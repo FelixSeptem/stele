@@ -86,15 +86,16 @@ type MemoryVersion struct {
 }
 
 type ProvenanceRecord struct {
-	ID            string
-	Scope         Scope
-	RawEventID    string
-	MemoryID      string
-	RequestID     string
-	Actor         string
-	Operation     string
-	CreatedAt     time.Time
-	SourceContext map[string]any
+	ID                string
+	Scope             Scope
+	RawEventID        string
+	CandidateMemoryID string
+	MemoryID          string
+	RequestID         string
+	Actor             string
+	Operation         string
+	CreatedAt         time.Time
+	SourceContext     map[string]any
 }
 
 type IngestEventInput struct {
