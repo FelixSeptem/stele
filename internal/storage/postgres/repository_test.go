@@ -149,6 +149,7 @@ func TestMigrateRunsBaseSchema(t *testing.T) {
 		"CREATE TABLE IF NOT EXISTS canonical_memories",
 		"CREATE TABLE IF NOT EXISTS memory_versions",
 		"CREATE TABLE IF NOT EXISTS provenance_links",
+		"modified_by text NOT NULL",
 	} {
 		if !containsSQL(sql, want) {
 			t.Fatalf("BaseSchemaSQL() missing %q", want)
@@ -561,6 +562,9 @@ func TestRepositoryPromoteCandidateCreatesCanonicalMemoryVersionAndProvenance(t 
 	}
 
 	mock.ExpectBegin()
+	mock.ExpectQuery("SELECT COALESCE\\(MAX\\(version\\), 0\\) FROM memory_versions").
+		WithArgs(input.MemoryID).
+		WillReturnRows(pgxmock.NewRows([]string{"coalesce"}).AddRow(int64(0)))
 	mock.ExpectQuery("INSERT INTO canonical_memories").
 		WithArgs(
 			input.MemoryID,
@@ -634,6 +638,121 @@ func TestRepositoryPromoteCandidateCreatesCanonicalMemoryVersionAndProvenance(t 
 
 	if version.ID != input.VersionID {
 		t.Fatalf("version.ID = %q, want %q", version.ID, input.VersionID)
+	}
+
+	if version.Version != 1 {
+		t.Fatalf("version.Version = %d, want %d", version.Version, 1)
+	}
+}
+
+func TestRepositoryPromoteCandidateSupersedeUpdatesCanonicalAndAppendsVersion(t *testing.T) {
+	mock, err := pgxmock.NewPool()
+	if err != nil {
+		t.Fatalf("pgxmock.NewPool() error = %v", err)
+	}
+	defer mock.Close()
+
+	createdAt := time.Date(2026, 6, 1, 14, 0, 0, 0, time.UTC)
+	updatedAt := time.Date(2026, 6, 1, 15, 10, 0, 0, time.UTC)
+	input := governance.CanonicalPromotion{
+		Candidate: governance.CandidateMemory{
+			ID:               "cand_456",
+			SourceRawEventID: "evt_456",
+			Scope: memory.Scope{
+				Tenant:    "tenant-a",
+				Project:   "project-a",
+				Namespace: "namespace-a",
+			},
+			Class:          memory.MemoryClassProfile,
+			Content:        "User prefers concise answers.",
+			Confidence:     0.94,
+			Importance:     0.87,
+			Freshness:      0.66,
+			Sensitivity:    governance.SensitivityLow,
+			Mutability:     governance.MutabilityMutable,
+			RetentionClass: policy.RetentionClassDurable,
+			Status:         governance.CandidateStatusPending,
+			CreatedAt:      updatedAt,
+			UpdatedAt:      updatedAt,
+		},
+		MemoryID:  "mem_existing",
+		VersionID: "ver_456",
+		Version:   1,
+		CreatedAt: updatedAt,
+	}
+
+	mock.ExpectBegin()
+	mock.ExpectQuery("SELECT COALESCE\\(MAX\\(version\\), 0\\) FROM memory_versions").
+		WithArgs(input.MemoryID).
+		WillReturnRows(pgxmock.NewRows([]string{"coalesce"}).AddRow(int64(1)))
+	mock.ExpectQuery("UPDATE canonical_memories").
+		WithArgs(
+			input.MemoryID,
+			memory.MemoryStateActive,
+			input.Candidate.Content,
+			input.CreatedAt,
+		).
+		WillReturnRows(pgxmock.NewRows([]string{
+			"id", "tenant", "project", "namespace", "class", "state", "content", "created_at", "updated_at",
+		}).AddRow(
+			input.MemoryID,
+			input.Candidate.Scope.Tenant,
+			input.Candidate.Scope.Project,
+			input.Candidate.Scope.Namespace,
+			input.Candidate.Class,
+			memory.MemoryStateActive,
+			input.Candidate.Content,
+			createdAt,
+			input.CreatedAt,
+		))
+	mock.ExpectQuery("INSERT INTO memory_versions").
+		WithArgs(
+			input.VersionID,
+			input.MemoryID,
+			int64(2),
+			memory.MemoryStateActive,
+			input.Candidate.Content,
+			input.CreatedAt,
+			input.Candidate.ID,
+		).
+		WillReturnRows(pgxmock.NewRows([]string{
+			"id", "memory_id", "version", "state", "content", "created_at", "modified_by",
+		}).AddRow(
+			input.VersionID,
+			input.MemoryID,
+			int64(2),
+			memory.MemoryStateActive,
+			input.Candidate.Content,
+			input.CreatedAt,
+			input.Candidate.ID,
+		))
+	mock.ExpectExec("INSERT INTO provenance_links").
+		WithArgs(
+			pgxmock.AnyArg(),
+			input.Candidate.SourceRawEventID,
+			input.Candidate.ID,
+			input.MemoryID,
+			input.Candidate.Scope.Tenant,
+			input.Candidate.Scope.Project,
+			input.Candidate.Scope.Namespace,
+			"promote_candidate",
+			input.CreatedAt,
+		).
+		WillReturnResult(pgxmock.NewResult("INSERT", 1))
+	mock.ExpectCommit()
+
+	repo := NewRepository(mock)
+	canonical, version, err := repo.PromoteCandidate(context.Background(), input)
+	if err != nil {
+		t.Fatalf("PromoteCandidate() error = %v", err)
+	}
+
+	if canonical.ID != input.MemoryID {
+		t.Fatalf("canonical.ID = %q, want %q", canonical.ID, input.MemoryID)
+	}
+
+	if version.Version != 2 {
+		t.Fatalf("version.Version = %d, want %d", version.Version, 2)
 	}
 }
 
@@ -748,6 +867,60 @@ func TestRepositoryCreateSummaryMemoryWritesCanonicalVersionAndEvidenceProvenanc
 	}
 }
 
+func TestRepositoryListCandidatesForCompactionReturnsPromotedCandidatesBeforeCutoff(t *testing.T) {
+	mock, err := pgxmock.NewPool()
+	if err != nil {
+		t.Fatalf("pgxmock.NewPool() error = %v", err)
+	}
+	defer mock.Close()
+
+	scope := memory.Scope{
+		Tenant:    "tenant-a",
+		Project:   "project-a",
+		Namespace: "namespace-a",
+	}
+	cutoff := time.Date(2026, 6, 1, 16, 0, 0, 0, time.UTC)
+
+	mock.ExpectQuery("SELECT .* FROM candidate_memories").
+		WithArgs(scope.Tenant, scope.Project, scope.Namespace, governance.CandidateStatusPromoted, cutoff, 10).
+		WillReturnRows(pgxmock.NewRows([]string{
+			"id", "source_raw_event_id", "tenant", "project", "namespace", "class", "content",
+			"confidence", "importance", "freshness", "sensitivity", "mutability", "retention_class",
+			"status", "created_at", "updated_at",
+		}).AddRow(
+			"cand_123",
+			"evt_123",
+			scope.Tenant,
+			scope.Project,
+			scope.Namespace,
+			memory.MemoryClassEpisodic,
+			"User asked about hotels.",
+			0.88,
+			0.61,
+			0.43,
+			governance.SensitivityLow,
+			governance.MutabilityImmutable,
+			policy.RetentionClassSession,
+			governance.CandidateStatusPromoted,
+			cutoff.Add(-2*time.Hour),
+			cutoff.Add(-time.Hour),
+		))
+
+	repo := NewRepository(mock)
+	candidates, err := repo.ListCandidatesForCompaction(context.Background(), scope, cutoff, 10)
+	if err != nil {
+		t.Fatalf("ListCandidatesForCompaction() error = %v", err)
+	}
+
+	if len(candidates) != 1 {
+		t.Fatalf("len(candidates) = %d, want %d", len(candidates), 1)
+	}
+
+	if candidates[0].ID != "cand_123" {
+		t.Fatalf("candidate.ID = %q, want %q", candidates[0].ID, "cand_123")
+	}
+}
+
 func TestRepositoryListVisibleCanonicalMemoriesExcludesHiddenStatesByDefault(t *testing.T) {
 	mock, err := pgxmock.NewPool()
 	if err != nil {
@@ -813,6 +986,7 @@ func TestRepositoryApplyLifecycleActionUpdatesCanonicalState(t *testing.T) {
 		AppliedAt: now,
 	}
 
+	mock.ExpectBegin()
 	mock.ExpectQuery("UPDATE canonical_memories").
 		WithArgs(action.MemoryID, action.TargetState(), now).
 		WillReturnRows(pgxmock.NewRows([]string{
@@ -828,6 +1002,7 @@ func TestRepositoryApplyLifecycleActionUpdatesCanonicalState(t *testing.T) {
 			now.Add(-time.Hour),
 			now,
 		))
+	mock.ExpectCommit()
 
 	repo := NewRepository(mock)
 	canonical, err := repo.ApplyLifecycleAction(context.Background(), action)
@@ -837,6 +1012,69 @@ func TestRepositoryApplyLifecycleActionUpdatesCanonicalState(t *testing.T) {
 
 	if canonical.State != memory.MemoryStateSuppressed {
 		t.Fatalf("State = %q, want %q", canonical.State, memory.MemoryStateSuppressed)
+	}
+}
+
+func TestRepositoryApplyLifecycleActionDeleteClearsPayloadAndWritesDeletionMarker(t *testing.T) {
+	mock, err := pgxmock.NewPool()
+	if err != nil {
+		t.Fatalf("pgxmock.NewPool() error = %v", err)
+	}
+	defer mock.Close()
+
+	now := time.Date(2026, 6, 1, 17, 25, 0, 0, time.UTC)
+	action := governance.LifecycleAction{
+		MemoryID: "mem_456",
+		Scope: memory.Scope{
+			Tenant:    "tenant-a",
+			Project:   "project-a",
+			Namespace: "namespace-a",
+		},
+		Action:    policy.ForgettingActionDelete,
+		Content:   "compliance request",
+		AppliedAt: now,
+	}
+
+	mock.ExpectBegin()
+	mock.ExpectQuery("UPDATE canonical_memories").
+		WithArgs(action.MemoryID, action.TargetState(), now).
+		WillReturnRows(pgxmock.NewRows([]string{
+			"id", "tenant", "project", "namespace", "class", "state", "content", "created_at", "updated_at",
+		}).AddRow(
+			action.MemoryID,
+			action.Scope.Tenant,
+			action.Scope.Project,
+			action.Scope.Namespace,
+			memory.MemoryClassProfile,
+			action.TargetState(),
+			"",
+			now.Add(-time.Hour),
+			now,
+		))
+	mock.ExpectExec("INSERT INTO deletion_markers").
+		WithArgs(
+			action.MemoryID,
+			action.Scope.Tenant,
+			action.Scope.Project,
+			action.Scope.Namespace,
+			action.Content,
+			now,
+		).
+		WillReturnResult(pgxmock.NewResult("INSERT", 1))
+	mock.ExpectCommit()
+
+	repo := NewRepository(mock)
+	canonical, err := repo.ApplyLifecycleAction(context.Background(), action)
+	if err != nil {
+		t.Fatalf("ApplyLifecycleAction() error = %v", err)
+	}
+
+	if canonical.State != memory.MemoryStateDeleted {
+		t.Fatalf("State = %q, want %q", canonical.State, memory.MemoryStateDeleted)
+	}
+
+	if canonical.Content != "" {
+		t.Fatalf("Content = %q, want empty payload after delete", canonical.Content)
 	}
 }
 
