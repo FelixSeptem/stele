@@ -8,6 +8,8 @@ import (
 
 	"github.com/FelixSeptem/stele/internal/auth"
 	"github.com/FelixSeptem/stele/internal/config"
+	"github.com/FelixSeptem/stele/internal/governance"
+	"github.com/FelixSeptem/stele/internal/jobs"
 	"github.com/FelixSeptem/stele/internal/memory"
 	"github.com/FelixSeptem/stele/internal/storage/postgres"
 	"github.com/jackc/pgx/v5"
@@ -43,6 +45,12 @@ type apiRuntime struct {
 	cleanup      func()
 }
 
+type workerRuntime struct {
+	bootstrapper bootstrapper
+	worker       backgroundWorker
+	cleanup      func()
+}
+
 type postgresRuntimeStore interface {
 	bootstrapDB
 	queryRower
@@ -70,6 +78,16 @@ type apiRuntimeDependencies struct {
 	newServer         func(addr string, deps HTTPDependencies) httpServer
 }
 
+type workerRuntimeDependencies struct {
+	openPool          func(ctx context.Context, dsn string) (postgresRuntimeStore, error)
+	bootstrapDatabase func(ctx context.Context, db postgresRuntimeStore) error
+	now               func() time.Time
+}
+
+type backgroundWorker interface {
+	RunOnce(ctx context.Context) (int, error)
+}
+
 func NewRunner(cfg config.Config) (Runner, error) {
 	switch cfg.Mode {
 	case config.ModeAPI:
@@ -78,7 +96,13 @@ func NewRunner(cfg config.Config) (Runner, error) {
 				return buildAPIRuntime(ctx, cfg, defaultAPIRuntimeDependencies())
 			},
 		}, nil
-	case config.ModeWorker, config.ModeScheduler:
+	case config.ModeWorker:
+		return workerRunner{
+			build: func(ctx context.Context) (workerRuntime, error) {
+				return buildWorkerRuntime(ctx, cfg, defaultWorkerRuntimeDependencies())
+			},
+		}, nil
+	case config.ModeScheduler:
 		return noopRunner{mode: cfg.Mode}, nil
 	default:
 		return nil, fmt.Errorf("unsupported mode %q", cfg.Mode)
@@ -92,6 +116,10 @@ func (r noopRunner) Start(ctx context.Context) error {
 	default:
 		return nil
 	}
+}
+
+type workerRunner struct {
+	build func(ctx context.Context) (workerRuntime, error)
 }
 
 func (r apiRunner) Start(ctx context.Context) error {
@@ -111,6 +139,36 @@ func (r apiRunner) Start(ctx context.Context) error {
 		return err
 	}
 	return runAPIRuntime(ctx, runtime)
+}
+
+func (r workerRunner) Start(ctx context.Context) error {
+	if r.build == nil {
+		return fmt.Errorf("worker runtime builder is required")
+	}
+
+	runtime, err := r.build(ctx)
+	if err != nil {
+		return err
+	}
+
+	if runtime.cleanup != nil {
+		defer runtime.cleanup()
+	}
+
+	if runtime.bootstrapper == nil {
+		return fmt.Errorf("worker bootstrapper is required")
+	}
+
+	if runtime.worker == nil {
+		return fmt.Errorf("worker runtime is required")
+	}
+
+	if err := runtime.bootstrapper.Bootstrap(ctx); err != nil {
+		return err
+	}
+
+	_, err = runtime.worker.RunOnce(ctx)
+	return err
 }
 
 func runAPIRuntime(ctx context.Context, runtime apiRuntime) error {
@@ -178,6 +236,18 @@ func defaultAPIRuntimeDependencies() apiRuntimeDependencies {
 	}
 }
 
+func defaultWorkerRuntimeDependencies() workerRuntimeDependencies {
+	return workerRuntimeDependencies{
+		openPool: func(ctx context.Context, dsn string) (postgresRuntimeStore, error) {
+			return postgres.OpenPool(ctx, dsn)
+		},
+		bootstrapDatabase: func(ctx context.Context, db postgresRuntimeStore) error {
+			return postgres.BootstrapDatabase(ctx, db)
+		},
+		now: time.Now,
+	}
+}
+
 func buildAPIRuntime(ctx context.Context, cfg config.Config, deps apiRuntimeDependencies) (apiRuntime, error) {
 	if deps.openPool == nil {
 		deps.openPool = defaultAPIRuntimeDependencies().openPool
@@ -210,6 +280,81 @@ func buildAPIRuntime(ctx context.Context, cfg config.Config, deps apiRuntimeDepe
 			pool.Close()
 		},
 	}, nil
+}
+
+func buildWorkerRuntime(ctx context.Context, cfg config.Config, deps workerRuntimeDependencies) (workerRuntime, error) {
+	if deps.openPool == nil {
+		deps.openPool = defaultWorkerRuntimeDependencies().openPool
+	}
+	if deps.bootstrapDatabase == nil {
+		deps.bootstrapDatabase = defaultWorkerRuntimeDependencies().bootstrapDatabase
+	}
+	if deps.now == nil {
+		deps.now = time.Now
+	}
+
+	pool, err := deps.openPool(ctx, cfg.PostgresDSN)
+	if err != nil {
+		return workerRuntime{}, fmt.Errorf("open postgres pool: %w", err)
+	}
+
+	repo := postgres.NewRepository(pool)
+	now := deps.now
+	summary := governance.SummaryProcessor{
+		Source:         repo,
+		Repository:     repo,
+		Summarizer:     governance.DeterministicSummarizer{},
+		Now:            now,
+		NewMemoryID:    newID,
+		NewVersionID:   newID,
+		MinClusterSize: 2,
+		ClusterLimit:   50,
+	}
+	pipeline := governance.PipelineProcessor{
+		Extraction: governance.ExtractionProcessor{
+			Extractor:       governance.RuleBasedExtractor{},
+			Candidates:      repo,
+			RawEvents:       repo,
+			Now:             now,
+			NewCandidateID:  newID,
+			NewProvenanceID: newID,
+		},
+		Consolidation: governance.ConsolidationProcessor{
+			Candidates:      repo,
+			Canonicals:      repo,
+			Consolidator:    governance.RuleBasedConsolidator{},
+			Now:             now,
+			NewMemoryID:     newID,
+			NewVersionID:    newID,
+			NewProvenanceID: newID,
+		},
+		RawEvents: repo,
+		Now:       now,
+		Summary:   summary,
+	}
+
+	worker := jobs.GovernanceWorker{
+		Claimer:       repo,
+		Processor:     pipeline,
+		WorkerID:      "stele-worker",
+		BatchSize:     32,
+		LeaseDuration: 2 * time.Minute,
+		Now:           now,
+	}
+
+	return workerRuntime{
+		bootstrapper: bootstrapperFunc(func(ctx context.Context) error {
+			return deps.bootstrapDatabase(ctx, pool)
+		}),
+		worker: worker,
+		cleanup: func() {
+			pool.Close()
+		},
+	}, nil
+}
+
+func newID() string {
+	return fmt.Sprintf("id_%d", time.Now().UnixNano())
 }
 
 type bootstrapperFunc func(ctx context.Context) error

@@ -59,6 +59,7 @@ CREATE TABLE IF NOT EXISTS memory_versions (
     content text NOT NULL,
     metadata jsonb NOT NULL DEFAULT '{}'::jsonb,
     created_at timestamptz NOT NULL DEFAULT now(),
+    modified_by text NOT NULL,
     UNIQUE (memory_id, version)
 );
 

@@ -216,6 +216,69 @@ func TestConsolidationProcessorPromotesAndTransitionsCandidate(t *testing.T) {
 	}
 }
 
+func TestConsolidationProcessorSupersedeReusesExistingCanonicalMemoryID(t *testing.T) {
+	now := time.Date(2026, 6, 1, 14, 22, 0, 0, time.UTC)
+	scope := memory.Scope{
+		Tenant:    "tenant-a",
+		Project:   "project-a",
+		Namespace: "namespace-a",
+	}
+	candidate := CandidateMemory{
+		ID:               "cand_supersede",
+		SourceRawEventID: "evt_supersede",
+		Scope:            scope,
+		Class:            memory.MemoryClassProfile,
+		Content:          "User prefers concise answers.",
+		Confidence:       0.91,
+		Importance:       0.84,
+		Freshness:        0.74,
+		Sensitivity:      SensitivityLow,
+		Mutability:       MutabilityMutable,
+		RetentionClass:   policy.RetentionClassDurable,
+		Status:           CandidateStatusPending,
+		CreatedAt:        now,
+		UpdatedAt:        now,
+	}
+
+	candidates := &stubCandidateRepository{
+		listByRawEventResult: []CandidateMemory{candidate},
+	}
+	canonicals := &stubCanonicalRepository{
+		latest: map[string]memory.CanonicalMemory{
+			scope.Tenant + "/" + scope.Project + "/" + scope.Namespace + "/" + string(memory.MemoryClassProfile): {
+				ID:         "mem_existing",
+				Scope:      scope,
+				Class:      memory.MemoryClassProfile,
+				State:      memory.MemoryStateActive,
+				Content:    "User prefers detailed answers.",
+				CreatedAt:  now.Add(-time.Hour),
+				ModifiedAt: now.Add(-time.Hour),
+			},
+		},
+	}
+	processor := ConsolidationProcessor{
+		Candidates:      candidates,
+		Canonicals:      canonicals,
+		Consolidator:    RuleBasedConsolidator{},
+		Now:             func() time.Time { return now },
+		NewMemoryID:     func() string { return "mem_new_should_not_be_used" },
+		NewVersionID:    func() string { return "ver_supersede" },
+		NewProvenanceID: func() string { return "prov_supersede" },
+	}
+
+	if err := processor.ProcessByRawEvent(context.Background(), "evt_supersede"); err != nil {
+		t.Fatalf("ProcessByRawEvent() error = %v", err)
+	}
+
+	if len(canonicals.promoted) != 1 {
+		t.Fatalf("len(canonicals.promoted) = %d, want %d", len(canonicals.promoted), 1)
+	}
+
+	if canonicals.promoted[0].MemoryID != "mem_existing" {
+		t.Fatalf("MemoryID = %q, want %q", canonicals.promoted[0].MemoryID, "mem_existing")
+	}
+}
+
 func TestConsolidationProcessorSuppressesLowConfidenceCandidate(t *testing.T) {
 	now := time.Date(2026, 6, 1, 14, 25, 0, 0, time.UTC)
 	candidate := CandidateMemory{

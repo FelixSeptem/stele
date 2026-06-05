@@ -62,8 +62,8 @@ func TestNewRunnerRejectsUnsupportedMode(t *testing.T) {
 	}
 }
 
-func TestRunnerStartSucceedsForNoOpModes(t *testing.T) {
-	modes := []config.Mode{config.ModeWorker, config.ModeScheduler}
+func TestRunnerStartSucceedsForSchedulerNoOpMode(t *testing.T) {
+	modes := []config.Mode{config.ModeScheduler}
 
 	for _, mode := range modes {
 		cfg := config.Config{Mode: mode, PostgresDSN: "postgres://example"}
@@ -75,6 +75,22 @@ func TestRunnerStartSucceedsForNoOpModes(t *testing.T) {
 		if err := runner.Start(context.Background()); err != nil {
 			t.Fatalf("Start(%q) error = %v", mode, err)
 		}
+	}
+}
+
+func TestNewRunnerCreatesRealWorkerRunner(t *testing.T) {
+	cfg := config.Config{
+		Mode:        config.ModeWorker,
+		PostgresDSN: "postgres://example",
+	}
+
+	runner, err := NewRunner(cfg)
+	if err != nil {
+		t.Fatalf("NewRunner() error = %v", err)
+	}
+
+	if _, ok := runner.(noopRunner); ok {
+		t.Fatal("worker runner = noopRunner, want governance-backed worker runner")
 	}
 }
 
@@ -304,6 +320,42 @@ func TestBuildAPIRuntimeReturnsPoolOpenFailure(t *testing.T) {
 
 	if !strings.Contains(err.Error(), "open postgres pool") {
 		t.Fatalf("error = %q, want wrapped pool open failure", err)
+	}
+}
+
+func TestBuildWorkerRuntimeAssemblesGovernanceWorker(t *testing.T) {
+	mock, err := pgxmock.NewPool()
+	if err != nil {
+		t.Fatalf("pgxmock.NewPool() error = %v", err)
+	}
+	defer mock.Close()
+
+	cfg := config.Config{
+		Mode:        config.ModeWorker,
+		PostgresDSN: "postgres://runtime",
+	}
+
+	runtime, err := buildWorkerRuntime(context.Background(), cfg, workerRuntimeDependencies{
+		openPool: func(ctx context.Context, dsn string) (postgresRuntimeStore, error) {
+			return mock, nil
+		},
+		bootstrapDatabase: func(ctx context.Context, db postgresRuntimeStore) error {
+			return nil
+		},
+		now: func() time.Time {
+			return time.Date(2026, 6, 2, 10, 0, 0, 0, time.UTC)
+		},
+	})
+	if err != nil {
+		t.Fatalf("buildWorkerRuntime() error = %v", err)
+	}
+
+	if runtime.bootstrapper == nil {
+		t.Fatal("runtime bootstrapper = nil, want bootstrapper")
+	}
+
+	if runtime.worker == nil {
+		t.Fatal("runtime worker = nil, want governance worker")
 	}
 }
 

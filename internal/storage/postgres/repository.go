@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"strings"
+	"time"
 
 	"github.com/FelixSeptem/stele/internal/governance"
 	"github.com/jackc/pgx/v5"
@@ -145,6 +146,67 @@ ORDER BY created_at ASC
 
 	if err := rows.Err(); err != nil {
 		return nil, fmt.Errorf("iterate candidates by raw event: %w", err)
+	}
+
+	return candidates, nil
+}
+
+func (r *Repository) ListCandidatesForCompaction(ctx context.Context, scope memory.Scope, cutoff time.Time, limit int) ([]governance.CandidateMemory, error) {
+	if err := scope.Validate(); err != nil {
+		return nil, err
+	}
+	if cutoff.IsZero() {
+		return nil, fmt.Errorf("cutoff is required")
+	}
+	if limit <= 0 {
+		return nil, fmt.Errorf("limit must be greater than zero")
+	}
+
+	const query = `
+SELECT
+	id,
+	source_raw_event_id,
+	tenant,
+	project,
+	namespace,
+	class,
+	content,
+	confidence,
+	importance,
+	freshness,
+	sensitivity,
+	mutability,
+	retention_class,
+	status,
+	created_at,
+	updated_at
+FROM candidate_memories
+WHERE tenant = $1
+	AND project = $2
+	AND namespace = $3
+	AND status = $4
+	AND updated_at <= $5
+ORDER BY updated_at ASC
+LIMIT $6
+`
+
+	rows, err := r.db.Query(ctx, query, scope.Tenant, scope.Project, scope.Namespace, governance.CandidateStatusPromoted, cutoff, limit)
+	if err != nil {
+		return nil, fmt.Errorf("list candidates for compaction: %w", err)
+	}
+	defer rows.Close()
+
+	candidates := make([]governance.CandidateMemory, 0)
+	for rows.Next() {
+		candidate, err := scanCandidate(rows)
+		if err != nil {
+			return nil, err
+		}
+		candidates = append(candidates, candidate)
+	}
+
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("iterate compaction candidates: %w", err)
 	}
 
 	return candidates, nil
@@ -362,7 +424,13 @@ func (r *Repository) PromoteCandidate(ctx context.Context, input governance.Cano
 	}
 	defer tx.Rollback(ctx)
 
-	const canonicalQuery = `
+	versionNumber, err := nextMemoryVersion(ctx, tx, input.MemoryID)
+	if err != nil {
+		return memory.CanonicalMemory{}, memory.MemoryVersion{}, err
+	}
+
+	if versionNumber == 1 {
+		const canonicalInsertQuery = `
 INSERT INTO canonical_memories (
 	id,
 	tenant,
@@ -377,18 +445,71 @@ INSERT INTO canonical_memories (
 RETURNING id, tenant, project, namespace, class, state, content, created_at, updated_at
 `
 
+		var canonical memory.CanonicalMemory
+		if err := tx.QueryRow(
+			ctx,
+			canonicalInsertQuery,
+			input.MemoryID,
+			input.Candidate.Scope.Tenant,
+			input.Candidate.Scope.Project,
+			input.Candidate.Scope.Namespace,
+			input.Candidate.Class,
+			memory.MemoryStateActive,
+			input.Candidate.Content,
+			input.CreatedAt,
+			input.CreatedAt,
+		).Scan(
+			&canonical.ID,
+			&canonical.Scope.Tenant,
+			&canonical.Scope.Project,
+			&canonical.Scope.Namespace,
+			&canonical.Class,
+			&canonical.State,
+			&canonical.Content,
+			&canonical.CreatedAt,
+			&canonical.ModifiedAt,
+		); err != nil {
+			return memory.CanonicalMemory{}, memory.MemoryVersion{}, fmt.Errorf("insert canonical memory: %w", err)
+		}
+
+		version, err := writeMemoryVersion(ctx, tx, input, versionNumber)
+		if err != nil {
+			return memory.CanonicalMemory{}, memory.MemoryVersion{}, err
+		}
+
+		if err := writeProvenance(ctx, tx, memory.ProvenanceRecord{
+			ID:                input.VersionID + "_prov",
+			Scope:             input.Candidate.Scope,
+			RawEventID:        input.Candidate.SourceRawEventID,
+			CandidateMemoryID: input.Candidate.ID,
+			MemoryID:          input.MemoryID,
+			Operation:         "promote_candidate",
+			CreatedAt:         input.CreatedAt,
+		}); err != nil {
+			return memory.CanonicalMemory{}, memory.MemoryVersion{}, err
+		}
+
+		if err := tx.Commit(ctx); err != nil {
+			return memory.CanonicalMemory{}, memory.MemoryVersion{}, fmt.Errorf("commit canonical promotion transaction: %w", err)
+		}
+
+		return canonical, version, nil
+	}
+
+	const canonicalUpdateQuery = `
+UPDATE canonical_memories
+SET state = $2, content = $3, updated_at = $4
+WHERE id = $1
+RETURNING id, tenant, project, namespace, class, state, content, created_at, updated_at
+`
+
 	var canonical memory.CanonicalMemory
 	if err := tx.QueryRow(
 		ctx,
-		canonicalQuery,
+		canonicalUpdateQuery,
 		input.MemoryID,
-		input.Candidate.Scope.Tenant,
-		input.Candidate.Scope.Project,
-		input.Candidate.Scope.Namespace,
-		input.Candidate.Class,
 		memory.MemoryStateActive,
 		input.Candidate.Content,
-		input.CreatedAt,
 		input.CreatedAt,
 	).Scan(
 		&canonical.ID,
@@ -401,43 +522,12 @@ RETURNING id, tenant, project, namespace, class, state, content, created_at, upd
 		&canonical.CreatedAt,
 		&canonical.ModifiedAt,
 	); err != nil {
-		return memory.CanonicalMemory{}, memory.MemoryVersion{}, fmt.Errorf("insert canonical memory: %w", err)
+		return memory.CanonicalMemory{}, memory.MemoryVersion{}, fmt.Errorf("update canonical memory: %w", err)
 	}
 
-	const versionQuery = `
-INSERT INTO memory_versions (
-	id,
-	memory_id,
-	version,
-	state,
-	content,
-	created_at,
-	modified_by
-) VALUES ($1, $2, $3, $4, $5, $6, $7)
-RETURNING id, memory_id, version, state, content, created_at, modified_by
-`
-
-	var version memory.MemoryVersion
-	if err := tx.QueryRow(
-		ctx,
-		versionQuery,
-		input.VersionID,
-		input.MemoryID,
-		input.Version,
-		memory.MemoryStateActive,
-		input.Candidate.Content,
-		input.CreatedAt,
-		input.Candidate.ID,
-	).Scan(
-		&version.ID,
-		&version.MemoryID,
-		&version.Version,
-		&version.State,
-		&version.Content,
-		&version.CreatedAt,
-		&version.ModifiedBy,
-	); err != nil {
-		return memory.CanonicalMemory{}, memory.MemoryVersion{}, fmt.Errorf("insert memory version: %w", err)
+	version, err := writeMemoryVersion(ctx, tx, input, versionNumber)
+	if err != nil {
+		return memory.CanonicalMemory{}, memory.MemoryVersion{}, err
 	}
 
 	if err := writeProvenance(ctx, tx, memory.ProvenanceRecord{
@@ -457,6 +547,46 @@ RETURNING id, memory_id, version, state, content, created_at, modified_by
 	}
 
 	return canonical, version, nil
+}
+
+func writeMemoryVersion(ctx context.Context, tx pgx.Tx, input governance.CanonicalPromotion, versionNumber int64) (memory.MemoryVersion, error) {
+	const versionQuery = `
+INSERT INTO memory_versions (
+	id,
+	memory_id,
+	version,
+	state,
+	content,
+	created_at,
+	modified_by
+) VALUES ($1, $2, $3, $4, $5, $6, $7)
+RETURNING id, memory_id, version, state, content, created_at, modified_by
+`
+
+	var version memory.MemoryVersion
+	if err := tx.QueryRow(
+		ctx,
+		versionQuery,
+		input.VersionID,
+		input.MemoryID,
+		versionNumber,
+		memory.MemoryStateActive,
+		input.Candidate.Content,
+		input.CreatedAt,
+		input.Candidate.ID,
+	).Scan(
+		&version.ID,
+		&version.MemoryID,
+		&version.Version,
+		&version.State,
+		&version.Content,
+		&version.CreatedAt,
+		&version.ModifiedBy,
+	); err != nil {
+		return memory.MemoryVersion{}, fmt.Errorf("insert memory version: %w", err)
+	}
+
+	return version, nil
 }
 
 func (r *Repository) CreateSummaryMemory(ctx context.Context, input governance.SummaryMemoryRecord) (memory.CanonicalMemory, memory.MemoryVersion, error) {
@@ -626,15 +756,26 @@ func (r *Repository) ApplyLifecycleAction(ctx context.Context, action governance
 		return memory.CanonicalMemory{}, err
 	}
 
+	tx, err := r.tx.BeginTx(ctx, pgx.TxOptions{})
+	if err != nil {
+		return memory.CanonicalMemory{}, fmt.Errorf("begin lifecycle action transaction: %w", err)
+	}
+	defer tx.Rollback(ctx)
+
 	const query = `
 UPDATE canonical_memories
-SET state = $2, updated_at = $3
+SET state = $2,
+	content = CASE WHEN $2 = 'deleted' THEN '' ELSE content END,
+	metadata = CASE WHEN $2 = 'deleted' THEN '{}'::jsonb ELSE metadata END,
+	search_text = CASE WHEN $2 = 'deleted' THEN NULL ELSE search_text END,
+	embedding = CASE WHEN $2 = 'deleted' THEN NULL ELSE embedding END,
+	updated_at = $3
 WHERE id = $1
 RETURNING id, tenant, project, namespace, class, state, content, created_at, updated_at
 `
 
 	var canonical memory.CanonicalMemory
-	if err := r.db.QueryRow(ctx, query, action.MemoryID, action.TargetState(), action.AppliedAt).Scan(
+	if err := tx.QueryRow(ctx, query, action.MemoryID, action.TargetState(), action.AppliedAt).Scan(
 		&canonical.ID,
 		&canonical.Scope.Tenant,
 		&canonical.Scope.Project,
@@ -648,8 +789,62 @@ RETURNING id, tenant, project, namespace, class, state, content, created_at, upd
 		return memory.CanonicalMemory{}, fmt.Errorf("apply lifecycle action: %w", err)
 	}
 
+	if action.TargetState() == memory.MemoryStateDeleted {
+		if err := writeDeletionMarker(ctx, tx, action); err != nil {
+			return memory.CanonicalMemory{}, err
+		}
+	}
+
+	if err := tx.Commit(ctx); err != nil {
+		return memory.CanonicalMemory{}, fmt.Errorf("commit lifecycle action transaction: %w", err)
+	}
+
 	return canonical, nil
 }
+
+func nextMemoryVersion(ctx context.Context, tx pgx.Tx, memoryID string) (int64, error) {
+	const query = `
+SELECT COALESCE(MAX(version), 0)
+FROM memory_versions
+WHERE memory_id = $1
+`
+
+	var current int64
+	if err := tx.QueryRow(ctx, query, memoryID).Scan(&current); err != nil {
+		return 0, fmt.Errorf("select next memory version: %w", err)
+	}
+
+	return current + 1, nil
+}
+
+func writeDeletionMarker(ctx context.Context, tx pgx.Tx, action governance.LifecycleAction) error {
+	const query = `
+INSERT INTO deletion_markers (
+	memory_id,
+	tenant,
+	project,
+	namespace,
+	reason,
+	created_at
+) VALUES ($1, $2, $3, $4, $5, $6)
+`
+
+	if _, err := tx.Exec(
+		ctx,
+		query,
+		action.MemoryID,
+		action.Scope.Tenant,
+		action.Scope.Project,
+		action.Scope.Namespace,
+		action.Content,
+		action.AppliedAt,
+	); err != nil {
+		return fmt.Errorf("insert deletion marker: %w", err)
+	}
+
+	return nil
+}
+
 
 func writeRawEvent(ctx context.Context, db queryRower, input memory.IngestEventInput) (memory.RawEvent, error) {
 	metadata, err := json.Marshal(input.Metadata)

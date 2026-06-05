@@ -152,16 +152,24 @@ func (p ConsolidationProcessor) ProcessByRawEvent(ctx context.Context, rawEventI
 				return err
 			}
 		case ConsolidationActionPromote, ConsolidationActionSupersede, ConsolidationActionCoexist:
-			if p.NewMemoryID == nil {
+			memoryID := latest.ID
+			if decision.Action != ConsolidationActionSupersede {
+				memoryID = ""
+			}
+
+			if memoryID == "" && p.NewMemoryID == nil {
 				return fmt.Errorf("memory id generator is required")
 			}
 			if p.NewVersionID == nil {
 				return fmt.Errorf("version id generator is required")
 			}
+			if memoryID == "" {
+				memoryID = p.NewMemoryID()
+			}
 
 			if _, _, err := p.Canonicals.PromoteCandidate(ctx, CanonicalPromotion{
 				Candidate: candidate,
-				MemoryID:  p.NewMemoryID(),
+				MemoryID:  memoryID,
 				VersionID: p.NewVersionID(),
 				Version:   1,
 				CreatedAt: currentTime,
