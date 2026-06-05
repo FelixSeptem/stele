@@ -372,7 +372,7 @@ func TestBuildAPIRuntimeAssemblesEventIngestionPath(t *testing.T) {
 		WillReturnRows(pgxmock.NewRows([]string{"id", "tenant", "project", "namespace", "event_type", "content", "source_timestamp", "created_at"}).
 			AddRow("evt_123", "tenant-a", "project-a", "namespace-a", "conversation.message", "hello world", sourceTime, sourceTime))
 	mock.ExpectExec("INSERT INTO provenance_links").
-		WithArgs(pgxmock.AnyArg(), "evt_123", "tenant-a", "project-a", "namespace-a", "ingest_event", pgxmock.AnyArg()).
+		WithArgs(pgxmock.AnyArg(), "evt_123", nil, nil, "tenant-a", "project-a", "namespace-a", "ingest_event", pgxmock.AnyArg()).
 		WillReturnResult(pgxmock.NewResult("INSERT", 1))
 	mock.ExpectCommit()
 
