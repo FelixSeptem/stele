@@ -2,13 +2,16 @@ package postgres
 
 import (
 	"context"
+	"database/sql"
 	"encoding/json"
 	"errors"
 	"fmt"
+	"strconv"
 	"strings"
 	"time"
 
 	"github.com/FelixSeptem/stele/internal/governance"
+	"github.com/FelixSeptem/stele/internal/retrieval"
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgconn"
 
@@ -439,9 +442,10 @@ INSERT INTO canonical_memories (
 	class,
 	state,
 	content,
+	search_text,
 	created_at,
 	updated_at
-) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
+) VALUES ($1, $2, $3, $4, $5, $6, $7, to_tsvector('simple', $7), $8, $9)
 RETURNING id, tenant, project, namespace, class, state, content, created_at, updated_at
 `
 
@@ -477,6 +481,10 @@ RETURNING id, tenant, project, namespace, class, state, content, created_at, upd
 			return memory.CanonicalMemory{}, memory.MemoryVersion{}, err
 		}
 
+		if err := upsertRelationProjection(ctx, tx, canonical, input.CreatedAt); err != nil {
+			return memory.CanonicalMemory{}, memory.MemoryVersion{}, err
+		}
+
 		if err := writeProvenance(ctx, tx, memory.ProvenanceRecord{
 			ID:                input.VersionID + "_prov",
 			Scope:             input.Candidate.Scope,
@@ -498,7 +506,7 @@ RETURNING id, tenant, project, namespace, class, state, content, created_at, upd
 
 	const canonicalUpdateQuery = `
 UPDATE canonical_memories
-SET state = $2, content = $3, updated_at = $4
+SET state = $2, content = $3, search_text = to_tsvector('simple', $3), updated_at = $4
 WHERE id = $1
 RETURNING id, tenant, project, namespace, class, state, content, created_at, updated_at
 `
@@ -527,6 +535,10 @@ RETURNING id, tenant, project, namespace, class, state, content, created_at, upd
 
 	version, err := writeMemoryVersion(ctx, tx, input, versionNumber)
 	if err != nil {
+		return memory.CanonicalMemory{}, memory.MemoryVersion{}, err
+	}
+
+	if err := upsertRelationProjection(ctx, tx, canonical, input.CreatedAt); err != nil {
 		return memory.CanonicalMemory{}, memory.MemoryVersion{}, err
 	}
 
@@ -609,9 +621,10 @@ INSERT INTO canonical_memories (
 	class,
 	state,
 	content,
+	search_text,
 	created_at,
 	updated_at
-) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
+) VALUES ($1, $2, $3, $4, $5, $6, $7, to_tsvector('simple', $7), $8, $9)
 RETURNING id, tenant, project, namespace, class, state, content, created_at, updated_at
 `
 
@@ -790,6 +803,11 @@ RETURNING id, tenant, project, namespace, class, state, content, created_at, upd
 	}
 
 	if action.TargetState() == memory.MemoryStateDeleted {
+		if canonical.Class == memory.MemoryClassRelation {
+			if err := deleteRelationProjection(ctx, tx, action.MemoryID); err != nil {
+				return memory.CanonicalMemory{}, err
+			}
+		}
 		if err := writeDeletionMarker(ctx, tx, action); err != nil {
 			return memory.CanonicalMemory{}, err
 		}
@@ -800,6 +818,302 @@ RETURNING id, tenant, project, namespace, class, state, content, created_at, upd
 	}
 
 	return canonical, nil
+}
+
+func (r *Repository) SearchLexical(ctx context.Context, input retrieval.SearchInput) ([]retrieval.ScoredMemory, error) {
+	if err := input.Validate(); err != nil {
+		return nil, err
+	}
+
+	limit := input.TopK
+	if limit <= 0 {
+		limit = 10
+	}
+
+	const query = `
+SELECT
+	id,
+	tenant,
+	project,
+	namespace,
+	class,
+	state,
+	content,
+	created_at,
+	updated_at,
+	ts_rank_cd(search_text, plainto_tsquery('simple', $4)) AS lexical_score
+FROM canonical_memories
+WHERE tenant = $1
+	AND project = $2
+	AND namespace = $3
+	AND state NOT IN ('suppressed', 'forgotten', 'deleted')
+	AND search_text @@ plainto_tsquery('simple', $4)
+	AND ($5::timestamptz IS NULL OR updated_at >= $5)
+	AND ($6::timestamptz IS NULL OR updated_at <= $6)
+ORDER BY lexical_score DESC, updated_at DESC
+LIMIT $7
+`
+
+	rows, err := r.db.Query(ctx, query, input.Scope.Tenant, input.Scope.Project, input.Scope.Namespace, input.Query, nullableTime(input.TimeFrom), nullableTime(input.TimeTo), limit)
+	if err != nil {
+		return nil, fmt.Errorf("search lexical memories: %w", err)
+	}
+	defer rows.Close()
+
+	hits := make([]retrieval.ScoredMemory, 0)
+	for rows.Next() {
+		var hit retrieval.ScoredMemory
+		if err := rows.Scan(
+			&hit.Memory.ID,
+			&hit.Memory.Scope.Tenant,
+			&hit.Memory.Scope.Project,
+			&hit.Memory.Scope.Namespace,
+			&hit.Memory.Class,
+			&hit.Memory.State,
+			&hit.Memory.Content,
+			&hit.Memory.CreatedAt,
+			&hit.Memory.ModifiedAt,
+			&hit.LexicalScore,
+		); err != nil {
+			return nil, fmt.Errorf("scan lexical search hit: %w", err)
+		}
+		hits = append(hits, hit)
+	}
+
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("iterate lexical search hits: %w", err)
+	}
+
+	return hits, nil
+}
+
+func (r *Repository) SearchSemantic(ctx context.Context, input retrieval.SearchInput) ([]retrieval.ScoredMemory, error) {
+	if err := input.Validate(); err != nil {
+		return nil, err
+	}
+	if len(input.QueryEmbedding) == 0 {
+		return []retrieval.ScoredMemory{}, nil
+	}
+
+	limit := input.TopK
+	if limit <= 0 {
+		limit = 10
+	}
+
+	const query = `
+SELECT
+	id,
+	tenant,
+	project,
+	namespace,
+	class,
+	state,
+	content,
+	created_at,
+	updated_at,
+	GREATEST(0, 1 - (embedding <=> $4::vector)) AS semantic_score
+FROM canonical_memories
+WHERE tenant = $1
+	AND project = $2
+	AND namespace = $3
+	AND state NOT IN ('suppressed', 'forgotten', 'deleted')
+	AND embedding IS NOT NULL
+	AND class IN ('profile', 'episodic', 'procedural', 'summary')
+	AND ($5::timestamptz IS NULL OR updated_at >= $5)
+	AND ($6::timestamptz IS NULL OR updated_at <= $6)
+ORDER BY semantic_score DESC, updated_at DESC
+LIMIT $7
+`
+
+	rows, err := r.db.Query(
+		ctx,
+		query,
+		input.Scope.Tenant,
+		input.Scope.Project,
+		input.Scope.Namespace,
+		vectorLiteral(input.QueryEmbedding),
+		nullableTime(input.TimeFrom),
+		nullableTime(input.TimeTo),
+		limit,
+	)
+	if err != nil {
+		return nil, fmt.Errorf("search semantic memories: %w", err)
+	}
+	defer rows.Close()
+
+	hits := make([]retrieval.ScoredMemory, 0)
+	for rows.Next() {
+		var hit retrieval.ScoredMemory
+		if err := rows.Scan(
+			&hit.Memory.ID,
+			&hit.Memory.Scope.Tenant,
+			&hit.Memory.Scope.Project,
+			&hit.Memory.Scope.Namespace,
+			&hit.Memory.Class,
+			&hit.Memory.State,
+			&hit.Memory.Content,
+			&hit.Memory.CreatedAt,
+			&hit.Memory.ModifiedAt,
+			&hit.SemanticScore,
+		); err != nil {
+			return nil, fmt.Errorf("scan semantic search hit: %w", err)
+		}
+		hits = append(hits, hit)
+	}
+
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("iterate semantic search hits: %w", err)
+	}
+
+	return hits, nil
+}
+
+func (r *Repository) SearchRelations(ctx context.Context, input retrieval.SearchInput) ([]retrieval.ScoredMemory, error) {
+	if err := input.Validate(); err != nil {
+		return nil, err
+	}
+	if !input.IncludeRelations {
+		return []retrieval.ScoredMemory{}, nil
+	}
+
+	limit := input.TopK
+	if limit <= 0 {
+		limit = 10
+	}
+
+	const query = `
+SELECT
+	cm.id,
+	cm.tenant,
+	cm.project,
+	cm.namespace,
+	cm.class,
+	cm.state,
+	cm.content,
+	cm.created_at,
+	cm.updated_at,
+	(
+		CASE WHEN rp.source_entity ILIKE ('%' || $4 || '%') THEN 0.25 ELSE 0 END +
+		CASE WHEN rp.relation_type ILIKE ('%' || $5 || '%') THEN 0.20 ELSE 0 END +
+		CASE WHEN rp.target_entity ILIKE ('%' || $6 || '%') THEN 0.25 ELSE 0 END +
+		CASE WHEN rp.relation_text ILIKE ('%' || $7 || '%') THEN 0.15 ELSE 0 END +
+		ts_rank_cd(rp.search_text, plainto_tsquery('simple', $8))
+	) AS relation_score
+FROM relation_projections rp
+JOIN canonical_memories cm ON cm.id = rp.memory_id
+WHERE rp.tenant = $1
+	AND rp.project = $2
+	AND rp.namespace = $3
+	AND cm.state NOT IN ('suppressed', 'forgotten', 'deleted')
+	AND (
+		rp.source_entity ILIKE ('%' || $4 || '%')
+		OR rp.relation_type ILIKE ('%' || $5 || '%')
+		OR rp.target_entity ILIKE ('%' || $6 || '%')
+		OR rp.relation_text ILIKE ('%' || $7 || '%')
+		OR rp.search_text @@ plainto_tsquery('simple', $8)
+	)
+	AND ($9::timestamptz IS NULL OR cm.updated_at >= $9)
+	AND ($10::timestamptz IS NULL OR cm.updated_at <= $10)
+ORDER BY relation_score DESC, cm.updated_at DESC
+LIMIT $11
+`
+
+	rows, err := r.db.Query(
+		ctx,
+		query,
+		input.Scope.Tenant,
+		input.Scope.Project,
+		input.Scope.Namespace,
+		input.Query,
+		input.Query,
+		input.Query,
+		input.Query,
+		input.Query,
+		nullableTime(input.TimeFrom),
+		nullableTime(input.TimeTo),
+		limit,
+	)
+	if err != nil {
+		return nil, fmt.Errorf("search relation memories: %w", err)
+	}
+	defer rows.Close()
+
+	hits := make([]retrieval.ScoredMemory, 0)
+	for rows.Next() {
+		var hit retrieval.ScoredMemory
+		if err := rows.Scan(
+			&hit.Memory.ID,
+			&hit.Memory.Scope.Tenant,
+			&hit.Memory.Scope.Project,
+			&hit.Memory.Scope.Namespace,
+			&hit.Memory.Class,
+			&hit.Memory.State,
+			&hit.Memory.Content,
+			&hit.Memory.CreatedAt,
+			&hit.Memory.ModifiedAt,
+			&hit.RelationScore,
+		); err != nil {
+			return nil, fmt.Errorf("scan relation search hit: %w", err)
+		}
+		hits = append(hits, hit)
+	}
+
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("iterate relation search hits: %w", err)
+	}
+
+	return hits, nil
+}
+
+func (r *Repository) ListCitations(ctx context.Context, scope memory.Scope, memoryIDs []string) (map[string][]retrieval.Citation, error) {
+	if err := scope.Validate(); err != nil {
+		return nil, err
+	}
+	if len(memoryIDs) == 0 {
+		return map[string][]retrieval.Citation{}, nil
+	}
+
+	const query = `
+SELECT memory_id, raw_event_id, operation
+FROM provenance_links
+WHERE tenant = $1
+	AND project = $2
+	AND namespace = $3
+	AND memory_id = ANY($4)
+ORDER BY created_at ASC
+`
+
+	rows, err := r.db.Query(ctx, query, scope.Tenant, scope.Project, scope.Namespace, memoryIDs)
+	if err != nil {
+		return nil, fmt.Errorf("list citations: %w", err)
+	}
+	defer rows.Close()
+
+	citations := make(map[string][]retrieval.Citation)
+	for rows.Next() {
+		var memoryID string
+		var rawEventID sql.NullString
+		var operation string
+		if err := rows.Scan(&memoryID, &rawEventID, &operation); err != nil {
+			return nil, fmt.Errorf("scan citation: %w", err)
+		}
+
+		citation := retrieval.Citation{
+			MemoryID:  memoryID,
+			Operation: operation,
+		}
+		if rawEventID.Valid {
+			citation.RawEventID = rawEventID.String
+		}
+
+		citations[memoryID] = append(citations[memoryID], citation)
+	}
+
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("iterate citations: %w", err)
+	}
+
+	return citations, nil
 }
 
 func nextMemoryVersion(ctx context.Context, tx pgx.Tx, memoryID string) (int64, error) {
@@ -845,6 +1159,89 @@ INSERT INTO deletion_markers (
 	return nil
 }
 
+func upsertRelationProjection(ctx context.Context, tx pgx.Tx, canonical memory.CanonicalMemory, updatedAt time.Time) error {
+	if canonical.Class != memory.MemoryClassRelation {
+		return nil
+	}
+
+	sourceEntity, relationType, targetEntity := parseRelationContent(canonical.Content)
+	const query = `
+INSERT INTO relation_projections (
+	memory_id,
+	tenant,
+	project,
+	namespace,
+	source_entity,
+	relation_type,
+	target_entity,
+	relation_text,
+	search_text,
+	created_at,
+	updated_at
+) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, to_tsvector('simple', $8), $9, $10)
+ON CONFLICT (memory_id) DO UPDATE SET
+	tenant = EXCLUDED.tenant,
+	project = EXCLUDED.project,
+	namespace = EXCLUDED.namespace,
+	source_entity = EXCLUDED.source_entity,
+	relation_type = EXCLUDED.relation_type,
+	target_entity = EXCLUDED.target_entity,
+	relation_text = EXCLUDED.relation_text,
+	search_text = EXCLUDED.search_text,
+	updated_at = EXCLUDED.updated_at
+`
+
+	if _, err := tx.Exec(
+		ctx,
+		query,
+		canonical.ID,
+		canonical.Scope.Tenant,
+		canonical.Scope.Project,
+		canonical.Scope.Namespace,
+		sourceEntity,
+		relationType,
+		targetEntity,
+		canonical.Content,
+		canonical.CreatedAt,
+		updatedAt,
+	); err != nil {
+		return fmt.Errorf("upsert relation projection: %w", err)
+	}
+
+	return nil
+}
+
+func deleteRelationProjection(ctx context.Context, tx pgx.Tx, memoryID string) error {
+	const query = `
+DELETE FROM relation_projections
+WHERE memory_id = $1
+`
+
+	if _, err := tx.Exec(ctx, query, memoryID); err != nil {
+		return fmt.Errorf("delete relation projection: %w", err)
+	}
+
+	return nil
+}
+
+func parseRelationContent(content string) (string, string, string) {
+	var sourceEntity string
+	var relationType string
+	var targetEntity string
+
+	for _, part := range strings.Fields(content) {
+		switch {
+		case strings.HasPrefix(part, "entity:"):
+			sourceEntity = strings.TrimPrefix(part, "entity:")
+		case strings.HasPrefix(part, "relation:"):
+			relationType = strings.TrimPrefix(part, "relation:")
+		case strings.HasPrefix(part, "target:"):
+			targetEntity = strings.TrimPrefix(part, "target:")
+		}
+	}
+
+	return sourceEntity, relationType, targetEntity
+}
 
 func writeRawEvent(ctx context.Context, db queryRower, input memory.IngestEventInput) (memory.RawEvent, error) {
 	metadata, err := json.Marshal(input.Metadata)
@@ -1029,4 +1426,21 @@ func nullableString(value string) any {
 	}
 
 	return value
+}
+
+func nullableTime(value time.Time) any {
+	if value.IsZero() {
+		return nil
+	}
+
+	return value
+}
+
+func vectorLiteral(values []float32) string {
+	parts := make([]string, 0, len(values))
+	for _, value := range values {
+		parts = append(parts, strconv.FormatFloat(float64(value), 'f', -1, 32))
+	}
+
+	return "[" + strings.Join(parts, ",") + "]"
 }

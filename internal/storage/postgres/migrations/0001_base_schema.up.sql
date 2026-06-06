@@ -1,4 +1,5 @@
 CREATE EXTENSION IF NOT EXISTS pgcrypto;
+CREATE EXTENSION IF NOT EXISTS vector;
 
 CREATE TABLE IF NOT EXISTS raw_events (
     id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
@@ -88,6 +89,20 @@ CREATE TABLE IF NOT EXISTS deletion_markers (
     created_at timestamptz NOT NULL DEFAULT now()
 );
 
+CREATE TABLE IF NOT EXISTS relation_projections (
+    memory_id uuid PRIMARY KEY REFERENCES canonical_memories(id) ON DELETE CASCADE,
+    tenant text NOT NULL,
+    project text NOT NULL,
+    namespace text NOT NULL,
+    source_entity text NOT NULL,
+    relation_type text NOT NULL,
+    target_entity text NOT NULL,
+    relation_text text NOT NULL,
+    search_text tsvector,
+    created_at timestamptz NOT NULL DEFAULT now(),
+    updated_at timestamptz NOT NULL DEFAULT now()
+);
+
 CREATE INDEX IF NOT EXISTS raw_events_scope_created_at_idx
     ON raw_events (tenant, project, namespace, created_at DESC);
 
@@ -103,8 +118,19 @@ CREATE INDEX IF NOT EXISTS canonical_memories_scope_state_idx
 CREATE INDEX IF NOT EXISTS canonical_memories_updated_at_idx
     ON canonical_memories (updated_at DESC);
 
+CREATE INDEX IF NOT EXISTS canonical_memories_search_text_idx
+    ON canonical_memories
+    USING GIN (search_text);
+
 CREATE INDEX IF NOT EXISTS memory_versions_memory_created_at_idx
     ON memory_versions (memory_id, created_at DESC);
 
 CREATE INDEX IF NOT EXISTS provenance_links_scope_created_at_idx
     ON provenance_links (tenant, project, namespace, created_at DESC);
+
+CREATE INDEX IF NOT EXISTS relation_projections_scope_updated_at_idx
+    ON relation_projections (tenant, project, namespace, updated_at DESC);
+
+CREATE INDEX IF NOT EXISTS relation_projections_search_text_idx
+    ON relation_projections
+    USING GIN (search_text);

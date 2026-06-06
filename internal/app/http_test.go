@@ -13,6 +13,7 @@ import (
 	"time"
 
 	"github.com/FelixSeptem/stele/internal/memory"
+	"github.com/FelixSeptem/stele/internal/retrieval"
 )
 
 type stubReadinessChecker struct {
@@ -42,6 +43,28 @@ type panicEventIngestor struct{}
 
 func (panicEventIngestor) Ingest(ctx context.Context, input memory.IngestEventInput) (memory.RawEvent, error) {
 	panic("boom")
+}
+
+type stubMemorySearcher struct {
+	gotInput retrieval.SearchInput
+	result   retrieval.SearchResult
+	err      error
+}
+
+func (s *stubMemorySearcher) Search(ctx context.Context, input retrieval.SearchInput) (retrieval.SearchResult, error) {
+	s.gotInput = input
+	return s.result, s.err
+}
+
+type stubContextAssembler struct {
+	gotInput retrieval.AssembleContextInput
+	result   retrieval.AssembledContext
+	err      error
+}
+
+func (s *stubContextAssembler) AssembleContext(ctx context.Context, input retrieval.AssembleContextInput) (retrieval.AssembledContext, error) {
+	s.gotInput = input
+	return s.result, s.err
 }
 
 func TestNewHTTPHandlerServesHealthAndReadiness(t *testing.T) {
@@ -90,8 +113,8 @@ func TestNewHTTPHandlerMarksReadinessFailure(t *testing.T) {
 
 func TestNewHTTPHandlerRejectsMissingAPIKeyForEvents(t *testing.T) {
 	handler := NewHTTPHandler(HTTPDependencies{
-		Readiness:  stubReadinessChecker{},
-		APIKeys:    map[string]struct{}{"test-key": {}},
+		Readiness:     stubReadinessChecker{},
+		APIKeys:       map[string]struct{}{"test-key": {}},
 		EventIngestor: &stubEventIngestor{eventID: "evt_123"},
 	})
 
@@ -113,8 +136,8 @@ func TestNewHTTPHandlerRejectsMissingAPIKeyForEvents(t *testing.T) {
 func TestNewHTTPHandlerIngestsEvent(t *testing.T) {
 	ingestor := &stubEventIngestor{eventID: "evt_123"}
 	handler := NewHTTPHandler(HTTPDependencies{
-		Readiness:    stubReadinessChecker{},
-		APIKeys:      map[string]struct{}{"test-key": {}},
+		Readiness:     stubReadinessChecker{},
+		APIKeys:       map[string]struct{}{"test-key": {}},
 		EventIngestor: ingestor,
 	})
 
@@ -154,8 +177,8 @@ func TestNewHTTPHandlerIngestsEvent(t *testing.T) {
 
 func TestNewHTTPHandlerRejectsInvalidEventPayload(t *testing.T) {
 	handler := NewHTTPHandler(HTTPDependencies{
-		Readiness:    stubReadinessChecker{},
-		APIKeys:      map[string]struct{}{"test-key": {}},
+		Readiness:     stubReadinessChecker{},
+		APIKeys:       map[string]struct{}{"test-key": {}},
 		EventIngestor: &stubEventIngestor{eventID: "evt_123"},
 	})
 
@@ -230,5 +253,123 @@ func TestNewHTTPHandlerReturnsServerErrorWhenIngestFails(t *testing.T) {
 
 	if rec.Code != http.StatusInternalServerError {
 		t.Fatalf("status = %d, want %d", rec.Code, http.StatusInternalServerError)
+	}
+}
+
+func TestNewHTTPHandlerSearchesMemories(t *testing.T) {
+	searcher := &stubMemorySearcher{
+		result: retrieval.SearchResult{
+			Hits: []retrieval.SearchHit{
+				{
+					Memory: memory.CanonicalMemory{
+						ID:         "mem_123",
+						Scope:      memory.Scope{Tenant: "tenant-a", Project: "project-a", Namespace: "namespace-a"},
+						Class:      memory.MemoryClassProfile,
+						State:      memory.MemoryStateActive,
+						Content:    "User prefers concise answers.",
+						CreatedAt:  time.Date(2026, 6, 6, 10, 0, 0, 0, time.UTC),
+						ModifiedAt: time.Date(2026, 6, 6, 10, 30, 0, 0, time.UTC),
+					},
+					Score: retrieval.ScoreBreakdown{
+						Overall:  1.2,
+						Lexical:  0.7,
+						Semantic: 0.5,
+					},
+					Citations: []retrieval.Citation{
+						{MemoryID: "mem_123", RawEventID: "evt_123", Operation: "promote_candidate"},
+					},
+				},
+			},
+		},
+	}
+
+	handler := NewHTTPHandler(HTTPDependencies{
+		Readiness:      stubReadinessChecker{},
+		APIKeys:        map[string]struct{}{"test-key": {}},
+		MemorySearcher: searcher,
+	})
+
+	req := httptest.NewRequest(http.MethodPost, "/v1/memories/search", bytes.NewBufferString(`{"query":"concise","query_embedding":[0.1,0.2,0.3],"top_k":3,"include_summaries":true,"time_from":"2026-06-06T09:00:00Z","time_to":"2026-06-06T12:00:00Z"}`))
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("X-API-Key", "test-key")
+	req.Header.Set("X-Stele-Tenant", "tenant-a")
+	req.Header.Set("X-Stele-Project", "project-a")
+	req.Header.Set("X-Stele-Namespace", "namespace-a")
+	rec := httptest.NewRecorder()
+
+	handler.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d, want %d", rec.Code, http.StatusOK)
+	}
+
+	if searcher.gotInput.Scope.Tenant != "tenant-a" {
+		t.Fatalf("search scope = %+v, want resolved request scope", searcher.gotInput.Scope)
+	}
+
+	if searcher.gotInput.TimeFrom.IsZero() || searcher.gotInput.TimeTo.IsZero() {
+		t.Fatalf("time window = %v to %v, want parsed time range", searcher.gotInput.TimeFrom, searcher.gotInput.TimeTo)
+	}
+
+	if len(searcher.gotInput.QueryEmbedding) != 3 {
+		t.Fatalf("query embedding = %v, want parsed embedding", searcher.gotInput.QueryEmbedding)
+	}
+
+	var payload map[string]any
+	if err := json.NewDecoder(rec.Body).Decode(&payload); err != nil {
+		t.Fatalf("json.NewDecoder() error = %v", err)
+	}
+
+	hits, ok := payload["hits"].([]any)
+	if !ok || len(hits) != 1 {
+		t.Fatalf("hits payload = %#v, want one hit", payload["hits"])
+	}
+}
+
+func TestNewHTTPHandlerAssemblesContext(t *testing.T) {
+	assembler := &stubContextAssembler{
+		result: retrieval.AssembledContext{
+			Profile: []retrieval.SearchHit{
+				{
+					Memory: memory.CanonicalMemory{
+						ID:         "mem_profile",
+						Scope:      memory.Scope{Tenant: "tenant-a", Project: "project-a", Namespace: "namespace-a"},
+						Class:      memory.MemoryClassProfile,
+						State:      memory.MemoryStateActive,
+						Content:    "User prefers concise answers.",
+						CreatedAt:  time.Date(2026, 6, 6, 10, 0, 0, 0, time.UTC),
+						ModifiedAt: time.Date(2026, 6, 6, 10, 30, 0, 0, time.UTC),
+					},
+					Score: retrieval.ScoreBreakdown{Overall: 0.9},
+				},
+			},
+			Citations: []retrieval.Citation{
+				{MemoryID: "mem_profile", RawEventID: "evt_profile", Operation: "promote_candidate"},
+			},
+		},
+	}
+
+	handler := NewHTTPHandler(HTTPDependencies{
+		Readiness:        stubReadinessChecker{},
+		APIKeys:          map[string]struct{}{"test-key": {}},
+		ContextAssembler: assembler,
+	})
+
+	req := httptest.NewRequest(http.MethodPost, "/v1/context/assemble", bytes.NewBufferString(`{"query":"preferences","budget":4}`))
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("X-API-Key", "test-key")
+	req.Header.Set("X-Stele-Tenant", "tenant-a")
+	req.Header.Set("X-Stele-Project", "project-a")
+	req.Header.Set("X-Stele-Namespace", "namespace-a")
+	rec := httptest.NewRecorder()
+
+	handler.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d, want %d", rec.Code, http.StatusOK)
+	}
+
+	if assembler.gotInput.Scope.Namespace != "namespace-a" {
+		t.Fatalf("assemble scope = %+v, want resolved request scope", assembler.gotInput.Scope)
 	}
 }

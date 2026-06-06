@@ -10,9 +10,19 @@ import (
 func TestSpecYAMLContainsBaselineEndpoints(t *testing.T) {
 	spec := SpecYAML()
 
-	for _, want := range []string{"/health", "/ready", "/v1/events"} {
+	for _, want := range []string{"/health", "/ready", "/v1/events", "/v1/memories/search", "/v1/context/assemble"} {
 		if !strings.Contains(spec, want) {
 			t.Fatalf("SpecYAML() missing path %q", want)
+		}
+	}
+}
+
+func TestSpecYAMLContainsSearchTimeWindowFields(t *testing.T) {
+	spec := SpecYAML()
+
+	for _, want := range []string{"time_from", "time_to", "query_embedding"} {
+		if !strings.Contains(spec, want) {
+			t.Fatalf("SpecYAML() missing search field %q", want)
 		}
 	}
 }

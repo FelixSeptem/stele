@@ -11,6 +11,7 @@ import (
 	"github.com/FelixSeptem/stele/internal/governance"
 	"github.com/FelixSeptem/stele/internal/jobs"
 	"github.com/FelixSeptem/stele/internal/memory"
+	"github.com/FelixSeptem/stele/internal/retrieval"
 	"github.com/FelixSeptem/stele/internal/storage/postgres"
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgconn"
@@ -266,10 +267,18 @@ func buildAPIRuntime(ctx context.Context, cfg config.Config, deps apiRuntimeDepe
 
 	repo := postgres.NewRepository(pool)
 	ingestor := memory.NewService(repo, time.Now)
+	retrievalService := retrieval.NewService(retrieval.ServiceDependencies{
+		Lexical:   repo,
+		Semantic:  repo,
+		Relations: repo,
+		Citations: repo,
+	})
 	httpDeps := httpDependenciesFromConfigWithIngestor(cfg, ingestor)
 	httpDeps.Readiness = readinessFunc(func(ctx context.Context) error {
 		return nil
 	})
+	httpDeps.MemorySearcher = retrievalService
+	httpDeps.ContextAssembler = retrievalService
 
 	return apiRuntime{
 		bootstrapper: bootstrapperFunc(func(ctx context.Context) error {

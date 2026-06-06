@@ -10,6 +10,7 @@ import (
 	"github.com/FelixSeptem/stele/internal/governance"
 	"github.com/FelixSeptem/stele/internal/memory"
 	"github.com/FelixSeptem/stele/internal/policy"
+	"github.com/FelixSeptem/stele/internal/retrieval"
 )
 
 func TestRepositoryWriteRawEvent(t *testing.T) {
@@ -144,12 +145,16 @@ func TestMigrateRunsBaseSchema(t *testing.T) {
 	}
 
 	for _, want := range []string{
+		"CREATE EXTENSION IF NOT EXISTS vector",
 		"CREATE TABLE IF NOT EXISTS raw_events",
 		"CREATE TABLE IF NOT EXISTS candidate_memories",
 		"CREATE TABLE IF NOT EXISTS canonical_memories",
 		"CREATE TABLE IF NOT EXISTS memory_versions",
 		"CREATE TABLE IF NOT EXISTS provenance_links",
+		"CREATE TABLE IF NOT EXISTS relation_projections",
 		"modified_by text NOT NULL",
+		"CREATE INDEX IF NOT EXISTS canonical_memories_search_text_idx",
+		"CREATE INDEX IF NOT EXISTS relation_projections_search_text_idx",
 	} {
 		if !containsSQL(sql, want) {
 			t.Fatalf("BaseSchemaSQL() missing %q", want)
@@ -565,7 +570,7 @@ func TestRepositoryPromoteCandidateCreatesCanonicalMemoryVersionAndProvenance(t 
 	mock.ExpectQuery("SELECT COALESCE\\(MAX\\(version\\), 0\\) FROM memory_versions").
 		WithArgs(input.MemoryID).
 		WillReturnRows(pgxmock.NewRows([]string{"coalesce"}).AddRow(int64(0)))
-	mock.ExpectQuery("INSERT INTO canonical_memories").
+	mock.ExpectQuery("INSERT INTO canonical_memories[\\s\\S]*search_text").
 		WithArgs(
 			input.MemoryID,
 			input.Candidate.Scope.Tenant,
@@ -685,7 +690,7 @@ func TestRepositoryPromoteCandidateSupersedeUpdatesCanonicalAndAppendsVersion(t 
 	mock.ExpectQuery("SELECT COALESCE\\(MAX\\(version\\), 0\\) FROM memory_versions").
 		WithArgs(input.MemoryID).
 		WillReturnRows(pgxmock.NewRows([]string{"coalesce"}).AddRow(int64(1)))
-	mock.ExpectQuery("UPDATE canonical_memories").
+	mock.ExpectQuery("UPDATE canonical_memories[\\s\\S]*search_text").
 		WithArgs(
 			input.MemoryID,
 			memory.MemoryStateActive,
@@ -756,6 +761,135 @@ func TestRepositoryPromoteCandidateSupersedeUpdatesCanonicalAndAppendsVersion(t 
 	}
 }
 
+func TestRepositoryPromoteCandidateRelationUpsertsProjection(t *testing.T) {
+	mock, err := pgxmock.NewPool()
+	if err != nil {
+		t.Fatalf("pgxmock.NewPool() error = %v", err)
+	}
+	defer mock.Close()
+
+	now := time.Date(2026, 6, 1, 15, 12, 0, 0, time.UTC)
+	input := governance.CanonicalPromotion{
+		Candidate: governance.CandidateMemory{
+			ID:               "cand_relation",
+			SourceRawEventID: "evt_relation",
+			Scope: memory.Scope{
+				Tenant:    "tenant-a",
+				Project:   "project-a",
+				Namespace: "namespace-a",
+			},
+			Class:          memory.MemoryClassRelation,
+			Content:        "entity:user relation:interested_in target:travel",
+			Confidence:     0.93,
+			Importance:     0.72,
+			Freshness:      0.81,
+			Sensitivity:    governance.SensitivityLow,
+			Mutability:     governance.MutabilityMutable,
+			RetentionClass: policy.RetentionClassDurable,
+			Status:         governance.CandidateStatusPending,
+			CreatedAt:      now,
+			UpdatedAt:      now,
+		},
+		MemoryID:  "mem_relation",
+		VersionID: "ver_relation",
+		Version:   1,
+		CreatedAt: now,
+	}
+
+	mock.ExpectBegin()
+	mock.ExpectQuery("SELECT COALESCE\\(MAX\\(version\\), 0\\) FROM memory_versions").
+		WithArgs(input.MemoryID).
+		WillReturnRows(pgxmock.NewRows([]string{"coalesce"}).AddRow(int64(0)))
+	mock.ExpectQuery("INSERT INTO canonical_memories[\\s\\S]*search_text").
+		WithArgs(
+			input.MemoryID,
+			input.Candidate.Scope.Tenant,
+			input.Candidate.Scope.Project,
+			input.Candidate.Scope.Namespace,
+			input.Candidate.Class,
+			memory.MemoryStateActive,
+			input.Candidate.Content,
+			input.CreatedAt,
+			input.CreatedAt,
+		).
+		WillReturnRows(pgxmock.NewRows([]string{
+			"id", "tenant", "project", "namespace", "class", "state", "content", "created_at", "updated_at",
+		}).AddRow(
+			input.MemoryID,
+			input.Candidate.Scope.Tenant,
+			input.Candidate.Scope.Project,
+			input.Candidate.Scope.Namespace,
+			input.Candidate.Class,
+			memory.MemoryStateActive,
+			input.Candidate.Content,
+			input.CreatedAt,
+			input.CreatedAt,
+		))
+	mock.ExpectQuery("INSERT INTO memory_versions").
+		WithArgs(
+			input.VersionID,
+			input.MemoryID,
+			input.Version,
+			memory.MemoryStateActive,
+			input.Candidate.Content,
+			input.CreatedAt,
+			input.Candidate.ID,
+		).
+		WillReturnRows(pgxmock.NewRows([]string{
+			"id", "memory_id", "version", "state", "content", "created_at", "modified_by",
+		}).AddRow(
+			input.VersionID,
+			input.MemoryID,
+			input.Version,
+			memory.MemoryStateActive,
+			input.Candidate.Content,
+			input.CreatedAt,
+			input.Candidate.ID,
+		))
+	mock.ExpectExec("INSERT INTO relation_projections").
+		WithArgs(
+			input.MemoryID,
+			input.Candidate.Scope.Tenant,
+			input.Candidate.Scope.Project,
+			input.Candidate.Scope.Namespace,
+			"user",
+			"interested_in",
+			"travel",
+			input.Candidate.Content,
+			input.CreatedAt,
+			input.CreatedAt,
+		).
+		WillReturnResult(pgxmock.NewResult("INSERT", 1))
+	mock.ExpectExec("INSERT INTO provenance_links").
+		WithArgs(
+			pgxmock.AnyArg(),
+			input.Candidate.SourceRawEventID,
+			input.Candidate.ID,
+			input.MemoryID,
+			input.Candidate.Scope.Tenant,
+			input.Candidate.Scope.Project,
+			input.Candidate.Scope.Namespace,
+			"promote_candidate",
+			input.CreatedAt,
+		).
+		WillReturnResult(pgxmock.NewResult("INSERT", 1))
+	mock.ExpectCommit()
+
+	repo := NewRepository(mock)
+	canonical, version, err := repo.PromoteCandidate(context.Background(), input)
+	if err != nil {
+		t.Fatalf("PromoteCandidate() error = %v", err)
+	}
+
+	if canonical.ID != input.MemoryID {
+		t.Fatalf("canonical.ID = %q, want %q", canonical.ID, input.MemoryID)
+	}
+
+	if version.Version != 1 {
+		t.Fatalf("version.Version = %d, want %d", version.Version, 1)
+	}
+}
+
 func TestRepositoryCreateSummaryMemoryWritesCanonicalVersionAndEvidenceProvenance(t *testing.T) {
 	mock, err := pgxmock.NewPool()
 	if err != nil {
@@ -778,7 +912,7 @@ func TestRepositoryCreateSummaryMemoryWritesCanonicalVersionAndEvidenceProvenanc
 	}
 
 	mock.ExpectBegin()
-	mock.ExpectQuery("INSERT INTO canonical_memories").
+	mock.ExpectQuery("INSERT INTO canonical_memories[\\s\\S]*search_text").
 		WithArgs(
 			input.MemoryID,
 			input.Scope.Tenant,
@@ -1075,6 +1209,312 @@ func TestRepositoryApplyLifecycleActionDeleteClearsPayloadAndWritesDeletionMarke
 
 	if canonical.Content != "" {
 		t.Fatalf("Content = %q, want empty payload after delete", canonical.Content)
+	}
+}
+
+func TestRepositoryApplyLifecycleActionDeleteRemovesRelationProjection(t *testing.T) {
+	mock, err := pgxmock.NewPool()
+	if err != nil {
+		t.Fatalf("pgxmock.NewPool() error = %v", err)
+	}
+	defer mock.Close()
+
+	now := time.Date(2026, 6, 1, 17, 27, 0, 0, time.UTC)
+	action := governance.LifecycleAction{
+		MemoryID: "mem_relation",
+		Scope: memory.Scope{
+			Tenant:    "tenant-a",
+			Project:   "project-a",
+			Namespace: "namespace-a",
+		},
+		Action:    policy.ForgettingActionDelete,
+		Content:   "compliance request",
+		AppliedAt: now,
+	}
+
+	mock.ExpectBegin()
+	mock.ExpectQuery("UPDATE canonical_memories").
+		WithArgs(action.MemoryID, action.TargetState(), now).
+		WillReturnRows(pgxmock.NewRows([]string{
+			"id", "tenant", "project", "namespace", "class", "state", "content", "created_at", "updated_at",
+		}).AddRow(
+			action.MemoryID,
+			action.Scope.Tenant,
+			action.Scope.Project,
+			action.Scope.Namespace,
+			memory.MemoryClassRelation,
+			action.TargetState(),
+			"",
+			now.Add(-time.Hour),
+			now,
+		))
+	mock.ExpectExec("DELETE FROM relation_projections").
+		WithArgs(action.MemoryID).
+		WillReturnResult(pgxmock.NewResult("DELETE", 1))
+	mock.ExpectExec("INSERT INTO deletion_markers").
+		WithArgs(
+			action.MemoryID,
+			action.Scope.Tenant,
+			action.Scope.Project,
+			action.Scope.Namespace,
+			action.Content,
+			now,
+		).
+		WillReturnResult(pgxmock.NewResult("INSERT", 1))
+	mock.ExpectCommit()
+
+	repo := NewRepository(mock)
+	canonical, err := repo.ApplyLifecycleAction(context.Background(), action)
+	if err != nil {
+		t.Fatalf("ApplyLifecycleAction() error = %v", err)
+	}
+
+	if canonical.State != memory.MemoryStateDeleted {
+		t.Fatalf("State = %q, want %q", canonical.State, memory.MemoryStateDeleted)
+	}
+}
+
+func TestRepositorySearchLexicalReturnsVisibleHits(t *testing.T) {
+	mock, err := pgxmock.NewPool()
+	if err != nil {
+		t.Fatalf("pgxmock.NewPool() error = %v", err)
+	}
+	defer mock.Close()
+
+	scope := memory.Scope{
+		Tenant:    "tenant-a",
+		Project:   "project-a",
+		Namespace: "namespace-a",
+	}
+	now := time.Date(2026, 6, 6, 14, 0, 0, 0, time.UTC)
+
+	mock.ExpectQuery("SELECT .*lexical_score.*FROM canonical_memories").
+		WithArgs(scope.Tenant, scope.Project, scope.Namespace, "concise answers", nil, nil, 3).
+		WillReturnRows(pgxmock.NewRows([]string{
+			"id", "tenant", "project", "namespace", "class", "state", "content", "created_at", "updated_at", "lexical_score",
+		}).AddRow(
+			"mem_123",
+			scope.Tenant,
+			scope.Project,
+			scope.Namespace,
+			memory.MemoryClassProfile,
+			memory.MemoryStateActive,
+			"User prefers concise answers.",
+			now.Add(-time.Hour),
+			now,
+			0.88,
+		))
+
+	repo := NewRepository(mock)
+	hits, err := repo.SearchLexical(context.Background(), retrieval.SearchInput{
+		Scope: scope,
+		Query: "concise answers",
+		TopK:  3,
+	})
+	if err != nil {
+		t.Fatalf("SearchLexical() error = %v", err)
+	}
+
+	if len(hits) != 1 {
+		t.Fatalf("len(hits) = %d, want %d", len(hits), 1)
+	}
+
+	if hits[0].Memory.ID != "mem_123" {
+		t.Fatalf("hits[0].Memory.ID = %q, want %q", hits[0].Memory.ID, "mem_123")
+	}
+}
+
+func TestRepositoryListCitationsByMemoryIDs(t *testing.T) {
+	mock, err := pgxmock.NewPool()
+	if err != nil {
+		t.Fatalf("pgxmock.NewPool() error = %v", err)
+	}
+	defer mock.Close()
+
+	scope := memory.Scope{
+		Tenant:    "tenant-a",
+		Project:   "project-a",
+		Namespace: "namespace-a",
+	}
+
+	mock.ExpectQuery("SELECT memory_id, raw_event_id, operation FROM provenance_links").
+		WithArgs(scope.Tenant, scope.Project, scope.Namespace, pgxmock.AnyArg()).
+		WillReturnRows(pgxmock.NewRows([]string{"memory_id", "raw_event_id", "operation"}).
+			AddRow("mem_123", "evt_123", "promote_candidate").
+			AddRow("mem_123", "evt_456", "create_summary_memory"))
+
+	repo := NewRepository(mock)
+	citations, err := repo.ListCitations(context.Background(), scope, []string{"mem_123"})
+	if err != nil {
+		t.Fatalf("ListCitations() error = %v", err)
+	}
+
+	if len(citations["mem_123"]) != 2 {
+		t.Fatalf("len(citations[mem_123]) = %d, want %d", len(citations["mem_123"]), 2)
+	}
+}
+
+func TestRepositorySearchSemanticReturnsVisibleSummaryHits(t *testing.T) {
+	mock, err := pgxmock.NewPool()
+	if err != nil {
+		t.Fatalf("pgxmock.NewPool() error = %v", err)
+	}
+	defer mock.Close()
+
+	scope := memory.Scope{
+		Tenant:    "tenant-a",
+		Project:   "project-a",
+		Namespace: "namespace-a",
+	}
+	now := time.Date(2026, 6, 6, 14, 10, 0, 0, time.UTC)
+	queryEmbedding := []float32{0.1, 0.2, 0.3}
+
+	mock.ExpectQuery("SELECT .*semantic_score.*FROM canonical_memories").
+		WithArgs(scope.Tenant, scope.Project, scope.Namespace, "[0.1,0.2,0.3]", nil, nil, 5).
+		WillReturnRows(pgxmock.NewRows([]string{
+			"id", "tenant", "project", "namespace", "class", "state", "content", "created_at", "updated_at", "semantic_score",
+		}).AddRow(
+			"mem_summary",
+			scope.Tenant,
+			scope.Project,
+			scope.Namespace,
+			memory.MemoryClassSummary,
+			memory.MemoryStateActive,
+			"Summary: the user is planning weekend travel.",
+			now.Add(-time.Hour),
+			now,
+			0.76,
+		))
+
+	repo := NewRepository(mock)
+	hits, err := repo.SearchSemantic(context.Background(), retrieval.SearchInput{
+		Scope:            scope,
+		Query:            "travel planning",
+		QueryEmbedding:   queryEmbedding,
+		TopK:             5,
+		IncludeSummaries: true,
+	})
+	if err != nil {
+		t.Fatalf("SearchSemantic() error = %v", err)
+	}
+
+	if len(hits) != 1 {
+		t.Fatalf("len(hits) = %d, want %d", len(hits), 1)
+	}
+
+	if hits[0].Memory.Class != memory.MemoryClassSummary {
+		t.Fatalf("hits[0].Memory.Class = %q, want %q", hits[0].Memory.Class, memory.MemoryClassSummary)
+	}
+}
+
+func TestRepositorySearchSemanticWithoutEmbeddingReturnsNoHits(t *testing.T) {
+	mock, err := pgxmock.NewPool()
+	if err != nil {
+		t.Fatalf("pgxmock.NewPool() error = %v", err)
+	}
+	defer mock.Close()
+
+	repo := NewRepository(mock)
+	hits, err := repo.SearchSemantic(context.Background(), retrieval.SearchInput{
+		Scope: memory.Scope{
+			Tenant:    "tenant-a",
+			Project:   "project-a",
+			Namespace: "namespace-a",
+		},
+		Query: "travel planning",
+		TopK:  5,
+	})
+	if err != nil {
+		t.Fatalf("SearchSemantic() error = %v", err)
+	}
+
+	if len(hits) != 0 {
+		t.Fatalf("len(hits) = %d, want %d", len(hits), 0)
+	}
+}
+
+func TestRepositorySearchRelationsReturnsRelationHitsOnlyWhenEnabled(t *testing.T) {
+	mock, err := pgxmock.NewPool()
+	if err != nil {
+		t.Fatalf("pgxmock.NewPool() error = %v", err)
+	}
+	defer mock.Close()
+
+	scope := memory.Scope{
+		Tenant:    "tenant-a",
+		Project:   "project-a",
+		Namespace: "namespace-a",
+	}
+	now := time.Date(2026, 6, 6, 14, 20, 0, 0, time.UTC)
+
+	mock.ExpectQuery("SELECT .*relation_score.*FROM relation_projections").
+		WithArgs(scope.Tenant, scope.Project, scope.Namespace, "travel", "travel", "travel", "travel", "travel", nil, nil, 4).
+		WillReturnRows(pgxmock.NewRows([]string{
+			"id", "tenant", "project", "namespace", "class", "state", "content", "created_at", "updated_at", "relation_score",
+		}).AddRow(
+			"mem_relation",
+			scope.Tenant,
+			scope.Project,
+			scope.Namespace,
+			memory.MemoryClassRelation,
+			memory.MemoryStateActive,
+			"entity:user relation:interested_in target:travel",
+			now.Add(-time.Hour),
+			now,
+			0.64,
+		))
+
+	repo := NewRepository(mock)
+	hits, err := repo.SearchRelations(context.Background(), retrieval.SearchInput{
+		Scope:            scope,
+		Query:            "travel",
+		TopK:             4,
+		IncludeRelations: true,
+	})
+	if err != nil {
+		t.Fatalf("SearchRelations() error = %v", err)
+	}
+
+	if len(hits) != 1 {
+		t.Fatalf("len(hits) = %d, want %d", len(hits), 1)
+	}
+
+	if hits[0].Memory.ID != "mem_relation" {
+		t.Fatalf("hits[0].Memory.ID = %q, want %q", hits[0].Memory.ID, "mem_relation")
+	}
+}
+
+func TestRepositorySearchLexicalPassesTimeWindowFilters(t *testing.T) {
+	mock, err := pgxmock.NewPool()
+	if err != nil {
+		t.Fatalf("pgxmock.NewPool() error = %v", err)
+	}
+	defer mock.Close()
+
+	scope := memory.Scope{
+		Tenant:    "tenant-a",
+		Project:   "project-a",
+		Namespace: "namespace-a",
+	}
+	from := time.Date(2026, 6, 6, 12, 0, 0, 0, time.UTC)
+	to := time.Date(2026, 6, 6, 15, 0, 0, 0, time.UTC)
+
+	mock.ExpectQuery("SELECT .*lexical_score.*FROM canonical_memories").
+		WithArgs(scope.Tenant, scope.Project, scope.Namespace, "travel", from, to, 2).
+		WillReturnRows(pgxmock.NewRows([]string{
+			"id", "tenant", "project", "namespace", "class", "state", "content", "created_at", "updated_at", "lexical_score",
+		}))
+
+	repo := NewRepository(mock)
+	_, err = repo.SearchLexical(context.Background(), retrieval.SearchInput{
+		Scope:    scope,
+		Query:    "travel",
+		TopK:     2,
+		TimeFrom: from,
+		TimeTo:   to,
+	})
+	if err != nil {
+		t.Fatalf("SearchLexical() error = %v", err)
 	}
 }
 

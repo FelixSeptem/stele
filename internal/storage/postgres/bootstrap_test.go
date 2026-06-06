@@ -7,8 +7,8 @@ import (
 	"testing"
 	"time"
 
-	pgxmock "github.com/pashagolub/pgxmock/v4"
 	"github.com/jackc/pgx/v5"
+	pgxmock "github.com/pashagolub/pgxmock/v4"
 )
 
 func TestBootstrapDatabaseRunsBaseMigration(t *testing.T) {
@@ -20,19 +20,24 @@ func TestBootstrapDatabaseRunsBaseMigration(t *testing.T) {
 
 	mock.ExpectBegin()
 	mock.ExpectExec("CREATE EXTENSION IF NOT EXISTS pgcrypto").WillReturnResult(pgxmock.NewResult("CREATE EXTENSION", 0))
+	mock.ExpectExec("CREATE EXTENSION IF NOT EXISTS vector").WillReturnResult(pgxmock.NewResult("CREATE EXTENSION", 0))
 	mock.ExpectExec("CREATE TABLE IF NOT EXISTS raw_events").WillReturnResult(pgxmock.NewResult("CREATE TABLE", 0))
 	mock.ExpectExec("CREATE TABLE IF NOT EXISTS candidate_memories").WillReturnResult(pgxmock.NewResult("CREATE TABLE", 0))
 	mock.ExpectExec("CREATE TABLE IF NOT EXISTS canonical_memories").WillReturnResult(pgxmock.NewResult("CREATE TABLE", 0))
 	mock.ExpectExec("CREATE TABLE IF NOT EXISTS memory_versions").WillReturnResult(pgxmock.NewResult("CREATE TABLE", 0))
 	mock.ExpectExec("CREATE TABLE IF NOT EXISTS provenance_links").WillReturnResult(pgxmock.NewResult("CREATE TABLE", 0))
 	mock.ExpectExec("CREATE TABLE IF NOT EXISTS deletion_markers").WillReturnResult(pgxmock.NewResult("CREATE TABLE", 0))
+	mock.ExpectExec("CREATE TABLE IF NOT EXISTS relation_projections").WillReturnResult(pgxmock.NewResult("CREATE TABLE", 0))
 	mock.ExpectExec("CREATE INDEX IF NOT EXISTS raw_events_scope_created_at_idx").WillReturnResult(pgxmock.NewResult("CREATE INDEX", 0))
 	mock.ExpectExec("CREATE INDEX IF NOT EXISTS candidate_memories_source_raw_event_idx").WillReturnResult(pgxmock.NewResult("CREATE INDEX", 0))
 	mock.ExpectExec("CREATE INDEX IF NOT EXISTS candidate_memories_scope_status_idx").WillReturnResult(pgxmock.NewResult("CREATE INDEX", 0))
 	mock.ExpectExec("CREATE INDEX IF NOT EXISTS canonical_memories_scope_state_idx").WillReturnResult(pgxmock.NewResult("CREATE INDEX", 0))
 	mock.ExpectExec("CREATE INDEX IF NOT EXISTS canonical_memories_updated_at_idx").WillReturnResult(pgxmock.NewResult("CREATE INDEX", 0))
+	mock.ExpectExec("CREATE INDEX IF NOT EXISTS canonical_memories_search_text_idx").WillReturnResult(pgxmock.NewResult("CREATE INDEX", 0))
 	mock.ExpectExec("CREATE INDEX IF NOT EXISTS memory_versions_memory_created_at_idx").WillReturnResult(pgxmock.NewResult("CREATE INDEX", 0))
 	mock.ExpectExec("CREATE INDEX IF NOT EXISTS provenance_links_scope_created_at_idx").WillReturnResult(pgxmock.NewResult("CREATE INDEX", 0))
+	mock.ExpectExec("CREATE INDEX IF NOT EXISTS relation_projections_scope_updated_at_idx").WillReturnResult(pgxmock.NewResult("CREATE INDEX", 0))
+	mock.ExpectExec("CREATE INDEX IF NOT EXISTS relation_projections_search_text_idx").WillReturnResult(pgxmock.NewResult("CREATE INDEX", 0))
 	mock.ExpectCommit()
 
 	if err := BootstrapDatabase(context.Background(), mock); err != nil {

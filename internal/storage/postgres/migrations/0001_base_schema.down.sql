@@ -1,4 +1,5 @@
 DROP TABLE IF EXISTS deletion_markers;
+DROP TABLE IF EXISTS relation_projections;
 DROP TABLE IF EXISTS provenance_links;
 DROP TABLE IF EXISTS memory_versions;
 DROP TABLE IF EXISTS canonical_memories;
