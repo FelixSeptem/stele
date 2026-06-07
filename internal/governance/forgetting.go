@@ -8,6 +8,7 @@ import (
 
 	"github.com/FelixSeptem/stele/internal/memory"
 	"github.com/FelixSeptem/stele/internal/policy"
+	"github.com/FelixSeptem/stele/internal/telemetry"
 )
 
 type LifecycleAction struct {
@@ -15,6 +16,9 @@ type LifecycleAction struct {
 	Scope     memory.Scope
 	Action    policy.ForgettingAction
 	Content   string
+	Reason    string
+	Actor     string
+	RequestID string
 	AppliedAt time.Time
 }
 
@@ -53,9 +57,46 @@ type LifecycleRepository interface {
 type ForgettingProcessor struct {
 	Repository LifecycleRepository
 	Now        func() time.Time
+	Observer   telemetry.Observer
 }
 
-func (p ForgettingProcessor) Apply(ctx context.Context, action LifecycleAction) error {
+func (p ForgettingProcessor) Apply(ctx context.Context, action LifecycleAction) (err error) {
+	started := time.Now()
+	defer func() {
+		if p.Observer == nil {
+			return
+		}
+
+		now := time.Now
+		if p.Now != nil {
+			now = p.Now
+		}
+		observedAt := action.AppliedAt
+		if observedAt.IsZero() {
+			observedAt = now().UTC()
+		}
+
+		status := "ok"
+		count := 1
+		errorMessage := ""
+		if err != nil {
+			status = "error"
+			count = 0
+			errorMessage = err.Error()
+		}
+
+		p.Observer.RecordOperation(ctx, telemetry.OperationEvent{
+			Mode:       "scheduler",
+			Component:  "forgetting_processor",
+			Operation:  "forget",
+			Status:     status,
+			Count:      count,
+			Duration:   time.Since(started),
+			Error:      errorMessage,
+			ObservedAt: observedAt,
+		})
+	}()
+
 	if err := action.Validate(); err != nil {
 		return err
 	}
@@ -72,6 +113,6 @@ func (p ForgettingProcessor) Apply(ctx context.Context, action LifecycleAction) 
 		action.AppliedAt = now().UTC()
 	}
 
-	_, err := p.Repository.ApplyLifecycleAction(ctx, action)
+	_, err = p.Repository.ApplyLifecycleAction(ctx, action)
 	return err
 }

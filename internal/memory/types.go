@@ -28,9 +28,9 @@ const (
 )
 
 type Scope struct {
-	Tenant    string
-	Project   string
-	Namespace string
+	Tenant    string `json:"tenant"`
+	Project   string `json:"project"`
+	Namespace string `json:"namespace"`
 }
 
 func (s Scope) Normalized() Scope {
@@ -56,46 +56,52 @@ func (s Scope) Validate() error {
 }
 
 type RawEvent struct {
-	ID              string
-	Scope           Scope
-	EventType       string
-	Content         string
-	Metadata        map[string]any
-	SourceTimestamp time.Time
-	CreatedAt       time.Time
+	ID              string         `json:"id"`
+	Scope           Scope          `json:"scope"`
+	EventType       string         `json:"event_type"`
+	Content         string         `json:"content"`
+	Metadata        map[string]any `json:"metadata"`
+	SourceTimestamp time.Time      `json:"source_timestamp"`
+	CreatedAt       time.Time      `json:"created_at"`
 }
 
 type CanonicalMemory struct {
-	ID         string
-	Scope      Scope
-	Class      MemoryClass
-	State      MemoryState
-	Content    string
-	CreatedAt  time.Time
-	ModifiedAt time.Time
+	ID         string      `json:"id"`
+	Scope      Scope       `json:"scope"`
+	Class      MemoryClass `json:"class"`
+	State      MemoryState `json:"state"`
+	Content    string      `json:"content"`
+	CreatedAt  time.Time   `json:"created_at"`
+	ModifiedAt time.Time   `json:"modified_at"`
 }
 
 type MemoryVersion struct {
-	ID         string
-	MemoryID   string
-	Version    int64
-	State      MemoryState
-	Content    string
-	CreatedAt  time.Time
-	ModifiedBy string
+	ID         string      `json:"id"`
+	MemoryID   string      `json:"memory_id"`
+	Version    int64       `json:"version"`
+	State      MemoryState `json:"state"`
+	Content    string      `json:"content"`
+	CreatedAt  time.Time   `json:"created_at"`
+	ModifiedBy string      `json:"modified_by"`
 }
 
 type ProvenanceRecord struct {
-	ID                string
-	Scope             Scope
-	RawEventID        string
-	CandidateMemoryID string
-	MemoryID          string
-	RequestID         string
-	Actor             string
-	Operation         string
-	CreatedAt         time.Time
-	SourceContext     map[string]any
+	ID                string         `json:"id"`
+	Scope             Scope          `json:"scope"`
+	RawEventID        string         `json:"raw_event_id"`
+	CandidateMemoryID string         `json:"candidate_memory_id"`
+	MemoryID          string         `json:"memory_id"`
+	RequestID         string         `json:"request_id"`
+	Actor             string         `json:"actor"`
+	Operation         string         `json:"operation"`
+	CreatedAt         time.Time      `json:"created_at"`
+	SourceContext     map[string]any `json:"source_context"`
+}
+
+type MemoryHistory struct {
+	Memory     CanonicalMemory    `json:"memory"`
+	Versions   []MemoryVersion    `json:"versions"`
+	Provenance []ProvenanceRecord `json:"provenance"`
 }
 
 type IngestEventInput struct {

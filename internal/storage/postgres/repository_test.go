@@ -5,9 +5,11 @@ import (
 	"testing"
 	"time"
 
+	"github.com/jackc/pgx/v5/pgconn"
 	pgxmock "github.com/pashagolub/pgxmock/v4"
 
 	"github.com/FelixSeptem/stele/internal/governance"
+	"github.com/FelixSeptem/stele/internal/jobs"
 	"github.com/FelixSeptem/stele/internal/memory"
 	"github.com/FelixSeptem/stele/internal/policy"
 	"github.com/FelixSeptem/stele/internal/retrieval"
@@ -69,12 +71,30 @@ func TestRepositoryWriteProvenance(t *testing.T) {
 			Project:   "project-a",
 			Namespace: "namespace-a",
 		},
+		RequestID: "req_123",
+		Actor:     "operator-a",
 		Operation: "ingest_event",
 		CreatedAt: time.Date(2026, 5, 29, 23, 45, 0, 0, time.UTC),
+		SourceContext: map[string]any{
+			"reason": "manual override",
+		},
 	}
 
 	mock.ExpectExec("INSERT INTO provenance_links").
-		WithArgs(record.ID, record.RawEventID, nil, nil, record.Scope.Tenant, record.Scope.Project, record.Scope.Namespace, record.Operation, record.CreatedAt).
+		WithArgs(
+			record.ID,
+			record.RawEventID,
+			nil,
+			nil,
+			record.Scope.Tenant,
+			record.Scope.Project,
+			record.Scope.Namespace,
+			record.Operation,
+			record.RequestID,
+			record.Actor,
+			pgxmock.AnyArg(),
+			record.CreatedAt,
+		).
 		WillReturnResult(pgxmock.NewResult("INSERT", 1))
 
 	repo := NewRepository(mock)
@@ -84,6 +104,73 @@ func TestRepositoryWriteProvenance(t *testing.T) {
 
 	if err := mock.ExpectationsWereMet(); err != nil {
 		t.Fatalf("ExpectationsWereMet() error = %v", err)
+	}
+}
+
+func TestRepositoryReadCanonicalMemoryReturnsVisibleScopedRecord(t *testing.T) {
+	mock, err := pgxmock.NewPool()
+	if err != nil {
+		t.Fatalf("pgxmock.NewPool() error = %v", err)
+	}
+	defer mock.Close()
+
+	scope := memory.Scope{Tenant: "tenant-a", Project: "project-a", Namespace: "namespace-a"}
+	now := time.Date(2026, 6, 7, 16, 0, 0, 0, time.UTC)
+
+	mock.ExpectQuery("SELECT[\\s\\S]*FROM canonical_memories").
+		WithArgs("mem_123", scope.Tenant, scope.Project, scope.Namespace, false).
+		WillReturnRows(pgxmock.NewRows([]string{
+			"id", "tenant", "project", "namespace", "class", "state", "content", "created_at", "updated_at",
+		}).AddRow(
+			"mem_123", scope.Tenant, scope.Project, scope.Namespace,
+			memory.MemoryClassProfile, memory.MemoryStateActive, "User prefers concise answers.", now.Add(-time.Hour), now,
+		))
+
+	repo := NewRepository(mock)
+	got, err := repo.ReadCanonicalMemory(context.Background(), scope, "mem_123", false)
+	if err != nil {
+		t.Fatalf("ReadCanonicalMemory() error = %v", err)
+	}
+
+	if got.ID != "mem_123" {
+		t.Fatalf("ID = %q, want mem_123", got.ID)
+	}
+}
+
+func TestRepositoryReadMemoryProvenanceReturnsActorAndReason(t *testing.T) {
+	mock, err := pgxmock.NewPool()
+	if err != nil {
+		t.Fatalf("pgxmock.NewPool() error = %v", err)
+	}
+	defer mock.Close()
+
+	scope := memory.Scope{Tenant: "tenant-a", Project: "project-a", Namespace: "namespace-a"}
+	now := time.Date(2026, 6, 7, 16, 10, 0, 0, time.UTC)
+
+	mock.ExpectQuery("SELECT[\\s\\S]*FROM provenance_links").
+		WithArgs(scope.Tenant, scope.Project, scope.Namespace, "mem_123").
+		WillReturnRows(pgxmock.NewRows([]string{
+			"id", "raw_event_id", "candidate_memory_id", "memory_id", "tenant", "project", "namespace", "operation", "request_id", "actor", "source_context", "created_at",
+		}).AddRow(
+			"prov_1", nil, nil, "mem_123", scope.Tenant, scope.Project, scope.Namespace, "suppress_memory", "req_1", "operator-a", []byte(`{"reason":"manual override"}`), now,
+		))
+
+	repo := NewRepository(mock)
+	records, err := repo.ReadMemoryProvenance(context.Background(), scope, "mem_123")
+	if err != nil {
+		t.Fatalf("ReadMemoryProvenance() error = %v", err)
+	}
+
+	if len(records) != 1 {
+		t.Fatalf("len(records) = %d, want 1", len(records))
+	}
+
+	if records[0].Actor != "operator-a" {
+		t.Fatalf("Actor = %q, want operator-a", records[0].Actor)
+	}
+
+	if got := records[0].SourceContext["reason"]; got != "manual override" {
+		t.Fatalf("SourceContext[reason] = %v, want manual override", got)
 	}
 }
 
@@ -119,7 +206,20 @@ func TestRepositoryIngestEventWritesRawEventAndProvenanceInOneTransaction(t *tes
 		WillReturnRows(pgxmock.NewRows([]string{"id", "tenant", "project", "namespace", "event_type", "content", "source_timestamp", "created_at"}).
 			AddRow("evt_123", input.Scope.Tenant, input.Scope.Project, input.Scope.Namespace, input.EventType, input.Content, input.SourceTimestamp, createdAt))
 	mock.ExpectExec("INSERT INTO provenance_links").
-		WithArgs(provenance.ID, "evt_123", nil, nil, input.Scope.Tenant, input.Scope.Project, input.Scope.Namespace, provenance.Operation, provenance.CreatedAt).
+		WithArgs(
+			provenance.ID,
+			"evt_123",
+			nil,
+			nil,
+			input.Scope.Tenant,
+			input.Scope.Project,
+			input.Scope.Namespace,
+			provenance.Operation,
+			nil,
+			nil,
+			pgxmock.AnyArg(),
+			provenance.CreatedAt,
+		).
 		WillReturnResult(pgxmock.NewResult("INSERT", 1))
 	mock.ExpectCommit()
 
@@ -149,9 +249,11 @@ func TestMigrateRunsBaseSchema(t *testing.T) {
 		"CREATE TABLE IF NOT EXISTS raw_events",
 		"CREATE TABLE IF NOT EXISTS candidate_memories",
 		"CREATE TABLE IF NOT EXISTS canonical_memories",
+		"retention_class text NOT NULL",
 		"CREATE TABLE IF NOT EXISTS memory_versions",
 		"CREATE TABLE IF NOT EXISTS provenance_links",
 		"CREATE TABLE IF NOT EXISTS relation_projections",
+		"CREATE TABLE IF NOT EXISTS job_executions",
 		"modified_by text NOT NULL",
 		"CREATE INDEX IF NOT EXISTS canonical_memories_search_text_idx",
 		"CREATE INDEX IF NOT EXISTS relation_projections_search_text_idx",
@@ -251,6 +353,9 @@ func TestRepositoryCreateCandidateWritesCandidateAndProvenanceInOneTransaction(t
 			candidate.Scope.Project,
 			candidate.Scope.Namespace,
 			provenance.Operation,
+			nil,
+			nil,
+			pgxmock.AnyArg(),
 			provenance.CreatedAt,
 		).
 		WillReturnResult(pgxmock.NewResult("INSERT", 1))
@@ -325,6 +430,306 @@ func TestRepositoryListCandidatesByRawEvent(t *testing.T) {
 	}
 }
 
+func TestRepositoryReadGovernanceStatusReturnsBacklogSnapshot(t *testing.T) {
+	mock, err := pgxmock.NewPool()
+	if err != nil {
+		t.Fatalf("pgxmock.NewPool() error = %v", err)
+	}
+	defer mock.Close()
+
+	now := time.Date(2026, 6, 6, 18, 30, 0, 0, time.UTC)
+	oldestPending := now.Add(-10 * time.Minute)
+	mock.ExpectQuery("SELECT[\\s\\S]*FROM raw_events").
+		WithArgs(now).
+		WillReturnRows(pgxmock.NewRows([]string{
+			"pending_raw_events", "leased_raw_events", "processed_raw_events", "oldest_pending_created_at",
+		}).AddRow(
+			int64(7),
+			int64(2),
+			int64(19),
+			oldestPending,
+		))
+
+	repo := NewRepository(mock)
+	status, err := repo.ReadGovernanceStatus(context.Background(), now)
+	if err != nil {
+		t.Fatalf("ReadGovernanceStatus() error = %v", err)
+	}
+
+	if status.PendingRawEvents != 7 || status.LeasedRawEvents != 2 || status.ProcessedRawEvents != 19 {
+		t.Fatalf("status = %+v, want expected counts", status)
+	}
+
+	if !status.OldestPendingCreatedAt.Equal(oldestPending) {
+		t.Fatalf("OldestPendingCreatedAt = %v, want %v", status.OldestPendingCreatedAt, oldestPending)
+	}
+}
+
+func TestRepositoryReadMemoryHistoryReturnsCanonicalVersionsAndProvenance(t *testing.T) {
+	mock, err := pgxmock.NewPool()
+	if err != nil {
+		t.Fatalf("pgxmock.NewPool() error = %v", err)
+	}
+	defer mock.Close()
+
+	scope := memory.Scope{
+		Tenant:    "tenant-a",
+		Project:   "project-a",
+		Namespace: "namespace-a",
+	}
+	now := time.Date(2026, 6, 6, 19, 0, 0, 0, time.UTC)
+
+	mock.ExpectQuery("SELECT[\\s\\S]*FROM canonical_memories").
+		WithArgs("mem_hidden", scope.Tenant, scope.Project, scope.Namespace, true).
+		WillReturnRows(pgxmock.NewRows([]string{
+			"id", "tenant", "project", "namespace", "class", "state", "content", "created_at", "updated_at",
+		}).AddRow(
+			"mem_hidden",
+			scope.Tenant,
+			scope.Project,
+			scope.Namespace,
+			memory.MemoryClassProfile,
+			memory.MemoryStateForgotten,
+			"Old preference",
+			now.Add(-time.Hour),
+			now,
+		))
+
+	mock.ExpectQuery("SELECT[\\s\\S]*FROM memory_versions").
+		WithArgs("mem_hidden").
+		WillReturnRows(pgxmock.NewRows([]string{
+			"id", "memory_id", "version", "state", "content", "created_at", "modified_by",
+		}).AddRow(
+			"ver_2",
+			"mem_hidden",
+			int64(2),
+			memory.MemoryStateForgotten,
+			"Old preference",
+			now,
+			"cand_2",
+		))
+
+	mock.ExpectQuery("SELECT[\\s\\S]*FROM provenance_links").
+		WithArgs(scope.Tenant, scope.Project, scope.Namespace, "mem_hidden").
+		WillReturnRows(pgxmock.NewRows([]string{
+			"id", "raw_event_id", "candidate_memory_id", "memory_id", "tenant", "project", "namespace", "operation", "request_id", "actor", "source_context", "created_at",
+		}).AddRow(
+			"prov_1",
+			"evt_1",
+			"cand_2",
+			"mem_hidden",
+			scope.Tenant,
+			scope.Project,
+			scope.Namespace,
+			"promote_candidate",
+			nil,
+			nil,
+			[]byte(`{}`),
+			now,
+		))
+
+	repo := NewRepository(mock)
+	history, err := repo.ReadMemoryHistory(context.Background(), scope, "mem_hidden", true)
+	if err != nil {
+		t.Fatalf("ReadMemoryHistory() error = %v", err)
+	}
+
+	if history.Memory.ID != "mem_hidden" {
+		t.Fatalf("Memory.ID = %q, want %q", history.Memory.ID, "mem_hidden")
+	}
+
+	if len(history.Versions) != 1 || history.Versions[0].ID != "ver_2" {
+		t.Fatalf("Versions = %+v, want one version", history.Versions)
+	}
+
+	if len(history.Provenance) != 1 || history.Provenance[0].ID != "prov_1" {
+		t.Fatalf("Provenance = %+v, want one provenance record", history.Provenance)
+	}
+}
+
+func TestRepositoryBeginJobExecutionInsertsNewExecution(t *testing.T) {
+	mock, err := pgxmock.NewPool()
+	if err != nil {
+		t.Fatalf("pgxmock.NewPool() error = %v", err)
+	}
+	defer mock.Close()
+
+	startedAt := time.Date(2026, 6, 7, 11, 0, 0, 0, time.UTC)
+	execution := jobs.JobExecution{
+		JobName:        "summary_compaction",
+		Scope:          memory.Scope{Tenant: "tenant-a", Project: "project-a", Namespace: "namespace-a"},
+		TriggerSource:  "scheduler",
+		IdempotencyKey: "summary_compaction:tenant-a:project-a:namespace-a:2026-06-07T11:00:00Z",
+		StartedAt:      startedAt,
+	}
+
+	mock.ExpectExec("INSERT INTO job_executions").
+		WithArgs(
+			execution.JobName,
+			execution.Scope.Tenant,
+			execution.Scope.Project,
+			execution.Scope.Namespace,
+			execution.TriggerSource,
+			execution.IdempotencyKey,
+			jobs.JobExecutionStatusRunning,
+			execution.StartedAt,
+		).
+		WillReturnResult(pgxmock.NewResult("INSERT", 1))
+
+	repo := NewRepository(mock)
+	started, err := repo.BeginJobExecution(context.Background(), execution)
+	if err != nil {
+		t.Fatalf("BeginJobExecution() error = %v", err)
+	}
+
+	if !started {
+		t.Fatal("started = false, want true")
+	}
+}
+
+func TestRepositoryBeginJobExecutionSkipsCompletedIdempotencyKey(t *testing.T) {
+	mock, err := pgxmock.NewPool()
+	if err != nil {
+		t.Fatalf("pgxmock.NewPool() error = %v", err)
+	}
+	defer mock.Close()
+
+	execution := jobs.JobExecution{
+		JobName:        "summary_compaction",
+		Scope:          memory.Scope{Tenant: "tenant-a", Project: "project-a", Namespace: "namespace-a"},
+		TriggerSource:  "scheduler",
+		IdempotencyKey: "summary_compaction:tenant-a:project-a:namespace-a:2026-06-07T11:00:00Z",
+		StartedAt:      time.Date(2026, 6, 7, 11, 0, 0, 0, time.UTC),
+	}
+
+	mock.ExpectExec("INSERT INTO job_executions").
+		WithArgs(
+			execution.JobName,
+			execution.Scope.Tenant,
+			execution.Scope.Project,
+			execution.Scope.Namespace,
+			execution.TriggerSource,
+			execution.IdempotencyKey,
+			jobs.JobExecutionStatusRunning,
+			execution.StartedAt,
+		).
+		WillReturnError(&pgconn.PgError{Code: "23505"})
+	mock.ExpectQuery("SELECT status FROM job_executions WHERE idempotency_key = \\$1").
+		WithArgs(execution.IdempotencyKey).
+		WillReturnRows(pgxmock.NewRows([]string{"status"}).AddRow(string(jobs.JobExecutionStatusCompleted)))
+
+	repo := NewRepository(mock)
+	started, err := repo.BeginJobExecution(context.Background(), execution)
+	if err != nil {
+		t.Fatalf("BeginJobExecution() error = %v", err)
+	}
+
+	if started {
+		t.Fatal("started = true, want false for completed idempotency key")
+	}
+}
+
+func TestRepositoryListRecentJobExecutionsReturnsNewestFirst(t *testing.T) {
+	mock, err := pgxmock.NewPool()
+	if err != nil {
+		t.Fatalf("pgxmock.NewPool() error = %v", err)
+	}
+	defer mock.Close()
+
+	scope := memory.Scope{Tenant: "tenant-a", Project: "project-a", Namespace: "namespace-a"}
+	now := time.Date(2026, 6, 7, 11, 30, 0, 0, time.UTC)
+
+	mock.ExpectQuery("SELECT[\\s\\S]*FROM job_executions").
+		WithArgs(scope.Tenant, scope.Project, scope.Namespace, 5).
+		WillReturnRows(pgxmock.NewRows([]string{
+			"job_name", "tenant", "project", "namespace", "trigger_source", "idempotency_key", "status", "attempt", "processed_count", "error_message", "started_at", "finished_at",
+		}).AddRow(
+			"summary_compaction",
+			scope.Tenant,
+			scope.Project,
+			scope.Namespace,
+			"scheduler",
+			"run-a",
+			string(jobs.JobExecutionStatusCompleted),
+			1,
+			1,
+			nil,
+			now,
+			now.Add(time.Second),
+		))
+
+	repo := NewRepository(mock)
+	records, err := repo.ListRecentJobExecutions(context.Background(), scope, 5)
+	if err != nil {
+		t.Fatalf("ListRecentJobExecutions() error = %v", err)
+	}
+
+	if len(records) != 1 {
+		t.Fatalf("len(records) = %d, want 1", len(records))
+	}
+
+	if records[0].JobName != "summary_compaction" || records[0].Status != jobs.JobExecutionStatusCompleted {
+		t.Fatalf("record = %+v, want returned job execution", records[0])
+	}
+}
+
+func TestRepositoryListRetentionTargetsReturnsActiveScopedTargets(t *testing.T) {
+	mock, err := pgxmock.NewPool()
+	if err != nil {
+		t.Fatalf("pgxmock.NewPool() error = %v", err)
+	}
+	defer mock.Close()
+
+	scope := memory.Scope{Tenant: "tenant-a", Project: "project-a", Namespace: "namespace-a"}
+	now := time.Date(2026, 6, 7, 12, 0, 0, 0, time.UTC)
+
+	mock.ExpectQuery("SELECT[\\s\\S]*FROM canonical_memories").
+		WithArgs(scope.Tenant, scope.Project, scope.Namespace, memory.MemoryStateActive, 10).
+		WillReturnRows(pgxmock.NewRows([]string{
+			"id", "tenant", "project", "namespace", "retention_class", "updated_at",
+		}).AddRow(
+			"mem_123",
+			scope.Tenant,
+			scope.Project,
+			scope.Namespace,
+			"ephemeral",
+			now,
+		))
+
+	repo := NewRepository(mock)
+	targets, err := repo.ListRetentionTargets(context.Background(), scope, 10)
+	if err != nil {
+		t.Fatalf("ListRetentionTargets() error = %v", err)
+	}
+
+	if len(targets) != 1 || targets[0].MemoryID != "mem_123" {
+		t.Fatalf("targets = %+v, want one target mem_123", targets)
+	}
+}
+
+func TestRepositoryDeleteJobExecutionsBeforeReturnsDeletedCount(t *testing.T) {
+	mock, err := pgxmock.NewPool()
+	if err != nil {
+		t.Fatalf("pgxmock.NewPool() error = %v", err)
+	}
+	defer mock.Close()
+
+	cutoff := time.Date(2026, 6, 1, 0, 0, 0, 0, time.UTC)
+	mock.ExpectExec("DELETE FROM job_executions").
+		WithArgs(cutoff).
+		WillReturnResult(pgxmock.NewResult("DELETE", 3))
+
+	repo := NewRepository(mock)
+	deleted, err := repo.DeleteJobExecutionsBefore(context.Background(), cutoff)
+	if err != nil {
+		t.Fatalf("DeleteJobExecutionsBefore() error = %v", err)
+	}
+
+	if deleted != 3 {
+		t.Fatalf("deleted = %d, want 3", deleted)
+	}
+}
+
 func TestRepositoryTransitionCandidateStatus(t *testing.T) {
 	mock, err := pgxmock.NewPool()
 	if err != nil {
@@ -385,6 +790,9 @@ func TestRepositoryTransitionCandidateStatus(t *testing.T) {
 			provenance.Scope.Project,
 			provenance.Scope.Namespace,
 			provenance.Operation,
+			nil,
+			nil,
+			pgxmock.AnyArg(),
 			provenance.CreatedAt,
 		).
 		WillReturnResult(pgxmock.NewResult("INSERT", 1))
@@ -578,6 +986,7 @@ func TestRepositoryPromoteCandidateCreatesCanonicalMemoryVersionAndProvenance(t 
 			input.Candidate.Scope.Namespace,
 			input.Candidate.Class,
 			memory.MemoryStateActive,
+			input.Candidate.RetentionClass,
 			input.Candidate.Content,
 			input.CreatedAt,
 			input.CreatedAt,
@@ -626,6 +1035,9 @@ func TestRepositoryPromoteCandidateCreatesCanonicalMemoryVersionAndProvenance(t 
 			input.Candidate.Scope.Project,
 			input.Candidate.Scope.Namespace,
 			"promote_candidate",
+			nil,
+			nil,
+			pgxmock.AnyArg(),
 			input.CreatedAt,
 		).
 		WillReturnResult(pgxmock.NewResult("INSERT", 1))
@@ -694,6 +1106,7 @@ func TestRepositoryPromoteCandidateSupersedeUpdatesCanonicalAndAppendsVersion(t 
 		WithArgs(
 			input.MemoryID,
 			memory.MemoryStateActive,
+			input.Candidate.RetentionClass,
 			input.Candidate.Content,
 			input.CreatedAt,
 		).
@@ -741,6 +1154,9 @@ func TestRepositoryPromoteCandidateSupersedeUpdatesCanonicalAndAppendsVersion(t 
 			input.Candidate.Scope.Project,
 			input.Candidate.Scope.Namespace,
 			"promote_candidate",
+			nil,
+			nil,
+			pgxmock.AnyArg(),
 			input.CreatedAt,
 		).
 		WillReturnResult(pgxmock.NewResult("INSERT", 1))
@@ -808,6 +1224,7 @@ func TestRepositoryPromoteCandidateRelationUpsertsProjection(t *testing.T) {
 			input.Candidate.Scope.Namespace,
 			input.Candidate.Class,
 			memory.MemoryStateActive,
+			input.Candidate.RetentionClass,
 			input.Candidate.Content,
 			input.CreatedAt,
 			input.CreatedAt,
@@ -870,6 +1287,9 @@ func TestRepositoryPromoteCandidateRelationUpsertsProjection(t *testing.T) {
 			input.Candidate.Scope.Project,
 			input.Candidate.Scope.Namespace,
 			"promote_candidate",
+			nil,
+			nil,
+			pgxmock.AnyArg(),
 			input.CreatedAt,
 		).
 		WillReturnResult(pgxmock.NewResult("INSERT", 1))
@@ -920,6 +1340,7 @@ func TestRepositoryCreateSummaryMemoryWritesCanonicalVersionAndEvidenceProvenanc
 			input.Scope.Namespace,
 			memory.MemoryClassSummary,
 			memory.MemoryStateActive,
+			policy.RetentionClassDurable,
 			input.Content,
 			input.CreatedAt,
 			input.CreatedAt,
@@ -968,6 +1389,9 @@ func TestRepositoryCreateSummaryMemoryWritesCanonicalVersionAndEvidenceProvenanc
 			input.Scope.Project,
 			input.Scope.Namespace,
 			"create_summary_memory",
+			nil,
+			nil,
+			pgxmock.AnyArg(),
 			input.CreatedAt,
 		).
 		WillReturnResult(pgxmock.NewResult("INSERT", 1))
@@ -981,6 +1405,9 @@ func TestRepositoryCreateSummaryMemoryWritesCanonicalVersionAndEvidenceProvenanc
 			input.Scope.Project,
 			input.Scope.Namespace,
 			"create_summary_memory",
+			nil,
+			nil,
+			pgxmock.AnyArg(),
 			input.CreatedAt,
 		).
 		WillReturnResult(pgxmock.NewResult("INSERT", 1))
@@ -1116,13 +1543,15 @@ func TestRepositoryApplyLifecycleActionUpdatesCanonicalState(t *testing.T) {
 			Namespace: "namespace-a",
 		},
 		Action:    policy.ForgettingActionSuppress,
-		Content:   "User prefers concise answers.",
+		Reason:    "manual override",
+		Actor:     "operator-a",
+		RequestID: "req_123",
 		AppliedAt: now,
 	}
 
 	mock.ExpectBegin()
 	mock.ExpectQuery("UPDATE canonical_memories").
-		WithArgs(action.MemoryID, action.TargetState(), now).
+		WithArgs(action.MemoryID, action.Scope.Tenant, action.Scope.Project, action.Scope.Namespace, action.TargetState(), now).
 		WillReturnRows(pgxmock.NewRows([]string{
 			"id", "tenant", "project", "namespace", "class", "state", "content", "created_at", "updated_at",
 		}).AddRow(
@@ -1132,10 +1561,26 @@ func TestRepositoryApplyLifecycleActionUpdatesCanonicalState(t *testing.T) {
 			action.Scope.Namespace,
 			memory.MemoryClassProfile,
 			action.TargetState(),
-			action.Content,
+			"User prefers concise answers.",
 			now.Add(-time.Hour),
 			now,
 		))
+	mock.ExpectExec("INSERT INTO provenance_links").
+		WithArgs(
+			pgxmock.AnyArg(),
+			nil,
+			nil,
+			action.MemoryID,
+			action.Scope.Tenant,
+			action.Scope.Project,
+			action.Scope.Namespace,
+			"suppress_memory",
+			action.RequestID,
+			action.Actor,
+			pgxmock.AnyArg(),
+			now,
+		).
+		WillReturnResult(pgxmock.NewResult("INSERT", 1))
 	mock.ExpectCommit()
 
 	repo := NewRepository(mock)
@@ -1165,13 +1610,15 @@ func TestRepositoryApplyLifecycleActionDeleteClearsPayloadAndWritesDeletionMarke
 			Namespace: "namespace-a",
 		},
 		Action:    policy.ForgettingActionDelete,
-		Content:   "compliance request",
+		Reason:    "compliance request",
+		Actor:     "operator-a",
+		RequestID: "req_456",
 		AppliedAt: now,
 	}
 
 	mock.ExpectBegin()
 	mock.ExpectQuery("UPDATE canonical_memories").
-		WithArgs(action.MemoryID, action.TargetState(), now).
+		WithArgs(action.MemoryID, action.Scope.Tenant, action.Scope.Project, action.Scope.Namespace, action.TargetState(), now).
 		WillReturnRows(pgxmock.NewRows([]string{
 			"id", "tenant", "project", "namespace", "class", "state", "content", "created_at", "updated_at",
 		}).AddRow(
@@ -1191,7 +1638,23 @@ func TestRepositoryApplyLifecycleActionDeleteClearsPayloadAndWritesDeletionMarke
 			action.Scope.Tenant,
 			action.Scope.Project,
 			action.Scope.Namespace,
-			action.Content,
+			action.Reason,
+			now,
+		).
+		WillReturnResult(pgxmock.NewResult("INSERT", 1))
+	mock.ExpectExec("INSERT INTO provenance_links").
+		WithArgs(
+			pgxmock.AnyArg(),
+			nil,
+			nil,
+			action.MemoryID,
+			action.Scope.Tenant,
+			action.Scope.Project,
+			action.Scope.Namespace,
+			"delete_memory",
+			action.RequestID,
+			action.Actor,
+			pgxmock.AnyArg(),
 			now,
 		).
 		WillReturnResult(pgxmock.NewResult("INSERT", 1))
@@ -1228,13 +1691,15 @@ func TestRepositoryApplyLifecycleActionDeleteRemovesRelationProjection(t *testin
 			Namespace: "namespace-a",
 		},
 		Action:    policy.ForgettingActionDelete,
-		Content:   "compliance request",
+		Reason:    "compliance request",
+		Actor:     "operator-a",
+		RequestID: "req_relation",
 		AppliedAt: now,
 	}
 
 	mock.ExpectBegin()
 	mock.ExpectQuery("UPDATE canonical_memories").
-		WithArgs(action.MemoryID, action.TargetState(), now).
+		WithArgs(action.MemoryID, action.Scope.Tenant, action.Scope.Project, action.Scope.Namespace, action.TargetState(), now).
 		WillReturnRows(pgxmock.NewRows([]string{
 			"id", "tenant", "project", "namespace", "class", "state", "content", "created_at", "updated_at",
 		}).AddRow(
@@ -1257,7 +1722,23 @@ func TestRepositoryApplyLifecycleActionDeleteRemovesRelationProjection(t *testin
 			action.Scope.Tenant,
 			action.Scope.Project,
 			action.Scope.Namespace,
-			action.Content,
+			action.Reason,
+			now,
+		).
+		WillReturnResult(pgxmock.NewResult("INSERT", 1))
+	mock.ExpectExec("INSERT INTO provenance_links").
+		WithArgs(
+			pgxmock.AnyArg(),
+			nil,
+			nil,
+			action.MemoryID,
+			action.Scope.Tenant,
+			action.Scope.Project,
+			action.Scope.Namespace,
+			"delete_memory",
+			action.RequestID,
+			action.Actor,
+			pgxmock.AnyArg(),
 			now,
 		).
 		WillReturnResult(pgxmock.NewResult("INSERT", 1))

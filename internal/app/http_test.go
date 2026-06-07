@@ -12,8 +12,11 @@ import (
 	"testing"
 	"time"
 
+	"github.com/FelixSeptem/stele/internal/jobs"
 	"github.com/FelixSeptem/stele/internal/memory"
+	"github.com/FelixSeptem/stele/internal/policy"
 	"github.com/FelixSeptem/stele/internal/retrieval"
+	"github.com/jackc/pgx/v5"
 )
 
 type stubReadinessChecker struct {
@@ -65,6 +68,90 @@ type stubContextAssembler struct {
 func (s *stubContextAssembler) AssembleContext(ctx context.Context, input retrieval.AssembleContextInput) (retrieval.AssembledContext, error) {
 	s.gotInput = input
 	return s.result, s.err
+}
+
+type stubGovernanceStatusReader struct {
+	status GovernanceStatus
+	err    error
+}
+
+func (s *stubGovernanceStatusReader) ReadGovernanceStatus(ctx context.Context) (GovernanceStatus, error) {
+	return s.status, s.err
+}
+
+type stubMemoryHistoryReader struct {
+	history memory.MemoryHistory
+	err     error
+}
+
+func (s *stubMemoryHistoryReader) ReadMemoryHistory(ctx context.Context, scope memory.Scope, memoryID string) (memory.MemoryHistory, error) {
+	if s.err != nil {
+		return memory.MemoryHistory{}, s.err
+	}
+
+	if s.history.Memory.ID == "" {
+		s.history.Memory.ID = memoryID
+		s.history.Memory.Scope = scope
+	}
+
+	return s.history, nil
+}
+
+type stubMemoryQueryService struct {
+	gotListInput       memory.ListMemoriesInput
+	gotGetScope        memory.Scope
+	gotGetMemoryID     string
+	gotHistoryScope    memory.Scope
+	gotHistoryMemoryID string
+	gotProvScope       memory.Scope
+	gotProvMemoryID    string
+	page               memory.MemoryPage
+	resource           memory.MemoryResource
+	history            memory.MemoryHistory
+	provenance         []memory.ProvenanceRecord
+	err                error
+}
+
+func (s *stubMemoryQueryService) ListMemories(ctx context.Context, input memory.ListMemoriesInput) (memory.MemoryPage, error) {
+	s.gotListInput = input
+	return s.page, s.err
+}
+
+func (s *stubMemoryQueryService) GetMemory(ctx context.Context, scope memory.Scope, memoryID string) (memory.MemoryResource, error) {
+	s.gotGetScope = scope
+	s.gotGetMemoryID = memoryID
+	return s.resource, s.err
+}
+
+func (s *stubMemoryQueryService) GetMemoryHistory(ctx context.Context, scope memory.Scope, memoryID string) (memory.MemoryHistory, error) {
+	s.gotHistoryScope = scope
+	s.gotHistoryMemoryID = memoryID
+	return s.history, s.err
+}
+
+func (s *stubMemoryQueryService) GetMemoryProvenance(ctx context.Context, scope memory.Scope, memoryID string) ([]memory.ProvenanceRecord, error) {
+	s.gotProvScope = scope
+	s.gotProvMemoryID = memoryID
+	return s.provenance, s.err
+}
+
+type stubJobExecutionReader struct {
+	records []jobs.JobExecutionRecord
+	err     error
+}
+
+func (s *stubJobExecutionReader) ListRecentJobExecutions(ctx context.Context, scope memory.Scope, limit int) ([]jobs.JobExecutionRecord, error) {
+	return s.records, s.err
+}
+
+type stubLifecycleService struct {
+	gotInput memory.LifecycleActionInput
+	err      error
+}
+
+func (s *stubLifecycleService) Apply(ctx context.Context, input memory.LifecycleActionInput) error {
+	s.gotInput = input
+	return s.err
 }
 
 func TestNewHTTPHandlerServesHealthAndReadiness(t *testing.T) {
@@ -371,5 +458,370 @@ func TestNewHTTPHandlerAssemblesContext(t *testing.T) {
 
 	if assembler.gotInput.Scope.Namespace != "namespace-a" {
 		t.Fatalf("assemble scope = %+v, want resolved request scope", assembler.gotInput.Scope)
+	}
+}
+
+func TestNewHTTPHandlerListsVisibleMemories(t *testing.T) {
+	reader := &stubMemoryQueryService{
+		page: memory.MemoryPage{
+			Items: []memory.MemoryResource{
+				{
+					ID:      "mem_123",
+					Scope:   memory.Scope{Tenant: "tenant-a", Project: "project-a", Namespace: "namespace-a"},
+					Class:   memory.MemoryClassProfile,
+					State:   memory.MemoryStateActive,
+					Content: "User prefers concise answers.",
+				},
+			},
+		},
+	}
+
+	handler := NewHTTPHandler(HTTPDependencies{
+		APIKeys:     map[string]struct{}{"test-key": {}},
+		MemoryQuery: reader,
+	})
+
+	req := httptest.NewRequest(http.MethodGet, "/v1/memories?class=profile&limit=10", nil)
+	req.Header.Set("X-API-Key", "test-key")
+	req.Header.Set("X-Stele-Tenant", "tenant-a")
+	req.Header.Set("X-Stele-Project", "project-a")
+	req.Header.Set("X-Stele-Namespace", "namespace-a")
+	rec := httptest.NewRecorder()
+
+	handler.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d, want %d", rec.Code, http.StatusOK)
+	}
+
+	if reader.gotListInput.Scope.Tenant != "tenant-a" {
+		t.Fatalf("scope = %+v, want resolved scope", reader.gotListInput.Scope)
+	}
+
+	if reader.gotListInput.Limit != 10 {
+		t.Fatalf("limit = %d, want %d", reader.gotListInput.Limit, 10)
+	}
+
+	if len(reader.gotListInput.Classes) != 1 || reader.gotListInput.Classes[0] != memory.MemoryClassProfile {
+		t.Fatalf("classes = %v, want one profile class", reader.gotListInput.Classes)
+	}
+}
+
+func TestNewHTTPHandlerReturnsMemoryDetail(t *testing.T) {
+	reader := &stubMemoryQueryService{
+		resource: memory.MemoryResource{
+			ID:      "mem_123",
+			Scope:   memory.Scope{Tenant: "tenant-a", Project: "project-a", Namespace: "namespace-a"},
+			Class:   memory.MemoryClassProfile,
+			State:   memory.MemoryStateActive,
+			Content: "User prefers concise answers.",
+		},
+	}
+
+	handler := NewHTTPHandler(HTTPDependencies{
+		APIKeys:     map[string]struct{}{"test-key": {}},
+		MemoryQuery: reader,
+	})
+
+	req := httptest.NewRequest(http.MethodGet, "/v1/memories/mem_123", nil)
+	req.Header.Set("X-API-Key", "test-key")
+	req.Header.Set("X-Stele-Tenant", "tenant-a")
+	req.Header.Set("X-Stele-Project", "project-a")
+	req.Header.Set("X-Stele-Namespace", "namespace-a")
+	rec := httptest.NewRecorder()
+
+	handler.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d, want %d", rec.Code, http.StatusOK)
+	}
+
+	if reader.gotGetMemoryID != "mem_123" {
+		t.Fatalf("memory id = %q, want mem_123", reader.gotGetMemoryID)
+	}
+}
+
+func TestNewHTTPHandlerReturnsNotFoundForMissingMemoryDetail(t *testing.T) {
+	reader := &stubMemoryQueryService{err: pgx.ErrNoRows}
+	handler := NewHTTPHandler(HTTPDependencies{
+		APIKeys:     map[string]struct{}{"test-key": {}},
+		MemoryQuery: reader,
+	})
+
+	req := httptest.NewRequest(http.MethodGet, "/v1/memories/mem_missing", nil)
+	req.Header.Set("X-API-Key", "test-key")
+	req.Header.Set("X-Stele-Tenant", "tenant-a")
+	req.Header.Set("X-Stele-Project", "project-a")
+	req.Header.Set("X-Stele-Namespace", "namespace-a")
+	rec := httptest.NewRecorder()
+
+	handler.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusNotFound {
+		t.Fatalf("status = %d, want %d", rec.Code, http.StatusNotFound)
+	}
+}
+
+func TestNewHTTPHandlerReturnsMemoryHistory(t *testing.T) {
+	reader := &stubMemoryQueryService{
+		history: memory.MemoryHistory{
+			Memory: memory.CanonicalMemory{
+				ID:    "mem_123",
+				Scope: memory.Scope{Tenant: "tenant-a", Project: "project-a", Namespace: "namespace-a"},
+			},
+		},
+	}
+
+	handler := NewHTTPHandler(HTTPDependencies{
+		APIKeys:     map[string]struct{}{"test-key": {}},
+		MemoryQuery: reader,
+	})
+
+	req := httptest.NewRequest(http.MethodGet, "/v1/memories/mem_123/history", nil)
+	req.Header.Set("X-API-Key", "test-key")
+	req.Header.Set("X-Stele-Tenant", "tenant-a")
+	req.Header.Set("X-Stele-Project", "project-a")
+	req.Header.Set("X-Stele-Namespace", "namespace-a")
+	rec := httptest.NewRecorder()
+
+	handler.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d, want %d", rec.Code, http.StatusOK)
+	}
+
+	if reader.gotHistoryMemoryID != "mem_123" {
+		t.Fatalf("memory id = %q, want mem_123", reader.gotHistoryMemoryID)
+	}
+}
+
+func TestNewHTTPHandlerReturnsMemoryProvenance(t *testing.T) {
+	reader := &stubMemoryQueryService{
+		provenance: []memory.ProvenanceRecord{
+			{ID: "prov_1", MemoryID: "mem_123", Operation: "promote_candidate"},
+		},
+	}
+
+	handler := NewHTTPHandler(HTTPDependencies{
+		APIKeys:     map[string]struct{}{"test-key": {}},
+		MemoryQuery: reader,
+	})
+
+	req := httptest.NewRequest(http.MethodGet, "/v1/memories/mem_123/provenance", nil)
+	req.Header.Set("X-API-Key", "test-key")
+	req.Header.Set("X-Stele-Tenant", "tenant-a")
+	req.Header.Set("X-Stele-Project", "project-a")
+	req.Header.Set("X-Stele-Namespace", "namespace-a")
+	rec := httptest.NewRecorder()
+
+	handler.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d, want %d", rec.Code, http.StatusOK)
+	}
+
+	if reader.gotProvMemoryID != "mem_123" {
+		t.Fatalf("memory id = %q, want mem_123", reader.gotProvMemoryID)
+	}
+}
+
+func TestNewHTTPHandlerReturnsAdminGovernanceStatus(t *testing.T) {
+	reader := &stubGovernanceStatusReader{
+		status: GovernanceStatus{
+			PendingRawEvents:   7,
+			LeasedRawEvents:    2,
+			ProcessedRawEvents: 19,
+		},
+	}
+
+	handler := NewHTTPHandler(HTTPDependencies{
+		Readiness:            stubReadinessChecker{},
+		AdminAPIKeys:         map[string]struct{}{"admin-key": {}},
+		GovernanceStatusRead: reader,
+	})
+
+	req := httptest.NewRequest(http.MethodGet, "/v1/admin/jobs/governance/status", nil)
+	req.Header.Set("X-API-Key", "admin-key")
+	rec := httptest.NewRecorder()
+
+	handler.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d, want %d", rec.Code, http.StatusOK)
+	}
+
+	var payload GovernanceStatus
+	if err := json.NewDecoder(rec.Body).Decode(&payload); err != nil {
+		t.Fatalf("json.NewDecoder() error = %v", err)
+	}
+
+	if payload.PendingRawEvents != 7 || payload.LeasedRawEvents != 2 || payload.ProcessedRawEvents != 19 {
+		t.Fatalf("payload = %+v, want returned governance status", payload)
+	}
+}
+
+func TestNewHTTPHandlerRejectsMissingAdminAPIKey(t *testing.T) {
+	handler := NewHTTPHandler(HTTPDependencies{
+		AdminAPIKeys:         map[string]struct{}{"admin-key": {}},
+		GovernanceStatusRead: &stubGovernanceStatusReader{},
+	})
+
+	req := httptest.NewRequest(http.MethodGet, "/v1/admin/jobs/governance/status", nil)
+	rec := httptest.NewRecorder()
+
+	handler.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusUnauthorized {
+		t.Fatalf("status = %d, want %d", rec.Code, http.StatusUnauthorized)
+	}
+}
+
+func TestNewHTTPHandlerReturnsAdminMemoryHistory(t *testing.T) {
+	reader := &stubMemoryHistoryReader{
+		history: memory.MemoryHistory{
+			Memory: memory.CanonicalMemory{
+				ID:         "mem_hidden",
+				Scope:      memory.Scope{Tenant: "tenant-a", Project: "project-a", Namespace: "namespace-a"},
+				Class:      memory.MemoryClassProfile,
+				State:      memory.MemoryStateForgotten,
+				Content:    "Old preference",
+				CreatedAt:  time.Date(2026, 6, 6, 8, 0, 0, 0, time.UTC),
+				ModifiedAt: time.Date(2026, 6, 6, 9, 0, 0, 0, time.UTC),
+			},
+			Versions: []memory.MemoryVersion{
+				{
+					ID:         "ver_2",
+					MemoryID:   "mem_hidden",
+					Version:    2,
+					State:      memory.MemoryStateForgotten,
+					Content:    "Old preference",
+					CreatedAt:  time.Date(2026, 6, 6, 9, 0, 0, 0, time.UTC),
+					ModifiedBy: "cand_2",
+				},
+			},
+			Provenance: []memory.ProvenanceRecord{
+				{
+					ID:         "prov_1",
+					Scope:      memory.Scope{Tenant: "tenant-a", Project: "project-a", Namespace: "namespace-a"},
+					RawEventID: "evt_1",
+					MemoryID:   "mem_hidden",
+					Operation:  "promote_candidate",
+					CreatedAt:  time.Date(2026, 6, 6, 9, 0, 0, 0, time.UTC),
+				},
+			},
+		},
+	}
+
+	handler := NewHTTPHandler(HTTPDependencies{
+		AdminAPIKeys:      map[string]struct{}{"admin-key": {}},
+		MemoryHistoryRead: reader,
+	})
+
+	req := httptest.NewRequest(http.MethodGet, "/v1/admin/memories/mem_hidden/history", nil)
+	req.Header.Set("X-API-Key", "admin-key")
+	req.Header.Set("X-Stele-Tenant", "tenant-a")
+	req.Header.Set("X-Stele-Project", "project-a")
+	req.Header.Set("X-Stele-Namespace", "namespace-a")
+	rec := httptest.NewRecorder()
+
+	handler.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d, want %d", rec.Code, http.StatusOK)
+	}
+
+	var payload memory.MemoryHistory
+	if err := json.NewDecoder(rec.Body).Decode(&payload); err != nil {
+		t.Fatalf("json.NewDecoder() error = %v", err)
+	}
+
+	if payload.Memory.State != memory.MemoryStateForgotten {
+		t.Fatalf("Memory.State = %q, want %q", payload.Memory.State, memory.MemoryStateForgotten)
+	}
+
+	if len(payload.Versions) != 1 || len(payload.Provenance) != 1 {
+		t.Fatalf("history payload = %+v, want one version and one provenance record", payload)
+	}
+}
+
+func TestNewHTTPHandlerReturnsAdminRecentJobStatus(t *testing.T) {
+	reader := &stubJobExecutionReader{
+		records: []jobs.JobExecutionRecord{
+			{
+				JobName:        "summary_compaction",
+				Scope:          memory.Scope{Tenant: "tenant-a", Project: "project-a", Namespace: "namespace-a"},
+				TriggerSource:  "scheduler",
+				IdempotencyKey: "run-a",
+				Status:         jobs.JobExecutionStatusCompleted,
+				Attempt:        1,
+				ProcessedCount: 1,
+				StartedAt:      time.Date(2026, 6, 7, 11, 0, 0, 0, time.UTC),
+				FinishedAt:     time.Date(2026, 6, 7, 11, 0, 1, 0, time.UTC),
+			},
+		},
+	}
+
+	handler := NewHTTPHandler(HTTPDependencies{
+		AdminAPIKeys:     map[string]struct{}{"admin-key": {}},
+		JobExecutionRead: reader,
+	})
+
+	req := httptest.NewRequest(http.MethodGet, "/v1/admin/jobs/status?limit=5", nil)
+	req.Header.Set("X-API-Key", "admin-key")
+	req.Header.Set("X-Stele-Tenant", "tenant-a")
+	req.Header.Set("X-Stele-Project", "project-a")
+	req.Header.Set("X-Stele-Namespace", "namespace-a")
+	rec := httptest.NewRecorder()
+
+	handler.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d, want %d", rec.Code, http.StatusOK)
+	}
+
+	var payload struct {
+		Executions []jobs.JobExecutionRecord `json:"executions"`
+	}
+	if err := json.NewDecoder(rec.Body).Decode(&payload); err != nil {
+		t.Fatalf("json.NewDecoder() error = %v", err)
+	}
+
+	if len(payload.Executions) != 1 || payload.Executions[0].JobName != "summary_compaction" {
+		t.Fatalf("executions = %+v, want one summary compaction record", payload.Executions)
+	}
+}
+
+func TestNewHTTPHandlerAppliesAdminSuppressAction(t *testing.T) {
+	service := &stubLifecycleService{}
+	handler := NewHTTPHandler(HTTPDependencies{
+		AdminAPIKeys:          map[string]struct{}{"admin-key": {}},
+		MemoryLifecycleAction: service,
+	})
+
+	req := httptest.NewRequest(http.MethodPost, "/v1/admin/memories/mem_123:suppress", strings.NewReader(`{"reason":"manual override"}`))
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("X-API-Key", "admin-key")
+	req.Header.Set("X-Stele-Actor", "operator-a")
+	req.Header.Set("X-Stele-Tenant", "tenant-a")
+	req.Header.Set("X-Stele-Project", "project-a")
+	req.Header.Set("X-Stele-Namespace", "namespace-a")
+	rec := httptest.NewRecorder()
+
+	handler.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d, want %d", rec.Code, http.StatusOK)
+	}
+
+	if service.gotInput.Action != policy.ForgettingActionSuppress {
+		t.Fatalf("action = %q, want suppress", service.gotInput.Action)
+	}
+
+	if service.gotInput.Actor != "operator-a" {
+		t.Fatalf("actor = %q, want operator-a", service.gotInput.Actor)
+	}
+
+	if service.gotInput.Reason != "manual override" {
+		t.Fatalf("reason = %q, want manual override", service.gotInput.Reason)
 	}
 }

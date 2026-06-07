@@ -13,6 +13,8 @@ import (
 	"time"
 
 	"github.com/FelixSeptem/stele/internal/config"
+	"github.com/FelixSeptem/stele/internal/jobs"
+	"github.com/FelixSeptem/stele/internal/telemetry"
 	pgxmock "github.com/pashagolub/pgxmock/v4"
 )
 
@@ -40,6 +42,19 @@ func (s *stubAPIServer) Shutdown(ctx context.Context) error {
 	return nil
 }
 
+type stubAppObserver struct {
+	operations []telemetry.OperationEvent
+	backlogs   []telemetry.BacklogEvent
+}
+
+func (s *stubAppObserver) RecordOperation(ctx context.Context, event telemetry.OperationEvent) {
+	s.operations = append(s.operations, event)
+}
+
+func (s *stubAppObserver) RecordBacklog(ctx context.Context, event telemetry.BacklogEvent) {
+	s.backlogs = append(s.backlogs, event)
+}
+
 func TestNewRunnerCreatesAPIRunner(t *testing.T) {
 	cfg := config.Config{Mode: config.ModeAPI, PostgresDSN: "postgres://example"}
 
@@ -62,19 +77,19 @@ func TestNewRunnerRejectsUnsupportedMode(t *testing.T) {
 	}
 }
 
-func TestRunnerStartSucceedsForSchedulerNoOpMode(t *testing.T) {
-	modes := []config.Mode{config.ModeScheduler}
+func TestNewRunnerCreatesRealSchedulerRunner(t *testing.T) {
+	cfg := config.Config{
+		Mode:        config.ModeScheduler,
+		PostgresDSN: "postgres://example",
+	}
 
-	for _, mode := range modes {
-		cfg := config.Config{Mode: mode, PostgresDSN: "postgres://example"}
-		runner, err := NewRunner(cfg)
-		if err != nil {
-			t.Fatalf("NewRunner(%q) error = %v", mode, err)
-		}
+	runner, err := NewRunner(cfg)
+	if err != nil {
+		t.Fatalf("NewRunner() error = %v", err)
+	}
 
-		if err := runner.Start(context.Background()); err != nil {
-			t.Fatalf("Start(%q) error = %v", mode, err)
-		}
+	if _, ok := runner.(noopRunner); ok {
+		t.Fatal("scheduler runner = noopRunner, want maintenance-backed scheduler runner")
 	}
 }
 
@@ -286,6 +301,10 @@ func TestBuildAPIRuntimeUsesConfiguredDependencies(t *testing.T) {
 		t.Fatal("EventIngestor = nil, want configured ingestor")
 	}
 
+	if gotDeps.MemoryQuery == nil {
+		t.Fatal("MemoryQuery = nil, want configured memory query service")
+	}
+
 	if gotDeps.Readiness == nil {
 		t.Fatal("Readiness = nil, want readiness checker")
 	}
@@ -359,6 +378,91 @@ func TestBuildWorkerRuntimeAssemblesGovernanceWorker(t *testing.T) {
 	}
 }
 
+func TestBuildSchedulerRuntimeAssemblesMaintenanceScheduler(t *testing.T) {
+	mock, err := pgxmock.NewPool()
+	if err != nil {
+		t.Fatalf("pgxmock.NewPool() error = %v", err)
+	}
+	defer mock.Close()
+
+	cfg := config.Config{
+		Mode:        config.ModeScheduler,
+		PostgresDSN: "postgres://runtime",
+		Auth: config.AuthConfig{
+			DefaultTenant:    "tenant-a",
+			DefaultProject:   "project-a",
+			DefaultNamespace: "namespace-a",
+		},
+		Jobs: config.JobConfig{
+			MaintenanceInterval:   30 * time.Second,
+			SchedulerErrorBackoff: time.Minute,
+		},
+	}
+
+	runtime, err := buildSchedulerRuntime(context.Background(), cfg, schedulerRuntimeDependencies{
+		openPool: func(ctx context.Context, dsn string) (postgresRuntimeStore, error) {
+			return mock, nil
+		},
+		bootstrapDatabase: func(ctx context.Context, db postgresRuntimeStore) error {
+			return nil
+		},
+		now: func() time.Time {
+			return time.Date(2026, 6, 6, 18, 0, 0, 0, time.UTC)
+		},
+	})
+	if err != nil {
+		t.Fatalf("buildSchedulerRuntime() error = %v", err)
+	}
+
+	if runtime.bootstrapper == nil {
+		t.Fatal("runtime bootstrapper = nil, want bootstrapper")
+	}
+
+	if runtime.scheduler == nil {
+		t.Fatal("runtime scheduler = nil, want maintenance scheduler")
+	}
+
+	scheduler, ok := runtime.scheduler.(jobs.MaintenanceScheduler)
+	if !ok {
+		t.Fatalf("runtime scheduler type = %T, want jobs.MaintenanceScheduler", runtime.scheduler)
+	}
+
+	if len(scheduler.Jobs) != 3 {
+		t.Fatalf("len(scheduler.Jobs) = %d, want 3", len(scheduler.Jobs))
+	}
+}
+
+func TestObservedGovernanceStatusReaderEmitsBacklogTelemetry(t *testing.T) {
+	observer := &stubAppObserver{}
+	now := time.Date(2026, 6, 7, 14, 0, 0, 0, time.UTC)
+	reader := observedGovernanceStatusReader{
+		reader: governanceStatusReaderFunc(func(ctx context.Context) (GovernanceStatus, error) {
+			return GovernanceStatus{
+				PendingRawEvents:       7,
+				LeasedRawEvents:        2,
+				ProcessedRawEvents:     19,
+				OldestPendingCreatedAt: now.Add(-5 * time.Minute),
+				ObservedAt:             now,
+			}, nil
+		}),
+		now:      func() time.Time { return now },
+		observer: observer,
+	}
+
+	_, err := reader.ReadGovernanceStatus(context.Background())
+	if err != nil {
+		t.Fatalf("ReadGovernanceStatus() error = %v", err)
+	}
+
+	if len(observer.backlogs) != 1 {
+		t.Fatalf("len(observer.backlogs) = %d, want 1", len(observer.backlogs))
+	}
+
+	if observer.backlogs[0].Queue != "governance_raw_events" || observer.backlogs[0].Pending != 7 || observer.backlogs[0].Status != "ok" {
+		t.Fatalf("backlog event = %+v, want governance backlog snapshot", observer.backlogs[0])
+	}
+}
+
 func TestAPIRunnerClosesRuntimeResourcesWhenBootstrapFails(t *testing.T) {
 	closed := false
 	runner := apiRunner{
@@ -424,7 +528,20 @@ func TestBuildAPIRuntimeAssemblesEventIngestionPath(t *testing.T) {
 		WillReturnRows(pgxmock.NewRows([]string{"id", "tenant", "project", "namespace", "event_type", "content", "source_timestamp", "created_at"}).
 			AddRow("evt_123", "tenant-a", "project-a", "namespace-a", "conversation.message", "hello world", sourceTime, sourceTime))
 	mock.ExpectExec("INSERT INTO provenance_links").
-		WithArgs(pgxmock.AnyArg(), "evt_123", nil, nil, "tenant-a", "project-a", "namespace-a", "ingest_event", pgxmock.AnyArg()).
+		WithArgs(
+			pgxmock.AnyArg(),
+			"evt_123",
+			nil,
+			nil,
+			"tenant-a",
+			"project-a",
+			"namespace-a",
+			"ingest_event",
+			nil,
+			nil,
+			pgxmock.AnyArg(),
+			pgxmock.AnyArg(),
+		).
 		WillReturnResult(pgxmock.NewResult("INSERT", 1))
 	mock.ExpectCommit()
 

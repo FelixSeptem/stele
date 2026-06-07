@@ -11,11 +11,14 @@ import (
 	"time"
 
 	"github.com/FelixSeptem/stele/internal/governance"
+	"github.com/FelixSeptem/stele/internal/jobs"
 	"github.com/FelixSeptem/stele/internal/retrieval"
+	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgconn"
 
 	"github.com/FelixSeptem/stele/internal/memory"
+	"github.com/FelixSeptem/stele/internal/policy"
 )
 
 type queryRower interface {
@@ -375,6 +378,520 @@ WHERE id = $1 AND governance_worker_id = $2
 	return nil
 }
 
+func (r *Repository) ReadGovernanceStatus(ctx context.Context, now time.Time) (jobs.GovernanceStatus, error) {
+	const query = `
+SELECT
+	COUNT(*) FILTER (
+		WHERE governance_processed_at IS NULL
+			AND (governance_lease_until IS NULL OR governance_lease_until <= $1)
+	) AS pending_raw_events,
+	COUNT(*) FILTER (
+		WHERE governance_processed_at IS NULL
+			AND governance_lease_until > $1
+	) AS leased_raw_events,
+	COUNT(*) FILTER (
+		WHERE governance_processed_at IS NOT NULL
+	) AS processed_raw_events,
+	MIN(created_at) FILTER (
+		WHERE governance_processed_at IS NULL
+			AND (governance_lease_until IS NULL OR governance_lease_until <= $1)
+	) AS oldest_pending_created_at
+FROM raw_events
+`
+
+	var status jobs.GovernanceStatus
+	var oldestPending sql.NullTime
+	if err := r.db.QueryRow(ctx, query, now).Scan(
+		&status.PendingRawEvents,
+		&status.LeasedRawEvents,
+		&status.ProcessedRawEvents,
+		&oldestPending,
+	); err != nil {
+		return jobs.GovernanceStatus{}, fmt.Errorf("read governance status: %w", err)
+	}
+
+	if oldestPending.Valid {
+		status.OldestPendingCreatedAt = oldestPending.Time
+	}
+	status.ObservedAt = now
+	return status, nil
+}
+
+func (r *Repository) ReadCanonicalMemory(ctx context.Context, scope memory.Scope, memoryID string, includeHidden bool) (memory.CanonicalMemory, error) {
+	if err := scope.Validate(); err != nil {
+		return memory.CanonicalMemory{}, err
+	}
+	if strings.TrimSpace(memoryID) == "" {
+		return memory.CanonicalMemory{}, fmt.Errorf("memory id is required")
+	}
+
+	const query = `
+SELECT
+	id,
+	tenant,
+	project,
+	namespace,
+	class,
+	state,
+	content,
+	created_at,
+	updated_at
+FROM canonical_memories
+WHERE id = $1
+	AND tenant = $2
+	AND project = $3
+	AND namespace = $4
+	AND ($5 OR state NOT IN ('suppressed', 'forgotten', 'deleted'))
+`
+
+	var canonical memory.CanonicalMemory
+	if err := r.db.QueryRow(ctx, query, memoryID, scope.Tenant, scope.Project, scope.Namespace, includeHidden).Scan(
+		&canonical.ID,
+		&canonical.Scope.Tenant,
+		&canonical.Scope.Project,
+		&canonical.Scope.Namespace,
+		&canonical.Class,
+		&canonical.State,
+		&canonical.Content,
+		&canonical.CreatedAt,
+		&canonical.ModifiedAt,
+	); err != nil {
+		return memory.CanonicalMemory{}, fmt.Errorf("read canonical memory: %w", err)
+	}
+
+	return canonical, nil
+}
+
+func (r *Repository) ReadMemoryProvenance(ctx context.Context, scope memory.Scope, memoryID string) ([]memory.ProvenanceRecord, error) {
+	if err := scope.Validate(); err != nil {
+		return nil, err
+	}
+	if strings.TrimSpace(memoryID) == "" {
+		return nil, fmt.Errorf("memory id is required")
+	}
+
+	const query = `
+SELECT
+	id,
+	raw_event_id,
+	candidate_memory_id,
+	memory_id,
+	tenant,
+	project,
+	namespace,
+	operation,
+	request_id,
+	actor,
+	source_context,
+	created_at
+FROM provenance_links
+WHERE tenant = $1
+	AND project = $2
+	AND namespace = $3
+	AND memory_id = $4
+ORDER BY created_at ASC
+`
+
+	rows, err := r.db.Query(ctx, query, scope.Tenant, scope.Project, scope.Namespace, memoryID)
+	if err != nil {
+		return nil, fmt.Errorf("read memory provenance: %w", err)
+	}
+	defer rows.Close()
+
+	records := make([]memory.ProvenanceRecord, 0)
+	for rows.Next() {
+		record, err := scanProvenanceRecord(rows)
+		if err != nil {
+			return nil, err
+		}
+
+		records = append(records, record)
+	}
+
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("iterate memory provenance: %w", err)
+	}
+
+	return records, nil
+}
+
+func (r *Repository) ReadMemoryHistory(ctx context.Context, scope memory.Scope, memoryID string, includeHidden bool) (memory.MemoryHistory, error) {
+	if err := scope.Validate(); err != nil {
+		return memory.MemoryHistory{}, err
+	}
+	if strings.TrimSpace(memoryID) == "" {
+		return memory.MemoryHistory{}, fmt.Errorf("memory id is required")
+	}
+
+	var history memory.MemoryHistory
+	canonical, err := r.ReadCanonicalMemory(ctx, scope, memoryID, includeHidden)
+	if err != nil {
+		return memory.MemoryHistory{}, err
+	}
+	history.Memory = canonical
+
+	const versionsQuery = `
+SELECT
+	id,
+	memory_id,
+	version,
+	state,
+	content,
+	created_at,
+	modified_by
+FROM memory_versions
+WHERE memory_id = $1
+ORDER BY version DESC
+`
+
+	versionRows, err := r.db.Query(ctx, versionsQuery, memoryID)
+	if err != nil {
+		return memory.MemoryHistory{}, fmt.Errorf("read memory versions: %w", err)
+	}
+	defer versionRows.Close()
+
+	for versionRows.Next() {
+		var version memory.MemoryVersion
+		if err := versionRows.Scan(
+			&version.ID,
+			&version.MemoryID,
+			&version.Version,
+			&version.State,
+			&version.Content,
+			&version.CreatedAt,
+			&version.ModifiedBy,
+		); err != nil {
+			return memory.MemoryHistory{}, fmt.Errorf("scan memory version: %w", err)
+		}
+
+		history.Versions = append(history.Versions, version)
+	}
+	if err := versionRows.Err(); err != nil {
+		return memory.MemoryHistory{}, fmt.Errorf("iterate memory versions: %w", err)
+	}
+
+	const provenanceQuery = `
+SELECT
+	id,
+	raw_event_id,
+	candidate_memory_id,
+	memory_id,
+	tenant,
+	project,
+	namespace,
+	operation,
+	request_id,
+	actor,
+	source_context,
+	created_at
+FROM provenance_links
+WHERE tenant = $1
+	AND project = $2
+	AND namespace = $3
+	AND memory_id = $4
+ORDER BY created_at ASC
+`
+
+	provenanceRows, err := r.db.Query(ctx, provenanceQuery, scope.Tenant, scope.Project, scope.Namespace, memoryID)
+	if err != nil {
+		return memory.MemoryHistory{}, fmt.Errorf("read provenance history: %w", err)
+	}
+	defer provenanceRows.Close()
+
+	for provenanceRows.Next() {
+		record, err := scanProvenanceRecord(provenanceRows)
+		if err != nil {
+			return memory.MemoryHistory{}, err
+		}
+
+		history.Provenance = append(history.Provenance, record)
+	}
+	if err := provenanceRows.Err(); err != nil {
+		return memory.MemoryHistory{}, fmt.Errorf("iterate provenance history: %w", err)
+	}
+
+	return history, nil
+}
+
+func (r *Repository) BeginJobExecution(ctx context.Context, execution jobs.JobExecution) (bool, error) {
+	if err := execution.Scope.Validate(); err != nil {
+		return false, err
+	}
+	if strings.TrimSpace(execution.JobName) == "" {
+		return false, fmt.Errorf("job name is required")
+	}
+	if strings.TrimSpace(execution.TriggerSource) == "" {
+		return false, fmt.Errorf("trigger source is required")
+	}
+	if strings.TrimSpace(execution.IdempotencyKey) == "" {
+		return false, fmt.Errorf("idempotency key is required")
+	}
+	if execution.StartedAt.IsZero() {
+		return false, fmt.Errorf("started at is required")
+	}
+
+	const insertQuery = `
+INSERT INTO job_executions (
+	job_name,
+	tenant,
+	project,
+	namespace,
+	trigger_source,
+	idempotency_key,
+	status,
+	started_at
+) VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
+`
+
+	if _, err := r.db.Exec(
+		ctx,
+		insertQuery,
+		execution.JobName,
+		execution.Scope.Tenant,
+		execution.Scope.Project,
+		execution.Scope.Namespace,
+		execution.TriggerSource,
+		execution.IdempotencyKey,
+		jobs.JobExecutionStatusRunning,
+		execution.StartedAt,
+	); err == nil {
+		return true, nil
+	} else if !isUniqueViolation(err) {
+		return false, fmt.Errorf("begin job execution: %w", err)
+	}
+
+	const statusQuery = `
+SELECT status
+FROM job_executions
+WHERE idempotency_key = $1
+`
+
+	var status string
+	if err := r.db.QueryRow(ctx, statusQuery, execution.IdempotencyKey).Scan(&status); err != nil {
+		return false, fmt.Errorf("read existing job execution: %w", err)
+	}
+
+	if jobs.JobExecutionStatus(status) != jobs.JobExecutionStatusFailed {
+		return false, nil
+	}
+
+	const retryQuery = `
+UPDATE job_executions
+SET
+	status = $2,
+	attempt = attempt + 1,
+	processed_count = 0,
+	error_message = NULL,
+	started_at = $3,
+	finished_at = NULL
+WHERE idempotency_key = $1
+`
+
+	if _, err := r.db.Exec(ctx, retryQuery, execution.IdempotencyKey, jobs.JobExecutionStatusRunning, execution.StartedAt); err != nil {
+		return false, fmt.Errorf("retry job execution: %w", err)
+	}
+
+	return true, nil
+}
+
+func (r *Repository) CompleteJobExecution(ctx context.Context, completion jobs.JobExecutionCompletion) error {
+	if strings.TrimSpace(completion.IdempotencyKey) == "" {
+		return fmt.Errorf("idempotency key is required")
+	}
+	if completion.FinishedAt.IsZero() {
+		return fmt.Errorf("finished at is required")
+	}
+
+	const query = `
+UPDATE job_executions
+SET
+	status = $2,
+	processed_count = $3,
+	error_message = NULL,
+	finished_at = $4
+WHERE idempotency_key = $1
+`
+
+	if _, err := r.db.Exec(ctx, query, completion.IdempotencyKey, jobs.JobExecutionStatusCompleted, completion.ProcessedCount, completion.FinishedAt); err != nil {
+		return fmt.Errorf("complete job execution: %w", err)
+	}
+
+	return nil
+}
+
+func (r *Repository) FailJobExecution(ctx context.Context, failure jobs.JobExecutionFailure) error {
+	if strings.TrimSpace(failure.IdempotencyKey) == "" {
+		return fmt.Errorf("idempotency key is required")
+	}
+	if failure.FinishedAt.IsZero() {
+		return fmt.Errorf("finished at is required")
+	}
+
+	const query = `
+UPDATE job_executions
+SET
+	status = $2,
+	error_message = $3,
+	finished_at = $4
+WHERE idempotency_key = $1
+`
+
+	if _, err := r.db.Exec(ctx, query, failure.IdempotencyKey, jobs.JobExecutionStatusFailed, failure.ErrorMessage, failure.FinishedAt); err != nil {
+		return fmt.Errorf("fail job execution: %w", err)
+	}
+
+	return nil
+}
+
+func (r *Repository) ListRecentJobExecutions(ctx context.Context, scope memory.Scope, limit int) ([]jobs.JobExecutionRecord, error) {
+	if err := scope.Validate(); err != nil {
+		return nil, err
+	}
+	if limit <= 0 {
+		limit = 20
+	}
+
+	const query = `
+SELECT
+	job_name,
+	tenant,
+	project,
+	namespace,
+	trigger_source,
+	idempotency_key,
+	status,
+	attempt,
+	processed_count,
+	error_message,
+	started_at,
+	finished_at
+FROM job_executions
+WHERE tenant = $1
+	AND project = $2
+	AND namespace = $3
+ORDER BY started_at DESC
+LIMIT $4
+`
+
+	rows, err := r.db.Query(ctx, query, scope.Tenant, scope.Project, scope.Namespace, limit)
+	if err != nil {
+		return nil, fmt.Errorf("list recent job executions: %w", err)
+	}
+	defer rows.Close()
+
+	records := make([]jobs.JobExecutionRecord, 0)
+	for rows.Next() {
+		var record jobs.JobExecutionRecord
+		var errorMessage sql.NullString
+		var finishedAt sql.NullTime
+		if err := rows.Scan(
+			&record.JobName,
+			&record.Scope.Tenant,
+			&record.Scope.Project,
+			&record.Scope.Namespace,
+			&record.TriggerSource,
+			&record.IdempotencyKey,
+			&record.Status,
+			&record.Attempt,
+			&record.ProcessedCount,
+			&errorMessage,
+			&record.StartedAt,
+			&finishedAt,
+		); err != nil {
+			return nil, fmt.Errorf("scan job execution: %w", err)
+		}
+
+		if errorMessage.Valid {
+			record.ErrorMessage = errorMessage.String
+		}
+		if finishedAt.Valid {
+			record.FinishedAt = finishedAt.Time
+		}
+
+		records = append(records, record)
+	}
+
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("iterate job executions: %w", err)
+	}
+
+	return records, nil
+}
+
+func (r *Repository) ListRetentionTargets(ctx context.Context, scope memory.Scope, limit int) ([]governance.RetentionTarget, error) {
+	if err := scope.Validate(); err != nil {
+		return nil, err
+	}
+	if limit <= 0 {
+		limit = 100
+	}
+
+	const query = `
+SELECT
+	id,
+	tenant,
+	project,
+	namespace,
+	retention_class,
+	updated_at
+FROM canonical_memories
+WHERE tenant = $1
+	AND project = $2
+	AND namespace = $3
+	AND state = $4
+ORDER BY updated_at ASC
+LIMIT $5
+`
+
+	rows, err := r.db.Query(ctx, query, scope.Tenant, scope.Project, scope.Namespace, memory.MemoryStateActive, limit)
+	if err != nil {
+		return nil, fmt.Errorf("list retention targets: %w", err)
+	}
+	defer rows.Close()
+
+	targets := make([]governance.RetentionTarget, 0)
+	for rows.Next() {
+		var target governance.RetentionTarget
+		if err := rows.Scan(
+			&target.MemoryID,
+			&target.Scope.Tenant,
+			&target.Scope.Project,
+			&target.Scope.Namespace,
+			&target.RetentionClass,
+			&target.UpdatedAt,
+		); err != nil {
+			return nil, fmt.Errorf("scan retention target: %w", err)
+		}
+
+		targets = append(targets, target)
+	}
+
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("iterate retention targets: %w", err)
+	}
+
+	return targets, nil
+}
+
+func (r *Repository) DeleteJobExecutionsBefore(ctx context.Context, cutoff time.Time) (int, error) {
+	if cutoff.IsZero() {
+		return 0, fmt.Errorf("cutoff is required")
+	}
+
+	const query = `
+DELETE FROM job_executions
+WHERE finished_at IS NOT NULL
+	AND finished_at < $1
+`
+
+	tag, err := r.db.Exec(ctx, query, cutoff)
+	if err != nil {
+		return 0, fmt.Errorf("delete job executions before cutoff: %w", err)
+	}
+
+	return int(tag.RowsAffected()), nil
+}
+
 func (r *Repository) GetLatestCanonicalByScopeAndClass(ctx context.Context, scope memory.Scope, class memory.MemoryClass) (memory.CanonicalMemory, bool, error) {
 	const query = `
 SELECT
@@ -441,11 +958,12 @@ INSERT INTO canonical_memories (
 	namespace,
 	class,
 	state,
+	retention_class,
 	content,
 	search_text,
 	created_at,
 	updated_at
-) VALUES ($1, $2, $3, $4, $5, $6, $7, to_tsvector('simple', $7), $8, $9)
+) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, to_tsvector('simple', $8), $9, $10)
 RETURNING id, tenant, project, namespace, class, state, content, created_at, updated_at
 `
 
@@ -459,6 +977,7 @@ RETURNING id, tenant, project, namespace, class, state, content, created_at, upd
 			input.Candidate.Scope.Namespace,
 			input.Candidate.Class,
 			memory.MemoryStateActive,
+			input.Candidate.RetentionClass,
 			input.Candidate.Content,
 			input.CreatedAt,
 			input.CreatedAt,
@@ -506,7 +1025,7 @@ RETURNING id, tenant, project, namespace, class, state, content, created_at, upd
 
 	const canonicalUpdateQuery = `
 UPDATE canonical_memories
-SET state = $2, content = $3, search_text = to_tsvector('simple', $3), updated_at = $4
+SET state = $2, retention_class = $3, content = $4, search_text = to_tsvector('simple', $4), updated_at = $5
 WHERE id = $1
 RETURNING id, tenant, project, namespace, class, state, content, created_at, updated_at
 `
@@ -517,6 +1036,7 @@ RETURNING id, tenant, project, namespace, class, state, content, created_at, upd
 		canonicalUpdateQuery,
 		input.MemoryID,
 		memory.MemoryStateActive,
+		input.Candidate.RetentionClass,
 		input.Candidate.Content,
 		input.CreatedAt,
 	).Scan(
@@ -620,11 +1140,12 @@ INSERT INTO canonical_memories (
 	namespace,
 	class,
 	state,
+	retention_class,
 	content,
 	search_text,
 	created_at,
 	updated_at
-) VALUES ($1, $2, $3, $4, $5, $6, $7, to_tsvector('simple', $7), $8, $9)
+) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, to_tsvector('simple', $8), $9, $10)
 RETURNING id, tenant, project, namespace, class, state, content, created_at, updated_at
 `
 
@@ -638,6 +1159,7 @@ RETURNING id, tenant, project, namespace, class, state, content, created_at, upd
 		input.Scope.Namespace,
 		memory.MemoryClassSummary,
 		memory.MemoryStateActive,
+		policy.RetentionClassDurable,
 		input.Content,
 		input.CreatedAt,
 		input.CreatedAt,
@@ -777,18 +1299,21 @@ func (r *Repository) ApplyLifecycleAction(ctx context.Context, action governance
 
 	const query = `
 UPDATE canonical_memories
-SET state = $2,
-	content = CASE WHEN $2 = 'deleted' THEN '' ELSE content END,
-	metadata = CASE WHEN $2 = 'deleted' THEN '{}'::jsonb ELSE metadata END,
-	search_text = CASE WHEN $2 = 'deleted' THEN NULL ELSE search_text END,
-	embedding = CASE WHEN $2 = 'deleted' THEN NULL ELSE embedding END,
-	updated_at = $3
+SET state = $5,
+	content = CASE WHEN $5 = 'deleted' THEN '' ELSE content END,
+	metadata = CASE WHEN $5 = 'deleted' THEN '{}'::jsonb ELSE metadata END,
+	search_text = CASE WHEN $5 = 'deleted' THEN NULL ELSE search_text END,
+	embedding = CASE WHEN $5 = 'deleted' THEN NULL ELSE embedding END,
+	updated_at = $6
 WHERE id = $1
+	AND tenant = $2
+	AND project = $3
+	AND namespace = $4
 RETURNING id, tenant, project, namespace, class, state, content, created_at, updated_at
 `
 
 	var canonical memory.CanonicalMemory
-	if err := tx.QueryRow(ctx, query, action.MemoryID, action.TargetState(), action.AppliedAt).Scan(
+	if err := tx.QueryRow(ctx, query, action.MemoryID, action.Scope.Tenant, action.Scope.Project, action.Scope.Namespace, action.TargetState(), action.AppliedAt).Scan(
 		&canonical.ID,
 		&canonical.Scope.Tenant,
 		&canonical.Scope.Project,
@@ -811,6 +1336,21 @@ RETURNING id, tenant, project, namespace, class, state, content, created_at, upd
 		if err := writeDeletionMarker(ctx, tx, action); err != nil {
 			return memory.CanonicalMemory{}, err
 		}
+	}
+
+	if err := writeProvenance(ctx, tx, memory.ProvenanceRecord{
+		ID:        uuid.NewString(),
+		Scope:     action.Scope,
+		MemoryID:  action.MemoryID,
+		RequestID: action.RequestID,
+		Actor:     action.Actor,
+		Operation: lifecycleProvenanceOperation(action.Action),
+		CreatedAt: action.AppliedAt,
+		SourceContext: map[string]any{
+			"reason": lifecycleReason(action),
+		},
+	}); err != nil {
+		return memory.CanonicalMemory{}, err
 	}
 
 	if err := tx.Commit(ctx); err != nil {
@@ -1150,7 +1690,7 @@ INSERT INTO deletion_markers (
 		action.Scope.Tenant,
 		action.Scope.Project,
 		action.Scope.Namespace,
-		action.Content,
+		lifecycleReason(action),
 		action.AppliedAt,
 	); err != nil {
 		return fmt.Errorf("insert deletion marker: %w", err)
@@ -1367,9 +1907,17 @@ INSERT INTO provenance_links (
 	project,
 	namespace,
 	operation,
+	request_id,
+	actor,
+	source_context,
 	created_at
-) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
+) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12)
 `
+
+	sourceContext, err := json.Marshal(normalizeSourceContext(record.SourceContext))
+	if err != nil {
+		return fmt.Errorf("marshal provenance source context: %w", err)
+	}
 
 	if _, err := db.Exec(
 		ctx,
@@ -1382,6 +1930,9 @@ INSERT INTO provenance_links (
 		record.Scope.Project,
 		record.Scope.Namespace,
 		record.Operation,
+		nullableString(record.RequestID),
+		nullableString(record.Actor),
+		sourceContext,
 		record.CreatedAt,
 	); err != nil {
 		return fmt.Errorf("insert provenance: %w", err)
@@ -1428,6 +1979,91 @@ func nullableString(value string) any {
 	return value
 }
 
+func lifecycleReason(action governance.LifecycleAction) string {
+	if strings.TrimSpace(action.Reason) != "" {
+		return action.Reason
+	}
+
+	return action.Content
+}
+
+func lifecycleProvenanceOperation(action policy.ForgettingAction) string {
+	switch action {
+	case policy.ForgettingActionSuppress:
+		return "suppress_memory"
+	case policy.ForgettingActionExpire:
+		return "expire_memory"
+	case policy.ForgettingActionDelete:
+		return "delete_memory"
+	default:
+		return "lifecycle_memory"
+	}
+}
+
+func normalizeSourceContext(sourceContext map[string]any) map[string]any {
+	if sourceContext == nil {
+		return map[string]any{}
+	}
+
+	return sourceContext
+}
+
+type provenanceScanner interface {
+	Scan(dest ...any) error
+}
+
+func scanProvenanceRecord(scanner provenanceScanner) (memory.ProvenanceRecord, error) {
+	var record memory.ProvenanceRecord
+	var rawEventID sql.NullString
+	var candidateMemoryID sql.NullString
+	var linkedMemoryID sql.NullString
+	var requestID sql.NullString
+	var actor sql.NullString
+	var sourceContext []byte
+
+	if err := scanner.Scan(
+		&record.ID,
+		&rawEventID,
+		&candidateMemoryID,
+		&linkedMemoryID,
+		&record.Scope.Tenant,
+		&record.Scope.Project,
+		&record.Scope.Namespace,
+		&record.Operation,
+		&requestID,
+		&actor,
+		&sourceContext,
+		&record.CreatedAt,
+	); err != nil {
+		return memory.ProvenanceRecord{}, fmt.Errorf("scan provenance record: %w", err)
+	}
+
+	if rawEventID.Valid {
+		record.RawEventID = rawEventID.String
+	}
+	if candidateMemoryID.Valid {
+		record.CandidateMemoryID = candidateMemoryID.String
+	}
+	if linkedMemoryID.Valid {
+		record.MemoryID = linkedMemoryID.String
+	}
+	if requestID.Valid {
+		record.RequestID = requestID.String
+	}
+	if actor.Valid {
+		record.Actor = actor.String
+	}
+
+	record.SourceContext = map[string]any{}
+	if len(sourceContext) > 0 {
+		if err := json.Unmarshal(sourceContext, &record.SourceContext); err != nil {
+			return memory.ProvenanceRecord{}, fmt.Errorf("unmarshal provenance source context: %w", err)
+		}
+	}
+
+	return record, nil
+}
+
 func nullableTime(value time.Time) any {
 	if value.IsZero() {
 		return nil
@@ -1443,4 +2079,13 @@ func vectorLiteral(values []float32) string {
 	}
 
 	return "[" + strings.Join(parts, ",") + "]"
+}
+
+func isUniqueViolation(err error) bool {
+	var pgErr *pgconn.PgError
+	if !errors.As(err, &pgErr) {
+		return false
+	}
+
+	return pgErr.Code == "23505"
 }
