@@ -7,6 +7,7 @@ import (
 
 	"github.com/FelixSeptem/stele/internal/memory"
 	"github.com/FelixSeptem/stele/internal/policy"
+	"github.com/FelixSeptem/stele/internal/telemetry"
 )
 
 type stubLifecycleRepository struct {
@@ -30,6 +31,16 @@ func (s *stubLifecycleRepository) ApplyLifecycleAction(ctx context.Context, acti
 		ModifiedAt: action.AppliedAt,
 	}, nil
 }
+
+type stubGovernanceObserver struct {
+	operations []telemetry.OperationEvent
+}
+
+func (s *stubGovernanceObserver) RecordOperation(ctx context.Context, event telemetry.OperationEvent) {
+	s.operations = append(s.operations, event)
+}
+
+func (s *stubGovernanceObserver) RecordBacklog(ctx context.Context, event telemetry.BacklogEvent) {}
 
 func TestLifecycleActionTargetState(t *testing.T) {
 	now := time.Date(2026, 6, 1, 17, 0, 0, 0, time.UTC)
@@ -61,9 +72,11 @@ func TestLifecycleActionTargetState(t *testing.T) {
 func TestForgettingProcessorApplyRetentionAction(t *testing.T) {
 	now := time.Date(2026, 6, 1, 17, 5, 0, 0, time.UTC)
 	repo := &stubLifecycleRepository{}
+	observer := &stubGovernanceObserver{}
 	processor := ForgettingProcessor{
 		Repository: repo,
 		Now:        func() time.Time { return now },
+		Observer:   observer,
 	}
 
 	err := processor.Apply(context.Background(), LifecycleAction{
@@ -83,5 +96,9 @@ func TestForgettingProcessorApplyRetentionAction(t *testing.T) {
 
 	if repo.applied[0].Action != policy.ForgettingActionSuppress {
 		t.Fatalf("Action = %q, want %q", repo.applied[0].Action, policy.ForgettingActionSuppress)
+	}
+
+	if len(observer.operations) != 1 || observer.operations[0].Operation != "forget" {
+		t.Fatalf("observer operations = %+v, want one forget operation", observer.operations)
 	}
 }

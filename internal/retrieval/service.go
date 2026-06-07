@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"github.com/FelixSeptem/stele/internal/memory"
+	"github.com/FelixSeptem/stele/internal/telemetry"
 )
 
 type SearchInput struct {
@@ -133,18 +134,55 @@ type Service struct {
 	semantic  SemanticSearcher
 	relations RelationSearcher
 	citations CitationLister
+	observer  telemetry.Observer
 }
 
-func NewService(deps ServiceDependencies) *Service {
+func NewService(deps ServiceDependencies, observers ...telemetry.Observer) *Service {
+	var observer telemetry.Observer
+	if len(observers) > 0 {
+		observer = observers[0]
+	}
+	if observer == nil {
+		observer = telemetry.NoopObserver()
+	}
+
 	return &Service{
 		lexical:   deps.Lexical,
 		semantic:  deps.Semantic,
 		relations: deps.Relations,
 		citations: deps.Citations,
+		observer:  observer,
 	}
 }
 
-func (s *Service) Search(ctx context.Context, input SearchInput) (SearchResult, error) {
+func (s *Service) Search(ctx context.Context, input SearchInput) (result SearchResult, err error) {
+	started := time.Now()
+	defer func() {
+		if s.observer == nil {
+			return
+		}
+
+		status := "ok"
+		count := len(result.Hits)
+		errorMessage := ""
+		if err != nil {
+			status = "error"
+			count = 0
+			errorMessage = err.Error()
+		}
+
+		s.observer.RecordOperation(ctx, telemetry.OperationEvent{
+			Mode:       "api",
+			Component:  "retrieval_service",
+			Operation:  "search",
+			Status:     status,
+			Count:      count,
+			Duration:   time.Since(started),
+			Error:      errorMessage,
+			ObservedAt: time.Now().UTC(),
+		})
+	}()
+
 	if err := input.Validate(); err != nil {
 		return SearchResult{}, err
 	}
@@ -246,10 +284,38 @@ func (s *Service) Search(ctx context.Context, input SearchInput) (SearchResult, 
 		}
 	}
 
-	return SearchResult{Hits: scored}, nil
+	result = SearchResult{Hits: scored}
+	return result, nil
 }
 
-func (s *Service) AssembleContext(ctx context.Context, input AssembleContextInput) (AssembledContext, error) {
+func (s *Service) AssembleContext(ctx context.Context, input AssembleContextInput) (output AssembledContext, err error) {
+	started := time.Now()
+	defer func() {
+		if s.observer == nil {
+			return
+		}
+
+		status := "ok"
+		count := len(output.Profile) + len(output.RecentSession) + len(output.RecentEpisodes) + len(output.RelevantSummaries) + len(output.RelatedEntities)
+		errorMessage := ""
+		if err != nil {
+			status = "error"
+			count = 0
+			errorMessage = err.Error()
+		}
+
+		s.observer.RecordOperation(ctx, telemetry.OperationEvent{
+			Mode:       "api",
+			Component:  "retrieval_service",
+			Operation:  "assemble_context",
+			Status:     status,
+			Count:      count,
+			Duration:   time.Since(started),
+			Error:      errorMessage,
+			ObservedAt: time.Now().UTC(),
+		})
+	}()
+
 	if err := input.Validate(); err != nil {
 		return AssembledContext{}, err
 	}
@@ -265,7 +331,7 @@ func (s *Service) AssembleContext(ctx context.Context, input AssembleContextInpu
 		return AssembledContext{}, err
 	}
 
-	output := AssembledContext{
+	output = AssembledContext{
 		Profile:           make([]SearchHit, 0),
 		RecentSession:     make([]SearchHit, 0),
 		RecentEpisodes:    make([]SearchHit, 0),

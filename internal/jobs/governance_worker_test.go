@@ -8,12 +8,13 @@ import (
 
 	"github.com/FelixSeptem/stele/internal/governance"
 	"github.com/FelixSeptem/stele/internal/memory"
+	"github.com/FelixSeptem/stele/internal/telemetry"
 )
 
 type stubRawEventClaimer struct {
 	gotInput governance.ClaimPendingRawEventsInput
-	claims    []governance.ClaimedRawEvent
-	err       error
+	claims   []governance.ClaimedRawEvent
+	err      error
 }
 
 func (s *stubRawEventClaimer) ClaimPendingRawEvents(ctx context.Context, input governance.ClaimPendingRawEventsInput) ([]governance.ClaimedRawEvent, error) {
@@ -34,6 +35,16 @@ func (s *stubRawEventProcessor) ProcessClaimedRawEvent(ctx context.Context, clai
 	s.gotClaims = append(s.gotClaims, claim)
 	return s.err
 }
+
+type stubJobsObserver struct {
+	operations []telemetry.OperationEvent
+}
+
+func (s *stubJobsObserver) RecordOperation(ctx context.Context, event telemetry.OperationEvent) {
+	s.operations = append(s.operations, event)
+}
+
+func (s *stubJobsObserver) RecordBacklog(ctx context.Context, event telemetry.BacklogEvent) {}
 
 func TestGovernanceWorkerRunOnceClaimsAndProcessesEvents(t *testing.T) {
 	now := time.Date(2026, 5, 31, 15, 30, 0, 0, time.UTC)
@@ -112,6 +123,35 @@ func TestGovernanceWorkerRunOnceReturnsProcessingFailure(t *testing.T) {
 
 	if _, err := worker.RunOnce(context.Background()); err == nil {
 		t.Fatal("RunOnce() error = nil, want processing failure")
+	}
+}
+
+func TestGovernanceWorkerRunOnceEmitsTelemetryOperation(t *testing.T) {
+	now := time.Date(2026, 6, 7, 13, 30, 0, 0, time.UTC)
+	observer := &stubJobsObserver{}
+	worker := GovernanceWorker{
+		Claimer: &stubRawEventClaimer{
+			claims: []governance.ClaimedRawEvent{newClaimedRawEvent(t, "evt_telemetry", now)},
+		},
+		Processor:     &stubRawEventProcessor{},
+		WorkerID:      "worker-a",
+		BatchSize:     1,
+		LeaseDuration: time.Minute,
+		Now:           func() time.Time { return now },
+		Observer:      observer,
+	}
+
+	_, err := worker.RunOnce(context.Background())
+	if err != nil {
+		t.Fatalf("RunOnce() error = %v", err)
+	}
+
+	if len(observer.operations) != 1 {
+		t.Fatalf("len(observer.operations) = %d, want 1", len(observer.operations))
+	}
+
+	if observer.operations[0].Operation != "governance" || observer.operations[0].Status != "ok" {
+		t.Fatalf("operation event = %+v, want governance ok", observer.operations[0])
 	}
 }
 

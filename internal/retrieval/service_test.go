@@ -6,6 +6,7 @@ import (
 	"time"
 
 	"github.com/FelixSeptem/stele/internal/memory"
+	"github.com/FelixSeptem/stele/internal/telemetry"
 )
 
 type stubLexicalSource struct {
@@ -53,6 +54,16 @@ func (s *stubCitationSource) ListCitations(ctx context.Context, scope memory.Sco
 	s.gotMemoryIDs = append([]string(nil), memoryIDs...)
 	return s.citations, s.err
 }
+
+type stubRetrievalObserver struct {
+	operations []telemetry.OperationEvent
+}
+
+func (s *stubRetrievalObserver) RecordOperation(ctx context.Context, event telemetry.OperationEvent) {
+	s.operations = append(s.operations, event)
+}
+
+func (s *stubRetrievalObserver) RecordBacklog(ctx context.Context, event telemetry.BacklogEvent) {}
 
 func TestServiceSearchMergesRankedHitsAcrossSources(t *testing.T) {
 	now := time.Date(2026, 6, 6, 11, 0, 0, 0, time.UTC)
@@ -463,5 +474,33 @@ func TestServiceAssembleContextPrefersSummaryOverExtraEpisodes(t *testing.T) {
 
 	if len(contextResult.RecentSession)+len(contextResult.RecentEpisodes) != 0 {
 		t.Fatalf("episodic sections = %d, want 0 after summary-preferred packing", len(contextResult.RecentSession)+len(contextResult.RecentEpisodes))
+	}
+}
+
+func TestServiceSearchEmitsTelemetryOperation(t *testing.T) {
+	scope := memory.Scope{Tenant: "tenant-a", Project: "project-a", Namespace: "namespace-a"}
+	observer := &stubRetrievalObserver{}
+	service := NewService(ServiceDependencies{
+		Lexical: &stubLexicalSource{
+			hits: []ScoredMemory{
+				{Memory: memory.CanonicalMemory{ID: "mem_1", Scope: scope, Class: memory.MemoryClassProfile, State: memory.MemoryStateActive, Content: "profile"}, LexicalScore: 1},
+			},
+		},
+	}, observer)
+
+	_, err := service.Search(context.Background(), SearchInput{
+		Scope: scope,
+		Query: "profile",
+	})
+	if err != nil {
+		t.Fatalf("Search() error = %v", err)
+	}
+
+	if len(observer.operations) != 1 {
+		t.Fatalf("len(observer.operations) = %d, want 1", len(observer.operations))
+	}
+
+	if observer.operations[0].Operation != "search" || observer.operations[0].Status != "ok" {
+		t.Fatalf("operation event = %+v, want search ok", observer.operations[0])
 	}
 }

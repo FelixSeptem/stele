@@ -25,13 +25,21 @@ type Config struct {
 
 type AuthConfig struct {
 	APIKeys          []string
+	AdminAPIKeys     []string
 	DefaultTenant    string
 	DefaultProject   string
 	DefaultNamespace string
 }
 
 type JobConfig struct {
-	MaintenanceInterval time.Duration
+	MaintenanceInterval       time.Duration
+	WorkerPollInterval        time.Duration
+	WorkerErrorBackoff        time.Duration
+	SchedulerErrorBackoff     time.Duration
+	SummaryCompactionInterval time.Duration
+	RetentionInterval         time.Duration
+	CleanupInterval           time.Duration
+	JobExecutionRetention     time.Duration
 }
 
 func LoadFromEnv() (Config, error) {
@@ -51,6 +59,34 @@ func LoadFromEnv() (Config, error) {
 	if err != nil {
 		return Config{}, err
 	}
+	workerPollInterval, err := loadDurationWithDefault("STELE_JOBS_WORKER_POLL_INTERVAL", 5*time.Second)
+	if err != nil {
+		return Config{}, err
+	}
+	workerErrorBackoff, err := loadDurationWithDefault("STELE_JOBS_WORKER_ERROR_BACKOFF", 15*time.Second)
+	if err != nil {
+		return Config{}, err
+	}
+	schedulerErrorBackoff, err := loadDurationWithDefault("STELE_JOBS_SCHEDULER_ERROR_BACKOFF", 30*time.Second)
+	if err != nil {
+		return Config{}, err
+	}
+	summaryCompactionInterval, err := loadDurationWithDefault("STELE_JOBS_SUMMARY_COMPACTION_INTERVAL", maintenanceInterval)
+	if err != nil {
+		return Config{}, err
+	}
+	retentionInterval, err := loadDurationWithDefault("STELE_JOBS_RETENTION_INTERVAL", maintenanceInterval)
+	if err != nil {
+		return Config{}, err
+	}
+	cleanupInterval, err := loadDurationWithDefault("STELE_JOBS_CLEANUP_INTERVAL", maintenanceInterval)
+	if err != nil {
+		return Config{}, err
+	}
+	jobExecutionRetention, err := loadDurationWithDefault("STELE_JOBS_JOB_EXECUTION_RETENTION", 7*24*time.Hour)
+	if err != nil {
+		return Config{}, err
+	}
 
 	return Config{
 		Mode:        mode,
@@ -58,12 +94,20 @@ func LoadFromEnv() (Config, error) {
 		PostgresDSN: postgresDSN,
 		Auth: AuthConfig{
 			APIKeys:          splitCSVEnv("STELE_AUTH_API_KEYS"),
+			AdminAPIKeys:     splitCSVEnv("STELE_AUTH_ADMIN_API_KEYS"),
 			DefaultTenant:    strings.TrimSpace(os.Getenv("STELE_AUTH_DEFAULT_TENANT")),
 			DefaultProject:   strings.TrimSpace(os.Getenv("STELE_AUTH_DEFAULT_PROJECT")),
 			DefaultNamespace: strings.TrimSpace(os.Getenv("STELE_AUTH_DEFAULT_NAMESPACE")),
 		},
 		Jobs: JobConfig{
-			MaintenanceInterval: maintenanceInterval,
+			MaintenanceInterval:       maintenanceInterval,
+			WorkerPollInterval:        workerPollInterval,
+			WorkerErrorBackoff:        workerErrorBackoff,
+			SchedulerErrorBackoff:     schedulerErrorBackoff,
+			SummaryCompactionInterval: summaryCompactionInterval,
+			RetentionInterval:         retentionInterval,
+			CleanupInterval:           cleanupInterval,
+			JobExecutionRetention:     jobExecutionRetention,
 		},
 	}, nil
 }

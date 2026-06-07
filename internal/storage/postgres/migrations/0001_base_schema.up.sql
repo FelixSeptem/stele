@@ -44,6 +44,7 @@ CREATE TABLE IF NOT EXISTS canonical_memories (
     namespace text NOT NULL,
     class text NOT NULL,
     state text NOT NULL,
+    retention_class text NOT NULL DEFAULT 'durable',
     content text NOT NULL,
     metadata jsonb NOT NULL DEFAULT '{}'::jsonb,
     search_text tsvector,
@@ -51,6 +52,9 @@ CREATE TABLE IF NOT EXISTS canonical_memories (
     created_at timestamptz NOT NULL DEFAULT now(),
     updated_at timestamptz NOT NULL DEFAULT now()
 );
+
+ALTER TABLE canonical_memories
+    ADD COLUMN IF NOT EXISTS retention_class text NOT NULL DEFAULT 'durable';
 
 CREATE TABLE IF NOT EXISTS memory_versions (
     id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
@@ -103,6 +107,22 @@ CREATE TABLE IF NOT EXISTS relation_projections (
     updated_at timestamptz NOT NULL DEFAULT now()
 );
 
+CREATE TABLE IF NOT EXISTS job_executions (
+    id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+    job_name text NOT NULL,
+    tenant text NOT NULL,
+    project text NOT NULL,
+    namespace text NOT NULL,
+    trigger_source text NOT NULL,
+    idempotency_key text NOT NULL UNIQUE,
+    status text NOT NULL,
+    attempt integer NOT NULL DEFAULT 1,
+    processed_count integer NOT NULL DEFAULT 0,
+    error_message text,
+    started_at timestamptz NOT NULL DEFAULT now(),
+    finished_at timestamptz
+);
+
 CREATE INDEX IF NOT EXISTS raw_events_scope_created_at_idx
     ON raw_events (tenant, project, namespace, created_at DESC);
 
@@ -134,3 +154,9 @@ CREATE INDEX IF NOT EXISTS relation_projections_scope_updated_at_idx
 CREATE INDEX IF NOT EXISTS relation_projections_search_text_idx
     ON relation_projections
     USING GIN (search_text);
+
+CREATE INDEX IF NOT EXISTS job_executions_scope_started_at_idx
+    ON job_executions (tenant, project, namespace, started_at DESC);
+
+CREATE INDEX IF NOT EXISTS job_executions_job_name_started_at_idx
+    ON job_executions (job_name, started_at DESC);
