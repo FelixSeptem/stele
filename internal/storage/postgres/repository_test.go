@@ -2,6 +2,7 @@ package postgres
 
 import (
 	"context"
+	"errors"
 	"testing"
 	"time"
 
@@ -1752,6 +1753,326 @@ func TestRepositoryApplyLifecycleActionDeleteRemovesRelationProjection(t *testin
 
 	if canonical.State != memory.MemoryStateDeleted {
 		t.Fatalf("State = %q, want %q", canonical.State, memory.MemoryStateDeleted)
+	}
+}
+
+func TestRepositoryCreateMemoryWritesCanonicalVersionAndProvenance(t *testing.T) {
+	mock, err := pgxmock.NewPool()
+	if err != nil {
+		t.Fatalf("pgxmock.NewPool() error = %v", err)
+	}
+	defer mock.Close()
+
+	record := memory.ManualCreateMemoryRecord{
+		MemoryID:  "mem_manual",
+		VersionID: "ver_manual",
+		Scope: memory.Scope{
+			Tenant:    "tenant-a",
+			Project:   "project-a",
+			Namespace: "namespace-a",
+		},
+		Class:     memory.MemoryClassProfile,
+		Content:   "Seeded operator memory.",
+		Reason:    "seed profile",
+		Actor:     "operator-a",
+		RequestID: "req_manual",
+		CreatedAt: time.Date(2026, 6, 7, 20, 20, 0, 0, time.UTC),
+	}
+
+	mock.ExpectBegin()
+	mock.ExpectQuery("SELECT COALESCE\\(MAX\\(version\\), 0\\)").
+		WithArgs(record.MemoryID).
+		WillReturnRows(pgxmock.NewRows([]string{"coalesce"}).AddRow(int64(0)))
+	mock.ExpectQuery("INSERT INTO canonical_memories").
+		WithArgs(
+			record.MemoryID,
+			record.Scope.Tenant,
+			record.Scope.Project,
+			record.Scope.Namespace,
+			record.Class,
+			memory.MemoryStateActive,
+			policy.RetentionClassDurable,
+			record.Content,
+			record.CreatedAt,
+			record.CreatedAt,
+		).
+		WillReturnRows(pgxmock.NewRows([]string{
+			"id", "tenant", "project", "namespace", "class", "state", "content", "created_at", "updated_at",
+		}).AddRow(
+			record.MemoryID,
+			record.Scope.Tenant,
+			record.Scope.Project,
+			record.Scope.Namespace,
+			record.Class,
+			memory.MemoryStateActive,
+			record.Content,
+			record.CreatedAt,
+			record.CreatedAt,
+		))
+	mock.ExpectQuery("INSERT INTO memory_versions").
+		WithArgs(record.VersionID, record.MemoryID, int64(1), memory.MemoryStateActive, record.Content, record.CreatedAt, record.Actor).
+		WillReturnRows(pgxmock.NewRows([]string{
+			"id", "memory_id", "version", "state", "content", "created_at", "modified_by",
+		}).AddRow(
+			record.VersionID, record.MemoryID, int64(1), memory.MemoryStateActive, record.Content, record.CreatedAt, record.Actor,
+		))
+	mock.ExpectExec("INSERT INTO provenance_links").
+		WithArgs(
+			pgxmock.AnyArg(),
+			nil,
+			nil,
+			record.MemoryID,
+			record.Scope.Tenant,
+			record.Scope.Project,
+			record.Scope.Namespace,
+			"manual_create_memory",
+			record.RequestID,
+			record.Actor,
+			pgxmock.AnyArg(),
+			record.CreatedAt,
+		).
+		WillReturnResult(pgxmock.NewResult("INSERT", 1))
+	mock.ExpectCommit()
+
+	repo := NewRepository(mock)
+	canonical, err := repo.CreateMemory(context.Background(), record)
+	if err != nil {
+		t.Fatalf("CreateMemory() error = %v", err)
+	}
+
+	if canonical.ID != record.MemoryID {
+		t.Fatalf("ID = %q, want %q", canonical.ID, record.MemoryID)
+	}
+
+	if err := mock.ExpectationsWereMet(); err != nil {
+		t.Fatalf("ExpectationsWereMet() error = %v", err)
+	}
+}
+
+func TestRepositoryUpdateMemoryRejectsVersionConflict(t *testing.T) {
+	mock, err := pgxmock.NewPool()
+	if err != nil {
+		t.Fatalf("pgxmock.NewPool() error = %v", err)
+	}
+	defer mock.Close()
+
+	record := memory.ManualUpdateMemoryRecord{
+		MemoryID:        "mem_manual",
+		VersionID:       "ver_manual",
+		Scope:           memory.Scope{Tenant: "tenant-a", Project: "project-a", Namespace: "namespace-a"},
+		Content:         "Corrected content.",
+		ExpectedVersion: 2,
+		Reason:          "correct typo",
+		Actor:           "operator-a",
+		RequestID:       "req_manual",
+		UpdatedAt:       time.Date(2026, 6, 7, 20, 25, 0, 0, time.UTC),
+	}
+
+	mock.ExpectBegin()
+	mock.ExpectQuery("SELECT COALESCE\\(MAX\\(version\\), 0\\)").
+		WithArgs(record.MemoryID).
+		WillReturnRows(pgxmock.NewRows([]string{"coalesce"}).AddRow(int64(3)))
+	mock.ExpectRollback()
+
+	repo := NewRepository(mock)
+	_, err = repo.UpdateMemory(context.Background(), record)
+	if !errors.Is(err, memory.ErrManualMutationVersionConflict) {
+		t.Fatalf("UpdateMemory() error = %v, want version conflict", err)
+	}
+
+	if err := mock.ExpectationsWereMet(); err != nil {
+		t.Fatalf("ExpectationsWereMet() error = %v", err)
+	}
+}
+
+func TestRepositoryMergeMemorySuppressesSourceAndWritesTargetVersion(t *testing.T) {
+	mock, err := pgxmock.NewPool()
+	if err != nil {
+		t.Fatalf("pgxmock.NewPool() error = %v", err)
+	}
+	defer mock.Close()
+
+	record := memory.ManualMergeMemoryRecord{
+		TargetMemoryID:  "mem_target",
+		SourceMemoryID:  "mem_source",
+		VersionID:       "ver_merge",
+		Scope:           memory.Scope{Tenant: "tenant-a", Project: "project-a", Namespace: "namespace-a"},
+		Content:         "Merged profile content.",
+		ExpectedVersion: 2,
+		Reason:          "dedupe duplicate",
+		Actor:           "operator-a",
+		RequestID:       "req_merge",
+		AppliedAt:       time.Date(2026, 6, 7, 20, 30, 0, 0, time.UTC),
+	}
+
+	mock.ExpectBegin()
+	mock.ExpectQuery("SELECT[\\s\\S]*FROM canonical_memories").
+		WithArgs(record.TargetMemoryID, record.Scope.Tenant, record.Scope.Project, record.Scope.Namespace).
+		WillReturnRows(pgxmock.NewRows([]string{
+			"id", "tenant", "project", "namespace", "class", "state", "content", "created_at", "updated_at",
+		}).AddRow(
+			record.TargetMemoryID, record.Scope.Tenant, record.Scope.Project, record.Scope.Namespace,
+			memory.MemoryClassProfile, memory.MemoryStateActive, "Old target", record.AppliedAt.Add(-2*time.Hour), record.AppliedAt.Add(-time.Hour),
+		))
+	mock.ExpectQuery("SELECT[\\s\\S]*FROM canonical_memories").
+		WithArgs(record.SourceMemoryID, record.Scope.Tenant, record.Scope.Project, record.Scope.Namespace).
+		WillReturnRows(pgxmock.NewRows([]string{
+			"id", "tenant", "project", "namespace", "class", "state", "content", "created_at", "updated_at",
+		}).AddRow(
+			record.SourceMemoryID, record.Scope.Tenant, record.Scope.Project, record.Scope.Namespace,
+			memory.MemoryClassProfile, memory.MemoryStateActive, "Source duplicate", record.AppliedAt.Add(-3*time.Hour), record.AppliedAt.Add(-90*time.Minute),
+		))
+	mock.ExpectQuery("SELECT COALESCE\\(MAX\\(version\\), 0\\)").
+		WithArgs(record.TargetMemoryID).
+		WillReturnRows(pgxmock.NewRows([]string{"coalesce"}).AddRow(int64(2)))
+	mock.ExpectQuery("UPDATE canonical_memories").
+		WithArgs(record.TargetMemoryID, record.Scope.Tenant, record.Scope.Project, record.Scope.Namespace, record.Content, record.AppliedAt).
+		WillReturnRows(pgxmock.NewRows([]string{
+			"id", "tenant", "project", "namespace", "class", "state", "content", "created_at", "updated_at",
+		}).AddRow(
+			record.TargetMemoryID, record.Scope.Tenant, record.Scope.Project, record.Scope.Namespace,
+			memory.MemoryClassProfile, memory.MemoryStateActive, record.Content, record.AppliedAt.Add(-2*time.Hour), record.AppliedAt,
+		))
+	mock.ExpectQuery("INSERT INTO memory_versions").
+		WithArgs(record.VersionID, record.TargetMemoryID, int64(3), memory.MemoryStateActive, record.Content, record.AppliedAt, record.Actor).
+		WillReturnRows(pgxmock.NewRows([]string{
+			"id", "memory_id", "version", "state", "content", "created_at", "modified_by",
+		}).AddRow(
+			record.VersionID, record.TargetMemoryID, int64(3), memory.MemoryStateActive, record.Content, record.AppliedAt, record.Actor,
+		))
+	mock.ExpectQuery("UPDATE canonical_memories").
+		WithArgs(record.SourceMemoryID, record.Scope.Tenant, record.Scope.Project, record.Scope.Namespace, memory.MemoryStateSuppressed, record.AppliedAt).
+		WillReturnRows(pgxmock.NewRows([]string{
+			"id", "tenant", "project", "namespace", "class", "state", "content", "created_at", "updated_at",
+		}).AddRow(
+			record.SourceMemoryID, record.Scope.Tenant, record.Scope.Project, record.Scope.Namespace,
+			memory.MemoryClassProfile, memory.MemoryStateSuppressed, "Source duplicate", record.AppliedAt.Add(-3*time.Hour), record.AppliedAt,
+		))
+	mock.ExpectExec("INSERT INTO provenance_links").
+		WithArgs(
+			pgxmock.AnyArg(),
+			nil,
+			nil,
+			record.TargetMemoryID,
+			record.Scope.Tenant,
+			record.Scope.Project,
+			record.Scope.Namespace,
+			"manual_merge_memory",
+			record.RequestID,
+			record.Actor,
+			pgxmock.AnyArg(),
+			record.AppliedAt,
+		).
+		WillReturnResult(pgxmock.NewResult("INSERT", 1))
+	mock.ExpectExec("INSERT INTO provenance_links").
+		WithArgs(
+			pgxmock.AnyArg(),
+			nil,
+			nil,
+			record.SourceMemoryID,
+			record.Scope.Tenant,
+			record.Scope.Project,
+			record.Scope.Namespace,
+			"manual_merge_memory",
+			record.RequestID,
+			record.Actor,
+			pgxmock.AnyArg(),
+			record.AppliedAt,
+		).
+		WillReturnResult(pgxmock.NewResult("INSERT", 1))
+	mock.ExpectCommit()
+
+	repo := NewRepository(mock)
+	canonical, err := repo.MergeMemory(context.Background(), record)
+	if err != nil {
+		t.Fatalf("MergeMemory() error = %v", err)
+	}
+
+	if canonical.ID != record.TargetMemoryID {
+		t.Fatalf("ID = %q, want %q", canonical.ID, record.TargetMemoryID)
+	}
+
+	if err := mock.ExpectationsWereMet(); err != nil {
+		t.Fatalf("ExpectationsWereMet() error = %v", err)
+	}
+}
+
+func TestRepositoryReclassifyMemoryUpdatesClassAndWritesProvenance(t *testing.T) {
+	mock, err := pgxmock.NewPool()
+	if err != nil {
+		t.Fatalf("pgxmock.NewPool() error = %v", err)
+	}
+	defer mock.Close()
+
+	record := memory.ManualReclassifyMemoryRecord{
+		MemoryID:        "mem_manual",
+		VersionID:       "ver_reclass",
+		Scope:           memory.Scope{Tenant: "tenant-a", Project: "project-a", Namespace: "namespace-a"},
+		TargetClass:     memory.MemoryClassProcedural,
+		ExpectedVersion: 1,
+		Reason:          "fix class",
+		Actor:           "operator-a",
+		RequestID:       "req_reclass",
+		AppliedAt:       time.Date(2026, 6, 7, 20, 35, 0, 0, time.UTC),
+	}
+
+	mock.ExpectBegin()
+	mock.ExpectQuery("SELECT[\\s\\S]*FROM canonical_memories").
+		WithArgs(record.MemoryID, record.Scope.Tenant, record.Scope.Project, record.Scope.Namespace).
+		WillReturnRows(pgxmock.NewRows([]string{
+			"id", "tenant", "project", "namespace", "class", "state", "content", "created_at", "updated_at",
+		}).AddRow(
+			record.MemoryID, record.Scope.Tenant, record.Scope.Project, record.Scope.Namespace,
+			memory.MemoryClassProfile, memory.MemoryStateActive, "Respond concisely.", record.AppliedAt.Add(-2*time.Hour), record.AppliedAt.Add(-time.Hour),
+		))
+	mock.ExpectQuery("SELECT COALESCE\\(MAX\\(version\\), 0\\)").
+		WithArgs(record.MemoryID).
+		WillReturnRows(pgxmock.NewRows([]string{"coalesce"}).AddRow(int64(1)))
+	mock.ExpectQuery("UPDATE canonical_memories").
+		WithArgs(record.MemoryID, record.Scope.Tenant, record.Scope.Project, record.Scope.Namespace, record.TargetClass, record.AppliedAt).
+		WillReturnRows(pgxmock.NewRows([]string{
+			"id", "tenant", "project", "namespace", "class", "state", "content", "created_at", "updated_at",
+		}).AddRow(
+			record.MemoryID, record.Scope.Tenant, record.Scope.Project, record.Scope.Namespace,
+			record.TargetClass, memory.MemoryStateActive, "Respond concisely.", record.AppliedAt.Add(-2*time.Hour), record.AppliedAt,
+		))
+	mock.ExpectQuery("INSERT INTO memory_versions").
+		WithArgs(record.VersionID, record.MemoryID, int64(2), memory.MemoryStateActive, "Respond concisely.", record.AppliedAt, record.Actor).
+		WillReturnRows(pgxmock.NewRows([]string{
+			"id", "memory_id", "version", "state", "content", "created_at", "modified_by",
+		}).AddRow(
+			record.VersionID, record.MemoryID, int64(2), memory.MemoryStateActive, "Respond concisely.", record.AppliedAt, record.Actor,
+		))
+	mock.ExpectExec("INSERT INTO provenance_links").
+		WithArgs(
+			pgxmock.AnyArg(),
+			nil,
+			nil,
+			record.MemoryID,
+			record.Scope.Tenant,
+			record.Scope.Project,
+			record.Scope.Namespace,
+			"manual_reclassify_memory",
+			record.RequestID,
+			record.Actor,
+			pgxmock.AnyArg(),
+			record.AppliedAt,
+		).
+		WillReturnResult(pgxmock.NewResult("INSERT", 1))
+	mock.ExpectCommit()
+
+	repo := NewRepository(mock)
+	canonical, err := repo.ReclassifyMemory(context.Background(), record)
+	if err != nil {
+		t.Fatalf("ReclassifyMemory() error = %v", err)
+	}
+
+	if canonical.Class != record.TargetClass {
+		t.Fatalf("Class = %q, want %q", canonical.Class, record.TargetClass)
+	}
+
+	if err := mock.ExpectationsWereMet(); err != nil {
+		t.Fatalf("ExpectationsWereMet() error = %v", err)
 	}
 }
 

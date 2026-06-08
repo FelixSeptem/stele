@@ -373,6 +373,12 @@ func buildAPIRuntime(ctx context.Context, cfg config.Config, deps apiRuntimeDepe
 		}},
 		Now: time.Now,
 	}
+	manualMutationService := memory.ManualMutationService{
+		Processor:    repo,
+		Now:          time.Now,
+		NewMemoryID:  newID,
+		NewVersionID: newID,
+	}
 	retrievalService := retrieval.NewService(retrieval.ServiceDependencies{
 		Lexical:   repo,
 		Semantic:  repo,
@@ -385,6 +391,7 @@ func buildAPIRuntime(ctx context.Context, cfg config.Config, deps apiRuntimeDepe
 	})
 	httpDeps.MemoryQuery = queryService
 	httpDeps.MemoryLifecycleAction = lifecycleService
+	httpDeps.MemoryManualMutation = manualMutationService
 	httpDeps.MemorySearcher = retrievalService
 	httpDeps.ContextAssembler = retrievalService
 	httpDeps.GovernanceStatusRead = observedGovernanceStatusReader{

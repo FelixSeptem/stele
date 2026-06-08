@@ -175,16 +175,28 @@ Public read routes:
 
 Privileged lifecycle routes:
 
+- `POST /v1/admin/memories`
+- `PATCH /v1/admin/memories/{memory_id}`
+- `POST /v1/admin/memories/{memory_id}:merge`
+- `POST /v1/admin/memories/{memory_id}:reclassify`
 - `POST /v1/admin/memories/{memory_id}:suppress`
 - `POST /v1/admin/memories/{memory_id}:expire`
 - `POST /v1/admin/memories/{memory_id}:delete`
 
-Lifecycle actions require:
+Privileged manual mutation and lifecycle actions require:
 
 - admin API key
 - scoped headers
 - `X-Stele-Actor`
 - JSON body with `reason`
+
+Manual mutation notes:
+
+- `POST /v1/admin/memories` only supports operator-authored primary classes; derived `summary` memory is excluded.
+- `PATCH /v1/admin/memories/{memory_id}` only updates canonical content. Scope, lifecycle, and class stay on dedicated surfaces.
+- merge and reclassify require `expected_version` optimistic concurrency.
+- `reclassify` only targets `profile`, `episodic`, or `procedural`; `relation` and `summary` stay excluded in this phase.
+- material manual mutation clears stale semantic embeddings until a later reindex pipeline exists.
 
 ## Example Flow
 
@@ -229,6 +241,58 @@ curl -X POST http://localhost:8080/v1/admin/memories/<memory-id>:suppress \
   -H 'X-Stele-Project: project-a' \
   -H 'X-Stele-Namespace: namespace-a' \
   -d '{"reason":"manual override"}'
+```
+
+5. Seed one canonical memory directly through the admin boundary:
+
+```bash
+curl -X POST http://localhost:8080/v1/admin/memories \
+  -H 'Content-Type: application/json' \
+  -H 'X-API-Key: dev-admin-key' \
+  -H 'X-Stele-Actor: operator-a' \
+  -H 'X-Stele-Tenant: tenant-a' \
+  -H 'X-Stele-Project: project-a' \
+  -H 'X-Stele-Namespace: namespace-a' \
+  -d '{"class":"profile","content":"user prefers concise answers","reason":"seed curated memory"}'
+```
+
+6. Correct the memory content with optimistic concurrency:
+
+```bash
+curl -X PATCH http://localhost:8080/v1/admin/memories/<memory-id> \
+  -H 'Content-Type: application/json' \
+  -H 'X-API-Key: dev-admin-key' \
+  -H 'X-Stele-Actor: operator-a' \
+  -H 'X-Stele-Tenant: tenant-a' \
+  -H 'X-Stele-Project: project-a' \
+  -H 'X-Stele-Namespace: namespace-a' \
+  -d '{"content":"user strongly prefers concise answers","expected_version":1,"reason":"correct curated fact"}'
+```
+
+7. Merge one duplicate memory into the surviving target:
+
+```bash
+curl -X POST http://localhost:8080/v1/admin/memories/<target-memory-id>:merge \
+  -H 'Content-Type: application/json' \
+  -H 'X-API-Key: dev-admin-key' \
+  -H 'X-Stele-Actor: operator-a' \
+  -H 'X-Stele-Tenant: tenant-a' \
+  -H 'X-Stele-Project: project-a' \
+  -H 'X-Stele-Namespace: namespace-a' \
+  -d '{"source_memory_id":"<source-memory-id>","content":"user strongly prefers concise answers","expected_version":2,"reason":"merge duplicate canonical facts"}'
+```
+
+8. Reclassify a memory into the right governed class:
+
+```bash
+curl -X POST http://localhost:8080/v1/admin/memories/<memory-id>:reclassify \
+  -H 'Content-Type: application/json' \
+  -H 'X-API-Key: dev-admin-key' \
+  -H 'X-Stele-Actor: operator-a' \
+  -H 'X-Stele-Tenant: tenant-a' \
+  -H 'X-Stele-Project: project-a' \
+  -H 'X-Stele-Namespace: namespace-a' \
+  -d '{"target_class":"procedural","expected_version":3,"reason":"fix canonical class"}'
 ```
 
 ## Operational Notes

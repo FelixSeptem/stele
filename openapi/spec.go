@@ -254,6 +254,125 @@ paths:
                 $ref: '#/components/schemas/MemoryHistory'
         '401':
           description: Missing or invalid admin API key
+  /v1/admin/memories:
+    post:
+      operationId: createAdminMemory
+      parameters:
+        - $ref: '#/components/parameters/AdminAPIKey'
+        - $ref: '#/components/parameters/ActorHeader'
+        - $ref: '#/components/parameters/TenantHeader'
+        - $ref: '#/components/parameters/ProjectHeader'
+        - $ref: '#/components/parameters/NamespaceHeader'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/AdminCreateMemoryRequest'
+      responses:
+        '201':
+          description: Canonical memory was created manually
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/CanonicalMemory'
+        '400':
+          description: Invalid request
+        '401':
+          description: Missing or invalid admin API key
+  /v1/admin/memories/{memory_id}:
+    patch:
+      operationId: updateAdminMemory
+      parameters:
+        - $ref: '#/components/parameters/MemoryIDPath'
+        - $ref: '#/components/parameters/AdminAPIKey'
+        - $ref: '#/components/parameters/ActorHeader'
+        - $ref: '#/components/parameters/TenantHeader'
+        - $ref: '#/components/parameters/ProjectHeader'
+        - $ref: '#/components/parameters/NamespaceHeader'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/AdminUpdateMemoryRequest'
+      responses:
+        '200':
+          description: Canonical memory was updated manually
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/CanonicalMemory'
+        '400':
+          description: Invalid request
+        '401':
+          description: Missing or invalid admin API key
+        '404':
+          description: Memory not found
+        '409':
+          description: Expected version does not match current version
+  /v1/admin/memories/{memory_id}:merge:
+    post:
+      operationId: mergeAdminMemory
+      parameters:
+        - $ref: '#/components/parameters/MemoryIDPath'
+        - $ref: '#/components/parameters/AdminAPIKey'
+        - $ref: '#/components/parameters/ActorHeader'
+        - $ref: '#/components/parameters/TenantHeader'
+        - $ref: '#/components/parameters/ProjectHeader'
+        - $ref: '#/components/parameters/NamespaceHeader'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/AdminMergeMemoryRequest'
+      responses:
+        '200':
+          description: Canonical memory merge completed
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/CanonicalMemory'
+        '400':
+          description: Invalid request
+        '401':
+          description: Missing or invalid admin API key
+        '404':
+          description: Memory not found
+        '409':
+          description: Expected version does not match current version
+  /v1/admin/memories/{memory_id}:reclassify:
+    post:
+      operationId: reclassifyAdminMemory
+      parameters:
+        - $ref: '#/components/parameters/MemoryIDPath'
+        - $ref: '#/components/parameters/AdminAPIKey'
+        - $ref: '#/components/parameters/ActorHeader'
+        - $ref: '#/components/parameters/TenantHeader'
+        - $ref: '#/components/parameters/ProjectHeader'
+        - $ref: '#/components/parameters/NamespaceHeader'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/AdminReclassifyMemoryRequest'
+      responses:
+        '200':
+          description: Canonical memory class was updated
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/CanonicalMemory'
+        '400':
+          description: Invalid request
+        '401':
+          description: Missing or invalid admin API key
+        '404':
+          description: Memory not found
+        '409':
+          description: Expected version does not match current version
   /v1/admin/memories/{memory_id}:suppress:
     post:
       operationId: suppressMemory
@@ -673,6 +792,61 @@ components:
           type: array
           items:
             $ref: '#/components/schemas/ProvenanceRecord'
+    AdminCreateMemoryRequest:
+      type: object
+      required:
+        - class
+        - content
+        - reason
+      properties:
+        class:
+          type: string
+        content:
+          type: string
+        reason:
+          type: string
+    AdminUpdateMemoryRequest:
+      type: object
+      required:
+        - content
+        - expected_version
+        - reason
+      properties:
+        content:
+          type: string
+        expected_version:
+          type: integer
+        reason:
+          type: string
+    AdminMergeMemoryRequest:
+      type: object
+      required:
+        - source_memory_id
+        - content
+        - expected_version
+        - reason
+      properties:
+        source_memory_id:
+          type: string
+        content:
+          type: string
+        expected_version:
+          type: integer
+        reason:
+          type: string
+    AdminReclassifyMemoryRequest:
+      type: object
+      required:
+        - target_class
+        - expected_version
+        - reason
+      properties:
+        target_class:
+          type: string
+        expected_version:
+          type: integer
+        reason:
+          type: string
     LifecycleActionRequest:
       type: object
       required:

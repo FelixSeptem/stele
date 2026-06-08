@@ -1286,6 +1286,354 @@ ORDER BY updated_at DESC
 	return memories, nil
 }
 
+func (r *Repository) CreateMemory(ctx context.Context, record memory.ManualCreateMemoryRecord) (memory.CanonicalMemory, error) {
+	tx, err := r.tx.BeginTx(ctx, pgx.TxOptions{})
+	if err != nil {
+		return memory.CanonicalMemory{}, fmt.Errorf("begin manual create transaction: %w", err)
+	}
+	defer tx.Rollback(ctx)
+
+	versionNumber, err := nextMemoryVersion(ctx, tx, record.MemoryID)
+	if err != nil {
+		return memory.CanonicalMemory{}, err
+	}
+	if versionNumber != 1 {
+		return memory.CanonicalMemory{}, fmt.Errorf("%w: manual create memory id already exists", memory.ErrManualMutationRejected)
+	}
+
+	const canonicalQuery = `
+INSERT INTO canonical_memories (
+	id,
+	tenant,
+	project,
+	namespace,
+	class,
+	state,
+	retention_class,
+	content,
+	search_text,
+	created_at,
+	updated_at
+) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, to_tsvector('simple', $8), $9, $10)
+RETURNING id, tenant, project, namespace, class, state, content, created_at, updated_at
+`
+
+	var canonical memory.CanonicalMemory
+	if err := tx.QueryRow(
+		ctx,
+		canonicalQuery,
+		record.MemoryID,
+		record.Scope.Tenant,
+		record.Scope.Project,
+		record.Scope.Namespace,
+		record.Class,
+		memory.MemoryStateActive,
+		policy.RetentionClassDurable,
+		record.Content,
+		record.CreatedAt,
+		record.CreatedAt,
+	).Scan(
+		&canonical.ID,
+		&canonical.Scope.Tenant,
+		&canonical.Scope.Project,
+		&canonical.Scope.Namespace,
+		&canonical.Class,
+		&canonical.State,
+		&canonical.Content,
+		&canonical.CreatedAt,
+		&canonical.ModifiedAt,
+	); err != nil {
+		return memory.CanonicalMemory{}, fmt.Errorf("insert manual canonical memory: %w", err)
+	}
+
+	if _, err := writeManualMemoryVersion(ctx, tx, record.VersionID, record.MemoryID, versionNumber, canonical.State, record.Content, record.CreatedAt, record.Actor); err != nil {
+		return memory.CanonicalMemory{}, err
+	}
+
+	if err := upsertRelationProjection(ctx, tx, canonical, record.CreatedAt); err != nil {
+		return memory.CanonicalMemory{}, err
+	}
+
+	if err := writeManualProvenance(ctx, tx, record.Scope, record.MemoryID, "manual_create_memory", record.RequestID, record.Actor, record.CreatedAt, map[string]any{
+		"reason": record.Reason,
+	}); err != nil {
+		return memory.CanonicalMemory{}, err
+	}
+
+	if err := tx.Commit(ctx); err != nil {
+		return memory.CanonicalMemory{}, fmt.Errorf("commit manual create transaction: %w", err)
+	}
+
+	return canonical, nil
+}
+
+func (r *Repository) UpdateMemory(ctx context.Context, record memory.ManualUpdateMemoryRecord) (memory.CanonicalMemory, error) {
+	tx, err := r.tx.BeginTx(ctx, pgx.TxOptions{})
+	if err != nil {
+		return memory.CanonicalMemory{}, fmt.Errorf("begin manual update transaction: %w", err)
+	}
+	defer tx.Rollback(ctx)
+
+	currentVersion, err := currentMemoryVersion(ctx, tx, record.MemoryID)
+	if err != nil {
+		return memory.CanonicalMemory{}, err
+	}
+	if currentVersion == 0 {
+		return memory.CanonicalMemory{}, pgx.ErrNoRows
+	}
+	if currentVersion != record.ExpectedVersion {
+		return memory.CanonicalMemory{}, memory.ErrManualMutationVersionConflict
+	}
+
+	const updateQuery = `
+UPDATE canonical_memories
+SET content = $5,
+	search_text = to_tsvector('simple', $5),
+	embedding = NULL,
+	updated_at = $6
+WHERE id = $1
+	AND tenant = $2
+	AND project = $3
+	AND namespace = $4
+	AND state <> 'deleted'
+RETURNING id, tenant, project, namespace, class, state, content, created_at, updated_at
+`
+
+	var canonical memory.CanonicalMemory
+	if err := tx.QueryRow(
+		ctx,
+		updateQuery,
+		record.MemoryID,
+		record.Scope.Tenant,
+		record.Scope.Project,
+		record.Scope.Namespace,
+		record.Content,
+		record.UpdatedAt,
+	).Scan(
+		&canonical.ID,
+		&canonical.Scope.Tenant,
+		&canonical.Scope.Project,
+		&canonical.Scope.Namespace,
+		&canonical.Class,
+		&canonical.State,
+		&canonical.Content,
+		&canonical.CreatedAt,
+		&canonical.ModifiedAt,
+	); err != nil {
+		return memory.CanonicalMemory{}, fmt.Errorf("update manual canonical memory: %w", err)
+	}
+
+	if _, err := writeManualMemoryVersion(ctx, tx, record.VersionID, record.MemoryID, currentVersion+1, canonical.State, record.Content, record.UpdatedAt, record.Actor); err != nil {
+		return memory.CanonicalMemory{}, err
+	}
+
+	if err := upsertRelationProjection(ctx, tx, canonical, record.UpdatedAt); err != nil {
+		return memory.CanonicalMemory{}, err
+	}
+
+	if err := writeManualProvenance(ctx, tx, record.Scope, record.MemoryID, "manual_update_memory", record.RequestID, record.Actor, record.UpdatedAt, map[string]any{
+		"reason": record.Reason,
+	}); err != nil {
+		return memory.CanonicalMemory{}, err
+	}
+
+	if err := tx.Commit(ctx); err != nil {
+		return memory.CanonicalMemory{}, fmt.Errorf("commit manual update transaction: %w", err)
+	}
+
+	return canonical, nil
+}
+
+func (r *Repository) MergeMemory(ctx context.Context, record memory.ManualMergeMemoryRecord) (memory.CanonicalMemory, error) {
+	tx, err := r.tx.BeginTx(ctx, pgx.TxOptions{})
+	if err != nil {
+		return memory.CanonicalMemory{}, fmt.Errorf("begin manual merge transaction: %w", err)
+	}
+	defer tx.Rollback(ctx)
+
+	target, err := readScopedCanonicalMemory(ctx, tx, record.Scope, record.TargetMemoryID)
+	if err != nil {
+		return memory.CanonicalMemory{}, err
+	}
+	source, err := readScopedCanonicalMemory(ctx, tx, record.Scope, record.SourceMemoryID)
+	if err != nil {
+		return memory.CanonicalMemory{}, err
+	}
+	if target.Class != source.Class {
+		return memory.CanonicalMemory{}, fmt.Errorf("%w: merge memories must share the same class", memory.ErrManualMutationRejected)
+	}
+	if target.State != memory.MemoryStateActive || source.State != memory.MemoryStateActive {
+		return memory.CanonicalMemory{}, fmt.Errorf("%w: merge memories must both be active", memory.ErrManualMutationRejected)
+	}
+
+	currentVersion, err := currentMemoryVersion(ctx, tx, record.TargetMemoryID)
+	if err != nil {
+		return memory.CanonicalMemory{}, err
+	}
+	if currentVersion == 0 {
+		return memory.CanonicalMemory{}, pgx.ErrNoRows
+	}
+	if currentVersion != record.ExpectedVersion {
+		return memory.CanonicalMemory{}, memory.ErrManualMutationVersionConflict
+	}
+
+	const updateTargetQuery = `
+UPDATE canonical_memories
+SET content = $5,
+	search_text = to_tsvector('simple', $5),
+	embedding = NULL,
+	updated_at = $6
+WHERE id = $1
+	AND tenant = $2
+	AND project = $3
+	AND namespace = $4
+RETURNING id, tenant, project, namespace, class, state, content, created_at, updated_at
+`
+
+	var canonical memory.CanonicalMemory
+	if err := tx.QueryRow(
+		ctx,
+		updateTargetQuery,
+		record.TargetMemoryID,
+		record.Scope.Tenant,
+		record.Scope.Project,
+		record.Scope.Namespace,
+		record.Content,
+		record.AppliedAt,
+	).Scan(
+		&canonical.ID,
+		&canonical.Scope.Tenant,
+		&canonical.Scope.Project,
+		&canonical.Scope.Namespace,
+		&canonical.Class,
+		&canonical.State,
+		&canonical.Content,
+		&canonical.CreatedAt,
+		&canonical.ModifiedAt,
+	); err != nil {
+		return memory.CanonicalMemory{}, fmt.Errorf("update merge target memory: %w", err)
+	}
+
+	if _, err := writeManualMemoryVersion(ctx, tx, record.VersionID, record.TargetMemoryID, currentVersion+1, canonical.State, record.Content, record.AppliedAt, record.Actor); err != nil {
+		return memory.CanonicalMemory{}, err
+	}
+
+	if err := upsertRelationProjection(ctx, tx, canonical, record.AppliedAt); err != nil {
+		return memory.CanonicalMemory{}, err
+	}
+
+	if _, err := suppressScopedCanonicalMemory(ctx, tx, record.Scope, record.SourceMemoryID, record.AppliedAt); err != nil {
+		return memory.CanonicalMemory{}, err
+	}
+
+	if err := writeManualProvenance(ctx, tx, record.Scope, record.TargetMemoryID, "manual_merge_memory", record.RequestID, record.Actor, record.AppliedAt, map[string]any{
+		"reason":           record.Reason,
+		"source_memory_id": record.SourceMemoryID,
+		"role":             "target",
+	}); err != nil {
+		return memory.CanonicalMemory{}, err
+	}
+
+	if err := writeManualProvenance(ctx, tx, record.Scope, record.SourceMemoryID, "manual_merge_memory", record.RequestID, record.Actor, record.AppliedAt, map[string]any{
+		"reason":           record.Reason,
+		"target_memory_id": record.TargetMemoryID,
+		"role":             "source",
+	}); err != nil {
+		return memory.CanonicalMemory{}, err
+	}
+
+	if err := tx.Commit(ctx); err != nil {
+		return memory.CanonicalMemory{}, fmt.Errorf("commit manual merge transaction: %w", err)
+	}
+
+	return canonical, nil
+}
+
+func (r *Repository) ReclassifyMemory(ctx context.Context, record memory.ManualReclassifyMemoryRecord) (memory.CanonicalMemory, error) {
+	tx, err := r.tx.BeginTx(ctx, pgx.TxOptions{})
+	if err != nil {
+		return memory.CanonicalMemory{}, fmt.Errorf("begin manual reclassify transaction: %w", err)
+	}
+	defer tx.Rollback(ctx)
+
+	current, err := readScopedCanonicalMemory(ctx, tx, record.Scope, record.MemoryID)
+	if err != nil {
+		return memory.CanonicalMemory{}, err
+	}
+	if current.State != memory.MemoryStateActive {
+		return memory.CanonicalMemory{}, fmt.Errorf("%w: reclassify memory must be active", memory.ErrManualMutationRejected)
+	}
+	if current.Class == memory.MemoryClassSummary || current.Class == memory.MemoryClassRelation {
+		return memory.CanonicalMemory{}, fmt.Errorf("%w: reclassify source class %q is not allowed", memory.ErrManualMutationRejected, current.Class)
+	}
+
+	currentVersion, err := currentMemoryVersion(ctx, tx, record.MemoryID)
+	if err != nil {
+		return memory.CanonicalMemory{}, err
+	}
+	if currentVersion == 0 {
+		return memory.CanonicalMemory{}, pgx.ErrNoRows
+	}
+	if currentVersion != record.ExpectedVersion {
+		return memory.CanonicalMemory{}, memory.ErrManualMutationVersionConflict
+	}
+
+	const updateQuery = `
+UPDATE canonical_memories
+SET class = $5,
+	embedding = NULL,
+	updated_at = $6
+WHERE id = $1
+	AND tenant = $2
+	AND project = $3
+	AND namespace = $4
+	AND state <> 'deleted'
+RETURNING id, tenant, project, namespace, class, state, content, created_at, updated_at
+`
+
+	var canonical memory.CanonicalMemory
+	if err := tx.QueryRow(
+		ctx,
+		updateQuery,
+		record.MemoryID,
+		record.Scope.Tenant,
+		record.Scope.Project,
+		record.Scope.Namespace,
+		record.TargetClass,
+		record.AppliedAt,
+	).Scan(
+		&canonical.ID,
+		&canonical.Scope.Tenant,
+		&canonical.Scope.Project,
+		&canonical.Scope.Namespace,
+		&canonical.Class,
+		&canonical.State,
+		&canonical.Content,
+		&canonical.CreatedAt,
+		&canonical.ModifiedAt,
+	); err != nil {
+		return memory.CanonicalMemory{}, fmt.Errorf("reclassify canonical memory: %w", err)
+	}
+
+	if _, err := writeManualMemoryVersion(ctx, tx, record.VersionID, record.MemoryID, currentVersion+1, canonical.State, canonical.Content, record.AppliedAt, record.Actor); err != nil {
+		return memory.CanonicalMemory{}, err
+	}
+
+	if err := writeManualProvenance(ctx, tx, record.Scope, record.MemoryID, "manual_reclassify_memory", record.RequestID, record.Actor, record.AppliedAt, map[string]any{
+		"reason":     record.Reason,
+		"from_class": current.Class,
+		"to_class":   canonical.Class,
+	}); err != nil {
+		return memory.CanonicalMemory{}, err
+	}
+
+	if err := tx.Commit(ctx); err != nil {
+		return memory.CanonicalMemory{}, fmt.Errorf("commit manual reclassify transaction: %w", err)
+	}
+
+	return canonical, nil
+}
+
 func (r *Repository) ApplyLifecycleAction(ctx context.Context, action governance.LifecycleAction) (memory.CanonicalMemory, error) {
 	if err := action.Validate(); err != nil {
 		return memory.CanonicalMemory{}, err
@@ -1671,6 +2019,15 @@ WHERE memory_id = $1
 	return current + 1, nil
 }
 
+func currentMemoryVersion(ctx context.Context, tx pgx.Tx, memoryID string) (int64, error) {
+	nextVersion, err := nextMemoryVersion(ctx, tx, memoryID)
+	if err != nil {
+		return 0, err
+	}
+
+	return nextVersion - 1, nil
+}
+
 func writeDeletionMarker(ctx context.Context, tx pgx.Tx, action governance.LifecycleAction) error {
 	const query = `
 INSERT INTO deletion_markers (
@@ -1697,6 +2054,128 @@ INSERT INTO deletion_markers (
 	}
 
 	return nil
+}
+
+func writeManualMemoryVersion(ctx context.Context, tx pgx.Tx, versionID string, memoryID string, versionNumber int64, state memory.MemoryState, content string, createdAt time.Time, modifiedBy string) (memory.MemoryVersion, error) {
+	const versionQuery = `
+INSERT INTO memory_versions (
+	id,
+	memory_id,
+	version,
+	state,
+	content,
+	created_at,
+	modified_by
+) VALUES ($1, $2, $3, $4, $5, $6, $7)
+RETURNING id, memory_id, version, state, content, created_at, modified_by
+`
+
+	var version memory.MemoryVersion
+	if err := tx.QueryRow(
+		ctx,
+		versionQuery,
+		versionID,
+		memoryID,
+		versionNumber,
+		state,
+		content,
+		createdAt,
+		modifiedBy,
+	).Scan(
+		&version.ID,
+		&version.MemoryID,
+		&version.Version,
+		&version.State,
+		&version.Content,
+		&version.CreatedAt,
+		&version.ModifiedBy,
+	); err != nil {
+		return memory.MemoryVersion{}, fmt.Errorf("insert manual memory version: %w", err)
+	}
+
+	return version, nil
+}
+
+func writeManualProvenance(ctx context.Context, tx pgx.Tx, scope memory.Scope, memoryID, operation, requestID, actor string, createdAt time.Time, sourceContext map[string]any) error {
+	return writeProvenance(ctx, tx, memory.ProvenanceRecord{
+		ID:            uuid.NewString(),
+		Scope:         scope,
+		MemoryID:      memoryID,
+		RequestID:     requestID,
+		Actor:         actor,
+		Operation:     operation,
+		CreatedAt:     createdAt,
+		SourceContext: sourceContext,
+	})
+}
+
+func readScopedCanonicalMemory(ctx context.Context, tx pgx.Tx, scope memory.Scope, memoryID string) (memory.CanonicalMemory, error) {
+	const query = `
+SELECT
+	id,
+	tenant,
+	project,
+	namespace,
+	class,
+	state,
+	content,
+	created_at,
+	updated_at
+FROM canonical_memories
+WHERE id = $1
+	AND tenant = $2
+	AND project = $3
+	AND namespace = $4
+`
+
+	var canonical memory.CanonicalMemory
+	if err := tx.QueryRow(ctx, query, memoryID, scope.Tenant, scope.Project, scope.Namespace).Scan(
+		&canonical.ID,
+		&canonical.Scope.Tenant,
+		&canonical.Scope.Project,
+		&canonical.Scope.Namespace,
+		&canonical.Class,
+		&canonical.State,
+		&canonical.Content,
+		&canonical.CreatedAt,
+		&canonical.ModifiedAt,
+	); err != nil {
+		return memory.CanonicalMemory{}, fmt.Errorf("read scoped canonical memory: %w", err)
+	}
+
+	return canonical, nil
+}
+
+func suppressScopedCanonicalMemory(ctx context.Context, tx pgx.Tx, scope memory.Scope, memoryID string, updatedAt time.Time) (memory.CanonicalMemory, error) {
+	const query = `
+UPDATE canonical_memories
+SET state = $5,
+	embedding = NULL,
+	updated_at = $6
+WHERE id = $1
+	AND tenant = $2
+	AND project = $3
+	AND namespace = $4
+	AND state <> 'deleted'
+RETURNING id, tenant, project, namespace, class, state, content, created_at, updated_at
+`
+
+	var canonical memory.CanonicalMemory
+	if err := tx.QueryRow(ctx, query, memoryID, scope.Tenant, scope.Project, scope.Namespace, memory.MemoryStateSuppressed, updatedAt).Scan(
+		&canonical.ID,
+		&canonical.Scope.Tenant,
+		&canonical.Scope.Project,
+		&canonical.Scope.Namespace,
+		&canonical.Class,
+		&canonical.State,
+		&canonical.Content,
+		&canonical.CreatedAt,
+		&canonical.ModifiedAt,
+	); err != nil {
+		return memory.CanonicalMemory{}, fmt.Errorf("suppress scoped canonical memory: %w", err)
+	}
+
+	return canonical, nil
 }
 
 func upsertRelationProjection(ctx context.Context, tx pgx.Tx, canonical memory.CanonicalMemory, updatedAt time.Time) error {

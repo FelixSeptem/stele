@@ -31,6 +31,7 @@ type HTTPDependencies struct {
 	EventIngestor         memory.EventIngestor
 	MemoryQuery           MemoryQueryService
 	MemoryLifecycleAction MemoryLifecycleActionService
+	MemoryManualMutation  ManualMemoryMutationService
 	MemorySearcher        retrieval.MemorySearcher
 	ContextAssembler      retrieval.ContextAssembler
 	GovernanceStatusRead  GovernanceStatusReader
@@ -60,12 +61,44 @@ type MemoryLifecycleActionService interface {
 	Apply(ctx context.Context, input memory.LifecycleActionInput) error
 }
 
+type ManualMemoryMutationService interface {
+	CreateMemory(ctx context.Context, input memory.ManualCreateMemoryInput) (memory.MemoryResource, error)
+	UpdateMemory(ctx context.Context, input memory.ManualUpdateMemoryInput) (memory.MemoryResource, error)
+	MergeMemory(ctx context.Context, input memory.ManualMergeMemoryInput) (memory.MemoryResource, error)
+	ReclassifyMemory(ctx context.Context, input memory.ManualReclassifyMemoryInput) (memory.MemoryResource, error)
+}
+
 type JobExecutionReader interface {
 	ListRecentJobExecutions(ctx context.Context, scope memory.Scope, limit int) ([]jobs.JobExecutionRecord, error)
 }
 
 type lifecycleActionRequest struct {
 	Reason string `json:"reason"`
+}
+
+type manualCreateMemoryRequest struct {
+	Class   memory.MemoryClass `json:"class"`
+	Content string             `json:"content"`
+	Reason  string             `json:"reason"`
+}
+
+type manualUpdateMemoryRequest struct {
+	Content         string `json:"content"`
+	ExpectedVersion int64  `json:"expected_version"`
+	Reason          string `json:"reason"`
+}
+
+type manualMergeMemoryRequest struct {
+	SourceMemoryID  string `json:"source_memory_id"`
+	Content         string `json:"content"`
+	ExpectedVersion int64  `json:"expected_version"`
+	Reason          string `json:"reason"`
+}
+
+type manualReclassifyMemoryRequest struct {
+	TargetClass     memory.MemoryClass `json:"target_class"`
+	ExpectedVersion int64              `json:"expected_version"`
+	Reason          string             `json:"reason"`
 }
 
 type eventIngestRequest struct {
@@ -200,14 +233,32 @@ func NewHTTPHandler(deps HTTPDependencies) http.Handler {
 	)
 	mux.Handle("GET /v1/admin/memories/{memory_id}/history", adminMemoryHistory)
 
-	adminMemoryLifecycle := auth.APIKeyMiddleware(deps.AdminAPIKeys)(
+	adminMemoryCreate := auth.APIKeyMiddleware(deps.AdminAPIKeys)(
 		auth.ScopeMiddleware()(
 			http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-				handleMemoryLifecycleAction(w, r, deps.MemoryLifecycleAction)
+				handleAdminMemoryCreate(w, r, deps.MemoryManualMutation)
 			}),
 		),
 	)
-	mux.Handle("POST /v1/admin/memories/{memory_action}", adminMemoryLifecycle)
+	mux.Handle("POST /v1/admin/memories", adminMemoryCreate)
+
+	adminMemoryUpdate := auth.APIKeyMiddleware(deps.AdminAPIKeys)(
+		auth.ScopeMiddleware()(
+			http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				handleAdminMemoryUpdate(w, r, deps.MemoryManualMutation)
+			}),
+		),
+	)
+	mux.Handle("PATCH /v1/admin/memories/{memory_id}", adminMemoryUpdate)
+
+	adminMemoryAction := auth.APIKeyMiddleware(deps.AdminAPIKeys)(
+		auth.ScopeMiddleware()(
+			http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				handleAdminMemoryAction(w, r, deps.MemoryLifecycleAction, deps.MemoryManualMutation)
+			}),
+		),
+	)
+	mux.Handle("POST /v1/admin/memories/{memory_action}", adminMemoryAction)
 
 	return requestMiddleware(mux, deps.Logger)
 }
@@ -655,10 +706,222 @@ func handleMemoryLifecycleAction(w http.ResponseWriter, r *http.Request, service
 	})
 }
 
+func handleAdminMemoryCreate(w http.ResponseWriter, r *http.Request, service ManualMemoryMutationService) {
+	if service == nil {
+		http.Error(w, "manual memory mutation service is not configured", http.StatusServiceUnavailable)
+		return
+	}
+
+	var req manualCreateMemoryRequest
+	if !decodeJSONBody(w, r, &req) {
+		return
+	}
+
+	scope, ok := auth.ScopeFromContext(r.Context())
+	if !ok {
+		http.Error(w, "scope context is missing", http.StatusInternalServerError)
+		return
+	}
+
+	input := memory.ManualCreateMemoryInput{
+		Scope:     scope,
+		Class:     req.Class,
+		Content:   req.Content,
+		Reason:    req.Reason,
+		Actor:     strings.TrimSpace(r.Header.Get("X-Stele-Actor")),
+		RequestID: strings.TrimSpace(r.Header.Get("X-Request-ID")),
+	}
+	if err := input.Validate(); err != nil {
+		http.Error(w, err.Error(), http.StatusBadRequest)
+		return
+	}
+
+	resource, err := service.CreateMemory(r.Context(), input)
+	if err != nil {
+		writeAdminManualMutationError(w, err, "failed to create memory")
+		return
+	}
+
+	writeJSON(w, http.StatusCreated, resource)
+}
+
+func handleAdminMemoryUpdate(w http.ResponseWriter, r *http.Request, service ManualMemoryMutationService) {
+	if service == nil {
+		http.Error(w, "manual memory mutation service is not configured", http.StatusServiceUnavailable)
+		return
+	}
+
+	var req manualUpdateMemoryRequest
+	if !decodeJSONBody(w, r, &req) {
+		return
+	}
+
+	scope, ok := auth.ScopeFromContext(r.Context())
+	if !ok {
+		http.Error(w, "scope context is missing", http.StatusInternalServerError)
+		return
+	}
+
+	input := memory.ManualUpdateMemoryInput{
+		Scope:           scope,
+		MemoryID:        r.PathValue("memory_id"),
+		Content:         req.Content,
+		ExpectedVersion: req.ExpectedVersion,
+		Reason:          req.Reason,
+		Actor:           strings.TrimSpace(r.Header.Get("X-Stele-Actor")),
+		RequestID:       strings.TrimSpace(r.Header.Get("X-Request-ID")),
+	}
+	if err := input.Validate(); err != nil {
+		http.Error(w, err.Error(), http.StatusBadRequest)
+		return
+	}
+
+	resource, err := service.UpdateMemory(r.Context(), input)
+	if err != nil {
+		writeAdminManualMutationError(w, err, "failed to update memory")
+		return
+	}
+
+	writeJSON(w, http.StatusOK, resource)
+}
+
+func handleAdminMemoryAction(w http.ResponseWriter, r *http.Request, lifecycleService MemoryLifecycleActionService, mutationService ManualMemoryMutationService) {
+	actionTarget := r.PathValue("memory_action")
+	switch {
+	case strings.HasSuffix(actionTarget, ":merge"):
+		handleAdminMemoryMergeAction(w, r, mutationService)
+	case strings.HasSuffix(actionTarget, ":reclassify"):
+		handleAdminMemoryReclassifyAction(w, r, mutationService)
+	default:
+		handleMemoryLifecycleAction(w, r, lifecycleService)
+	}
+}
+
+func handleAdminMemoryMergeAction(w http.ResponseWriter, r *http.Request, service ManualMemoryMutationService) {
+	if service == nil {
+		http.Error(w, "manual memory mutation service is not configured", http.StatusServiceUnavailable)
+		return
+	}
+
+	var req manualMergeMemoryRequest
+	if !decodeJSONBody(w, r, &req) {
+		return
+	}
+
+	scope, ok := auth.ScopeFromContext(r.Context())
+	if !ok {
+		http.Error(w, "scope context is missing", http.StatusInternalServerError)
+		return
+	}
+
+	memoryID, err := parseAdminMutationActionTarget(r.PathValue("memory_action"), "merge")
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusBadRequest)
+		return
+	}
+
+	input := memory.ManualMergeMemoryInput{
+		Scope:           scope,
+		TargetMemoryID:  memoryID,
+		SourceMemoryID:  req.SourceMemoryID,
+		Content:         req.Content,
+		ExpectedVersion: req.ExpectedVersion,
+		Reason:          req.Reason,
+		Actor:           strings.TrimSpace(r.Header.Get("X-Stele-Actor")),
+		RequestID:       strings.TrimSpace(r.Header.Get("X-Request-ID")),
+	}
+	if err := input.Validate(); err != nil {
+		http.Error(w, err.Error(), http.StatusBadRequest)
+		return
+	}
+
+	resource, err := service.MergeMemory(r.Context(), input)
+	if err != nil {
+		writeAdminManualMutationError(w, err, "failed to merge memory")
+		return
+	}
+
+	writeJSON(w, http.StatusOK, resource)
+}
+
+func handleAdminMemoryReclassifyAction(w http.ResponseWriter, r *http.Request, service ManualMemoryMutationService) {
+	if service == nil {
+		http.Error(w, "manual memory mutation service is not configured", http.StatusServiceUnavailable)
+		return
+	}
+
+	var req manualReclassifyMemoryRequest
+	if !decodeJSONBody(w, r, &req) {
+		return
+	}
+
+	scope, ok := auth.ScopeFromContext(r.Context())
+	if !ok {
+		http.Error(w, "scope context is missing", http.StatusInternalServerError)
+		return
+	}
+
+	memoryID, err := parseAdminMutationActionTarget(r.PathValue("memory_action"), "reclassify")
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusBadRequest)
+		return
+	}
+
+	input := memory.ManualReclassifyMemoryInput{
+		Scope:           scope,
+		MemoryID:        memoryID,
+		TargetClass:     req.TargetClass,
+		ExpectedVersion: req.ExpectedVersion,
+		Reason:          req.Reason,
+		Actor:           strings.TrimSpace(r.Header.Get("X-Stele-Actor")),
+		RequestID:       strings.TrimSpace(r.Header.Get("X-Request-ID")),
+	}
+	if err := input.Validate(); err != nil {
+		http.Error(w, err.Error(), http.StatusBadRequest)
+		return
+	}
+
+	resource, err := service.ReclassifyMemory(r.Context(), input)
+	if err != nil {
+		writeAdminManualMutationError(w, err, "failed to reclassify memory")
+		return
+	}
+
+	writeJSON(w, http.StatusOK, resource)
+}
+
 func writeJSON(w http.ResponseWriter, status int, payload any) {
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(status)
 	_ = json.NewEncoder(w).Encode(payload)
+}
+
+func decodeJSONBody(w http.ResponseWriter, r *http.Request, target any) bool {
+	decoder := json.NewDecoder(r.Body)
+	decoder.DisallowUnknownFields()
+	if err := decoder.Decode(target); err != nil {
+		http.Error(w, "invalid request body", http.StatusBadRequest)
+		return false
+	}
+	if decoder.More() {
+		http.Error(w, "invalid request body", http.StatusBadRequest)
+		return false
+	}
+
+	return true
+}
+
+func writeAdminManualMutationError(w http.ResponseWriter, err error, fallback string) {
+	switch {
+	case errors.Is(err, memory.ErrManualMutationVersionConflict):
+		http.Error(w, err.Error(), http.StatusConflict)
+	case errors.Is(err, memory.ErrManualMutationRejected):
+		http.Error(w, err.Error(), http.StatusBadRequest)
+	case errors.Is(err, pgx.ErrNoRows):
+		http.Error(w, "memory not found", http.StatusNotFound)
+	default:
+		http.Error(w, fallback, http.StatusInternalServerError)
+	}
 }
 
 func parseMemoryClasses(values []string) []memory.MemoryClass {
@@ -700,4 +963,13 @@ func parseLifecycleActionTarget(value string) (string, policy.ForgettingAction, 
 	default:
 		return "", "", fmt.Errorf("invalid lifecycle action target")
 	}
+}
+
+func parseAdminMutationActionTarget(value string, expectedAction string) (string, error) {
+	memoryID, actionName, ok := strings.Cut(value, ":")
+	if !ok || strings.TrimSpace(memoryID) == "" || actionName != expectedAction {
+		return "", fmt.Errorf("invalid memory action target")
+	}
+
+	return memoryID, nil
 }

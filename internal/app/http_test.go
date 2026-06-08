@@ -154,6 +154,35 @@ func (s *stubLifecycleService) Apply(ctx context.Context, input memory.Lifecycle
 	return s.err
 }
 
+type stubManualMutationService struct {
+	gotCreateInput     memory.ManualCreateMemoryInput
+	gotUpdateInput     memory.ManualUpdateMemoryInput
+	gotMergeInput      memory.ManualMergeMemoryInput
+	gotReclassifyInput memory.ManualReclassifyMemoryInput
+	resource           memory.MemoryResource
+	err                error
+}
+
+func (s *stubManualMutationService) CreateMemory(ctx context.Context, input memory.ManualCreateMemoryInput) (memory.MemoryResource, error) {
+	s.gotCreateInput = input
+	return s.resource, s.err
+}
+
+func (s *stubManualMutationService) UpdateMemory(ctx context.Context, input memory.ManualUpdateMemoryInput) (memory.MemoryResource, error) {
+	s.gotUpdateInput = input
+	return s.resource, s.err
+}
+
+func (s *stubManualMutationService) MergeMemory(ctx context.Context, input memory.ManualMergeMemoryInput) (memory.MemoryResource, error) {
+	s.gotMergeInput = input
+	return s.resource, s.err
+}
+
+func (s *stubManualMutationService) ReclassifyMemory(ctx context.Context, input memory.ManualReclassifyMemoryInput) (memory.MemoryResource, error) {
+	s.gotReclassifyInput = input
+	return s.resource, s.err
+}
+
 func TestNewHTTPHandlerServesHealthAndReadiness(t *testing.T) {
 	var logBuf bytes.Buffer
 	handler := NewHTTPHandler(HTTPDependencies{
@@ -823,5 +852,153 @@ func TestNewHTTPHandlerAppliesAdminSuppressAction(t *testing.T) {
 
 	if service.gotInput.Reason != "manual override" {
 		t.Fatalf("reason = %q, want manual override", service.gotInput.Reason)
+	}
+}
+
+func TestNewHTTPHandlerCreatesAdminMemory(t *testing.T) {
+	service := &stubManualMutationService{
+		resource: memory.MemoryResource{
+			ID:      "mem_123",
+			Scope:   memory.Scope{Tenant: "tenant-a", Project: "project-a", Namespace: "namespace-a"},
+			Class:   memory.MemoryClassProfile,
+			State:   memory.MemoryStateActive,
+			Content: "seed knowledge",
+		},
+	}
+	handler := NewHTTPHandler(HTTPDependencies{
+		AdminAPIKeys:         map[string]struct{}{"admin-key": {}},
+		MemoryManualMutation: service,
+	})
+
+	req := httptest.NewRequest(http.MethodPost, "/v1/admin/memories", strings.NewReader(`{"class":"profile","content":"seed knowledge","reason":"seed"}`))
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("X-API-Key", "admin-key")
+	req.Header.Set("X-Stele-Actor", "operator-a")
+	req.Header.Set("X-Stele-Tenant", "tenant-a")
+	req.Header.Set("X-Stele-Project", "project-a")
+	req.Header.Set("X-Stele-Namespace", "namespace-a")
+	rec := httptest.NewRecorder()
+
+	handler.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusCreated {
+		t.Fatalf("status = %d, want %d", rec.Code, http.StatusCreated)
+	}
+	if service.gotCreateInput.Class != memory.MemoryClassProfile {
+		t.Fatalf("class = %q, want profile", service.gotCreateInput.Class)
+	}
+	if service.gotCreateInput.Actor != "operator-a" {
+		t.Fatalf("actor = %q, want operator-a", service.gotCreateInput.Actor)
+	}
+}
+
+func TestNewHTTPHandlerUpdatesAdminMemory(t *testing.T) {
+	service := &stubManualMutationService{
+		resource: memory.MemoryResource{
+			ID:      "mem_123",
+			Scope:   memory.Scope{Tenant: "tenant-a", Project: "project-a", Namespace: "namespace-a"},
+			Class:   memory.MemoryClassProfile,
+			State:   memory.MemoryStateActive,
+			Content: "corrected knowledge",
+		},
+	}
+	handler := NewHTTPHandler(HTTPDependencies{
+		AdminAPIKeys:         map[string]struct{}{"admin-key": {}},
+		MemoryManualMutation: service,
+	})
+
+	req := httptest.NewRequest(http.MethodPatch, "/v1/admin/memories/mem_123", strings.NewReader(`{"content":"corrected knowledge","expected_version":2,"reason":"correct"}`))
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("X-API-Key", "admin-key")
+	req.Header.Set("X-Stele-Actor", "operator-a")
+	req.Header.Set("X-Stele-Tenant", "tenant-a")
+	req.Header.Set("X-Stele-Project", "project-a")
+	req.Header.Set("X-Stele-Namespace", "namespace-a")
+	rec := httptest.NewRecorder()
+
+	handler.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d, want %d", rec.Code, http.StatusOK)
+	}
+	if service.gotUpdateInput.MemoryID != "mem_123" {
+		t.Fatalf("memory id = %q, want mem_123", service.gotUpdateInput.MemoryID)
+	}
+	if service.gotUpdateInput.ExpectedVersion != 2 {
+		t.Fatalf("expected version = %d, want 2", service.gotUpdateInput.ExpectedVersion)
+	}
+}
+
+func TestNewHTTPHandlerMergesAdminMemory(t *testing.T) {
+	service := &stubManualMutationService{
+		resource: memory.MemoryResource{
+			ID:      "mem_target",
+			Scope:   memory.Scope{Tenant: "tenant-a", Project: "project-a", Namespace: "namespace-a"},
+			Class:   memory.MemoryClassProfile,
+			State:   memory.MemoryStateActive,
+			Content: "merged knowledge",
+		},
+	}
+	handler := NewHTTPHandler(HTTPDependencies{
+		AdminAPIKeys:         map[string]struct{}{"admin-key": {}},
+		MemoryManualMutation: service,
+	})
+
+	req := httptest.NewRequest(http.MethodPost, "/v1/admin/memories/mem_target:merge", strings.NewReader(`{"source_memory_id":"mem_source","content":"merged knowledge","expected_version":3,"reason":"dedupe"}`))
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("X-API-Key", "admin-key")
+	req.Header.Set("X-Stele-Actor", "operator-a")
+	req.Header.Set("X-Stele-Tenant", "tenant-a")
+	req.Header.Set("X-Stele-Project", "project-a")
+	req.Header.Set("X-Stele-Namespace", "namespace-a")
+	rec := httptest.NewRecorder()
+
+	handler.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d, want %d", rec.Code, http.StatusOK)
+	}
+	if service.gotMergeInput.TargetMemoryID != "mem_target" {
+		t.Fatalf("target memory id = %q, want mem_target", service.gotMergeInput.TargetMemoryID)
+	}
+	if service.gotMergeInput.SourceMemoryID != "mem_source" {
+		t.Fatalf("source memory id = %q, want mem_source", service.gotMergeInput.SourceMemoryID)
+	}
+}
+
+func TestNewHTTPHandlerReclassifiesAdminMemory(t *testing.T) {
+	service := &stubManualMutationService{
+		resource: memory.MemoryResource{
+			ID:      "mem_123",
+			Scope:   memory.Scope{Tenant: "tenant-a", Project: "project-a", Namespace: "namespace-a"},
+			Class:   memory.MemoryClassProcedural,
+			State:   memory.MemoryStateActive,
+			Content: "respond concisely",
+		},
+	}
+	handler := NewHTTPHandler(HTTPDependencies{
+		AdminAPIKeys:         map[string]struct{}{"admin-key": {}},
+		MemoryManualMutation: service,
+	})
+
+	req := httptest.NewRequest(http.MethodPost, "/v1/admin/memories/mem_123:reclassify", strings.NewReader(`{"target_class":"procedural","expected_version":4,"reason":"fix class"}`))
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("X-API-Key", "admin-key")
+	req.Header.Set("X-Stele-Actor", "operator-a")
+	req.Header.Set("X-Stele-Tenant", "tenant-a")
+	req.Header.Set("X-Stele-Project", "project-a")
+	req.Header.Set("X-Stele-Namespace", "namespace-a")
+	rec := httptest.NewRecorder()
+
+	handler.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d, want %d", rec.Code, http.StatusOK)
+	}
+	if service.gotReclassifyInput.MemoryID != "mem_123" {
+		t.Fatalf("memory id = %q, want mem_123", service.gotReclassifyInput.MemoryID)
+	}
+	if service.gotReclassifyInput.TargetClass != memory.MemoryClassProcedural {
+		t.Fatalf("target class = %q, want procedural", service.gotReclassifyInput.TargetClass)
 	}
 }

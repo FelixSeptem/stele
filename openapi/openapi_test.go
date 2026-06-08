@@ -36,6 +36,22 @@ func TestSpecYAMLIncludesMemoryManagementRoutes(t *testing.T) {
 	}
 }
 
+func TestSpecYAMLIncludesManualMutationRoutes(t *testing.T) {
+	for _, want := range []string{
+		"/v1/admin/memories",
+		"/v1/admin/memories/{memory_id}",
+		"/v1/admin/memories/{memory_id}:merge",
+		"/v1/admin/memories/{memory_id}:reclassify",
+		"expected_version",
+		"source_memory_id",
+		"target_class",
+	} {
+		if !strings.Contains(SpecYAML(), want) {
+			t.Fatalf("SpecYAML() missing %q", want)
+		}
+	}
+}
+
 func TestSpecYAMLContainsSearchTimeWindowFields(t *testing.T) {
 	spec := SpecYAML()
 
