@@ -378,6 +378,71 @@ func TestBuildWorkerRuntimeAssemblesGovernanceWorker(t *testing.T) {
 	}
 }
 
+func TestBuildWorkerRuntimeWiresDurableRetrySettings(t *testing.T) {
+	mock, err := pgxmock.NewPool()
+	if err != nil {
+		t.Fatalf("pgxmock.NewPool() error = %v", err)
+	}
+	defer mock.Close()
+
+	cfg := config.Config{
+		Mode:        config.ModeWorker,
+		PostgresDSN: "postgres://runtime",
+		Jobs: config.JobConfig{
+			WorkerPollInterval:         7 * time.Second,
+			WorkerErrorBackoff:         11 * time.Second,
+			GovernanceMaxAttempts:      7,
+			GovernanceRetryBackoff:     45 * time.Second,
+			GovernanceLeaseRenewPeriod: 20 * time.Second,
+		},
+	}
+
+	runtime, err := buildWorkerRuntime(context.Background(), cfg, workerRuntimeDependencies{
+		openPool: func(ctx context.Context, dsn string) (postgresRuntimeStore, error) {
+			return mock, nil
+		},
+		bootstrapDatabase: func(ctx context.Context, db postgresRuntimeStore) error {
+			return nil
+		},
+		now: func() time.Time {
+			return time.Date(2026, 6, 10, 10, 0, 0, 0, time.UTC)
+		},
+	})
+	if err != nil {
+		t.Fatalf("buildWorkerRuntime() error = %v", err)
+	}
+
+	poller, ok := runtime.worker.(jobs.PollingWorker)
+	if !ok {
+		t.Fatalf("runtime worker type = %T, want jobs.PollingWorker", runtime.worker)
+	}
+
+	worker, ok := poller.Worker.(jobs.GovernanceWorker)
+	if !ok {
+		t.Fatalf("poller.Worker type = %T, want jobs.GovernanceWorker", poller.Worker)
+	}
+
+	if worker.MaxAttempts != 7 {
+		t.Fatalf("MaxAttempts = %d, want 7", worker.MaxAttempts)
+	}
+
+	if worker.RetryBackoff != 45*time.Second {
+		t.Fatalf("RetryBackoff = %v, want 45s", worker.RetryBackoff)
+	}
+
+	if worker.LeaseRenewInterval != 20*time.Second {
+		t.Fatalf("LeaseRenewInterval = %v, want 20s", worker.LeaseRenewInterval)
+	}
+
+	if poller.PollInterval != 7*time.Second {
+		t.Fatalf("PollInterval = %v, want 7s", poller.PollInterval)
+	}
+
+	if poller.ErrorBackoff != 11*time.Second {
+		t.Fatalf("ErrorBackoff = %v, want 11s", poller.ErrorBackoff)
+	}
+}
+
 func TestBuildSchedulerRuntimeAssemblesMaintenanceScheduler(t *testing.T) {
 	mock, err := pgxmock.NewPool()
 	if err != nil {
@@ -429,6 +494,75 @@ func TestBuildSchedulerRuntimeAssemblesMaintenanceScheduler(t *testing.T) {
 
 	if len(scheduler.Jobs) != 3 {
 		t.Fatalf("len(scheduler.Jobs) = %d, want 3", len(scheduler.Jobs))
+	}
+}
+
+func TestBuildSchedulerRuntimeAssemblesScopeDispatchJobs(t *testing.T) {
+	mock, err := pgxmock.NewPool()
+	if err != nil {
+		t.Fatalf("pgxmock.NewPool() error = %v", err)
+	}
+	defer mock.Close()
+
+	cfg := config.Config{
+		Mode:        config.ModeScheduler,
+		PostgresDSN: "postgres://runtime",
+		Auth: config.AuthConfig{
+			DefaultTenant:    "tenant-a",
+			DefaultProject:   "project-a",
+			DefaultNamespace: "namespace-a",
+		},
+		Jobs: config.JobConfig{
+			MaintenanceInterval:        30 * time.Second,
+			SchedulerErrorBackoff:      time.Minute,
+			MaintenanceScopeBatchLimit: 25,
+		},
+	}
+
+	runtime, err := buildSchedulerRuntime(context.Background(), cfg, schedulerRuntimeDependencies{
+		openPool: func(ctx context.Context, dsn string) (postgresRuntimeStore, error) {
+			return mock, nil
+		},
+		bootstrapDatabase: func(ctx context.Context, db postgresRuntimeStore) error {
+			return nil
+		},
+		now: func() time.Time {
+			return time.Date(2026, 6, 10, 11, 0, 0, 0, time.UTC)
+		},
+	})
+	if err != nil {
+		t.Fatalf("buildSchedulerRuntime() error = %v", err)
+	}
+
+	scheduler, ok := runtime.scheduler.(jobs.MaintenanceScheduler)
+	if !ok {
+		t.Fatalf("runtime scheduler type = %T, want jobs.MaintenanceScheduler", runtime.scheduler)
+	}
+
+	if len(scheduler.Jobs) != 3 {
+		t.Fatalf("len(scheduler.Jobs) = %d, want 3", len(scheduler.Jobs))
+	}
+
+	dispatchA, ok := scheduler.Jobs[0].(jobs.ScopeDispatchJob)
+	if !ok {
+		t.Fatalf("scheduler.Jobs[0] type = %T, want jobs.ScopeDispatchJob", scheduler.Jobs[0])
+	}
+
+	dispatchB, ok := scheduler.Jobs[1].(jobs.ScopeDispatchJob)
+	if !ok {
+		t.Fatalf("scheduler.Jobs[1] type = %T, want jobs.ScopeDispatchJob", scheduler.Jobs[1])
+	}
+
+	if dispatchA.ScopeBatchLimit != 25 || dispatchB.ScopeBatchLimit != 25 {
+		t.Fatalf("scope batch limits = (%d, %d), want 25", dispatchA.ScopeBatchLimit, dispatchB.ScopeBatchLimit)
+	}
+
+	if dispatchA.FallbackScope.Namespace != "namespace-a" || dispatchB.FallbackScope.Namespace != "namespace-a" {
+		t.Fatalf("fallback scopes = (%+v, %+v), want default namespace", dispatchA.FallbackScope, dispatchB.FallbackScope)
+	}
+
+	if _, ok := scheduler.Jobs[2].(jobs.JobExecutionCleanupJob); !ok {
+		t.Fatalf("scheduler.Jobs[2] type = %T, want jobs.JobExecutionCleanupJob", scheduler.Jobs[2])
 	}
 }
 

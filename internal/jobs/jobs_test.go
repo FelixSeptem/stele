@@ -66,6 +66,47 @@ func (s *stubMaintenanceJob) Run(ctx context.Context) (int, error) {
 	return 1, nil
 }
 
+type stubMaintenanceScopeSource struct {
+	scopes   []memory.Scope
+	err      error
+	calls    int
+	gotLimit int
+}
+
+func (s *stubMaintenanceScopeSource) ListMaintenanceScopes(ctx context.Context, limit int) ([]memory.Scope, error) {
+	s.calls++
+	s.gotLimit = limit
+	if s.err != nil {
+		return nil, s.err
+	}
+
+	return s.scopes, nil
+}
+
+type stubScopedMaintenanceJob struct {
+	name      string
+	scope     memory.Scope
+	err       error
+	processed int
+	calls     int
+}
+
+func (s *stubScopedMaintenanceJob) Name() string {
+	return s.name
+}
+
+func (s *stubScopedMaintenanceJob) Run(ctx context.Context) (int, error) {
+	s.calls++
+	if s.err != nil {
+		return 0, s.err
+	}
+	if s.processed > 0 {
+		return s.processed, nil
+	}
+
+	return 1, nil
+}
+
 type stubSummaryProcessor struct {
 	calls     int
 	gotScope  memory.Scope
@@ -224,6 +265,78 @@ func TestMaintenanceSchedulerStartRunsJobsOnInterval(t *testing.T) {
 	}
 }
 
+func TestScopeDispatchJobRunsScopedMaintenanceAcrossEligibleScopes(t *testing.T) {
+	source := &stubMaintenanceScopeSource{
+		scopes: []memory.Scope{
+			{Tenant: "tenant-a", Project: "project-a", Namespace: "ns-a"},
+			{Tenant: "tenant-b", Project: "project-b", Namespace: "ns-b"},
+		},
+	}
+	dispatched := make([]memory.Scope, 0, 2)
+	job := ScopeDispatchJob{
+		NameValue:       "summary_compaction_dispatch",
+		ScopeSource:     source,
+		ScopeBatchLimit: 10,
+		Dispatch: func(scope memory.Scope) MaintenanceJob {
+			dispatched = append(dispatched, scope)
+			return &stubScopedMaintenanceJob{name: "summary_compaction", scope: scope}
+		},
+	}
+
+	processed, err := job.Run(context.Background())
+	if err != nil {
+		t.Fatalf("Run() error = %v", err)
+	}
+
+	if processed != 2 {
+		t.Fatalf("processed = %d, want 2", processed)
+	}
+
+	if source.calls != 1 || source.gotLimit != 10 {
+		t.Fatalf("scope source calls/limit = (%d, %d), want (1, 10)", source.calls, source.gotLimit)
+	}
+
+	if len(dispatched) != 2 {
+		t.Fatalf("len(dispatched) = %d, want 2", len(dispatched))
+	}
+
+	if dispatched[0].Namespace != "ns-a" || dispatched[1].Namespace != "ns-b" {
+		t.Fatalf("dispatched scopes = %+v, want ns-a/ns-b order", dispatched)
+	}
+}
+
+func TestScopeDispatchJobUsesFallbackScopeWhenDiscoveryReturnsNone(t *testing.T) {
+	fallback := memory.Scope{Tenant: "tenant-a", Project: "project-a", Namespace: "namespace-a"}
+	dispatched := make([]memory.Scope, 0, 1)
+	job := ScopeDispatchJob{
+		NameValue:       "retention_sweep_dispatch",
+		ScopeSource:     &stubMaintenanceScopeSource{},
+		ScopeBatchLimit: 10,
+		FallbackScope:   fallback,
+		Dispatch: func(scope memory.Scope) MaintenanceJob {
+			dispatched = append(dispatched, scope)
+			return &stubScopedMaintenanceJob{name: "retention_sweep", scope: scope}
+		},
+	}
+
+	processed, err := job.Run(context.Background())
+	if err != nil {
+		t.Fatalf("Run() error = %v", err)
+	}
+
+	if processed != 1 {
+		t.Fatalf("processed = %d, want 1", processed)
+	}
+
+	if len(dispatched) != 1 {
+		t.Fatalf("len(dispatched) = %d, want 1", len(dispatched))
+	}
+
+	if dispatched[0] != fallback {
+		t.Fatalf("dispatched[0] = %+v, want %+v", dispatched[0], fallback)
+	}
+}
+
 func TestSummaryCompactionJobRunSkipsDuplicateExecutionWindow(t *testing.T) {
 	scope := memory.Scope{Tenant: "tenant-a", Project: "project-a", Namespace: "namespace-a"}
 	processor := &stubSummaryProcessor{}
@@ -355,13 +468,13 @@ func TestJobExecutionCleanupJobRunDeletesOldExecutions(t *testing.T) {
 	store := &stubExecutionStore{beginStarted: true}
 
 	job := JobExecutionCleanupJob{
-		Scope:              scope,
-		Cadence:            30 * time.Minute,
-		RetentionWindow:    24 * time.Hour,
-		Now:                func() time.Time { return now },
-		Cleaner:            cleaner,
-		ExecutionStore:     store,
-		TriggerSource:      "scheduler",
+		Scope:           scope,
+		Cadence:         30 * time.Minute,
+		RetentionWindow: 24 * time.Hour,
+		Now:             func() time.Time { return now },
+		Cleaner:         cleaner,
+		ExecutionStore:  store,
+		TriggerSource:   "scheduler",
 	}
 
 	processed, err := job.Run(context.Background())

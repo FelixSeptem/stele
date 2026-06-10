@@ -18,6 +18,12 @@ CREATE TABLE IF NOT EXISTS raw_events (
     created_at timestamptz NOT NULL DEFAULT now()
 );
 
+ALTER TABLE raw_events
+    ADD COLUMN IF NOT EXISTS governance_last_failed_at timestamptz,
+    ADD COLUMN IF NOT EXISTS governance_last_error text,
+    ADD COLUMN IF NOT EXISTS governance_next_attempt_at timestamptz,
+    ADD COLUMN IF NOT EXISTS governance_exhausted_at timestamptz;
+
 CREATE TABLE IF NOT EXISTS candidate_memories (
     id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
     source_raw_event_id uuid NOT NULL REFERENCES raw_events(id),
@@ -125,6 +131,15 @@ CREATE TABLE IF NOT EXISTS job_executions (
 
 CREATE INDEX IF NOT EXISTS raw_events_scope_created_at_idx
     ON raw_events (tenant, project, namespace, created_at DESC);
+
+CREATE INDEX IF NOT EXISTS raw_events_governance_claim_idx
+    ON raw_events (
+        governance_processed_at,
+        governance_exhausted_at,
+        governance_next_attempt_at,
+        governance_lease_until,
+        created_at
+    );
 
 CREATE INDEX IF NOT EXISTS candidate_memories_source_raw_event_idx
     ON candidate_memories (source_raw_event_id, created_at DESC);

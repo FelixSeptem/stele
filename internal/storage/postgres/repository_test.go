@@ -248,6 +248,9 @@ func TestMigrateRunsBaseSchema(t *testing.T) {
 	for _, want := range []string{
 		"CREATE EXTENSION IF NOT EXISTS vector",
 		"CREATE TABLE IF NOT EXISTS raw_events",
+		"governance_last_failed_at timestamptz",
+		"governance_next_attempt_at timestamptz",
+		"governance_exhausted_at timestamptz",
 		"CREATE TABLE IF NOT EXISTS candidate_memories",
 		"CREATE TABLE IF NOT EXISTS canonical_memories",
 		"retention_class text NOT NULL",
@@ -256,6 +259,7 @@ func TestMigrateRunsBaseSchema(t *testing.T) {
 		"CREATE TABLE IF NOT EXISTS relation_projections",
 		"CREATE TABLE IF NOT EXISTS job_executions",
 		"modified_by text NOT NULL",
+		"CREATE INDEX IF NOT EXISTS raw_events_governance_claim_idx",
 		"CREATE INDEX IF NOT EXISTS canonical_memories_search_text_idx",
 		"CREATE INDEX IF NOT EXISTS relation_projections_search_text_idx",
 	} {
@@ -888,6 +892,208 @@ func TestRepositoryMarkRawEventProcessed(t *testing.T) {
 	repo := NewRepository(mock)
 	if err := repo.MarkRawEventProcessed(context.Background(), input); err != nil {
 		t.Fatalf("MarkRawEventProcessed() error = %v", err)
+	}
+
+	if err := mock.ExpectationsWereMet(); err != nil {
+		t.Fatalf("ExpectationsWereMet() error = %v", err)
+	}
+}
+
+func TestRepositoryClaimPendingRawEventsSkipsRetryWaitAndExhausted(t *testing.T) {
+	mock, err := pgxmock.NewPool()
+	if err != nil {
+		t.Fatalf("pgxmock.NewPool() error = %v", err)
+	}
+	defer mock.Close()
+
+	now := time.Date(2026, 6, 10, 12, 0, 0, 0, time.UTC)
+	input := governance.ClaimPendingRawEventsInput{
+		WorkerID:      "worker-a",
+		BatchSize:     8,
+		LeaseDuration: 2 * time.Minute,
+		Now:           now,
+	}
+
+	mock.ExpectQuery("WITH claimed AS").
+		WithArgs(input.WorkerID, input.Now, input.Now.Add(input.LeaseDuration), input.BatchSize).
+		WillReturnRows(pgxmock.NewRows([]string{
+			"id", "tenant", "project", "namespace", "event_type", "content", "source_timestamp", "created_at",
+			"governance_worker_id", "governance_claimed_at", "governance_lease_until", "governance_attempt",
+		}))
+
+	repo := NewRepository(mock)
+	claims, err := repo.ClaimPendingRawEvents(context.Background(), input)
+	if err != nil {
+		t.Fatalf("ClaimPendingRawEvents() error = %v", err)
+	}
+
+	if len(claims) != 0 {
+		t.Fatalf("len(claims) = %d, want 0", len(claims))
+	}
+
+	if err := mock.ExpectationsWereMet(); err != nil {
+		t.Fatalf("ExpectationsWereMet() error = %v", err)
+	}
+}
+
+func TestRepositoryRenewClaimedRawEventLease(t *testing.T) {
+	mock, err := pgxmock.NewPool()
+	if err != nil {
+		t.Fatalf("pgxmock.NewPool() error = %v", err)
+	}
+	defer mock.Close()
+
+	renewedAt := time.Date(2026, 6, 10, 12, 10, 0, 0, time.UTC)
+	input := governance.RenewClaimedRawEventLeaseInput{
+		RawEventID: "evt_123",
+		WorkerID:   "worker-a",
+		RenewedAt:  renewedAt,
+		LeaseUntil: renewedAt.Add(2 * time.Minute),
+	}
+
+	mock.ExpectExec("UPDATE raw_events").
+		WithArgs(input.RawEventID, input.WorkerID, input.RenewedAt, input.LeaseUntil).
+		WillReturnResult(pgxmock.NewResult("UPDATE", 1))
+
+	repo := NewRepository(mock)
+	if err := repo.RenewClaimedRawEventLease(context.Background(), input); err != nil {
+		t.Fatalf("RenewClaimedRawEventLease() error = %v", err)
+	}
+
+	if err := mock.ExpectationsWereMet(); err != nil {
+		t.Fatalf("ExpectationsWereMet() error = %v", err)
+	}
+}
+
+func TestRepositoryRecordClaimedRawEventFailureSchedulesRetry(t *testing.T) {
+	mock, err := pgxmock.NewPool()
+	if err != nil {
+		t.Fatalf("pgxmock.NewPool() error = %v", err)
+	}
+	defer mock.Close()
+
+	failedAt := time.Date(2026, 6, 10, 12, 0, 0, 0, time.UTC)
+	nextAttemptAt := failedAt.Add(30 * time.Second)
+	input := governance.RecordClaimedRawEventFailureInput{
+		RawEventID:    "evt_123",
+		WorkerID:      "worker-a",
+		FailedAt:      failedAt,
+		ErrorMessage:  "candidate extraction failed",
+		NextAttemptAt: nextAttemptAt,
+	}
+
+	mock.ExpectExec("UPDATE raw_events").
+		WithArgs(
+			input.RawEventID,
+			input.WorkerID,
+			input.FailedAt,
+			input.ErrorMessage,
+			input.NextAttemptAt,
+			nil,
+		).
+		WillReturnResult(pgxmock.NewResult("UPDATE", 1))
+
+	repo := NewRepository(mock)
+	if err := repo.RecordClaimedRawEventFailure(context.Background(), input); err != nil {
+		t.Fatalf("RecordClaimedRawEventFailure() error = %v", err)
+	}
+
+	if err := mock.ExpectationsWereMet(); err != nil {
+		t.Fatalf("ExpectationsWereMet() error = %v", err)
+	}
+}
+
+func TestRepositoryRecordClaimedRawEventFailureMarksExhausted(t *testing.T) {
+	mock, err := pgxmock.NewPool()
+	if err != nil {
+		t.Fatalf("pgxmock.NewPool() error = %v", err)
+	}
+	defer mock.Close()
+
+	failedAt := time.Date(2026, 6, 10, 12, 5, 0, 0, time.UTC)
+	input := governance.RecordClaimedRawEventFailureInput{
+		RawEventID:   "evt_123",
+		WorkerID:     "worker-a",
+		FailedAt:     failedAt,
+		ErrorMessage: "candidate extraction failed",
+		ExhaustedAt:  failedAt,
+	}
+
+	mock.ExpectExec("UPDATE raw_events").
+		WithArgs(
+			input.RawEventID,
+			input.WorkerID,
+			input.FailedAt,
+			input.ErrorMessage,
+			nil,
+			input.ExhaustedAt,
+		).
+		WillReturnResult(pgxmock.NewResult("UPDATE", 1))
+
+	repo := NewRepository(mock)
+	if err := repo.RecordClaimedRawEventFailure(context.Background(), input); err != nil {
+		t.Fatalf("RecordClaimedRawEventFailure() error = %v", err)
+	}
+
+	if err := mock.ExpectationsWereMet(); err != nil {
+		t.Fatalf("ExpectationsWereMet() error = %v", err)
+	}
+}
+
+func TestRepositoryRenewClaimedRawEventLeaseRejectsLostOwnership(t *testing.T) {
+	mock, err := pgxmock.NewPool()
+	if err != nil {
+		t.Fatalf("pgxmock.NewPool() error = %v", err)
+	}
+	defer mock.Close()
+
+	renewedAt := time.Date(2026, 6, 10, 12, 10, 0, 0, time.UTC)
+	input := governance.RenewClaimedRawEventLeaseInput{
+		RawEventID: "evt_123",
+		WorkerID:   "worker-a",
+		RenewedAt:  renewedAt,
+		LeaseUntil: renewedAt.Add(2 * time.Minute),
+	}
+
+	mock.ExpectExec("UPDATE raw_events").
+		WithArgs(input.RawEventID, input.WorkerID, input.RenewedAt, input.LeaseUntil).
+		WillReturnResult(pgxmock.NewResult("UPDATE", 0))
+
+	repo := NewRepository(mock)
+	if err := repo.RenewClaimedRawEventLease(context.Background(), input); !errors.Is(err, governance.ErrClaimOwnershipLost) {
+		t.Fatalf("RenewClaimedRawEventLease() error = %v, want ErrClaimOwnershipLost", err)
+	}
+
+	if err := mock.ExpectationsWereMet(); err != nil {
+		t.Fatalf("ExpectationsWereMet() error = %v", err)
+	}
+}
+
+func TestRepositoryListMaintenanceScopesReturnsDistinctEligibleScopes(t *testing.T) {
+	mock, err := pgxmock.NewPool()
+	if err != nil {
+		t.Fatalf("pgxmock.NewPool() error = %v", err)
+	}
+	defer mock.Close()
+
+	mock.ExpectQuery("SELECT tenant, project, namespace FROM \\(").
+		WithArgs(50).
+		WillReturnRows(pgxmock.NewRows([]string{"tenant", "project", "namespace"}).
+			AddRow("tenant-a", "project-a", "namespace-a").
+			AddRow("tenant-b", "project-b", "namespace-b"))
+
+	repo := NewRepository(mock)
+	scopes, err := repo.ListMaintenanceScopes(context.Background(), 50)
+	if err != nil {
+		t.Fatalf("ListMaintenanceScopes() error = %v", err)
+	}
+
+	if len(scopes) != 2 {
+		t.Fatalf("len(scopes) = %d, want 2", len(scopes))
+	}
+
+	if scopes[0].Namespace != "namespace-a" || scopes[1].Namespace != "namespace-b" {
+		t.Fatalf("scopes = %+v, want namespace-a/namespace-b", scopes)
 	}
 
 	if err := mock.ExpectationsWereMet(); err != nil {

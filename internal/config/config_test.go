@@ -110,3 +110,33 @@ func TestLoadFromEnvRejectsInvalidJobInterval(t *testing.T) {
 		t.Fatal("LoadFromEnv() error = nil, want invalid duration error")
 	}
 }
+
+func TestLoadFromEnvParsesDurableWorkerSettings(t *testing.T) {
+	t.Setenv("STELE_MODE", "worker")
+	t.Setenv("STELE_POSTGRES_DSN", "postgres://example")
+	t.Setenv("STELE_JOBS_GOVERNANCE_MAX_ATTEMPTS", "7")
+	t.Setenv("STELE_JOBS_GOVERNANCE_RETRY_BACKOFF", "45s")
+	t.Setenv("STELE_JOBS_GOVERNANCE_LEASE_RENEW_INTERVAL", "20s")
+	t.Setenv("STELE_JOBS_MAINTENANCE_SCOPE_BATCH_LIMIT", "25")
+
+	cfg, err := LoadFromEnv()
+	if err != nil {
+		t.Fatalf("LoadFromEnv() error = %v", err)
+	}
+
+	if cfg.Jobs.GovernanceMaxAttempts != 7 {
+		t.Fatalf("GovernanceMaxAttempts = %d, want 7", cfg.Jobs.GovernanceMaxAttempts)
+	}
+
+	if cfg.Jobs.GovernanceRetryBackoff != 45*time.Second {
+		t.Fatalf("GovernanceRetryBackoff = %v, want 45s", cfg.Jobs.GovernanceRetryBackoff)
+	}
+
+	if cfg.Jobs.GovernanceLeaseRenewPeriod != 20*time.Second {
+		t.Fatalf("GovernanceLeaseRenewPeriod = %v, want 20s", cfg.Jobs.GovernanceLeaseRenewPeriod)
+	}
+
+	if cfg.Jobs.MaintenanceScopeBatchLimit != 25 {
+		t.Fatalf("MaintenanceScopeBatchLimit = %d, want 25", cfg.Jobs.MaintenanceScopeBatchLimit)
+	}
+}

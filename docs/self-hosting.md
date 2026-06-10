@@ -6,7 +6,7 @@
 
 - `api`: public ingest, memory read, retrieval, context assembly, and admin inspection or lifecycle routes
 - `worker`: continuous governance processing loop for claimed raw events
-- `scheduler`: periodic maintenance dispatch for summary compaction, retention sweep, and job execution cleanup for the configured default scope
+- `scheduler`: periodic maintenance dispatch for summary compaction, retention sweep, and job execution cleanup
 
 The repository ships a production-oriented `Dockerfile` plus a local `docker-compose.yml` so operators can boot the full stack without reconstructing runtime wiring by hand.
 
@@ -46,6 +46,10 @@ Job tuning variables:
 - `STELE_JOBS_WORKER_POLL_INTERVAL`: worker idle poll delay, default `5s`
 - `STELE_JOBS_WORKER_ERROR_BACKOFF`: worker retry backoff, default `15s`
 - `STELE_JOBS_SCHEDULER_ERROR_BACKOFF`: scheduler retry backoff, default `30s`
+- `STELE_JOBS_GOVERNANCE_MAX_ATTEMPTS`: automatic retry budget for claimed governance raw events, default `5`
+- `STELE_JOBS_GOVERNANCE_RETRY_BACKOFF`: retry wait after a failed governance attempt, default `30s`
+- `STELE_JOBS_GOVERNANCE_LEASE_RENEW_INTERVAL`: cadence for renewing an in-flight governance claim lease, default `30s`
+- `STELE_JOBS_MAINTENANCE_SCOPE_BATCH_LIMIT`: maximum discovered scopes evaluated per scheduler tick, default `100`
 
 ## Local Bootstrap With Compose
 
@@ -300,5 +304,9 @@ curl -X POST http://localhost:8080/v1/admin/memories/<memory-id>:reclassify \
 - `api` logs request completion and panic recovery in structured key-value style.
 - `worker` logs polling loop failures and successful batch execution.
 - `scheduler` logs maintenance job execution results and backoff retries.
-- The scheduler dispatch path is independent from public request traffic and currently drives summary compaction, retention expiry evaluation, and job execution cleanup for the configured default scope.
+- The worker persists retryable governance failures with bounded retry state instead of relying only on lease expiry.
+- Raw events that hit the retry ceiling are marked exhausted and stop automatic claim until a later explicit recovery surface exists.
+- The scheduler dispatch path is independent from public request traffic.
+- Summary compaction and retention sweep are dispatched per eligible discovered scope, with the configured default scope used only as a fallback when discovery returns none.
+- Job execution cleanup remains runtime-global and runs once per cadence window instead of being fanned out per discovered scope.
 - Telemetry hook points are wired for ingest, governance worker execution, retrieval, forgetting, and backlog inspection. The default runtime uses a no-op observer until a concrete metrics or tracing backend is attached.

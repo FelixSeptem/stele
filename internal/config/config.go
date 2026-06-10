@@ -3,6 +3,7 @@ package config
 import (
 	"fmt"
 	"os"
+	"strconv"
 	"strings"
 	"time"
 )
@@ -32,14 +33,18 @@ type AuthConfig struct {
 }
 
 type JobConfig struct {
-	MaintenanceInterval       time.Duration
-	WorkerPollInterval        time.Duration
-	WorkerErrorBackoff        time.Duration
-	SchedulerErrorBackoff     time.Duration
-	SummaryCompactionInterval time.Duration
-	RetentionInterval         time.Duration
-	CleanupInterval           time.Duration
-	JobExecutionRetention     time.Duration
+	MaintenanceInterval        time.Duration
+	WorkerPollInterval         time.Duration
+	WorkerErrorBackoff         time.Duration
+	SchedulerErrorBackoff      time.Duration
+	SummaryCompactionInterval  time.Duration
+	RetentionInterval          time.Duration
+	CleanupInterval            time.Duration
+	JobExecutionRetention      time.Duration
+	GovernanceMaxAttempts      int
+	GovernanceRetryBackoff     time.Duration
+	GovernanceLeaseRenewPeriod time.Duration
+	MaintenanceScopeBatchLimit int
 }
 
 func LoadFromEnv() (Config, error) {
@@ -87,6 +92,22 @@ func LoadFromEnv() (Config, error) {
 	if err != nil {
 		return Config{}, err
 	}
+	governanceMaxAttempts, err := loadIntWithDefault("STELE_JOBS_GOVERNANCE_MAX_ATTEMPTS", 5)
+	if err != nil {
+		return Config{}, err
+	}
+	governanceRetryBackoff, err := loadDurationWithDefault("STELE_JOBS_GOVERNANCE_RETRY_BACKOFF", 30*time.Second)
+	if err != nil {
+		return Config{}, err
+	}
+	governanceLeaseRenewPeriod, err := loadDurationWithDefault("STELE_JOBS_GOVERNANCE_LEASE_RENEW_INTERVAL", 30*time.Second)
+	if err != nil {
+		return Config{}, err
+	}
+	maintenanceScopeBatchLimit, err := loadIntWithDefault("STELE_JOBS_MAINTENANCE_SCOPE_BATCH_LIMIT", 100)
+	if err != nil {
+		return Config{}, err
+	}
 
 	return Config{
 		Mode:        mode,
@@ -100,14 +121,18 @@ func LoadFromEnv() (Config, error) {
 			DefaultNamespace: strings.TrimSpace(os.Getenv("STELE_AUTH_DEFAULT_NAMESPACE")),
 		},
 		Jobs: JobConfig{
-			MaintenanceInterval:       maintenanceInterval,
-			WorkerPollInterval:        workerPollInterval,
-			WorkerErrorBackoff:        workerErrorBackoff,
-			SchedulerErrorBackoff:     schedulerErrorBackoff,
-			SummaryCompactionInterval: summaryCompactionInterval,
-			RetentionInterval:         retentionInterval,
-			CleanupInterval:           cleanupInterval,
-			JobExecutionRetention:     jobExecutionRetention,
+			MaintenanceInterval:        maintenanceInterval,
+			WorkerPollInterval:         workerPollInterval,
+			WorkerErrorBackoff:         workerErrorBackoff,
+			SchedulerErrorBackoff:      schedulerErrorBackoff,
+			SummaryCompactionInterval:  summaryCompactionInterval,
+			RetentionInterval:          retentionInterval,
+			CleanupInterval:            cleanupInterval,
+			JobExecutionRetention:      jobExecutionRetention,
+			GovernanceMaxAttempts:      governanceMaxAttempts,
+			GovernanceRetryBackoff:     governanceRetryBackoff,
+			GovernanceLeaseRenewPeriod: governanceLeaseRenewPeriod,
+			MaintenanceScopeBatchLimit: maintenanceScopeBatchLimit,
 		},
 	}, nil
 }
@@ -145,6 +170,20 @@ func loadDurationWithDefault(key string, fallback time.Duration) (time.Duration,
 	}
 
 	value, err := time.ParseDuration(raw)
+	if err != nil {
+		return 0, fmt.Errorf("%s is invalid: %w", key, err)
+	}
+
+	return value, nil
+}
+
+func loadIntWithDefault(key string, fallback int) (int, error) {
+	raw := strings.TrimSpace(os.Getenv(key))
+	if raw == "" {
+		return fallback, nil
+	}
+
+	value, err := strconv.Atoi(raw)
 	if err != nil {
 		return 0, fmt.Errorf("%s is invalid: %w", key, err)
 	}

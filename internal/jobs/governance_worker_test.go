@@ -3,6 +3,7 @@ package jobs
 import (
 	"context"
 	"errors"
+	"sync"
 	"testing"
 	"time"
 
@@ -33,6 +34,60 @@ type stubRawEventProcessor struct {
 
 func (s *stubRawEventProcessor) ProcessClaimedRawEvent(ctx context.Context, claim governance.ClaimedRawEvent) error {
 	s.gotClaims = append(s.gotClaims, claim)
+	return s.err
+}
+
+type selectiveRawEventProcessor struct {
+	gotClaims []governance.ClaimedRawEvent
+	errs      map[string]error
+}
+
+func (s *selectiveRawEventProcessor) ProcessClaimedRawEvent(ctx context.Context, claim governance.ClaimedRawEvent) error {
+	s.gotClaims = append(s.gotClaims, claim)
+	if err, ok := s.errs[claim.Event.ID]; ok {
+		return err
+	}
+
+	return nil
+}
+
+type blockingProcessor struct {
+	release chan struct{}
+}
+
+func (p *blockingProcessor) ProcessClaimedRawEvent(ctx context.Context, claim governance.ClaimedRawEvent) error {
+	select {
+	case <-ctx.Done():
+		return ctx.Err()
+	case <-p.release:
+		return nil
+	}
+}
+
+type stubRawEventFailureRecorder struct {
+	inputs []governance.RecordClaimedRawEventFailureInput
+	err    error
+}
+
+func (s *stubRawEventFailureRecorder) RecordClaimedRawEventFailure(ctx context.Context, input governance.RecordClaimedRawEventFailureInput) error {
+	s.inputs = append(s.inputs, input)
+	return s.err
+}
+
+type stubRawEventLeaseRenewer struct {
+	inputs   []governance.RenewClaimedRawEventLeaseInput
+	err      error
+	signal   chan struct{}
+	signalMu sync.Once
+}
+
+func (s *stubRawEventLeaseRenewer) RenewClaimedRawEventLease(ctx context.Context, input governance.RenewClaimedRawEventLeaseInput) error {
+	s.inputs = append(s.inputs, input)
+	if s.signal != nil {
+		s.signalMu.Do(func() {
+			close(s.signal)
+		})
+	}
 	return s.err
 }
 
@@ -222,6 +277,161 @@ func TestGovernanceWorkerRunOnceSkipsAlreadyProcessedEvents(t *testing.T) {
 
 	if processed != 0 {
 		t.Fatalf("second processed = %d, want %d", processed, 0)
+	}
+}
+
+func TestGovernanceWorkerRunOnceRecordsRetryableFailureAndContinues(t *testing.T) {
+	now := time.Date(2026, 6, 10, 12, 0, 0, 0, time.UTC)
+	claimer := &stubRawEventClaimer{
+		claims: []governance.ClaimedRawEvent{
+			newClaimedRawEvent(t, "evt_fail", now),
+			newClaimedRawEvent(t, "evt_ok", now.Add(time.Second)),
+		},
+	}
+	processor := &selectiveRawEventProcessor{
+		errs: map[string]error{
+			"evt_fail": errors.New("processing failed"),
+		},
+	}
+	recorder := &stubRawEventFailureRecorder{}
+	worker := GovernanceWorker{
+		Claimer:         claimer,
+		Processor:       processor,
+		FailureRecorder: recorder,
+		WorkerID:        "worker-a",
+		BatchSize:       2,
+		LeaseDuration:   2 * time.Minute,
+		RetryBackoff:    30 * time.Second,
+		MaxAttempts:     3,
+		Now:             func() time.Time { return now },
+	}
+
+	processed, err := worker.RunOnce(context.Background())
+	if err != nil {
+		t.Fatalf("RunOnce() error = %v", err)
+	}
+
+	if processed != 1 {
+		t.Fatalf("processed = %d, want %d", processed, 1)
+	}
+
+	if len(processor.gotClaims) != 2 {
+		t.Fatalf("len(processor.gotClaims) = %d, want 2", len(processor.gotClaims))
+	}
+
+	if len(recorder.inputs) != 1 {
+		t.Fatalf("len(recorder.inputs) = %d, want 1", len(recorder.inputs))
+	}
+
+	if recorder.inputs[0].RawEventID != "evt_fail" {
+		t.Fatalf("RawEventID = %q, want evt_fail", recorder.inputs[0].RawEventID)
+	}
+
+	if !recorder.inputs[0].NextAttemptAt.Equal(now.Add(30 * time.Second)) {
+		t.Fatalf("NextAttemptAt = %v, want %v", recorder.inputs[0].NextAttemptAt, now.Add(30*time.Second))
+	}
+
+	if !recorder.inputs[0].ExhaustedAt.IsZero() {
+		t.Fatalf("ExhaustedAt = %v, want zero", recorder.inputs[0].ExhaustedAt)
+	}
+}
+
+func TestGovernanceWorkerRunOnceExhaustsRawEventAtMaxAttempts(t *testing.T) {
+	now := time.Date(2026, 6, 10, 12, 5, 0, 0, time.UTC)
+	claim := newClaimedRawEvent(t, "evt_exhaust", now)
+	claim.Attempt = 3
+
+	recorder := &stubRawEventFailureRecorder{}
+	worker := GovernanceWorker{
+		Claimer: &stubRawEventClaimer{
+			claims: []governance.ClaimedRawEvent{claim},
+		},
+		Processor:       &stubRawEventProcessor{err: errors.New("processing failed")},
+		FailureRecorder: recorder,
+		WorkerID:        "worker-a",
+		BatchSize:       1,
+		LeaseDuration:   2 * time.Minute,
+		RetryBackoff:    30 * time.Second,
+		MaxAttempts:     3,
+		Now:             func() time.Time { return now },
+	}
+
+	processed, err := worker.RunOnce(context.Background())
+	if err != nil {
+		t.Fatalf("RunOnce() error = %v", err)
+	}
+
+	if processed != 0 {
+		t.Fatalf("processed = %d, want 0", processed)
+	}
+
+	if len(recorder.inputs) != 1 {
+		t.Fatalf("len(recorder.inputs) = %d, want 1", len(recorder.inputs))
+	}
+
+	if recorder.inputs[0].ExhaustedAt.IsZero() {
+		t.Fatal("ExhaustedAt = zero, want exhaustion timestamp")
+	}
+
+	if !recorder.inputs[0].NextAttemptAt.IsZero() {
+		t.Fatalf("NextAttemptAt = %v, want zero", recorder.inputs[0].NextAttemptAt)
+	}
+}
+
+func TestGovernanceWorkerRunOnceRenewsLeaseDuringLongProcessing(t *testing.T) {
+	now := time.Date(2026, 6, 10, 12, 10, 0, 0, time.UTC)
+	release := make(chan struct{})
+	renewer := &stubRawEventLeaseRenewer{signal: make(chan struct{})}
+	worker := GovernanceWorker{
+		Claimer: &stubRawEventClaimer{
+			claims: []governance.ClaimedRawEvent{newClaimedRawEvent(t, "evt_lease", now)},
+		},
+		Processor:          &blockingProcessor{release: release},
+		LeaseRenewer:       renewer,
+		WorkerID:           "worker-a",
+		BatchSize:          1,
+		LeaseDuration:      100 * time.Millisecond,
+		LeaseRenewInterval: 10 * time.Millisecond,
+		Now:                func() time.Time { return now },
+	}
+
+	type runResult struct {
+		processed int
+		err       error
+	}
+
+	done := make(chan runResult, 1)
+	go func() {
+		processed, err := worker.RunOnce(context.Background())
+		done <- runResult{processed: processed, err: err}
+	}()
+
+	select {
+	case <-renewer.signal:
+	case <-time.After(time.Second):
+		t.Fatal("timed out waiting for lease renewal")
+	}
+
+	close(release)
+
+	select {
+	case result := <-done:
+		if result.err != nil {
+			t.Fatalf("RunOnce() error = %v", result.err)
+		}
+		if result.processed != 1 {
+			t.Fatalf("processed = %d, want 1", result.processed)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("timed out waiting for worker completion")
+	}
+
+	if len(renewer.inputs) == 0 {
+		t.Fatal("len(renewer.inputs) = 0, want at least one renewal")
+	}
+
+	if renewer.inputs[0].RawEventID != "evt_lease" {
+		t.Fatalf("RawEventID = %q, want evt_lease", renewer.inputs[0].RawEventID)
 	}
 }
 

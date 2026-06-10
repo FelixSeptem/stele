@@ -2,8 +2,10 @@ package jobs
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"log"
+	"strings"
 	"time"
 
 	"github.com/FelixSeptem/stele/internal/governance"
@@ -18,13 +20,18 @@ func (NoopWorker) Start() error {
 }
 
 type GovernanceWorker struct {
-	Claimer       governance.RawEventClaimer
-	Processor     governance.RawEventProcessor
-	WorkerID      string
-	BatchSize     int
-	LeaseDuration time.Duration
-	Now           func() time.Time
-	Observer      telemetry.Observer
+	Claimer            governance.RawEventClaimer
+	Processor          governance.RawEventProcessor
+	FailureRecorder    governance.RawEventFailureRecorder
+	LeaseRenewer       governance.RawEventLeaseRenewer
+	WorkerID           string
+	BatchSize          int
+	LeaseDuration      time.Duration
+	LeaseRenewInterval time.Duration
+	MaxAttempts        int
+	RetryBackoff       time.Duration
+	Now                func() time.Time
+	Observer           telemetry.Observer
 }
 
 func (w GovernanceWorker) RunOnce(ctx context.Context) (processed int, err error) {
@@ -87,13 +94,152 @@ func (w GovernanceWorker) RunOnce(ctx context.Context) (processed int, err error
 			return 0, err
 		}
 
-		if err := w.Processor.ProcessClaimedRawEvent(ctx, claim); err != nil {
-			return 0, err
+		ok, claimErr := w.processClaim(ctx, claim)
+		if claimErr != nil {
+			return 0, claimErr
+		}
+		if ok {
+			processed++
 		}
 	}
 
-	processed = len(claims)
 	return processed, nil
+}
+
+func (w GovernanceWorker) processClaim(ctx context.Context, claim governance.ClaimedRawEvent) (bool, error) {
+	runCtx, cancel := context.WithCancel(ctx)
+	defer cancel()
+
+	renewalErrCh := w.startLeaseRenewal(runCtx, cancel, claim)
+	err := w.Processor.ProcessClaimedRawEvent(runCtx, claim)
+	cancel()
+
+	if renewalErr := waitRenewalErr(renewalErrCh); renewalErr != nil {
+		return false, renewalErr
+	}
+
+	if err == nil {
+		return true, nil
+	}
+
+	if errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) || ctx.Err() != nil {
+		return false, err
+	}
+
+	if w.FailureRecorder == nil {
+		return false, err
+	}
+
+	if recordErr := w.recordClaimFailure(ctx, claim, err); recordErr != nil {
+		return false, recordErr
+	}
+
+	return false, nil
+}
+
+func (w GovernanceWorker) startLeaseRenewal(ctx context.Context, cancel context.CancelFunc, claim governance.ClaimedRawEvent) <-chan error {
+	result := make(chan error, 1)
+	if w.LeaseRenewer == nil || w.LeaseRenewInterval <= 0 {
+		close(result)
+		return result
+	}
+
+	go func() {
+		defer close(result)
+
+		ticker := time.NewTicker(w.LeaseRenewInterval)
+		defer ticker.Stop()
+
+		for {
+			select {
+			case <-ctx.Done():
+				return
+			case <-ticker.C:
+				renewedAt := w.nowUTC()
+				input := governance.RenewClaimedRawEventLeaseInput{
+					RawEventID: claim.Event.ID,
+					WorkerID:   claim.WorkerID,
+					RenewedAt:  renewedAt,
+					LeaseUntil: renewedAt.Add(w.LeaseDuration),
+				}
+				if err := w.LeaseRenewer.RenewClaimedRawEventLease(ctx, input); err != nil {
+					cancel()
+					result <- err
+					return
+				}
+			}
+		}
+	}()
+
+	return result
+}
+
+func waitRenewalErr(result <-chan error) error {
+	if result == nil {
+		return nil
+	}
+
+	err, ok := <-result
+	if !ok {
+		return nil
+	}
+
+	return err
+}
+
+func (w GovernanceWorker) recordClaimFailure(ctx context.Context, claim governance.ClaimedRawEvent, cause error) error {
+	failedAt := w.nowUTC()
+	input := governance.RecordClaimedRawEventFailureInput{
+		RawEventID:   claim.Event.ID,
+		WorkerID:     claim.WorkerID,
+		FailedAt:     failedAt,
+		ErrorMessage: truncateError(cause.Error(), 512),
+	}
+
+	if claim.Attempt >= w.maxAttempts() {
+		input.ExhaustedAt = failedAt
+	} else {
+		input.NextAttemptAt = failedAt.Add(w.retryBackoff())
+	}
+
+	return w.FailureRecorder.RecordClaimedRawEventFailure(ctx, input)
+}
+
+func (w GovernanceWorker) nowUTC() time.Time {
+	now := time.Now
+	if w.Now != nil {
+		now = w.Now
+	}
+
+	return now().UTC()
+}
+
+func (w GovernanceWorker) maxAttempts() int {
+	if w.MaxAttempts > 0 {
+		return w.MaxAttempts
+	}
+
+	return 5
+}
+
+func (w GovernanceWorker) retryBackoff() time.Duration {
+	if w.RetryBackoff > 0 {
+		return w.RetryBackoff
+	}
+	if w.LeaseDuration > 0 {
+		return w.LeaseDuration
+	}
+
+	return 30 * time.Second
+}
+
+func truncateError(message string, limit int) string {
+	message = strings.TrimSpace(message)
+	if limit <= 0 || len(message) <= limit {
+		return message
+	}
+
+	return message[:limit]
 }
 
 type NoopScheduler struct{}
@@ -246,6 +392,67 @@ func (w PollingWorker) Start(ctx context.Context) error {
 type MaintenanceJob interface {
 	Name() string
 	Run(ctx context.Context) (int, error)
+}
+
+type MaintenanceScopeSource interface {
+	ListMaintenanceScopes(ctx context.Context, limit int) ([]memory.Scope, error)
+}
+
+type ScopeDispatchJob struct {
+	NameValue       string
+	ScopeSource     MaintenanceScopeSource
+	ScopeBatchLimit int
+	FallbackScope   memory.Scope
+	Dispatch        func(scope memory.Scope) MaintenanceJob
+}
+
+func (j ScopeDispatchJob) Name() string {
+	if strings.TrimSpace(j.NameValue) != "" {
+		return j.NameValue
+	}
+
+	return "scope_dispatch"
+}
+
+func (j ScopeDispatchJob) Run(ctx context.Context) (int, error) {
+	if j.ScopeSource == nil {
+		return 0, fmt.Errorf("maintenance scope source is required")
+	}
+	if j.Dispatch == nil {
+		return 0, fmt.Errorf("scope dispatch function is required")
+	}
+
+	scopes, err := j.ScopeSource.ListMaintenanceScopes(ctx, scopeBatchLimitOrDefault(j.ScopeBatchLimit))
+	if err != nil {
+		return 0, err
+	}
+	if len(scopes) == 0 {
+		fallback := j.FallbackScope.Normalized()
+		if err := fallback.Validate(); err == nil {
+			scopes = []memory.Scope{fallback}
+		}
+	}
+
+	total := 0
+	for _, scope := range scopes {
+		normalized := scope.Normalized()
+		if err := normalized.Validate(); err != nil {
+			return total, err
+		}
+
+		job := j.Dispatch(normalized)
+		if job == nil {
+			continue
+		}
+
+		processed, err := job.Run(ctx)
+		if err != nil {
+			return total, err
+		}
+		total += processed
+	}
+
+	return total, nil
 }
 
 type MaintenanceScheduler struct {
@@ -610,6 +817,14 @@ func failScheduledExecution(ctx context.Context, store ExecutionStore, idempoten
 		FinishedAt:     finishedAt,
 		ErrorMessage:   cause.Error(),
 	})
+}
+
+func scopeBatchLimitOrDefault(value int) int {
+	if value > 0 {
+		return value
+	}
+
+	return 100
 }
 
 func isContextDone(ctx context.Context, err error) bool {

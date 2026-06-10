@@ -110,6 +110,8 @@ type backgroundScheduler interface {
 	Start(ctx context.Context) error
 }
 
+const governanceWorkerLeaseDuration = 2 * time.Minute
+
 type lifecycleProcessorAdapter struct {
 	processor governance.ForgettingProcessor
 }
@@ -474,13 +476,18 @@ func buildWorkerRuntime(ctx context.Context, cfg config.Config, deps workerRunti
 	}
 
 	worker := jobs.GovernanceWorker{
-		Claimer:       repo,
-		Processor:     pipeline,
-		WorkerID:      "stele-worker",
-		BatchSize:     32,
-		LeaseDuration: 2 * time.Minute,
-		Now:           now,
-		Observer:      deps.observer,
+		Claimer:            repo,
+		Processor:          pipeline,
+		FailureRecorder:    repo,
+		LeaseRenewer:       repo,
+		WorkerID:           "stele-worker",
+		BatchSize:          32,
+		LeaseDuration:      governanceWorkerLeaseDuration,
+		LeaseRenewInterval: cfg.Jobs.GovernanceLeaseRenewPeriod,
+		MaxAttempts:        cfg.Jobs.GovernanceMaxAttempts,
+		RetryBackoff:       cfg.Jobs.GovernanceRetryBackoff,
+		Now:                now,
+		Observer:           deps.observer,
 	}
 
 	return workerRuntime{
@@ -557,24 +564,40 @@ func buildSchedulerRuntime(ctx context.Context, cfg config.Config, deps schedule
 
 	scheduler := jobs.MaintenanceScheduler{
 		Jobs: []jobs.MaintenanceJob{
-			jobs.SummaryCompactionJob{
-				Scope:          scope,
-				CutoffWindow:   summaryInterval,
-				Cadence:        summaryInterval,
-				Now:            now,
-				Processor:      summary,
-				ExecutionStore: repo,
-				TriggerSource:  "scheduler",
+			jobs.ScopeDispatchJob{
+				NameValue:       "summary_compaction_dispatch",
+				ScopeSource:     repo,
+				ScopeBatchLimit: cfg.Jobs.MaintenanceScopeBatchLimit,
+				FallbackScope:   scope,
+				Dispatch: func(scope memory.Scope) jobs.MaintenanceJob {
+					return jobs.SummaryCompactionJob{
+						Scope:          scope,
+						CutoffWindow:   summaryInterval,
+						Cadence:        summaryInterval,
+						Now:            now,
+						Processor:      summary,
+						ExecutionStore: repo,
+						TriggerSource:  "scheduler",
+					}
+				},
 			},
-			jobs.RetentionSweepJob{
-				Scope:          scope,
-				Cadence:        retentionInterval,
-				Now:            now,
-				Source:         repo,
-				Evaluator:      retention,
-				ExecutionStore: repo,
-				TriggerSource:  "scheduler",
-				Limit:          100,
+			jobs.ScopeDispatchJob{
+				NameValue:       "retention_sweep_dispatch",
+				ScopeSource:     repo,
+				ScopeBatchLimit: cfg.Jobs.MaintenanceScopeBatchLimit,
+				FallbackScope:   scope,
+				Dispatch: func(scope memory.Scope) jobs.MaintenanceJob {
+					return jobs.RetentionSweepJob{
+						Scope:          scope,
+						Cadence:        retentionInterval,
+						Now:            now,
+						Source:         repo,
+						Evaluator:      retention,
+						ExecutionStore: repo,
+						TriggerSource:  "scheduler",
+						Limit:          100,
+					}
+				},
 			},
 			jobs.JobExecutionCleanupJob{
 				Scope:           scope,

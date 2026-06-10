@@ -120,3 +120,102 @@ func TestClaimedRawEventValidate(t *testing.T) {
 		}
 	}
 }
+
+func TestRecordClaimedRawEventFailureInputValidate(t *testing.T) {
+	failedAt := time.Date(2026, 6, 10, 12, 0, 0, 0, time.UTC)
+	valid := RecordClaimedRawEventFailureInput{
+		RawEventID:    "evt_123",
+		WorkerID:      "worker-a",
+		FailedAt:      failedAt,
+		ErrorMessage:  "candidate extraction failed",
+		NextAttemptAt: failedAt.Add(30 * time.Second),
+	}
+
+	if err := valid.Validate(); err != nil {
+		t.Fatalf("Validate() error = %v", err)
+	}
+
+	invalidCases := []RecordClaimedRawEventFailureInput{
+		{
+			WorkerID:      "worker-a",
+			FailedAt:      failedAt,
+			ErrorMessage:  "candidate extraction failed",
+			NextAttemptAt: failedAt.Add(30 * time.Second),
+		},
+		{
+			RawEventID:    "evt_123",
+			FailedAt:      failedAt,
+			ErrorMessage:  "candidate extraction failed",
+			NextAttemptAt: failedAt.Add(30 * time.Second),
+		},
+		{
+			RawEventID:    "evt_123",
+			WorkerID:      "worker-a",
+			ErrorMessage:  "candidate extraction failed",
+			NextAttemptAt: failedAt.Add(30 * time.Second),
+		},
+		{
+			RawEventID:   "evt_123",
+			WorkerID:     "worker-a",
+			FailedAt:     failedAt,
+			NextAttemptAt: failedAt.Add(30 * time.Second),
+		},
+		{
+			RawEventID:    "evt_123",
+			WorkerID:      "worker-a",
+			FailedAt:      failedAt,
+			ErrorMessage:  "candidate extraction failed",
+			NextAttemptAt: failedAt,
+		},
+	}
+
+	for _, invalid := range invalidCases {
+		if err := invalid.Validate(); err == nil {
+			t.Fatalf("Validate() error = nil for invalid input %+v", invalid)
+		}
+	}
+}
+
+func TestRenewClaimedRawEventLeaseInputValidate(t *testing.T) {
+	renewedAt := time.Date(2026, 6, 10, 12, 10, 0, 0, time.UTC)
+	valid := RenewClaimedRawEventLeaseInput{
+		RawEventID: "evt_123",
+		WorkerID:   "worker-a",
+		RenewedAt:  renewedAt,
+		LeaseUntil: renewedAt.Add(2 * time.Minute),
+	}
+
+	if err := valid.Validate(); err != nil {
+		t.Fatalf("Validate() error = %v", err)
+	}
+
+	invalidCases := []RenewClaimedRawEventLeaseInput{
+		{
+			WorkerID:   "worker-a",
+			RenewedAt:  renewedAt,
+			LeaseUntil: renewedAt.Add(2 * time.Minute),
+		},
+		{
+			RawEventID: "evt_123",
+			RenewedAt:  renewedAt,
+			LeaseUntil: renewedAt.Add(2 * time.Minute),
+		},
+		{
+			RawEventID: "evt_123",
+			WorkerID:   "worker-a",
+			LeaseUntil: renewedAt.Add(2 * time.Minute),
+		},
+		{
+			RawEventID: "evt_123",
+			WorkerID:   "worker-a",
+			RenewedAt:  renewedAt,
+			LeaseUntil: renewedAt,
+		},
+	}
+
+	for _, invalid := range invalidCases {
+		if err := invalid.Validate(); err == nil {
+			t.Fatalf("Validate() error = nil for invalid input %+v", invalid)
+		}
+	}
+}

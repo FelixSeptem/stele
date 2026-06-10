@@ -286,6 +286,8 @@ WITH claimed AS (
 		SELECT id
 		FROM raw_events
 		WHERE governance_processed_at IS NULL
+			AND governance_exhausted_at IS NULL
+			AND (governance_next_attempt_at IS NULL OR governance_next_attempt_at <= $2)
 			AND (governance_lease_until IS NULL OR governance_lease_until <= $2)
 		ORDER BY created_at ASC
 		LIMIT $4
@@ -358,6 +360,72 @@ ORDER BY created_at ASC
 	return claims, nil
 }
 
+func (r *Repository) RecordClaimedRawEventFailure(ctx context.Context, input governance.RecordClaimedRawEventFailureInput) error {
+	if err := input.Validate(); err != nil {
+		return err
+	}
+
+	const query = `
+UPDATE raw_events
+SET
+	governance_last_failed_at = $3,
+	governance_last_error = $4,
+	governance_next_attempt_at = $5,
+	governance_exhausted_at = $6,
+	governance_worker_id = NULL,
+	governance_lease_until = NULL
+WHERE id = $1
+	AND governance_worker_id = $2
+	AND governance_processed_at IS NULL
+`
+
+	tag, err := r.db.Exec(
+		ctx,
+		query,
+		input.RawEventID,
+		input.WorkerID,
+		input.FailedAt,
+		input.ErrorMessage,
+		nullableTime(input.NextAttemptAt),
+		nullableTime(input.ExhaustedAt),
+	)
+	if err != nil {
+		return fmt.Errorf("record claimed raw event failure: %w", err)
+	}
+	if tag.RowsAffected() == 0 {
+		return governance.ErrClaimOwnershipLost
+	}
+
+	return nil
+}
+
+func (r *Repository) RenewClaimedRawEventLease(ctx context.Context, input governance.RenewClaimedRawEventLeaseInput) error {
+	if err := input.Validate(); err != nil {
+		return err
+	}
+
+	const query = `
+UPDATE raw_events
+SET
+	governance_claimed_at = $3,
+	governance_lease_until = $4
+WHERE id = $1
+	AND governance_worker_id = $2
+	AND governance_processed_at IS NULL
+	AND governance_exhausted_at IS NULL
+`
+
+	tag, err := r.db.Exec(ctx, query, input.RawEventID, input.WorkerID, input.RenewedAt, input.LeaseUntil)
+	if err != nil {
+		return fmt.Errorf("renew claimed raw event lease: %w", err)
+	}
+	if tag.RowsAffected() == 0 {
+		return governance.ErrClaimOwnershipLost
+	}
+
+	return nil
+}
+
 func (r *Repository) MarkRawEventProcessed(ctx context.Context, input governance.CompleteClaimedRawEventInput) error {
 	if err := input.Validate(); err != nil {
 		return err
@@ -415,6 +483,47 @@ FROM raw_events
 	}
 	status.ObservedAt = now
 	return status, nil
+}
+
+func (r *Repository) ListMaintenanceScopes(ctx context.Context, limit int) ([]memory.Scope, error) {
+	if limit <= 0 {
+		return nil, fmt.Errorf("limit must be greater than zero")
+	}
+
+	const query = `
+SELECT tenant, project, namespace FROM (
+	SELECT DISTINCT tenant, project, namespace
+	FROM canonical_memories
+	WHERE state = 'active'
+	UNION
+	SELECT DISTINCT tenant, project, namespace
+	FROM candidate_memories
+	WHERE status = 'promoted'
+) scoped
+ORDER BY tenant, project, namespace
+LIMIT $1
+`
+
+	rows, err := r.db.Query(ctx, query, limit)
+	if err != nil {
+		return nil, fmt.Errorf("list maintenance scopes: %w", err)
+	}
+	defer rows.Close()
+
+	scopes := make([]memory.Scope, 0)
+	for rows.Next() {
+		var scope memory.Scope
+		if err := rows.Scan(&scope.Tenant, &scope.Project, &scope.Namespace); err != nil {
+			return nil, fmt.Errorf("scan maintenance scope: %w", err)
+		}
+		scopes = append(scopes, scope.Normalized())
+	}
+
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("iterate maintenance scopes: %w", err)
+	}
+
+	return scopes, nil
 }
 
 func (r *Repository) ReadCanonicalMemory(ctx context.Context, scope memory.Scope, memoryID string, includeHidden bool) (memory.CanonicalMemory, error) {

@@ -1,8 +1,5 @@
-# worker-orchestration-and-maintenance-jobs Specification
+## MODIFIED Requirements
 
-## Purpose
-Define the worker and scheduler orchestration behaviors that drive governed background processing, maintenance execution, and retry-safe job handling.
-## Requirements
 ### Requirement: Reliable worker orchestration
 The service SHALL run governance work through a durable worker orchestration path that persists lease, failure, and retry state rather than relying on a fire-once execution model.
 
@@ -47,4 +44,3 @@ The service SHALL provide a scheduler-driven, scope-aware path for periodic main
 #### Scenario: Runtime-global cleanup remains singular
 - **WHEN** a maintenance job is runtime-global rather than scope-bound
 - **THEN** the scheduler executes it once per cadence window without multiplying the same cleanup work across all discovered scopes
-
