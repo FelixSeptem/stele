@@ -214,6 +214,218 @@ paths:
                 $ref: '#/components/schemas/GovernanceStatus'
         '401':
           description: Missing or invalid admin API key
+  /v1/admin/governance/raw-events:
+    get:
+      operationId: listAdminGovernanceRawEvents
+      parameters:
+        - $ref: '#/components/parameters/AdminAPIKey'
+        - $ref: '#/components/parameters/TenantHeader'
+        - $ref: '#/components/parameters/ProjectHeader'
+        - $ref: '#/components/parameters/NamespaceHeader'
+        - in: query
+          name: state
+          required: false
+          schema:
+            $ref: '#/components/schemas/GovernanceRawEventState'
+        - in: query
+          name: event_type
+          required: false
+          schema:
+            type: string
+        - in: query
+          name: attempt_gte
+          required: false
+          schema:
+            type: integer
+        - in: query
+          name: attempt_lte
+          required: false
+          schema:
+            type: integer
+        - in: query
+          name: failed_from
+          required: false
+          schema:
+            type: string
+            format: date-time
+        - in: query
+          name: failed_to
+          required: false
+          schema:
+            type: string
+            format: date-time
+        - in: query
+          name: next_attempt_from
+          required: false
+          schema:
+            type: string
+            format: date-time
+        - in: query
+          name: next_attempt_to
+          required: false
+          schema:
+            type: string
+            format: date-time
+        - in: query
+          name: limit
+          required: false
+          schema:
+            type: integer
+        - in: query
+          name: cursor
+          required: false
+          schema:
+            type: string
+      responses:
+        '200':
+          description: Filtered governance raw event inspection page
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/GovernanceRawEventListResponse'
+        '400':
+          description: Invalid request
+        '401':
+          description: Missing or invalid admin API key
+  /v1/admin/governance/raw-events/{raw_event_id}:
+    get:
+      operationId: getAdminGovernanceRawEvent
+      parameters:
+        - $ref: '#/components/parameters/RawEventIDPath'
+        - $ref: '#/components/parameters/AdminAPIKey'
+        - $ref: '#/components/parameters/TenantHeader'
+        - $ref: '#/components/parameters/ProjectHeader'
+        - $ref: '#/components/parameters/NamespaceHeader'
+      responses:
+        '200':
+          description: Governance raw event detail
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/GovernanceRawEvent'
+        '401':
+          description: Missing or invalid admin API key
+        '404':
+          description: Raw event not found
+  /v1/admin/governance/raw-events/{raw_event_id}/recovery-history:
+    get:
+      operationId: listAdminGovernanceRecoveryHistory
+      parameters:
+        - $ref: '#/components/parameters/RawEventIDPath'
+        - $ref: '#/components/parameters/AdminAPIKey'
+        - $ref: '#/components/parameters/TenantHeader'
+        - $ref: '#/components/parameters/ProjectHeader'
+        - $ref: '#/components/parameters/NamespaceHeader'
+      responses:
+        '200':
+          description: Governance recovery history for one raw event
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/GovernanceRecoveryHistoryResponse'
+        '401':
+          description: Missing or invalid admin API key
+        '404':
+          description: Raw event not found
+  /v1/admin/governance/raw-events/{raw_event_id}:retry:
+    post:
+      operationId: retryAdminGovernanceRawEvent
+      parameters:
+        - $ref: '#/components/parameters/RawEventIDPath'
+        - $ref: '#/components/parameters/AdminAPIKey'
+        - $ref: '#/components/parameters/ActorHeader'
+        - $ref: '#/components/parameters/TenantHeader'
+        - $ref: '#/components/parameters/ProjectHeader'
+        - $ref: '#/components/parameters/NamespaceHeader'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/GovernanceRecoveryActionRequest'
+      responses:
+        '200':
+          description: Governance raw event recovery applied
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/GovernanceRecoveryOutcome'
+        '400':
+          description: Invalid request
+        '401':
+          description: Missing or invalid admin API key
+        '404':
+          description: Raw event not found
+        '409':
+          description: Recovery conflict
+        '422':
+          description: Recovery rejected
+  /v1/admin/governance/raw-events/{raw_event_id}:reschedule:
+    post:
+      operationId: rescheduleAdminGovernanceRawEvent
+      parameters:
+        - $ref: '#/components/parameters/RawEventIDPath'
+        - $ref: '#/components/parameters/AdminAPIKey'
+        - $ref: '#/components/parameters/ActorHeader'
+        - $ref: '#/components/parameters/TenantHeader'
+        - $ref: '#/components/parameters/ProjectHeader'
+        - $ref: '#/components/parameters/NamespaceHeader'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/GovernanceRecoveryActionRequest'
+      responses:
+        '200':
+          description: Governance raw event recovery applied
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/GovernanceRecoveryOutcome'
+        '400':
+          description: Invalid request
+        '401':
+          description: Missing or invalid admin API key
+        '404':
+          description: Raw event not found
+        '409':
+          description: Recovery conflict
+        '422':
+          description: Recovery rejected
+  /v1/admin/governance/raw-events/{raw_event_id}:requeue:
+    post:
+      operationId: requeueAdminGovernanceRawEvent
+      parameters:
+        - $ref: '#/components/parameters/RawEventIDPath'
+        - $ref: '#/components/parameters/AdminAPIKey'
+        - $ref: '#/components/parameters/ActorHeader'
+        - $ref: '#/components/parameters/TenantHeader'
+        - $ref: '#/components/parameters/ProjectHeader'
+        - $ref: '#/components/parameters/NamespaceHeader'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/GovernanceRecoveryActionRequest'
+      responses:
+        '200':
+          description: Governance raw event recovery applied
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/GovernanceRecoveryOutcome'
+        '400':
+          description: Invalid request
+        '401':
+          description: Missing or invalid admin API key
+        '404':
+          description: Raw event not found
+        '409':
+          description: Recovery conflict
+        '422':
+          description: Recovery rejected
   /v1/admin/jobs/status:
     get:
       operationId: getAdminJobStatus
@@ -498,6 +710,12 @@ components:
       required: true
       schema:
         type: string
+    RawEventIDPath:
+      in: path
+      name: raw_event_id
+      required: true
+      schema:
+        type: string
   schemas:
     Scope:
       type: object
@@ -713,6 +931,167 @@ components:
         observed_at:
           type: string
           format: date-time
+    GovernanceRawEventState:
+      type: string
+      enum: [pending, retry_wait, leased, exhausted, processed]
+    GovernanceRecoveryAction:
+      type: string
+      enum: [retry, reschedule, requeue]
+    GovernanceRawEvent:
+      type: object
+      required:
+        - id
+        - scope
+        - event_type
+        - content
+        - created_at
+        - state
+        - attempt
+      properties:
+        id:
+          type: string
+        scope:
+          $ref: '#/components/schemas/Scope'
+        event_type:
+          type: string
+        content:
+          type: string
+        source_timestamp:
+          type: string
+          format: date-time
+        created_at:
+          type: string
+          format: date-time
+        state:
+          $ref: '#/components/schemas/GovernanceRawEventState'
+        attempt:
+          type: integer
+        worker_id:
+          type: string
+        claimed_at:
+          type: string
+          format: date-time
+        lease_until:
+          type: string
+          format: date-time
+        last_failed_at:
+          type: string
+          format: date-time
+        last_error:
+          type: string
+        next_attempt_at:
+          type: string
+          format: date-time
+        exhausted_at:
+          type: string
+          format: date-time
+        processed_at:
+          type: string
+          format: date-time
+    GovernanceRawEventListResponse:
+      type: object
+      required:
+        - items
+      properties:
+        items:
+          type: array
+          items:
+            $ref: '#/components/schemas/GovernanceRawEvent'
+        next_cursor:
+          type: string
+    GovernanceRecoverySnapshot:
+      type: object
+      required:
+        - state
+        - attempt
+      properties:
+        state:
+          $ref: '#/components/schemas/GovernanceRawEventState'
+        attempt:
+          type: integer
+        worker_id:
+          type: string
+        claimed_at:
+          type: string
+          format: date-time
+        lease_until:
+          type: string
+          format: date-time
+        last_failed_at:
+          type: string
+          format: date-time
+        last_error:
+          type: string
+        next_attempt_at:
+          type: string
+          format: date-time
+        exhausted_at:
+          type: string
+          format: date-time
+        processed_at:
+          type: string
+          format: date-time
+    GovernanceRecoveryRecord:
+      type: object
+      required:
+        - id
+        - raw_event_id
+        - scope
+        - action
+        - actor
+        - reason
+        - before
+        - after
+        - occurred_at
+      properties:
+        id:
+          type: string
+        raw_event_id:
+          type: string
+        scope:
+          $ref: '#/components/schemas/Scope'
+        action:
+          $ref: '#/components/schemas/GovernanceRecoveryAction'
+        actor:
+          type: string
+        reason:
+          type: string
+        before:
+          $ref: '#/components/schemas/GovernanceRecoverySnapshot'
+        after:
+          $ref: '#/components/schemas/GovernanceRecoverySnapshot'
+        occurred_at:
+          type: string
+          format: date-time
+    GovernanceRecoveryHistoryResponse:
+      type: object
+      required:
+        - history
+      properties:
+        history:
+          type: array
+          items:
+            $ref: '#/components/schemas/GovernanceRecoveryRecord'
+    GovernanceRecoveryActionRequest:
+      type: object
+      required:
+        - reason
+      properties:
+        reason:
+          type: string
+        scheduled_for:
+          type: string
+          format: date-time
+    GovernanceRecoveryOutcome:
+      type: object
+      required:
+        - raw_event
+        - recovery
+      properties:
+        raw_event:
+          $ref: '#/components/schemas/GovernanceRawEvent'
+        recovery:
+          $ref: '#/components/schemas/GovernanceRecoveryRecord'
     MemoryVersion:
       type: object
       required:

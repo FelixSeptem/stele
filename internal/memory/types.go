@@ -85,6 +85,75 @@ type MemoryVersion struct {
 	ModifiedBy string      `json:"modified_by"`
 }
 
+type EmbeddingRebuildStatus string
+
+const (
+	EmbeddingRebuildStatusPending    EmbeddingRebuildStatus = "pending"
+	EmbeddingRebuildStatusRebuilding EmbeddingRebuildStatus = "rebuilding"
+	EmbeddingRebuildStatusFailed     EmbeddingRebuildStatus = "failed"
+	EmbeddingRebuildStatusCurrent    EmbeddingRebuildStatus = "current"
+)
+
+type VectorRevisionStatus string
+
+const (
+	VectorRevisionStatusGenerated  VectorRevisionStatus = "generated"
+	VectorRevisionStatusActive     VectorRevisionStatus = "active"
+	VectorRevisionStatusSuperseded VectorRevisionStatus = "superseded"
+	VectorRevisionStatusFailed     VectorRevisionStatus = "failed"
+)
+
+type EmbeddingRebuildRecord struct {
+	MemoryID             string
+	Scope                Scope
+	Class                MemoryClass
+	Content              string
+	SourceVersion        int64
+	ContentHash          string
+	RequestedProvider    string
+	RequestedModel       string
+	RequestedDimensions  int
+	Status               EmbeddingRebuildStatus
+	FailureReason        string
+	RequestedAt          time.Time
+	LastAttemptedAt      time.Time
+	ActiveVectorRevision string
+}
+
+type EmbeddingLifecycleCandidate struct {
+	MemoryID             string
+	Scope                Scope
+	Class                MemoryClass
+	CurrentSourceVersion int64
+	CurrentContentHash   string
+	RebuildStatus        EmbeddingRebuildStatus
+	RequestedProvider    string
+	RequestedModel       string
+	RequestedDimensions  int
+	ActiveVectorRevision string
+	ActiveProvider       string
+	ActiveModel          string
+	ActiveDimensions     int
+}
+
+type VectorRevision struct {
+	ID                 string
+	MemoryID           string
+	Scope              Scope
+	SourceVersion      int64
+	ContentHash        string
+	Provider           string
+	Model              string
+	Dimensions         int
+	Embedding          []float32
+	Status             VectorRevisionStatus
+	FailureReason      string
+	SupersededBy       string
+	GeneratedAt        time.Time
+	ActivatedAt        time.Time
+	LastRebuildRequest time.Time
+}
+
 type ProvenanceRecord struct {
 	ID                string         `json:"id"`
 	Scope             Scope          `json:"scope"`

@@ -6,7 +6,7 @@
 
 - `api`: public ingest, memory read, retrieval, context assembly, and admin inspection or lifecycle routes
 - `worker`: continuous governance processing loop for claimed raw events
-- `scheduler`: periodic maintenance dispatch for summary compaction, retention sweep, and job execution cleanup
+- `scheduler`: periodic maintenance dispatch for embedding rebuild, summary compaction, retention sweep, and job execution cleanup
 
 The repository ships a production-oriented `Dockerfile` plus a local `docker-compose.yml` so operators can boot the full stack without reconstructing runtime wiring by hand.
 
@@ -35,6 +35,13 @@ Common optional variables:
 - `STELE_AUTH_DEFAULT_TENANT`: default scheduler tenant scope
 - `STELE_AUTH_DEFAULT_PROJECT`: default scheduler project scope
 - `STELE_AUTH_DEFAULT_NAMESPACE`: default scheduler namespace scope
+
+Embedding routing variables:
+
+- `STELE_EMBEDDING_DEFAULT_PROVIDER`: default provider name recorded on rebuild eligibility and vector revisions
+- `STELE_EMBEDDING_DEFAULT_MODEL`: default model name recorded on rebuild eligibility and vector revisions
+- `STELE_EMBEDDING_DEFAULT_DIMENSIONS`: default vector dimension target used for drift detection and rebuild eligibility
+- `STELE_EMBEDDING_CLASS_ROUTES`: optional comma-separated per-class overrides in `class=provider:model:dimensions` format
 
 Job tuning variables:
 
@@ -163,6 +170,16 @@ curl http://localhost:8080/v1/admin/memories/<memory-id>/history \
   -H 'X-Stele-Namespace: namespace-a'
 ```
 
+7. Inspect governance recovery candidates in one scope:
+
+```bash
+curl 'http://localhost:8080/v1/admin/governance/raw-events?state=retry_wait&attempt_gte=1&limit=10' \
+  -H 'X-API-Key: dev-admin-key' \
+  -H 'X-Stele-Tenant: tenant-a' \
+  -H 'X-Stele-Project: project-a' \
+  -H 'X-Stele-Namespace: namespace-a'
+```
+
 ## Memory Management Surface
 
 `Stele` now exposes two distinct memory management boundaries:
@@ -187,6 +204,15 @@ Privileged lifecycle routes:
 - `POST /v1/admin/memories/{memory_id}:expire`
 - `POST /v1/admin/memories/{memory_id}:delete`
 
+Privileged governance recovery routes:
+
+- `GET /v1/admin/governance/raw-events`
+- `GET /v1/admin/governance/raw-events/{raw_event_id}`
+- `GET /v1/admin/governance/raw-events/{raw_event_id}/recovery-history`
+- `POST /v1/admin/governance/raw-events/{raw_event_id}:retry`
+- `POST /v1/admin/governance/raw-events/{raw_event_id}:reschedule`
+- `POST /v1/admin/governance/raw-events/{raw_event_id}:requeue`
+
 Privileged manual mutation and lifecycle actions require:
 
 - admin API key
@@ -194,13 +220,54 @@ Privileged manual mutation and lifecycle actions require:
 - `X-Stele-Actor`
 - JSON body with `reason`
 
+Privileged governance recovery actions use the same admin boundary and additionally require:
+
+- `X-Stele-Actor` for every recovery action
+- `reason` in the JSON body for every recovery action
+- `scheduled_for` only for `:reschedule`
+
+Governance recovery query filters:
+
+- `state`
+- `event_type`
+- `attempt_gte`
+- `attempt_lte`
+- `failed_from`
+- `failed_to`
+- `next_attempt_from`
+- `next_attempt_to`
+- `limit`
+- `cursor`
+
 Manual mutation notes:
 
 - `POST /v1/admin/memories` only supports operator-authored primary classes; derived `summary` memory is excluded.
 - `PATCH /v1/admin/memories/{memory_id}` only updates canonical content. Scope, lifecycle, and class stay on dedicated surfaces.
 - merge and reclassify require `expected_version` optimistic concurrency.
 - `reclassify` only targets `profile`, `episodic`, or `procedural`; `relation` and `summary` stay excluded in this phase.
-- material manual mutation clears stale semantic embeddings until a later reindex pipeline exists.
+- material manual mutation clears stale semantic participation immediately and records durable rebuild eligibility for later background regeneration.
+
+Governance recovery notes:
+
+- Admin governance inspection returns derived raw event states: `pending`, `retry_wait`, `leased`, `exhausted`, and `processed`.
+- `retry` only targets `retry_wait` items and pulls `next_attempt_at` forward to immediate worker eligibility.
+- `reschedule` only targets `pending` or `retry_wait` items and moves `next_attempt_at` to the operator-provided future timestamp.
+- `requeue` only targets `exhausted` items, clears `governance_exhausted_at`, resets the automatic attempt counter, and returns the event to the ordinary worker claim path.
+- `leased` and `processed` items are rejected rather than being force-taken over.
+- Every recovery action is written to the append-only `governance_recovery_ledger` with actor, reason, and before or after state snapshots.
+- Recovery never triggers direct execution. The existing governance worker picks the event up on a later poll through the normal durable claim path.
+- First phase boundaries stay narrow: single-item recovery only, no bulk remediation, no leased takeover, and no `ignore` or `drop` terminal action.
+
+## Embedding Lifecycle
+
+- Semantic retrieval reads only the active vector revision linked to the current canonical projection. Superseded, failed, stale, or missing revisions are excluded from default semantic recall.
+- When a canonical memory has no active semantic projection, hybrid retrieval still completes through lexical and relation recall. The request does not fail just because semantic projection is unavailable.
+- Manual create, update, merge, and reclassify paths invalidate stale active semantic participation synchronously, then rely on scheduler-driven rebuild execution to restore semantic recall later.
+- The scheduler discovers missing embeddings and provider or model drift through durable `embedding_rebuilds` state, then claims rebuild work without blocking write paths.
+- Every generation attempt is audited in append-only `vector_revisions`, including failed attempts and superseded lineage. Activation uses compare-and-promote guards so stale content never becomes the active semantic projection.
+- Routing metadata comes from `STELE_EMBEDDING_DEFAULT_*` and optional `STELE_EMBEDDING_CLASS_ROUTES` overrides. These settings define the desired target used for eligibility, drift detection, and audit history.
+- Provider implementations remain an internal runtime integration point. If no provider is registered for the configured target, rebuild attempts remain retryable failures and retrieval falls back to lexical plus relation signals.
+- Admin rebuild controls, bulk rotation controls, and embedding-specific inspection endpoints remain an explicit non-goal in this phase.
 
 ## Example Flow
 
@@ -299,14 +366,84 @@ curl -X POST http://localhost:8080/v1/admin/memories/<memory-id>:reclassify \
   -d '{"target_class":"procedural","expected_version":3,"reason":"fix canonical class"}'
 ```
 
+9. List governance raw events that are waiting for retry:
+
+```bash
+curl 'http://localhost:8080/v1/admin/governance/raw-events?state=retry_wait&attempt_gte=1&limit=20' \
+  -H 'X-API-Key: dev-admin-key' \
+  -H 'X-Stele-Tenant: tenant-a' \
+  -H 'X-Stele-Project: project-a' \
+  -H 'X-Stele-Namespace: namespace-a'
+```
+
+10. Read one raw event detail before remediation:
+
+```bash
+curl http://localhost:8080/v1/admin/governance/raw-events/<raw-event-id> \
+  -H 'X-API-Key: dev-admin-key' \
+  -H 'X-Stele-Tenant: tenant-a' \
+  -H 'X-Stele-Project: project-a' \
+  -H 'X-Stele-Namespace: namespace-a'
+```
+
+11. Retry one waiting raw event immediately:
+
+```bash
+curl -X POST http://localhost:8080/v1/admin/governance/raw-events/<raw-event-id>:retry \
+  -H 'Content-Type: application/json' \
+  -H 'X-API-Key: dev-admin-key' \
+  -H 'X-Stele-Actor: operator-a' \
+  -H 'X-Stele-Tenant: tenant-a' \
+  -H 'X-Stele-Project: project-a' \
+  -H 'X-Stele-Namespace: namespace-a' \
+  -d '{"reason":"retry now after transient dependency recovery"}'
+```
+
+12. Reschedule one raw event into a later maintenance window:
+
+```bash
+curl -X POST http://localhost:8080/v1/admin/governance/raw-events/<raw-event-id>:reschedule \
+  -H 'Content-Type: application/json' \
+  -H 'X-API-Key: dev-admin-key' \
+  -H 'X-Stele-Actor: operator-a' \
+  -H 'X-Stele-Tenant: tenant-a' \
+  -H 'X-Stele-Project: project-a' \
+  -H 'X-Stele-Namespace: namespace-a' \
+  -d '{"reason":"delay until downstream system is stable","scheduled_for":"2026-06-13T03:00:00Z"}'
+```
+
+13. Requeue one exhausted raw event back into normal worker polling:
+
+```bash
+curl -X POST http://localhost:8080/v1/admin/governance/raw-events/<raw-event-id>:requeue \
+  -H 'Content-Type: application/json' \
+  -H 'X-API-Key: dev-admin-key' \
+  -H 'X-Stele-Actor: operator-a' \
+  -H 'X-Stele-Tenant: tenant-a' \
+  -H 'X-Stele-Project: project-a' \
+  -H 'X-Stele-Namespace: namespace-a' \
+  -d '{"reason":"clear exhausted state after operator review"}'
+```
+
+14. Read recovery audit history for one raw event:
+
+```bash
+curl http://localhost:8080/v1/admin/governance/raw-events/<raw-event-id>/recovery-history \
+  -H 'X-API-Key: dev-admin-key' \
+  -H 'X-Stele-Tenant: tenant-a' \
+  -H 'X-Stele-Project: project-a' \
+  -H 'X-Stele-Namespace: namespace-a'
+```
+
 ## Operational Notes
 
 - `api` logs request completion and panic recovery in structured key-value style.
 - `worker` logs polling loop failures and successful batch execution.
 - `scheduler` logs maintenance job execution results and backoff retries.
 - The worker persists retryable governance failures with bounded retry state instead of relying only on lease expiry.
-- Raw events that hit the retry ceiling are marked exhausted and stop automatic claim until a later explicit recovery surface exists.
+- Raw events that hit the retry ceiling are marked exhausted and stop automatic claim until an explicit admin recovery action intervenes.
 - The scheduler dispatch path is independent from public request traffic.
+- The embedding rebuild scheduler records backlog and execution telemetry for newly queued rebuild work, rebuild outcomes, and error paths through the shared observer hook.
 - Summary compaction and retention sweep are dispatched per eligible discovered scope, with the configured default scope used only as a fallback when discovery returns none.
 - Job execution cleanup remains runtime-global and runs once per cadence window instead of being fanned out per discovered scope.
-- Telemetry hook points are wired for ingest, governance worker execution, retrieval, forgetting, and backlog inspection. The default runtime uses a no-op observer until a concrete metrics or tracing backend is attached.
+- Telemetry hook points are wired for ingest, governance worker execution, retrieval, forgetting, governance backlog inspection, and embedding rebuild backlog plus execution inspection. The default runtime uses a no-op observer until a concrete metrics or tracing backend is attached.

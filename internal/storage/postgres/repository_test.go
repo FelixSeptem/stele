@@ -2,10 +2,14 @@ package postgres
 
 import (
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"errors"
 	"testing"
 	"time"
 
+	"github.com/FelixSeptem/stele/internal/embedding"
+	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgconn"
 	pgxmock "github.com/pashagolub/pgxmock/v4"
 
@@ -15,6 +19,28 @@ import (
 	"github.com/FelixSeptem/stele/internal/policy"
 	"github.com/FelixSeptem/stele/internal/retrieval"
 )
+
+func testEmbeddingRouter() embedding.Router {
+	return embedding.Router{
+		Default: embedding.Target{
+			Provider:   "openai",
+			Model:      "text-embedding-3-small",
+			Dimensions: 1536,
+		},
+		ByClass: map[string]embedding.Target{
+			string(memory.MemoryClassProcedural): {
+				Provider:   "openai",
+				Model:      "text-embedding-3-large",
+				Dimensions: 3072,
+			},
+		},
+	}
+}
+
+func testContentHash(content string) string {
+	sum := sha256.Sum256([]byte(content))
+	return "sha256:" + hex.EncodeToString(sum[:])
+}
 
 func TestRepositoryWriteRawEvent(t *testing.T) {
 	mock, err := pgxmock.NewPool()
@@ -251,6 +277,9 @@ func TestMigrateRunsBaseSchema(t *testing.T) {
 		"governance_last_failed_at timestamptz",
 		"governance_next_attempt_at timestamptz",
 		"governance_exhausted_at timestamptz",
+		"CREATE TABLE IF NOT EXISTS governance_recovery_ledger",
+		"before_snapshot jsonb NOT NULL",
+		"after_snapshot jsonb NOT NULL",
 		"CREATE TABLE IF NOT EXISTS candidate_memories",
 		"CREATE TABLE IF NOT EXISTS canonical_memories",
 		"retention_class text NOT NULL",
@@ -260,6 +289,7 @@ func TestMigrateRunsBaseSchema(t *testing.T) {
 		"CREATE TABLE IF NOT EXISTS job_executions",
 		"modified_by text NOT NULL",
 		"CREATE INDEX IF NOT EXISTS raw_events_governance_claim_idx",
+		"CREATE INDEX IF NOT EXISTS governance_recovery_ledger_scope_created_at_idx",
 		"CREATE INDEX IF NOT EXISTS canonical_memories_search_text_idx",
 		"CREATE INDEX IF NOT EXISTS relation_projections_search_text_idx",
 	} {
@@ -467,6 +497,514 @@ func TestRepositoryReadGovernanceStatusReturnsBacklogSnapshot(t *testing.T) {
 
 	if !status.OldestPendingCreatedAt.Equal(oldestPending) {
 		t.Fatalf("OldestPendingCreatedAt = %v, want %v", status.OldestPendingCreatedAt, oldestPending)
+	}
+}
+
+func TestRepositoryListGovernanceRawEventsReturnsDerivedStatesAndNextCursor(t *testing.T) {
+	mock, err := pgxmock.NewPool()
+	if err != nil {
+		t.Fatalf("pgxmock.NewPool() error = %v", err)
+	}
+	defer mock.Close()
+
+	now := time.Date(2026, 6, 11, 10, 0, 0, 0, time.UTC)
+	attemptGTE := 2
+	input := governance.ListGovernanceRawEventsInput{
+		Scope:      memory.Scope{Tenant: "tenant-a", Project: "project-a", Namespace: "namespace-a"},
+		State:      governance.GovernanceRawEventStateRetryWait,
+		EventType:  "conversation.message",
+		AttemptGTE: &attemptGTE,
+		Limit:      1,
+		Now:        now,
+	}
+
+	rows := pgxmock.NewRows([]string{
+		"id", "tenant", "project", "namespace", "event_type", "content", "source_timestamp", "created_at",
+		"governance_attempt", "governance_worker_id", "governance_claimed_at", "governance_lease_until",
+		"governance_last_failed_at", "governance_last_error", "governance_next_attempt_at", "governance_exhausted_at", "governance_processed_at",
+	}).
+		AddRow(
+			"evt_newer", input.Scope.Tenant, input.Scope.Project, input.Scope.Namespace, input.EventType, "retry me", now.Add(-2*time.Minute), now.Add(-time.Minute),
+			2, nil, nil, nil, now.Add(-30*time.Second), "extractor timeout", now.Add(10*time.Minute), nil, nil,
+		).
+		AddRow(
+			"evt_older", input.Scope.Tenant, input.Scope.Project, input.Scope.Namespace, input.EventType, "still waiting", now.Add(-3*time.Minute), now.Add(-2*time.Minute),
+			4, nil, nil, nil, now.Add(-2*time.Minute), "downstream failure", now.Add(20*time.Minute), nil, nil,
+		)
+
+	mock.ExpectQuery("SELECT[\\s\\S]*FROM raw_events").
+		WithArgs(
+			input.Scope.Tenant,
+			input.Scope.Project,
+			input.Scope.Namespace,
+			input.EventType,
+			string(input.State),
+			attemptGTE,
+			nil,
+			nil,
+			nil,
+			nil,
+			nil,
+			nil,
+			now,
+			nil,
+			input.Limit+1,
+		).
+		WillReturnRows(rows)
+
+	repo := NewRepository(mock)
+	page, err := repo.ListGovernanceRawEvents(context.Background(), input)
+	if err != nil {
+		t.Fatalf("ListGovernanceRawEvents() error = %v", err)
+	}
+
+	if len(page.Items) != 1 {
+		t.Fatalf("len(page.Items) = %d, want 1", len(page.Items))
+	}
+	if page.Items[0].ID != "evt_newer" {
+		t.Fatalf("page.Items[0].ID = %q, want evt_newer", page.Items[0].ID)
+	}
+	if page.Items[0].State != governance.GovernanceRawEventStateRetryWait {
+		t.Fatalf("page.Items[0].State = %q, want retry_wait", page.Items[0].State)
+	}
+	cursor, err := governance.DecodeGovernanceRawEventCursor(page.NextCursor)
+	if err != nil {
+		t.Fatalf("DecodeGovernanceRawEventCursor() error = %v", err)
+	}
+	if cursor.RawEventID != "evt_newer" {
+		t.Fatalf("cursor.RawEventID = %q, want evt_newer", cursor.RawEventID)
+	}
+	if !cursor.CreatedAt.Equal(now.Add(-time.Minute)) {
+		t.Fatalf("cursor.CreatedAt = %v, want %v", cursor.CreatedAt, now.Add(-time.Minute))
+	}
+}
+
+func TestRepositoryReadGovernanceRawEventReturnsScopedDetail(t *testing.T) {
+	mock, err := pgxmock.NewPool()
+	if err != nil {
+		t.Fatalf("pgxmock.NewPool() error = %v", err)
+	}
+	defer mock.Close()
+
+	now := time.Date(2026, 6, 11, 10, 5, 0, 0, time.UTC)
+	input := governance.ReadGovernanceRawEventInput{
+		Scope:      memory.Scope{Tenant: "tenant-a", Project: "project-a", Namespace: "namespace-a"},
+		RawEventID: "evt_detail",
+		Now:        now,
+	}
+
+	mock.ExpectQuery("SELECT[\\s\\S]*FROM raw_events").
+		WithArgs(input.RawEventID, input.Scope.Tenant, input.Scope.Project, input.Scope.Namespace).
+		WillReturnRows(pgxmock.NewRows([]string{
+			"id", "tenant", "project", "namespace", "event_type", "content", "source_timestamp", "created_at",
+			"governance_attempt", "governance_worker_id", "governance_claimed_at", "governance_lease_until",
+			"governance_last_failed_at", "governance_last_error", "governance_next_attempt_at", "governance_exhausted_at", "governance_processed_at",
+		}).AddRow(
+			input.RawEventID, input.Scope.Tenant, input.Scope.Project, input.Scope.Namespace, "conversation.message", "hello", now.Add(-2*time.Minute), now.Add(-time.Minute),
+			3, "worker-a", now.Add(-30*time.Second), now.Add(time.Minute), now.Add(-time.Minute), "extractor timeout", now.Add(5*time.Minute), nil, nil,
+		))
+
+	repo := NewRepository(mock)
+	resource, err := repo.ReadGovernanceRawEvent(context.Background(), input)
+	if err != nil {
+		t.Fatalf("ReadGovernanceRawEvent() error = %v", err)
+	}
+
+	if resource.ID != input.RawEventID {
+		t.Fatalf("resource.ID = %q, want %q", resource.ID, input.RawEventID)
+	}
+	if resource.State != governance.GovernanceRawEventStateLeased {
+		t.Fatalf("resource.State = %q, want leased", resource.State)
+	}
+	if resource.WorkerID != "worker-a" {
+		t.Fatalf("resource.WorkerID = %q, want worker-a", resource.WorkerID)
+	}
+}
+
+func TestRepositoryListGovernanceRecoveryHistoryReturnsSnapshots(t *testing.T) {
+	mock, err := pgxmock.NewPool()
+	if err != nil {
+		t.Fatalf("pgxmock.NewPool() error = %v", err)
+	}
+	defer mock.Close()
+
+	input := governance.ListGovernanceRecoveryHistoryInput{
+		Scope:      memory.Scope{Tenant: "tenant-a", Project: "project-a", Namespace: "namespace-a"},
+		RawEventID: "evt_123",
+	}
+	now := time.Date(2026, 6, 11, 10, 10, 0, 0, time.UTC)
+
+	mock.ExpectQuery("SELECT 1 FROM raw_events").
+		WithArgs(input.RawEventID, input.Scope.Tenant, input.Scope.Project, input.Scope.Namespace).
+		WillReturnRows(pgxmock.NewRows([]string{"?column?"}).AddRow(1))
+
+	mock.ExpectQuery("SELECT[\\s\\S]*FROM governance_recovery_ledger").
+		WithArgs(input.RawEventID, input.Scope.Tenant, input.Scope.Project, input.Scope.Namespace).
+		WillReturnRows(pgxmock.NewRows([]string{
+			"id", "raw_event_id", "tenant", "project", "namespace", "action", "actor", "reason", "before_snapshot", "after_snapshot", "created_at",
+		}).AddRow(
+			"rec_1",
+			input.RawEventID,
+			input.Scope.Tenant,
+			input.Scope.Project,
+			input.Scope.Namespace,
+			string(governance.GovernanceRecoveryActionRetry),
+			"operator-a",
+			"retry immediately",
+			[]byte(`{"state":"retry_wait","attempt":2,"last_failed_at":"2026-06-11T10:08:00Z","last_error":"extractor timeout","next_attempt_at":"2026-06-11T10:20:00Z"}`),
+			[]byte(`{"state":"pending","attempt":2,"last_failed_at":"2026-06-11T10:08:00Z","last_error":"extractor timeout","next_attempt_at":"2026-06-11T10:10:00Z"}`),
+			now,
+		))
+
+	repo := NewRepository(mock)
+	history, err := repo.ListGovernanceRecoveryHistory(context.Background(), input)
+	if err != nil {
+		t.Fatalf("ListGovernanceRecoveryHistory() error = %v", err)
+	}
+
+	if len(history) != 1 {
+		t.Fatalf("len(history) = %d, want 1", len(history))
+	}
+	if history[0].Before.State != governance.GovernanceRawEventStateRetryWait {
+		t.Fatalf("history[0].Before.State = %q, want retry_wait", history[0].Before.State)
+	}
+	if history[0].After.State != governance.GovernanceRawEventStatePending {
+		t.Fatalf("history[0].After.State = %q, want pending", history[0].After.State)
+	}
+}
+
+func TestRepositoryListGovernanceRecoveryHistoryReturnsNotFoundForMissingRawEvent(t *testing.T) {
+	mock, err := pgxmock.NewPool()
+	if err != nil {
+		t.Fatalf("pgxmock.NewPool() error = %v", err)
+	}
+	defer mock.Close()
+
+	input := governance.ListGovernanceRecoveryHistoryInput{
+		Scope:      memory.Scope{Tenant: "tenant-a", Project: "project-a", Namespace: "namespace-a"},
+		RawEventID: "evt_missing",
+	}
+
+	mock.ExpectQuery("SELECT 1 FROM raw_events").
+		WithArgs(input.RawEventID, input.Scope.Tenant, input.Scope.Project, input.Scope.Namespace).
+		WillReturnError(pgx.ErrNoRows)
+
+	repo := NewRepository(mock)
+	_, err = repo.ListGovernanceRecoveryHistory(context.Background(), input)
+	if !errors.Is(err, pgx.ErrNoRows) {
+		t.Fatalf("ListGovernanceRecoveryHistory() error = %v, want pgx.ErrNoRows", err)
+	}
+
+	if err := mock.ExpectationsWereMet(); err != nil {
+		t.Fatalf("ExpectationsWereMet() error = %v", err)
+	}
+}
+
+func TestRepositoryApplyGovernanceRecoveryRetryWritesLedgerAndReturnsUpdatedState(t *testing.T) {
+	mock, err := pgxmock.NewPool()
+	if err != nil {
+		t.Fatalf("pgxmock.NewPool() error = %v", err)
+	}
+	defer mock.Close()
+
+	now := time.Date(2026, 6, 11, 10, 15, 0, 0, time.UTC)
+	input := governance.ApplyGovernanceRecoveryInput{
+		Scope:      memory.Scope{Tenant: "tenant-a", Project: "project-a", Namespace: "namespace-a"},
+		RawEventID: "evt_retry",
+		Action:     governance.GovernanceRecoveryActionRetry,
+		Actor:      "operator-a",
+		Reason:     "retry immediately",
+		AppliedAt:  now,
+	}
+
+	mock.ExpectBegin()
+	mock.ExpectQuery("SELECT[\\s\\S]*FROM raw_events[\\s\\S]*FOR UPDATE").
+		WithArgs(input.RawEventID, input.Scope.Tenant, input.Scope.Project, input.Scope.Namespace).
+		WillReturnRows(pgxmock.NewRows([]string{
+			"id", "tenant", "project", "namespace", "event_type", "content", "source_timestamp", "created_at",
+			"governance_attempt", "governance_worker_id", "governance_claimed_at", "governance_lease_until",
+			"governance_last_failed_at", "governance_last_error", "governance_next_attempt_at", "governance_exhausted_at", "governance_processed_at",
+		}).AddRow(
+			input.RawEventID, input.Scope.Tenant, input.Scope.Project, input.Scope.Namespace, "conversation.message", "hello", now.Add(-2*time.Minute), now.Add(-time.Minute),
+			2, nil, nil, nil, now.Add(-time.Minute), "extractor timeout", now.Add(20*time.Minute), nil, nil,
+		))
+	mock.ExpectQuery("UPDATE raw_events").
+		WithArgs(
+			input.RawEventID,
+			input.Scope.Tenant,
+			input.Scope.Project,
+			input.Scope.Namespace,
+			2,
+			nil,
+			nil,
+			nil,
+			now.Add(-time.Minute),
+			"extractor timeout",
+			now,
+			nil,
+			nil,
+		).
+		WillReturnRows(pgxmock.NewRows([]string{
+			"id", "tenant", "project", "namespace", "event_type", "content", "source_timestamp", "created_at",
+			"governance_attempt", "governance_worker_id", "governance_claimed_at", "governance_lease_until",
+			"governance_last_failed_at", "governance_last_error", "governance_next_attempt_at", "governance_exhausted_at", "governance_processed_at",
+		}).AddRow(
+			input.RawEventID, input.Scope.Tenant, input.Scope.Project, input.Scope.Namespace, "conversation.message", "hello", now.Add(-2*time.Minute), now.Add(-time.Minute),
+			2, nil, nil, nil, now.Add(-time.Minute), "extractor timeout", now, nil, nil,
+		))
+	mock.ExpectExec("INSERT INTO governance_recovery_ledger").
+		WithArgs(
+			pgxmock.AnyArg(),
+			input.RawEventID,
+			input.Scope.Tenant,
+			input.Scope.Project,
+			input.Scope.Namespace,
+			string(input.Action),
+			input.Actor,
+			input.Reason,
+			pgxmock.AnyArg(),
+			pgxmock.AnyArg(),
+			input.AppliedAt,
+		).
+		WillReturnResult(pgxmock.NewResult("INSERT", 1))
+	mock.ExpectCommit()
+
+	repo := NewRepository(mock)
+	outcome, err := repo.ApplyGovernanceRecovery(context.Background(), input)
+	if err != nil {
+		t.Fatalf("ApplyGovernanceRecovery() error = %v", err)
+	}
+
+	if outcome.RawEvent.State != governance.GovernanceRawEventStatePending {
+		t.Fatalf("outcome.RawEvent.State = %q, want pending", outcome.RawEvent.State)
+	}
+	if outcome.Recovery.Before.State != governance.GovernanceRawEventStateRetryWait {
+		t.Fatalf("outcome.Recovery.Before.State = %q, want retry_wait", outcome.Recovery.Before.State)
+	}
+	if outcome.Recovery.After.State != governance.GovernanceRawEventStatePending {
+		t.Fatalf("outcome.Recovery.After.State = %q, want pending", outcome.Recovery.After.State)
+	}
+}
+
+func TestRepositoryApplyGovernanceRecoveryReschedulePreservesAttemptAndWritesLedger(t *testing.T) {
+	mock, err := pgxmock.NewPool()
+	if err != nil {
+		t.Fatalf("pgxmock.NewPool() error = %v", err)
+	}
+	defer mock.Close()
+
+	now := time.Date(2026, 6, 11, 10, 18, 0, 0, time.UTC)
+	scheduledFor := now.Add(45 * time.Minute)
+	input := governance.ApplyGovernanceRecoveryInput{
+		Scope:        memory.Scope{Tenant: "tenant-a", Project: "project-a", Namespace: "namespace-a"},
+		RawEventID:   "evt_reschedule",
+		Action:       governance.GovernanceRecoveryActionReschedule,
+		Actor:        "operator-a",
+		Reason:       "delay until quiet period",
+		AppliedAt:    now,
+		ScheduledFor: scheduledFor,
+	}
+
+	mock.ExpectBegin()
+	mock.ExpectQuery("SELECT[\\s\\S]*FROM raw_events[\\s\\S]*FOR UPDATE").
+		WithArgs(input.RawEventID, input.Scope.Tenant, input.Scope.Project, input.Scope.Namespace).
+		WillReturnRows(pgxmock.NewRows([]string{
+			"id", "tenant", "project", "namespace", "event_type", "content", "source_timestamp", "created_at",
+			"governance_attempt", "governance_worker_id", "governance_claimed_at", "governance_lease_until",
+			"governance_last_failed_at", "governance_last_error", "governance_next_attempt_at", "governance_exhausted_at", "governance_processed_at",
+		}).AddRow(
+			input.RawEventID, input.Scope.Tenant, input.Scope.Project, input.Scope.Namespace, "conversation.message", "hello", now.Add(-2*time.Minute), now.Add(-time.Minute),
+			2, nil, nil, nil, now.Add(-3*time.Minute), "extractor timeout", now.Add(10*time.Minute), nil, nil,
+		))
+	mock.ExpectQuery("UPDATE raw_events").
+		WithArgs(
+			input.RawEventID,
+			input.Scope.Tenant,
+			input.Scope.Project,
+			input.Scope.Namespace,
+			2,
+			nil,
+			nil,
+			nil,
+			now.Add(-3*time.Minute),
+			"extractor timeout",
+			scheduledFor,
+			nil,
+			nil,
+		).
+		WillReturnRows(pgxmock.NewRows([]string{
+			"id", "tenant", "project", "namespace", "event_type", "content", "source_timestamp", "created_at",
+			"governance_attempt", "governance_worker_id", "governance_claimed_at", "governance_lease_until",
+			"governance_last_failed_at", "governance_last_error", "governance_next_attempt_at", "governance_exhausted_at", "governance_processed_at",
+		}).AddRow(
+			input.RawEventID, input.Scope.Tenant, input.Scope.Project, input.Scope.Namespace, "conversation.message", "hello", now.Add(-2*time.Minute), now.Add(-time.Minute),
+			2, nil, nil, nil, now.Add(-3*time.Minute), "extractor timeout", scheduledFor, nil, nil,
+		))
+	mock.ExpectExec("INSERT INTO governance_recovery_ledger").
+		WithArgs(
+			pgxmock.AnyArg(),
+			input.RawEventID,
+			input.Scope.Tenant,
+			input.Scope.Project,
+			input.Scope.Namespace,
+			string(input.Action),
+			input.Actor,
+			input.Reason,
+			pgxmock.AnyArg(),
+			pgxmock.AnyArg(),
+			input.AppliedAt,
+		).
+		WillReturnResult(pgxmock.NewResult("INSERT", 1))
+	mock.ExpectCommit()
+
+	repo := NewRepository(mock)
+	outcome, err := repo.ApplyGovernanceRecovery(context.Background(), input)
+	if err != nil {
+		t.Fatalf("ApplyGovernanceRecovery() error = %v", err)
+	}
+
+	if outcome.RawEvent.Attempt != 2 {
+		t.Fatalf("outcome.RawEvent.Attempt = %d, want 2", outcome.RawEvent.Attempt)
+	}
+	if !outcome.RawEvent.NextAttemptAt.Equal(scheduledFor) {
+		t.Fatalf("outcome.RawEvent.NextAttemptAt = %v, want %v", outcome.RawEvent.NextAttemptAt, scheduledFor)
+	}
+	if outcome.Recovery.Before.State != governance.GovernanceRawEventStateRetryWait {
+		t.Fatalf("outcome.Recovery.Before.State = %q, want retry_wait", outcome.Recovery.Before.State)
+	}
+	if outcome.Recovery.After.State != governance.GovernanceRawEventStateRetryWait {
+		t.Fatalf("outcome.Recovery.After.State = %q, want retry_wait", outcome.Recovery.After.State)
+	}
+}
+
+func TestRepositoryApplyGovernanceRecoveryRequeueClearsExhaustedAndResetsAttempt(t *testing.T) {
+	mock, err := pgxmock.NewPool()
+	if err != nil {
+		t.Fatalf("pgxmock.NewPool() error = %v", err)
+	}
+	defer mock.Close()
+
+	now := time.Date(2026, 6, 11, 10, 25, 0, 0, time.UTC)
+	exhaustedAt := now.Add(-time.Hour)
+	lastFailedAt := now.Add(-2 * time.Hour)
+	input := governance.ApplyGovernanceRecoveryInput{
+		Scope:      memory.Scope{Tenant: "tenant-a", Project: "project-a", Namespace: "namespace-a"},
+		RawEventID: "evt_requeue",
+		Action:     governance.GovernanceRecoveryActionRequeue,
+		Actor:      "operator-a",
+		Reason:     "clear exhausted state",
+		AppliedAt:  now,
+	}
+
+	mock.ExpectBegin()
+	mock.ExpectQuery("SELECT[\\s\\S]*FROM raw_events[\\s\\S]*FOR UPDATE").
+		WithArgs(input.RawEventID, input.Scope.Tenant, input.Scope.Project, input.Scope.Namespace).
+		WillReturnRows(pgxmock.NewRows([]string{
+			"id", "tenant", "project", "namespace", "event_type", "content", "source_timestamp", "created_at",
+			"governance_attempt", "governance_worker_id", "governance_claimed_at", "governance_lease_until",
+			"governance_last_failed_at", "governance_last_error", "governance_next_attempt_at", "governance_exhausted_at", "governance_processed_at",
+		}).AddRow(
+			input.RawEventID, input.Scope.Tenant, input.Scope.Project, input.Scope.Namespace, "conversation.message", "hello", now.Add(-3*time.Minute), now.Add(-2*time.Minute),
+			5, nil, nil, nil, lastFailedAt, "extractor timeout", nil, exhaustedAt, nil,
+		))
+	mock.ExpectQuery("UPDATE raw_events").
+		WithArgs(
+			input.RawEventID,
+			input.Scope.Tenant,
+			input.Scope.Project,
+			input.Scope.Namespace,
+			0,
+			nil,
+			nil,
+			nil,
+			lastFailedAt,
+			"extractor timeout",
+			now,
+			nil,
+			nil,
+		).
+		WillReturnRows(pgxmock.NewRows([]string{
+			"id", "tenant", "project", "namespace", "event_type", "content", "source_timestamp", "created_at",
+			"governance_attempt", "governance_worker_id", "governance_claimed_at", "governance_lease_until",
+			"governance_last_failed_at", "governance_last_error", "governance_next_attempt_at", "governance_exhausted_at", "governance_processed_at",
+		}).AddRow(
+			input.RawEventID, input.Scope.Tenant, input.Scope.Project, input.Scope.Namespace, "conversation.message", "hello", now.Add(-3*time.Minute), now.Add(-2*time.Minute),
+			0, nil, nil, nil, lastFailedAt, "extractor timeout", now, nil, nil,
+		))
+	mock.ExpectExec("INSERT INTO governance_recovery_ledger").
+		WithArgs(
+			pgxmock.AnyArg(),
+			input.RawEventID,
+			input.Scope.Tenant,
+			input.Scope.Project,
+			input.Scope.Namespace,
+			string(input.Action),
+			input.Actor,
+			input.Reason,
+			pgxmock.AnyArg(),
+			pgxmock.AnyArg(),
+			input.AppliedAt,
+		).
+		WillReturnResult(pgxmock.NewResult("INSERT", 1))
+	mock.ExpectCommit()
+
+	repo := NewRepository(mock)
+	outcome, err := repo.ApplyGovernanceRecovery(context.Background(), input)
+	if err != nil {
+		t.Fatalf("ApplyGovernanceRecovery() error = %v", err)
+	}
+
+	if outcome.RawEvent.Attempt != 0 {
+		t.Fatalf("outcome.RawEvent.Attempt = %d, want 0", outcome.RawEvent.Attempt)
+	}
+	if !outcome.RawEvent.ExhaustedAt.IsZero() {
+		t.Fatalf("outcome.RawEvent.ExhaustedAt = %v, want zero", outcome.RawEvent.ExhaustedAt)
+	}
+	if !outcome.RawEvent.NextAttemptAt.Equal(now) {
+		t.Fatalf("outcome.RawEvent.NextAttemptAt = %v, want %v", outcome.RawEvent.NextAttemptAt, now)
+	}
+	if outcome.Recovery.Before.State != governance.GovernanceRawEventStateExhausted {
+		t.Fatalf("outcome.Recovery.Before.State = %q, want exhausted", outcome.Recovery.Before.State)
+	}
+	if outcome.Recovery.After.State != governance.GovernanceRawEventStatePending {
+		t.Fatalf("outcome.Recovery.After.State = %q, want pending", outcome.Recovery.After.State)
+	}
+}
+
+func TestRepositoryApplyGovernanceRecoveryRejectsLeasedRawEvent(t *testing.T) {
+	mock, err := pgxmock.NewPool()
+	if err != nil {
+		t.Fatalf("pgxmock.NewPool() error = %v", err)
+	}
+	defer mock.Close()
+
+	now := time.Date(2026, 6, 11, 10, 20, 0, 0, time.UTC)
+	input := governance.ApplyGovernanceRecoveryInput{
+		Scope:      memory.Scope{Tenant: "tenant-a", Project: "project-a", Namespace: "namespace-a"},
+		RawEventID: "evt_leased",
+		Action:     governance.GovernanceRecoveryActionRetry,
+		Actor:      "operator-a",
+		Reason:     "should fail",
+		AppliedAt:  now,
+	}
+
+	mock.ExpectBegin()
+	mock.ExpectQuery("SELECT[\\s\\S]*FROM raw_events[\\s\\S]*FOR UPDATE").
+		WithArgs(input.RawEventID, input.Scope.Tenant, input.Scope.Project, input.Scope.Namespace).
+		WillReturnRows(pgxmock.NewRows([]string{
+			"id", "tenant", "project", "namespace", "event_type", "content", "source_timestamp", "created_at",
+			"governance_attempt", "governance_worker_id", "governance_claimed_at", "governance_lease_until",
+			"governance_last_failed_at", "governance_last_error", "governance_next_attempt_at", "governance_exhausted_at", "governance_processed_at",
+		}).AddRow(
+			input.RawEventID, input.Scope.Tenant, input.Scope.Project, input.Scope.Namespace, "conversation.message", "hello", now.Add(-2*time.Minute), now.Add(-time.Minute),
+			2, "worker-a", now.Add(-30*time.Second), now.Add(time.Minute), now.Add(-time.Minute), "extractor timeout", now.Add(20*time.Minute), nil, nil,
+		))
+	mock.ExpectRollback()
+
+	repo := NewRepository(mock)
+	_, err = repo.ApplyGovernanceRecovery(context.Background(), input)
+	if !errors.Is(err, governance.ErrGovernanceRecoveryConflict) {
+		t.Fatalf("ApplyGovernanceRecovery() error = %v, want ErrGovernanceRecoveryConflict", err)
 	}
 }
 
@@ -2038,9 +2576,27 @@ func TestRepositoryCreateMemoryWritesCanonicalVersionAndProvenance(t *testing.T)
 			record.CreatedAt,
 		).
 		WillReturnResult(pgxmock.NewResult("INSERT", 1))
+	mock.ExpectExec("INSERT INTO embedding_rebuilds").
+		WithArgs(
+			record.MemoryID,
+			record.Scope.Tenant,
+			record.Scope.Project,
+			record.Scope.Namespace,
+			int64(1),
+			testContentHash(record.Content),
+			"openai",
+			"text-embedding-3-small",
+			1536,
+			memory.EmbeddingRebuildStatusPending,
+			nil,
+			record.CreatedAt,
+			nil,
+			nil,
+		).
+		WillReturnResult(pgxmock.NewResult("INSERT", 1))
 	mock.ExpectCommit()
 
-	repo := NewRepository(mock)
+	repo := NewRepositoryWithEmbeddingRouter(mock, testEmbeddingRouter())
 	canonical, err := repo.CreateMemory(context.Background(), record)
 	if err != nil {
 		t.Fatalf("CreateMemory() error = %v", err)
@@ -2048,6 +2604,102 @@ func TestRepositoryCreateMemoryWritesCanonicalVersionAndProvenance(t *testing.T)
 
 	if canonical.ID != record.MemoryID {
 		t.Fatalf("ID = %q, want %q", canonical.ID, record.MemoryID)
+	}
+
+	if err := mock.ExpectationsWereMet(); err != nil {
+		t.Fatalf("ExpectationsWereMet() error = %v", err)
+	}
+}
+
+func TestRepositoryUpdateMemoryQueuesEmbeddingRebuildAndClearsStaleSemanticProjection(t *testing.T) {
+	mock, err := pgxmock.NewPool()
+	if err != nil {
+		t.Fatalf("pgxmock.NewPool() error = %v", err)
+	}
+	defer mock.Close()
+
+	record := memory.ManualUpdateMemoryRecord{
+		MemoryID:        "mem_manual",
+		VersionID:       "ver_manual",
+		Scope:           memory.Scope{Tenant: "tenant-a", Project: "project-a", Namespace: "namespace-a"},
+		Content:         "Corrected content.",
+		ExpectedVersion: 1,
+		Reason:          "correct typo",
+		Actor:           "operator-a",
+		RequestID:       "req_manual",
+		UpdatedAt:       time.Date(2026, 6, 7, 20, 25, 0, 0, time.UTC),
+	}
+
+	mock.ExpectBegin()
+	mock.ExpectQuery("SELECT COALESCE\\(MAX\\(version\\), 0\\)").
+		WithArgs(record.MemoryID).
+		WillReturnRows(pgxmock.NewRows([]string{"coalesce"}).AddRow(int64(1)))
+	mock.ExpectQuery("UPDATE canonical_memories[\\s\\S]*search_text[\\s\\S]*embedding = NULL").
+		WithArgs(record.MemoryID, record.Scope.Tenant, record.Scope.Project, record.Scope.Namespace, record.Content, record.UpdatedAt).
+		WillReturnRows(pgxmock.NewRows([]string{
+			"id", "tenant", "project", "namespace", "class", "state", "content", "created_at", "updated_at",
+		}).AddRow(
+			record.MemoryID,
+			record.Scope.Tenant,
+			record.Scope.Project,
+			record.Scope.Namespace,
+			memory.MemoryClassProfile,
+			memory.MemoryStateActive,
+			record.Content,
+			record.UpdatedAt.Add(-time.Hour),
+			record.UpdatedAt,
+		))
+	mock.ExpectQuery("INSERT INTO memory_versions").
+		WithArgs(record.VersionID, record.MemoryID, int64(2), memory.MemoryStateActive, record.Content, record.UpdatedAt, record.Actor).
+		WillReturnRows(pgxmock.NewRows([]string{
+			"id", "memory_id", "version", "state", "content", "created_at", "modified_by",
+		}).AddRow(
+			record.VersionID, record.MemoryID, int64(2), memory.MemoryStateActive, record.Content, record.UpdatedAt, record.Actor,
+		))
+	mock.ExpectExec("INSERT INTO provenance_links").
+		WithArgs(
+			pgxmock.AnyArg(),
+			nil,
+			nil,
+			record.MemoryID,
+			record.Scope.Tenant,
+			record.Scope.Project,
+			record.Scope.Namespace,
+			"manual_update_memory",
+			record.RequestID,
+			record.Actor,
+			pgxmock.AnyArg(),
+			record.UpdatedAt,
+		).
+		WillReturnResult(pgxmock.NewResult("INSERT", 1))
+	mock.ExpectExec("INSERT INTO embedding_rebuilds").
+		WithArgs(
+			record.MemoryID,
+			record.Scope.Tenant,
+			record.Scope.Project,
+			record.Scope.Namespace,
+			int64(2),
+			testContentHash(record.Content),
+			"openai",
+			"text-embedding-3-small",
+			1536,
+			memory.EmbeddingRebuildStatusPending,
+			nil,
+			record.UpdatedAt,
+			nil,
+			nil,
+		).
+		WillReturnResult(pgxmock.NewResult("INSERT", 1))
+	mock.ExpectCommit()
+
+	repo := NewRepositoryWithEmbeddingRouter(mock, testEmbeddingRouter())
+	canonical, err := repo.UpdateMemory(context.Background(), record)
+	if err != nil {
+		t.Fatalf("UpdateMemory() error = %v", err)
+	}
+
+	if canonical.Content != record.Content {
+		t.Fatalf("Content = %q, want %q", canonical.Content, record.Content)
 	}
 
 	if err := mock.ExpectationsWereMet(); err != nil {
@@ -2131,7 +2783,7 @@ func TestRepositoryMergeMemorySuppressesSourceAndWritesTargetVersion(t *testing.
 	mock.ExpectQuery("SELECT COALESCE\\(MAX\\(version\\), 0\\)").
 		WithArgs(record.TargetMemoryID).
 		WillReturnRows(pgxmock.NewRows([]string{"coalesce"}).AddRow(int64(2)))
-	mock.ExpectQuery("UPDATE canonical_memories").
+	mock.ExpectQuery("UPDATE canonical_memories[\\s\\S]*search_text[\\s\\S]*embedding = NULL").
 		WithArgs(record.TargetMemoryID, record.Scope.Tenant, record.Scope.Project, record.Scope.Namespace, record.Content, record.AppliedAt).
 		WillReturnRows(pgxmock.NewRows([]string{
 			"id", "tenant", "project", "namespace", "class", "state", "content", "created_at", "updated_at",
@@ -2186,9 +2838,27 @@ func TestRepositoryMergeMemorySuppressesSourceAndWritesTargetVersion(t *testing.
 			record.AppliedAt,
 		).
 		WillReturnResult(pgxmock.NewResult("INSERT", 1))
+	mock.ExpectExec("INSERT INTO embedding_rebuilds").
+		WithArgs(
+			record.TargetMemoryID,
+			record.Scope.Tenant,
+			record.Scope.Project,
+			record.Scope.Namespace,
+			int64(3),
+			testContentHash(record.Content),
+			"openai",
+			"text-embedding-3-small",
+			1536,
+			memory.EmbeddingRebuildStatusPending,
+			nil,
+			record.AppliedAt,
+			nil,
+			nil,
+		).
+		WillReturnResult(pgxmock.NewResult("INSERT", 1))
 	mock.ExpectCommit()
 
-	repo := NewRepository(mock)
+	repo := NewRepositoryWithEmbeddingRouter(mock, testEmbeddingRouter())
 	canonical, err := repo.MergeMemory(context.Background(), record)
 	if err != nil {
 		t.Fatalf("MergeMemory() error = %v", err)
@@ -2234,7 +2904,7 @@ func TestRepositoryReclassifyMemoryUpdatesClassAndWritesProvenance(t *testing.T)
 	mock.ExpectQuery("SELECT COALESCE\\(MAX\\(version\\), 0\\)").
 		WithArgs(record.MemoryID).
 		WillReturnRows(pgxmock.NewRows([]string{"coalesce"}).AddRow(int64(1)))
-	mock.ExpectQuery("UPDATE canonical_memories").
+	mock.ExpectQuery("UPDATE canonical_memories[\\s\\S]*embedding = NULL").
 		WithArgs(record.MemoryID, record.Scope.Tenant, record.Scope.Project, record.Scope.Namespace, record.TargetClass, record.AppliedAt).
 		WillReturnRows(pgxmock.NewRows([]string{
 			"id", "tenant", "project", "namespace", "class", "state", "content", "created_at", "updated_at",
@@ -2265,9 +2935,27 @@ func TestRepositoryReclassifyMemoryUpdatesClassAndWritesProvenance(t *testing.T)
 			record.AppliedAt,
 		).
 		WillReturnResult(pgxmock.NewResult("INSERT", 1))
+	mock.ExpectExec("INSERT INTO embedding_rebuilds").
+		WithArgs(
+			record.MemoryID,
+			record.Scope.Tenant,
+			record.Scope.Project,
+			record.Scope.Namespace,
+			int64(2),
+			testContentHash("Respond concisely."),
+			"openai",
+			"text-embedding-3-large",
+			3072,
+			memory.EmbeddingRebuildStatusPending,
+			nil,
+			record.AppliedAt,
+			nil,
+			nil,
+		).
+		WillReturnResult(pgxmock.NewResult("INSERT", 1))
 	mock.ExpectCommit()
 
-	repo := NewRepository(mock)
+	repo := NewRepositoryWithEmbeddingRouter(mock, testEmbeddingRouter())
 	canonical, err := repo.ReclassifyMemory(context.Background(), record)
 	if err != nil {
 		t.Fatalf("ReclassifyMemory() error = %v", err)
@@ -2279,6 +2967,313 @@ func TestRepositoryReclassifyMemoryUpdatesClassAndWritesProvenance(t *testing.T)
 
 	if err := mock.ExpectationsWereMet(); err != nil {
 		t.Fatalf("ExpectationsWereMet() error = %v", err)
+	}
+}
+
+func TestRepositoryRecordEmbeddingRebuildRequiredUpsertsEligibility(t *testing.T) {
+	mock, err := pgxmock.NewPool()
+	if err != nil {
+		t.Fatalf("pgxmock.NewPool() error = %v", err)
+	}
+	defer mock.Close()
+
+	record := memory.EmbeddingRebuildRecord{
+		MemoryID:          "mem_embed",
+		Scope:             memory.Scope{Tenant: "tenant-a", Project: "project-a", Namespace: "namespace-a"},
+		SourceVersion:     3,
+		ContentHash:       "sha256:abc",
+		RequestedProvider: "openai",
+		RequestedModel:    "text-embedding-3-small",
+		RequestedDimensions: 1536,
+		Status:            memory.EmbeddingRebuildStatusPending,
+		RequestedAt:       time.Date(2026, 6, 12, 8, 0, 0, 0, time.UTC),
+	}
+
+	mock.ExpectExec("INSERT INTO embedding_rebuilds").
+		WithArgs(
+			record.MemoryID,
+			record.Scope.Tenant,
+			record.Scope.Project,
+			record.Scope.Namespace,
+			record.SourceVersion,
+			record.ContentHash,
+			record.RequestedProvider,
+			record.RequestedModel,
+			record.RequestedDimensions,
+			record.Status,
+			nil,
+			record.RequestedAt,
+			nil,
+			nil,
+		).
+		WillReturnResult(pgxmock.NewResult("INSERT", 1))
+
+	repo := NewRepository(mock)
+	if err := repo.RecordEmbeddingRebuildRequired(context.Background(), record); err != nil {
+		t.Fatalf("RecordEmbeddingRebuildRequired() error = %v", err)
+	}
+
+	if err := mock.ExpectationsWereMet(); err != nil {
+		t.Fatalf("ExpectationsWereMet() error = %v", err)
+	}
+}
+
+func TestRepositoryAppendVectorRevisionWritesAppendOnlyRecord(t *testing.T) {
+	mock, err := pgxmock.NewPool()
+	if err != nil {
+		t.Fatalf("pgxmock.NewPool() error = %v", err)
+	}
+	defer mock.Close()
+
+	now := time.Date(2026, 6, 12, 8, 10, 0, 0, time.UTC)
+	revision := memory.VectorRevision{
+		ID:            "vec_123",
+		MemoryID:      "mem_embed",
+		Scope:         memory.Scope{Tenant: "tenant-a", Project: "project-a", Namespace: "namespace-a"},
+		SourceVersion: 3,
+		ContentHash:   "sha256:abc",
+		Provider:      "openai",
+		Model:         "text-embedding-3-small",
+		Dimensions:    3,
+		Embedding:     []float32{0.1, 0.2, 0.3},
+		Status:        memory.VectorRevisionStatusGenerated,
+		GeneratedAt:   now,
+	}
+
+	mock.ExpectExec("INSERT INTO vector_revisions").
+		WithArgs(
+			revision.ID,
+			revision.MemoryID,
+			revision.Scope.Tenant,
+			revision.Scope.Project,
+			revision.Scope.Namespace,
+			revision.SourceVersion,
+			revision.ContentHash,
+			revision.Provider,
+			revision.Model,
+			revision.Dimensions,
+			pgxmock.AnyArg(),
+			revision.Status,
+			nil,
+			nil,
+			revision.GeneratedAt,
+			nil,
+			nil,
+		).
+		WillReturnResult(pgxmock.NewResult("INSERT", 1))
+
+	repo := NewRepository(mock)
+	if err := repo.AppendVectorRevision(context.Background(), revision); err != nil {
+		t.Fatalf("AppendVectorRevision() error = %v", err)
+	}
+
+	if err := mock.ExpectationsWereMet(); err != nil {
+		t.Fatalf("ExpectationsWereMet() error = %v", err)
+	}
+}
+
+func TestRepositoryPromoteVectorRevisionSupersedesPriorActiveRevision(t *testing.T) {
+	mock, err := pgxmock.NewPool()
+	if err != nil {
+		t.Fatalf("pgxmock.NewPool() error = %v", err)
+	}
+	defer mock.Close()
+
+	revision := memory.VectorRevision{
+		ID:            "vec_new",
+		MemoryID:      "mem_embed",
+		Scope:         memory.Scope{Tenant: "tenant-a", Project: "project-a", Namespace: "namespace-a"},
+		SourceVersion: 3,
+		ContentHash:   testContentHash("User prefers concise answers."),
+		Status:        memory.VectorRevisionStatusGenerated,
+		GeneratedAt:   time.Date(2026, 6, 12, 8, 12, 0, 0, time.UTC),
+		ActivatedAt:   time.Date(2026, 6, 12, 8, 13, 0, 0, time.UTC),
+		Embedding:     []float32{0.1, 0.2, 0.3},
+	}
+
+	mock.ExpectBegin()
+	mock.ExpectQuery("SELECT[\\s\\S]*FROM canonical_memories").
+		WithArgs(revision.MemoryID, revision.Scope.Tenant, revision.Scope.Project, revision.Scope.Namespace).
+		WillReturnRows(pgxmock.NewRows([]string{
+			"id", "tenant", "project", "namespace", "class", "state", "content", "created_at", "updated_at",
+		}).AddRow(
+			revision.MemoryID, revision.Scope.Tenant, revision.Scope.Project, revision.Scope.Namespace,
+			memory.MemoryClassProfile, memory.MemoryStateActive, "User prefers concise answers.", revision.GeneratedAt.Add(-time.Hour), revision.GeneratedAt,
+		))
+	mock.ExpectQuery("SELECT COALESCE\\(MAX\\(version\\), 0\\)").
+		WithArgs(revision.MemoryID).
+		WillReturnRows(pgxmock.NewRows([]string{"coalesce"}).AddRow(int64(3)))
+	mock.ExpectExec("UPDATE vector_revisions").
+		WithArgs(revision.MemoryID, revision.Scope.Tenant, revision.Scope.Project, revision.Scope.Namespace, memory.VectorRevisionStatusSuperseded, revision.ID, revision.ActivatedAt).
+		WillReturnResult(pgxmock.NewResult("UPDATE", 1))
+	mock.ExpectExec("UPDATE vector_revisions").
+		WithArgs(revision.ID, revision.MemoryID, revision.Scope.Tenant, revision.Scope.Project, revision.Scope.Namespace, revision.SourceVersion, memory.VectorRevisionStatusActive, revision.ActivatedAt, revision.ContentHash).
+		WillReturnResult(pgxmock.NewResult("UPDATE", 1))
+	mock.ExpectExec("UPDATE canonical_memories").
+		WithArgs(revision.MemoryID, revision.Scope.Tenant, revision.Scope.Project, revision.Scope.Namespace, pgxmock.AnyArg(), revision.ActivatedAt).
+		WillReturnResult(pgxmock.NewResult("UPDATE", 1))
+	mock.ExpectExec("UPDATE embedding_rebuilds").
+		WithArgs(revision.MemoryID, revision.Scope.Tenant, revision.Scope.Project, revision.Scope.Namespace, revision.ID, memory.EmbeddingRebuildStatusCurrent).
+		WillReturnResult(pgxmock.NewResult("UPDATE", 1))
+	mock.ExpectCommit()
+
+	repo := NewRepository(mock)
+	if err := repo.PromoteVectorRevision(context.Background(), revision); err != nil {
+		t.Fatalf("PromoteVectorRevision() error = %v", err)
+	}
+
+	if err := mock.ExpectationsWereMet(); err != nil {
+		t.Fatalf("ExpectationsWereMet() error = %v", err)
+	}
+}
+
+func TestRepositoryListEligibleEmbeddingRebuildsReturnsScopedPendingRecords(t *testing.T) {
+	mock, err := pgxmock.NewPool()
+	if err != nil {
+		t.Fatalf("pgxmock.NewPool() error = %v", err)
+	}
+	defer mock.Close()
+
+	requestedAt := time.Date(2026, 6, 12, 8, 20, 0, 0, time.UTC)
+	mock.ExpectQuery("SELECT[\\s\\S]*FROM embedding_rebuilds[\\s\\S]*JOIN canonical_memories[\\s\\S]*state NOT IN \\('suppressed', 'forgotten', 'deleted'\\)").
+		WithArgs(memory.EmbeddingRebuildStatusPending, 10).
+		WillReturnRows(pgxmock.NewRows([]string{
+			"memory_id", "tenant", "project", "namespace", "source_version", "content_hash",
+			"requested_provider", "requested_model", "requested_dimensions", "status", "failure_reason", "requested_at", "last_attempted_at", "active_vector_revision",
+		}).AddRow(
+			"mem_embed", "tenant-a", "project-a", "namespace-a", int64(3), "sha256:abc",
+			"openai", "text-embedding-3-small", 1536, memory.EmbeddingRebuildStatusPending, nil, requestedAt, nil, nil,
+		))
+
+	repo := NewRepository(mock)
+	records, err := repo.ListEligibleEmbeddingRebuilds(context.Background(), 10)
+	if err != nil {
+		t.Fatalf("ListEligibleEmbeddingRebuilds() error = %v", err)
+	}
+
+	if len(records) != 1 {
+		t.Fatalf("len(records) = %d, want 1", len(records))
+	}
+	if records[0].MemoryID != "mem_embed" || records[0].Scope.Namespace != "namespace-a" {
+		t.Fatalf("records[0] = %+v, want scoped pending rebuild record", records[0])
+	}
+	if records[0].RequestedDimensions != 1536 {
+		t.Fatalf("RequestedDimensions = %d, want 1536", records[0].RequestedDimensions)
+	}
+
+	if err := mock.ExpectationsWereMet(); err != nil {
+		t.Fatalf("ExpectationsWereMet() error = %v", err)
+	}
+}
+
+func TestRepositoryClaimEmbeddingRebuildsMarksPendingRecordsRebuilding(t *testing.T) {
+	mock, err := pgxmock.NewPool()
+	if err != nil {
+		t.Fatalf("pgxmock.NewPool() error = %v", err)
+	}
+	defer mock.Close()
+
+	scope := memory.Scope{Tenant: "tenant-a", Project: "project-a", Namespace: "namespace-a"}
+	attemptedAt := time.Date(2026, 6, 18, 10, 0, 0, 0, time.UTC)
+	mock.ExpectQuery("WITH claimed AS \\([\\s\\S]*UPDATE embedding_rebuilds").
+		WithArgs(
+			scope.Tenant,
+			scope.Project,
+			scope.Namespace,
+			memory.EmbeddingRebuildStatusPending,
+			memory.EmbeddingRebuildStatusRebuilding,
+			attemptedAt,
+			memory.EmbeddingRebuildStatusFailed,
+			5,
+		).
+		WillReturnRows(pgxmock.NewRows([]string{
+			"memory_id", "tenant", "project", "namespace", "class", "content", "source_version", "content_hash",
+			"requested_provider", "requested_model", "requested_dimensions", "status", "failure_reason", "requested_at", "last_attempted_at", "active_vector_revision_id",
+		}).AddRow(
+			"mem_embed", scope.Tenant, scope.Project, scope.Namespace, memory.MemoryClassProfile, "User prefers concise answers.", int64(3), "sha256:abc",
+			"openai", "text-embedding-3-small", 1536, memory.EmbeddingRebuildStatusRebuilding, nil, attemptedAt.Add(-time.Minute), attemptedAt, "vec_old",
+		))
+
+	repo := NewRepository(mock)
+	records, err := repo.ClaimEmbeddingRebuilds(context.Background(), scope, 5, attemptedAt)
+	if err != nil {
+		t.Fatalf("ClaimEmbeddingRebuilds() error = %v", err)
+	}
+
+	if len(records) != 1 {
+		t.Fatalf("len(records) = %d, want 1", len(records))
+	}
+	if records[0].Status != memory.EmbeddingRebuildStatusRebuilding || records[0].Content != "User prefers concise answers." {
+		t.Fatalf("records[0] = %+v, want rebuilding claim with content", records[0])
+	}
+}
+
+func TestRepositoryRecordEmbeddingRebuildFailurePersistsRetryableFailureState(t *testing.T) {
+	mock, err := pgxmock.NewPool()
+	if err != nil {
+		t.Fatalf("pgxmock.NewPool() error = %v", err)
+	}
+	defer mock.Close()
+
+	record := memory.EmbeddingRebuildRecord{
+		MemoryID: "mem_embed",
+		Scope:    memory.Scope{Tenant: "tenant-a", Project: "project-a", Namespace: "namespace-a"},
+	}
+	failedAt := time.Date(2026, 6, 18, 10, 5, 0, 0, time.UTC)
+
+	mock.ExpectExec("UPDATE embedding_rebuilds").
+		WithArgs(
+			record.MemoryID,
+			record.Scope.Tenant,
+			record.Scope.Project,
+			record.Scope.Namespace,
+			memory.EmbeddingRebuildStatusFailed,
+			"provider unavailable",
+			failedAt,
+		).
+		WillReturnResult(pgxmock.NewResult("UPDATE", 1))
+
+	repo := NewRepository(mock)
+	if err := repo.RecordEmbeddingRebuildFailure(context.Background(), record, "provider unavailable", failedAt); err != nil {
+		t.Fatalf("RecordEmbeddingRebuildFailure() error = %v", err)
+	}
+}
+
+func TestRepositoryListEmbeddingLifecycleCandidatesReturnsVisibleCanonicalAndDriftContext(t *testing.T) {
+	mock, err := pgxmock.NewPool()
+	if err != nil {
+		t.Fatalf("pgxmock.NewPool() error = %v", err)
+	}
+	defer mock.Close()
+
+	scope := memory.Scope{Tenant: "tenant-a", Project: "project-a", Namespace: "namespace-a"}
+	mock.ExpectQuery("SELECT[\\s\\S]*FROM canonical_memories cm").
+		WithArgs(scope.Tenant, scope.Project, scope.Namespace, 10).
+		WillReturnRows(pgxmock.NewRows([]string{
+			"id", "tenant", "project", "namespace", "class", "content", "current_version", "status", "source_version", "content_hash",
+			"requested_provider", "requested_model", "requested_dimensions", "active_vector_revision_id", "provider", "model", "dimensions",
+		}).AddRow(
+			"mem_embed", scope.Tenant, scope.Project, scope.Namespace, memory.MemoryClassProfile, "User prefers concise answers.", int64(3), memory.EmbeddingRebuildStatusCurrent, int64(3), testContentHash("User prefers concise answers."),
+			"openai", "text-embedding-3-small", 1536, "vec_active", "openai", "text-embedding-3-small", 1536,
+		).AddRow(
+			"mem_missing", scope.Tenant, scope.Project, scope.Namespace, memory.MemoryClassProfile, "User likes travel.", int64(1), nil, nil, nil,
+			nil, nil, nil, nil, nil, nil, nil,
+		))
+
+	repo := NewRepository(mock)
+	candidates, err := repo.ListEmbeddingLifecycleCandidates(context.Background(), scope, 10)
+	if err != nil {
+		t.Fatalf("ListEmbeddingLifecycleCandidates() error = %v", err)
+	}
+
+	if len(candidates) != 2 {
+		t.Fatalf("len(candidates) = %d, want 2", len(candidates))
+	}
+	if candidates[0].RebuildStatus != memory.EmbeddingRebuildStatusCurrent || candidates[0].ActiveProvider != "openai" {
+		t.Fatalf("candidates[0] = %+v, want active drift context", candidates[0])
+	}
+	if candidates[1].CurrentContentHash != testContentHash("User likes travel.") {
+		t.Fatalf("candidates[1].CurrentContentHash = %q, want content hash", candidates[1].CurrentContentHash)
 	}
 }
 
@@ -2377,7 +3372,7 @@ func TestRepositorySearchSemanticReturnsVisibleSummaryHits(t *testing.T) {
 	now := time.Date(2026, 6, 6, 14, 10, 0, 0, time.UTC)
 	queryEmbedding := []float32{0.1, 0.2, 0.3}
 
-	mock.ExpectQuery("SELECT .*semantic_score.*FROM canonical_memories").
+	mock.ExpectQuery("SELECT[\\s\\S]*semantic_score[\\s\\S]*FROM canonical_memories cm[\\s\\S]*JOIN embedding_rebuilds er[\\s\\S]*JOIN vector_revisions vr[\\s\\S]*vr.id = er.active_vector_revision_id[\\s\\S]*vr.status = 'active'").
 		WithArgs(scope.Tenant, scope.Project, scope.Namespace, "[0.1,0.2,0.3]", nil, nil, 5).
 		WillReturnRows(pgxmock.NewRows([]string{
 			"id", "tenant", "project", "namespace", "class", "state", "content", "created_at", "updated_at", "semantic_score",
@@ -2412,6 +3407,41 @@ func TestRepositorySearchSemanticReturnsVisibleSummaryHits(t *testing.T) {
 
 	if hits[0].Memory.Class != memory.MemoryClassSummary {
 		t.Fatalf("hits[0].Memory.Class = %q, want %q", hits[0].Memory.Class, memory.MemoryClassSummary)
+	}
+}
+
+func TestRepositorySearchSemanticExcludesMemoriesWithoutActiveCurrentRevision(t *testing.T) {
+	mock, err := pgxmock.NewPool()
+	if err != nil {
+		t.Fatalf("pgxmock.NewPool() error = %v", err)
+	}
+	defer mock.Close()
+
+	scope := memory.Scope{
+		Tenant:    "tenant-a",
+		Project:   "project-a",
+		Namespace: "namespace-a",
+	}
+
+	mock.ExpectQuery("SELECT[\\s\\S]*semantic_score[\\s\\S]*FROM canonical_memories cm[\\s\\S]*JOIN embedding_rebuilds er[\\s\\S]*JOIN vector_revisions vr[\\s\\S]*vr.id = er.active_vector_revision_id[\\s\\S]*vr.status = 'active'").
+		WithArgs(scope.Tenant, scope.Project, scope.Namespace, "[0.1,0.2,0.3]", nil, nil, 5).
+		WillReturnRows(pgxmock.NewRows([]string{
+			"id", "tenant", "project", "namespace", "class", "state", "content", "created_at", "updated_at", "semantic_score",
+		}))
+
+	repo := NewRepository(mock)
+	hits, err := repo.SearchSemantic(context.Background(), retrieval.SearchInput{
+		Scope:          scope,
+		Query:          "travel planning",
+		QueryEmbedding: []float32{0.1, 0.2, 0.3},
+		TopK:           5,
+	})
+	if err != nil {
+		t.Fatalf("SearchSemantic() error = %v", err)
+	}
+
+	if len(hits) != 0 {
+		t.Fatalf("len(hits) = %d, want 0", len(hits))
 	}
 }
 

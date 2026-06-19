@@ -305,6 +305,10 @@ func TestBuildAPIRuntimeUsesConfiguredDependencies(t *testing.T) {
 		t.Fatal("MemoryQuery = nil, want configured memory query service")
 	}
 
+	if gotDeps.GovernanceAdmin == nil {
+		t.Fatal("GovernanceAdmin = nil, want configured governance admin service")
+	}
+
 	if gotDeps.Readiness == nil {
 		t.Fatal("Readiness = nil, want readiness checker")
 	}
@@ -492,8 +496,8 @@ func TestBuildSchedulerRuntimeAssemblesMaintenanceScheduler(t *testing.T) {
 		t.Fatalf("runtime scheduler type = %T, want jobs.MaintenanceScheduler", runtime.scheduler)
 	}
 
-	if len(scheduler.Jobs) != 3 {
-		t.Fatalf("len(scheduler.Jobs) = %d, want 3", len(scheduler.Jobs))
+	if len(scheduler.Jobs) != 4 {
+		t.Fatalf("len(scheduler.Jobs) = %d, want 4", len(scheduler.Jobs))
 	}
 }
 
@@ -539,8 +543,8 @@ func TestBuildSchedulerRuntimeAssemblesScopeDispatchJobs(t *testing.T) {
 		t.Fatalf("runtime scheduler type = %T, want jobs.MaintenanceScheduler", runtime.scheduler)
 	}
 
-	if len(scheduler.Jobs) != 3 {
-		t.Fatalf("len(scheduler.Jobs) = %d, want 3", len(scheduler.Jobs))
+	if len(scheduler.Jobs) != 4 {
+		t.Fatalf("len(scheduler.Jobs) = %d, want 4", len(scheduler.Jobs))
 	}
 
 	dispatchA, ok := scheduler.Jobs[0].(jobs.ScopeDispatchJob)
@@ -553,16 +557,34 @@ func TestBuildSchedulerRuntimeAssemblesScopeDispatchJobs(t *testing.T) {
 		t.Fatalf("scheduler.Jobs[1] type = %T, want jobs.ScopeDispatchJob", scheduler.Jobs[1])
 	}
 
-	if dispatchA.ScopeBatchLimit != 25 || dispatchB.ScopeBatchLimit != 25 {
-		t.Fatalf("scope batch limits = (%d, %d), want 25", dispatchA.ScopeBatchLimit, dispatchB.ScopeBatchLimit)
+	dispatchC, ok := scheduler.Jobs[2].(jobs.ScopeDispatchJob)
+	if !ok {
+		t.Fatalf("scheduler.Jobs[2] type = %T, want jobs.ScopeDispatchJob", scheduler.Jobs[2])
 	}
 
-	if dispatchA.FallbackScope.Namespace != "namespace-a" || dispatchB.FallbackScope.Namespace != "namespace-a" {
-		t.Fatalf("fallback scopes = (%+v, %+v), want default namespace", dispatchA.FallbackScope, dispatchB.FallbackScope)
+	if dispatchA.ScopeBatchLimit != 25 || dispatchB.ScopeBatchLimit != 25 || dispatchC.ScopeBatchLimit != 25 {
+		t.Fatalf("scope batch limits = (%d, %d, %d), want 25", dispatchA.ScopeBatchLimit, dispatchB.ScopeBatchLimit, dispatchC.ScopeBatchLimit)
 	}
 
-	if _, ok := scheduler.Jobs[2].(jobs.JobExecutionCleanupJob); !ok {
-		t.Fatalf("scheduler.Jobs[2] type = %T, want jobs.JobExecutionCleanupJob", scheduler.Jobs[2])
+	if dispatchA.FallbackScope.Namespace != "namespace-a" || dispatchB.FallbackScope.Namespace != "namespace-a" || dispatchC.FallbackScope.Namespace != "namespace-a" {
+		t.Fatalf("fallback scopes = (%+v, %+v, %+v), want default namespace", dispatchA.FallbackScope, dispatchB.FallbackScope, dispatchC.FallbackScope)
+	}
+
+	if dispatchA.NameValue != "embedding_rebuild_dispatch" {
+		t.Fatalf("scheduler.Jobs[0].NameValue = %q, want embedding_rebuild_dispatch", dispatchA.NameValue)
+	}
+
+	embeddingJob, ok := dispatchA.Dispatch(dispatchA.FallbackScope).(jobs.EmbeddingRebuildJob)
+	if !ok {
+		t.Fatalf("dispatchA.Dispatch(...) type = %T, want jobs.EmbeddingRebuildJob", dispatchA.Dispatch(dispatchA.FallbackScope))
+	}
+
+	if embeddingJob.Observer == nil {
+		t.Fatal("embedding rebuild job observer = nil, want telemetry observer wiring")
+	}
+
+	if _, ok := scheduler.Jobs[3].(jobs.JobExecutionCleanupJob); !ok {
+		t.Fatalf("scheduler.Jobs[3] type = %T, want jobs.JobExecutionCleanupJob", scheduler.Jobs[3])
 	}
 }
 

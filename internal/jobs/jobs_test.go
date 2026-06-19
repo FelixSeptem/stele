@@ -6,8 +6,11 @@ import (
 	"testing"
 	"time"
 
+	"github.com/FelixSeptem/stele/internal/embedding"
 	"github.com/FelixSeptem/stele/internal/governance"
 	"github.com/FelixSeptem/stele/internal/memory"
+	"github.com/FelixSeptem/stele/internal/telemetry"
+	"github.com/jackc/pgx/v5"
 )
 
 func TestNoopWorkerStart(t *testing.T) {
@@ -187,6 +190,125 @@ func (s *stubJobExecutionCleaner) DeleteJobExecutionsBefore(ctx context.Context,
 	s.calls++
 	s.gotCutoff = cutoff
 	return s.deleted, s.err
+}
+
+type stubEmbeddingProvider struct {
+	gotInputs []embedding.ProviderRequest
+	result    embedding.ProviderResult
+	err       error
+}
+
+func (s *stubEmbeddingProvider) GenerateEmbedding(ctx context.Context, input embedding.ProviderRequest) (embedding.ProviderResult, error) {
+	s.gotInputs = append(s.gotInputs, input)
+	if s.err != nil {
+		return embedding.ProviderResult{}, s.err
+	}
+
+	return s.result, nil
+}
+
+type stubEmbeddingProviderResolver struct {
+	providers map[string]embedding.Provider
+}
+
+func (s *stubEmbeddingProviderResolver) ResolveProvider(name string) (embedding.Provider, error) {
+	provider, ok := s.providers[name]
+	if !ok {
+		return nil, errors.New("provider not registered")
+	}
+
+	return provider, nil
+}
+
+type stubEmbeddingJobsObserver struct {
+	operations []telemetry.OperationEvent
+	backlogs   []telemetry.BacklogEvent
+}
+
+func (s *stubEmbeddingJobsObserver) RecordOperation(ctx context.Context, event telemetry.OperationEvent) {
+	s.operations = append(s.operations, event)
+}
+
+func (s *stubEmbeddingJobsObserver) RecordBacklog(ctx context.Context, event telemetry.BacklogEvent) {
+	s.backlogs = append(s.backlogs, event)
+}
+
+type embeddingFailureUpdate struct {
+	record       memory.EmbeddingRebuildRecord
+	failureCause string
+	failedAt     time.Time
+}
+
+type stubEmbeddingLifecycleStore struct {
+	candidates            []memory.EmbeddingLifecycleCandidate
+	claims                []memory.EmbeddingRebuildRecord
+	recordedRebuilds      []memory.EmbeddingRebuildRecord
+	appendedRevisions     []memory.VectorRevision
+	promotedRevisions     []memory.VectorRevision
+	failedRevisions       []memory.VectorRevision
+	failureUpdates        []embeddingFailureUpdate
+	gotCandidateScope     memory.Scope
+	gotCandidateLimit     int
+	gotClaimScope         memory.Scope
+	gotClaimLimit         int
+	gotClaimAttemptedAt   time.Time
+	candidateErr          error
+	recordErr             error
+	claimErr              error
+	appendErr             error
+	promoteErr            error
+	failedRevisionErr     error
+	failureUpdateErr      error
+}
+
+func (s *stubEmbeddingLifecycleStore) ListEmbeddingLifecycleCandidates(ctx context.Context, scope memory.Scope, limit int) ([]memory.EmbeddingLifecycleCandidate, error) {
+	s.gotCandidateScope = scope
+	s.gotCandidateLimit = limit
+	if s.candidateErr != nil {
+		return nil, s.candidateErr
+	}
+
+	return s.candidates, nil
+}
+
+func (s *stubEmbeddingLifecycleStore) RecordEmbeddingRebuildRequired(ctx context.Context, record memory.EmbeddingRebuildRecord) error {
+	s.recordedRebuilds = append(s.recordedRebuilds, record)
+	return s.recordErr
+}
+
+func (s *stubEmbeddingLifecycleStore) ClaimEmbeddingRebuilds(ctx context.Context, scope memory.Scope, limit int, attemptedAt time.Time) ([]memory.EmbeddingRebuildRecord, error) {
+	s.gotClaimScope = scope
+	s.gotClaimLimit = limit
+	s.gotClaimAttemptedAt = attemptedAt
+	if s.claimErr != nil {
+		return nil, s.claimErr
+	}
+
+	return s.claims, nil
+}
+
+func (s *stubEmbeddingLifecycleStore) AppendVectorRevision(ctx context.Context, revision memory.VectorRevision) error {
+	s.appendedRevisions = append(s.appendedRevisions, revision)
+	return s.appendErr
+}
+
+func (s *stubEmbeddingLifecycleStore) PromoteVectorRevision(ctx context.Context, revision memory.VectorRevision) error {
+	s.promotedRevisions = append(s.promotedRevisions, revision)
+	return s.promoteErr
+}
+
+func (s *stubEmbeddingLifecycleStore) RecordFailedVectorRevision(ctx context.Context, record memory.EmbeddingRebuildRecord, revision memory.VectorRevision) error {
+	s.failedRevisions = append(s.failedRevisions, revision)
+	return s.failedRevisionErr
+}
+
+func (s *stubEmbeddingLifecycleStore) RecordEmbeddingRebuildFailure(ctx context.Context, record memory.EmbeddingRebuildRecord, failureCause string, failedAt time.Time) error {
+	s.failureUpdates = append(s.failureUpdates, embeddingFailureUpdate{
+		record:       record,
+		failureCause: failureCause,
+		failedAt:     failedAt,
+	})
+	return s.failureUpdateErr
 }
 
 func TestPollingWorkerStartUsesIdleAndErrorBackoff(t *testing.T) {
@@ -492,5 +614,366 @@ func TestJobExecutionCleanupJobRunDeletesOldExecutions(t *testing.T) {
 
 	if !cleaner.gotCutoff.Equal(now.Add(-24 * time.Hour)) {
 		t.Fatalf("cutoff = %v, want %v", cleaner.gotCutoff, now.Add(-24*time.Hour))
+	}
+}
+
+func TestEmbeddingRebuildJobRunQueuesBackfillAndProviderDriftCandidates(t *testing.T) {
+	scope := memory.Scope{Tenant: "tenant-a", Project: "project-a", Namespace: "namespace-a"}
+	now := time.Date(2026, 6, 14, 13, 0, 0, 0, time.UTC)
+	store := &stubEmbeddingLifecycleStore{
+		candidates: []memory.EmbeddingLifecycleCandidate{
+			{
+				MemoryID:             "mem_missing",
+				Scope:                scope,
+				Class:                memory.MemoryClassProfile,
+				CurrentSourceVersion: 2,
+				CurrentContentHash:   "sha256:missing",
+			},
+			{
+				MemoryID:             "mem_drift",
+				Scope:                scope,
+				Class:                memory.MemoryClassProfile,
+				CurrentSourceVersion: 3,
+				CurrentContentHash:   "sha256:drift",
+				RebuildStatus:        memory.EmbeddingRebuildStatusCurrent,
+				RequestedProvider:    "anthropic",
+				RequestedModel:       "text-embedding-3-small",
+				RequestedDimensions:  1536,
+				ActiveVectorRevision: "vec_active",
+				ActiveProvider:       "anthropic",
+				ActiveModel:          "text-embedding-3-small",
+				ActiveDimensions:     1536,
+			},
+			{
+				MemoryID:             "mem_pending",
+				Scope:                scope,
+				Class:                memory.MemoryClassProfile,
+				CurrentSourceVersion: 4,
+				CurrentContentHash:   "sha256:pending",
+				RebuildStatus:        memory.EmbeddingRebuildStatusPending,
+			},
+		},
+	}
+	executions := &stubExecutionStore{beginStarted: true}
+	observer := &stubEmbeddingJobsObserver{}
+	job := EmbeddingRebuildJob{
+		Scope: scope,
+		Router: embedding.Router{
+			Default: embedding.Target{
+				Provider:   "openai",
+				Model:      "text-embedding-3-small",
+				Dimensions: 1536,
+			},
+		},
+		Store:          store,
+		ExecutionStore: executions,
+		TriggerSource:  "scheduler",
+		Now:            func() time.Time { return now },
+		Cadence:        time.Hour,
+		Limit:          10,
+		NewRevisionID:  func() string { return "vec_unused" },
+		Observer:       observer,
+	}
+
+	processed, err := job.Run(context.Background())
+	if err != nil {
+		t.Fatalf("Run() error = %v", err)
+	}
+
+	if processed != 0 {
+		t.Fatalf("processed = %d, want 0 when only discovery queues work", processed)
+	}
+
+	if len(store.recordedRebuilds) != 2 {
+		t.Fatalf("len(recordedRebuilds) = %d, want 2", len(store.recordedRebuilds))
+	}
+
+	if store.recordedRebuilds[0].MemoryID != "mem_missing" || store.recordedRebuilds[1].MemoryID != "mem_drift" {
+		t.Fatalf("recordedRebuilds = %+v, want mem_missing and mem_drift", store.recordedRebuilds)
+	}
+
+	if store.recordedRebuilds[0].RequestedProvider != "openai" || store.recordedRebuilds[0].RequestedDimensions != 1536 {
+		t.Fatalf("recordedRebuilds[0] = %+v, want default routing target", store.recordedRebuilds[0])
+	}
+
+	if len(observer.backlogs) != 1 {
+		t.Fatalf("len(observer.backlogs) = %d, want 1", len(observer.backlogs))
+	}
+
+	if observer.backlogs[0].Queue != "embedding_rebuilds" || observer.backlogs[0].Pending != 2 || observer.backlogs[0].Status != "ok" {
+		t.Fatalf("backlog event = %+v, want queued embedding rebuild snapshot", observer.backlogs[0])
+	}
+
+	if len(observer.operations) != 1 {
+		t.Fatalf("len(observer.operations) = %d, want 1", len(observer.operations))
+	}
+
+	if observer.operations[0].Operation != "embedding_rebuild" || observer.operations[0].Count != 0 || observer.operations[0].Status != "ok" {
+		t.Fatalf("operation event = %+v, want successful empty embedding execution", observer.operations[0])
+	}
+}
+
+func TestEmbeddingRebuildJobRunAppendsAndPromotesGeneratedRevision(t *testing.T) {
+	scope := memory.Scope{Tenant: "tenant-a", Project: "project-a", Namespace: "namespace-a"}
+	now := time.Date(2026, 6, 14, 13, 15, 0, 0, time.UTC)
+	store := &stubEmbeddingLifecycleStore{
+		claims: []memory.EmbeddingRebuildRecord{
+			{
+				MemoryID:             "mem_embed",
+				Scope:                scope,
+				Class:                memory.MemoryClassProfile,
+				Content:              "User prefers concise answers.",
+				SourceVersion:        3,
+				ContentHash:          "sha256:abc",
+				RequestedProvider:    "openai",
+				RequestedModel:       "text-embedding-3-small",
+				RequestedDimensions:  3,
+				Status:               memory.EmbeddingRebuildStatusRebuilding,
+				RequestedAt:          now.Add(-time.Minute),
+				ActiveVectorRevision: "vec_old",
+			},
+		},
+	}
+	provider := &stubEmbeddingProvider{
+		result: embedding.ProviderResult{
+			Provider:   "openai",
+			Model:      "text-embedding-3-small",
+			Dimensions: 3,
+			Embedding:  []float32{0.1, 0.2, 0.3},
+		},
+	}
+	executions := &stubExecutionStore{beginStarted: true}
+	job := EmbeddingRebuildJob{
+		Scope:             scope,
+		Store:             store,
+		Providers:         &stubEmbeddingProviderResolver{providers: map[string]embedding.Provider{"openai": provider}},
+		ExecutionStore:    executions,
+		TriggerSource:     "scheduler",
+		Now:               func() time.Time { return now },
+		Cadence:           time.Hour,
+		Limit:             10,
+		NewRevisionID:     func() string { return "vec_new" },
+	}
+
+	processed, err := job.Run(context.Background())
+	if err != nil {
+		t.Fatalf("Run() error = %v", err)
+	}
+
+	if processed != 1 {
+		t.Fatalf("processed = %d, want 1", processed)
+	}
+
+	if len(provider.gotInputs) != 1 {
+		t.Fatalf("len(provider.gotInputs) = %d, want 1", len(provider.gotInputs))
+	}
+
+	if provider.gotInputs[0].Target.Provider != "openai" || provider.gotInputs[0].Target.Dimensions != 3 {
+		t.Fatalf("provider input = %+v, want requested target", provider.gotInputs[0].Target)
+	}
+
+	if len(store.appendedRevisions) != 1 {
+		t.Fatalf("len(appendedRevisions) = %d, want 1", len(store.appendedRevisions))
+	}
+
+	if store.appendedRevisions[0].ID != "vec_new" || store.appendedRevisions[0].Status != memory.VectorRevisionStatusGenerated {
+		t.Fatalf("appendedRevisions[0] = %+v, want generated vec_new", store.appendedRevisions[0])
+	}
+
+	if len(store.promotedRevisions) != 1 || store.promotedRevisions[0].ID != "vec_new" {
+		t.Fatalf("promotedRevisions = %+v, want vec_new promotion", store.promotedRevisions)
+	}
+
+	if executions.completeCalls != 1 {
+		t.Fatalf("completeCalls = %d, want 1", executions.completeCalls)
+	}
+}
+
+func TestEmbeddingRebuildJobRunRecordsFailedAttemptWithoutStoppingScheduler(t *testing.T) {
+	scope := memory.Scope{Tenant: "tenant-a", Project: "project-a", Namespace: "namespace-a"}
+	now := time.Date(2026, 6, 14, 13, 30, 0, 0, time.UTC)
+	store := &stubEmbeddingLifecycleStore{
+		claims: []memory.EmbeddingRebuildRecord{
+			{
+				MemoryID:            "mem_fail",
+				Scope:               scope,
+				Class:               memory.MemoryClassProfile,
+				Content:             "User prefers concise answers.",
+				SourceVersion:       5,
+				ContentHash:         "sha256:def",
+				RequestedProvider:   "openai",
+				RequestedModel:      "text-embedding-3-small",
+				RequestedDimensions: 3,
+				Status:              memory.EmbeddingRebuildStatusRebuilding,
+				RequestedAt:         now.Add(-time.Minute),
+			},
+		},
+	}
+	provider := &stubEmbeddingProvider{err: errors.New("provider unavailable")}
+	executions := &stubExecutionStore{beginStarted: true}
+	observer := &stubEmbeddingJobsObserver{}
+	job := EmbeddingRebuildJob{
+		Scope:          scope,
+		Store:          store,
+		Providers:      &stubEmbeddingProviderResolver{providers: map[string]embedding.Provider{"openai": provider}},
+		ExecutionStore: executions,
+		TriggerSource:  "scheduler",
+		Now:            func() time.Time { return now },
+		Cadence:        time.Hour,
+		Limit:          10,
+		NewRevisionID:  func() string { return "vec_failed" },
+		Observer:       observer,
+	}
+
+	processed, err := job.Run(context.Background())
+	if err != nil {
+		t.Fatalf("Run() error = %v", err)
+	}
+
+	if processed != 1 {
+		t.Fatalf("processed = %d, want 1 handled failure", processed)
+	}
+
+	if len(store.failedRevisions) != 1 {
+		t.Fatalf("len(failedRevisions) = %d, want 1", len(store.failedRevisions))
+	}
+
+	if store.failedRevisions[0].ID != "vec_failed" || store.failedRevisions[0].Status != memory.VectorRevisionStatusFailed {
+		t.Fatalf("failedRevisions[0] = %+v, want failed vec_failed", store.failedRevisions[0])
+	}
+
+	if len(store.promotedRevisions) != 0 {
+		t.Fatalf("promotedRevisions = %+v, want no promotion on failure", store.promotedRevisions)
+	}
+
+	if executions.completeCalls != 1 {
+		t.Fatalf("completeCalls = %d, want 1", executions.completeCalls)
+	}
+
+	if len(observer.backlogs) != 1 {
+		t.Fatalf("len(observer.backlogs) = %d, want 1", len(observer.backlogs))
+	}
+
+	if observer.backlogs[0].Queue != "embedding_rebuilds" || observer.backlogs[0].Pending != 0 || observer.backlogs[0].Status != "ok" {
+		t.Fatalf("backlog event = %+v, want zero newly-queued embedding backlog snapshot", observer.backlogs[0])
+	}
+
+	if len(observer.operations) != 1 {
+		t.Fatalf("len(observer.operations) = %d, want 1", len(observer.operations))
+	}
+
+	if observer.operations[0].Operation != "embedding_rebuild" || observer.operations[0].Count != 1 || observer.operations[0].Status != "ok" {
+		t.Fatalf("operation event = %+v, want handled failed-attempt execution", observer.operations[0])
+	}
+}
+
+func TestEmbeddingRebuildJobRunEmitsBacklogErrorTelemetryWhenCandidateDiscoveryFails(t *testing.T) {
+	scope := memory.Scope{Tenant: "tenant-a", Project: "project-a", Namespace: "namespace-a"}
+	now := time.Date(2026, 6, 14, 14, 0, 0, 0, time.UTC)
+	store := &stubEmbeddingLifecycleStore{
+		candidateErr: errors.New("candidate listing unavailable"),
+	}
+	executions := &stubExecutionStore{beginStarted: true}
+	observer := &stubEmbeddingJobsObserver{}
+
+	job := EmbeddingRebuildJob{
+		Scope:          scope,
+		Store:          store,
+		ExecutionStore: executions,
+		TriggerSource:  "scheduler",
+		Now:            func() time.Time { return now },
+		Cadence:        time.Hour,
+		Limit:          10,
+		NewRevisionID:  func() string { return "vec_unused" },
+		Observer:       observer,
+	}
+
+	processed, err := job.Run(context.Background())
+	if err == nil {
+		t.Fatal("Run() error = nil, want candidate discovery failure")
+	}
+
+	if processed != 0 {
+		t.Fatalf("processed = %d, want 0", processed)
+	}
+
+	if len(observer.backlogs) != 1 {
+		t.Fatalf("len(observer.backlogs) = %d, want 1", len(observer.backlogs))
+	}
+
+	if observer.backlogs[0].Status != "error" || observer.backlogs[0].Error != "candidate listing unavailable" {
+		t.Fatalf("backlog event = %+v, want error backlog telemetry", observer.backlogs[0])
+	}
+
+	if len(observer.operations) != 1 {
+		t.Fatalf("len(observer.operations) = %d, want 1", len(observer.operations))
+	}
+
+	if observer.operations[0].Status != "error" || observer.operations[0].Operation != "embedding_rebuild" {
+		t.Fatalf("operation event = %+v, want error embedding execution telemetry", observer.operations[0])
+	}
+}
+
+func TestEmbeddingRebuildJobRunTreatsStalePromotionAsHandledWithoutFailure(t *testing.T) {
+	scope := memory.Scope{Tenant: "tenant-a", Project: "project-a", Namespace: "namespace-a"}
+	now := time.Date(2026, 6, 14, 13, 45, 0, 0, time.UTC)
+	store := &stubEmbeddingLifecycleStore{
+		claims: []memory.EmbeddingRebuildRecord{
+			{
+				MemoryID:            "mem_stale",
+				Scope:               scope,
+				Class:               memory.MemoryClassProfile,
+				Content:             "User prefers concise answers.",
+				SourceVersion:       6,
+				ContentHash:         "sha256:stale",
+				RequestedProvider:   "openai",
+				RequestedModel:      "text-embedding-3-small",
+				RequestedDimensions: 3,
+				Status:              memory.EmbeddingRebuildStatusRebuilding,
+				RequestedAt:         now.Add(-time.Minute),
+			},
+		},
+		promoteErr: pgx.ErrNoRows,
+	}
+	provider := &stubEmbeddingProvider{
+		result: embedding.ProviderResult{
+			Provider:   "openai",
+			Model:      "text-embedding-3-small",
+			Dimensions: 3,
+			Embedding:  []float32{0.1, 0.2, 0.3},
+		},
+	}
+	executions := &stubExecutionStore{beginStarted: true}
+	job := EmbeddingRebuildJob{
+		Scope:          scope,
+		Store:          store,
+		Providers:      &stubEmbeddingProviderResolver{providers: map[string]embedding.Provider{"openai": provider}},
+		ExecutionStore: executions,
+		TriggerSource:  "scheduler",
+		Now:            func() time.Time { return now },
+		Cadence:        time.Hour,
+		Limit:          10,
+		NewRevisionID:  func() string { return "vec_stale" },
+	}
+
+	processed, err := job.Run(context.Background())
+	if err != nil {
+		t.Fatalf("Run() error = %v", err)
+	}
+
+	if processed != 1 {
+		t.Fatalf("processed = %d, want 1 handled stale promotion", processed)
+	}
+
+	if len(store.appendedRevisions) != 1 {
+		t.Fatalf("len(appendedRevisions) = %d, want 1", len(store.appendedRevisions))
+	}
+
+	if len(store.failureUpdates) != 0 || len(store.failedRevisions) != 0 {
+		t.Fatalf("failure state = updates:%+v failed:%+v, want no failure recording for stale promotion", store.failureUpdates, store.failedRevisions)
+	}
+
+	if executions.completeCalls != 1 {
+		t.Fatalf("completeCalls = %d, want 1", executions.completeCalls)
 	}
 }

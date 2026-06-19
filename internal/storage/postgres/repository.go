@@ -2,7 +2,9 @@ package postgres
 
 import (
 	"context"
+	"crypto/sha256"
 	"database/sql"
+	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -10,6 +12,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/FelixSeptem/stele/internal/embedding"
 	"github.com/FelixSeptem/stele/internal/governance"
 	"github.com/FelixSeptem/stele/internal/jobs"
 	"github.com/FelixSeptem/stele/internal/retrieval"
@@ -32,15 +35,31 @@ type transactionStarter interface {
 }
 
 type Repository struct {
-	db queryRower
-	tx transactionStarter
+	db              queryRower
+	tx              transactionStarter
+	embeddingRouter embedding.Router
+}
+
+type governanceRawEventScanner interface {
+	Scan(dest ...any) error
 }
 
 func NewRepository(db interface {
 	queryRower
 	transactionStarter
 }) *Repository {
-	return &Repository{db: db, tx: db}
+	return NewRepositoryWithEmbeddingRouter(db, embedding.Router{})
+}
+
+func NewRepositoryWithEmbeddingRouter(db interface {
+	queryRower
+	transactionStarter
+}, router embedding.Router) *Repository {
+	return &Repository{
+		db:              db,
+		tx:              db,
+		embeddingRouter: router,
+	}
 }
 
 func (r *Repository) WriteRawEvent(ctx context.Context, input memory.IngestEventInput) (memory.RawEvent, error) {
@@ -483,6 +502,396 @@ FROM raw_events
 	}
 	status.ObservedAt = now
 	return status, nil
+}
+
+func (r *Repository) ListGovernanceRawEvents(ctx context.Context, input governance.ListGovernanceRawEventsInput) (governance.GovernanceRawEventPage, error) {
+	if err := input.Validate(); err != nil {
+		return governance.GovernanceRawEventPage{}, err
+	}
+
+	var cursorCreatedAt any
+	var cursorRawEventID any
+	if strings.TrimSpace(input.Cursor) != "" {
+		cursor, err := governance.DecodeGovernanceRawEventCursor(input.Cursor)
+		if err != nil {
+			return governance.GovernanceRawEventPage{}, err
+		}
+		cursorCreatedAt = cursor.CreatedAt
+		cursorRawEventID = cursor.RawEventID
+	}
+
+	const query = `
+SELECT
+	id,
+	tenant,
+	project,
+	namespace,
+	event_type,
+	content,
+	source_timestamp,
+	created_at,
+	governance_attempt,
+	governance_worker_id,
+	governance_claimed_at,
+	governance_lease_until,
+	governance_last_failed_at,
+	governance_last_error,
+	governance_next_attempt_at,
+	governance_exhausted_at,
+	governance_processed_at
+FROM raw_events
+WHERE tenant = $1
+	AND project = $2
+	AND namespace = $3
+	AND ($4::text = '' OR event_type = $4)
+	AND (
+		$5::text = ''
+		OR ($5 = 'processed' AND governance_processed_at IS NOT NULL)
+		OR ($5 = 'exhausted' AND governance_processed_at IS NULL AND governance_exhausted_at IS NOT NULL)
+		OR ($5 = 'leased' AND governance_processed_at IS NULL AND governance_exhausted_at IS NULL AND governance_lease_until > $13)
+		OR ($5 = 'retry_wait' AND governance_processed_at IS NULL AND governance_exhausted_at IS NULL AND (governance_lease_until IS NULL OR governance_lease_until <= $13) AND governance_next_attempt_at > $13)
+		OR ($5 = 'pending' AND governance_processed_at IS NULL AND governance_exhausted_at IS NULL AND (governance_lease_until IS NULL OR governance_lease_until <= $13) AND (governance_next_attempt_at IS NULL OR governance_next_attempt_at <= $13))
+	)
+	AND ($6::int IS NULL OR governance_attempt >= $6)
+	AND ($7::int IS NULL OR governance_attempt <= $7)
+	AND ($8::timestamptz IS NULL OR governance_last_failed_at >= $8)
+	AND ($9::timestamptz IS NULL OR governance_last_failed_at <= $9)
+	AND ($10::timestamptz IS NULL OR governance_next_attempt_at >= $10)
+	AND ($11::timestamptz IS NULL OR governance_next_attempt_at <= $11)
+	AND (
+		$12::timestamptz IS NULL
+		OR created_at < $12
+		OR (created_at = $12 AND id < $14)
+	)
+ORDER BY created_at DESC, id DESC
+LIMIT $15
+`
+
+	rows, err := r.db.Query(
+		ctx,
+		query,
+		input.Scope.Tenant,
+		input.Scope.Project,
+		input.Scope.Namespace,
+		strings.TrimSpace(input.EventType),
+		string(input.State),
+		nullableInt(input.AttemptGTE),
+		nullableInt(input.AttemptLTE),
+		nullableTime(input.FailedFrom),
+		nullableTime(input.FailedTo),
+		nullableTime(input.NextAttemptFrom),
+		nullableTime(input.NextAttemptTo),
+		cursorCreatedAt,
+		input.Now.UTC(),
+		cursorRawEventID,
+		input.Limit+1,
+	)
+	if err != nil {
+		return governance.GovernanceRawEventPage{}, fmt.Errorf("list governance raw events: %w", err)
+	}
+	defer rows.Close()
+
+	items := make([]governance.GovernanceRawEvent, 0, input.Limit+1)
+	for rows.Next() {
+		resource, _, err := scanGovernanceRawEvent(rows, input.Now.UTC())
+		if err != nil {
+			return governance.GovernanceRawEventPage{}, err
+		}
+		items = append(items, resource)
+	}
+	if err := rows.Err(); err != nil {
+		return governance.GovernanceRawEventPage{}, fmt.Errorf("iterate governance raw events: %w", err)
+	}
+
+	page := governance.GovernanceRawEventPage{Items: items}
+	if len(items) > input.Limit {
+		page.Items = items[:input.Limit]
+		last := page.Items[len(page.Items)-1]
+		page.NextCursor = governance.GovernanceRawEventCursor{
+			CreatedAt:  last.CreatedAt,
+			RawEventID: last.ID,
+		}.Encode()
+	}
+
+	return page, nil
+}
+
+func (r *Repository) ReadGovernanceRawEvent(ctx context.Context, input governance.ReadGovernanceRawEventInput) (governance.GovernanceRawEvent, error) {
+	if err := input.Validate(); err != nil {
+		return governance.GovernanceRawEvent{}, err
+	}
+
+	const query = `
+SELECT
+	id,
+	tenant,
+	project,
+	namespace,
+	event_type,
+	content,
+	source_timestamp,
+	created_at,
+	governance_attempt,
+	governance_worker_id,
+	governance_claimed_at,
+	governance_lease_until,
+	governance_last_failed_at,
+	governance_last_error,
+	governance_next_attempt_at,
+	governance_exhausted_at,
+	governance_processed_at
+FROM raw_events
+WHERE id = $1
+	AND tenant = $2
+	AND project = $3
+	AND namespace = $4
+`
+
+	resource, _, err := scanGovernanceRawEvent(
+		r.db.QueryRow(ctx, query, input.RawEventID, input.Scope.Tenant, input.Scope.Project, input.Scope.Namespace),
+		input.Now.UTC(),
+	)
+	if err != nil {
+		return governance.GovernanceRawEvent{}, fmt.Errorf("read governance raw event: %w", err)
+	}
+
+	return resource, nil
+}
+
+func (r *Repository) ListGovernanceRecoveryHistory(ctx context.Context, input governance.ListGovernanceRecoveryHistoryInput) ([]governance.GovernanceRecoveryRecord, error) {
+	if err := input.Validate(); err != nil {
+		return nil, err
+	}
+
+	const existsQuery = `
+SELECT 1
+FROM raw_events
+WHERE id = $1
+	AND tenant = $2
+	AND project = $3
+	AND namespace = $4
+`
+
+	if err := r.db.QueryRow(ctx, existsQuery, input.RawEventID, input.Scope.Tenant, input.Scope.Project, input.Scope.Namespace).Scan(new(int)); err != nil {
+		return nil, fmt.Errorf("read governance recovery history target: %w", err)
+	}
+
+	const query = `
+SELECT
+	id,
+	raw_event_id,
+	tenant,
+	project,
+	namespace,
+	action,
+	actor,
+	reason,
+	before_snapshot,
+	after_snapshot,
+	created_at
+FROM governance_recovery_ledger
+WHERE raw_event_id = $1
+	AND tenant = $2
+	AND project = $3
+	AND namespace = $4
+ORDER BY created_at DESC, id DESC
+`
+
+	rows, err := r.db.Query(ctx, query, input.RawEventID, input.Scope.Tenant, input.Scope.Project, input.Scope.Namespace)
+	if err != nil {
+		return nil, fmt.Errorf("list governance recovery history: %w", err)
+	}
+	defer rows.Close()
+
+	records := make([]governance.GovernanceRecoveryRecord, 0)
+	for rows.Next() {
+		record, err := scanGovernanceRecoveryRecord(rows)
+		if err != nil {
+			return nil, err
+		}
+		records = append(records, record)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("iterate governance recovery history: %w", err)
+	}
+
+	return records, nil
+}
+
+func (r *Repository) ApplyGovernanceRecovery(ctx context.Context, input governance.ApplyGovernanceRecoveryInput) (governance.GovernanceRecoveryOutcome, error) {
+	if err := input.Validate(); err != nil {
+		return governance.GovernanceRecoveryOutcome{}, err
+	}
+
+	tx, err := r.tx.BeginTx(ctx, pgx.TxOptions{})
+	if err != nil {
+		return governance.GovernanceRecoveryOutcome{}, fmt.Errorf("begin governance recovery transaction: %w", err)
+	}
+	defer tx.Rollback(ctx)
+
+	const selectQuery = `
+SELECT
+	id,
+	tenant,
+	project,
+	namespace,
+	event_type,
+	content,
+	source_timestamp,
+	created_at,
+	governance_attempt,
+	governance_worker_id,
+	governance_claimed_at,
+	governance_lease_until,
+	governance_last_failed_at,
+	governance_last_error,
+	governance_next_attempt_at,
+	governance_exhausted_at,
+	governance_processed_at
+FROM raw_events
+WHERE id = $1
+	AND tenant = $2
+	AND project = $3
+	AND namespace = $4
+FOR UPDATE
+`
+
+	currentResource, currentSnapshot, err := scanGovernanceRawEvent(
+		tx.QueryRow(ctx, selectQuery, input.RawEventID, input.Scope.Tenant, input.Scope.Project, input.Scope.Namespace),
+		input.AppliedAt.UTC(),
+	)
+	if err != nil {
+		return governance.GovernanceRecoveryOutcome{}, fmt.Errorf("read governance recovery target: %w", err)
+	}
+
+	nextSnapshot, err := governance.ApplyGovernanceRecovery(currentSnapshot, input)
+	if err != nil {
+		return governance.GovernanceRecoveryOutcome{}, err
+	}
+
+	const updateQuery = `
+UPDATE raw_events
+SET
+	governance_attempt = $5,
+	governance_worker_id = $6,
+	governance_claimed_at = $7,
+	governance_lease_until = $8,
+	governance_last_failed_at = $9,
+	governance_last_error = $10,
+	governance_next_attempt_at = $11,
+	governance_exhausted_at = $12,
+	governance_processed_at = $13
+WHERE id = $1
+	AND tenant = $2
+	AND project = $3
+	AND namespace = $4
+RETURNING
+	id,
+	tenant,
+	project,
+	namespace,
+	event_type,
+	content,
+	source_timestamp,
+	created_at,
+	governance_attempt,
+	governance_worker_id,
+	governance_claimed_at,
+	governance_lease_until,
+	governance_last_failed_at,
+	governance_last_error,
+	governance_next_attempt_at,
+	governance_exhausted_at,
+	governance_processed_at
+`
+
+	updatedResource, updatedSnapshot, err := scanGovernanceRawEvent(
+		tx.QueryRow(
+			ctx,
+			updateQuery,
+			input.RawEventID,
+			input.Scope.Tenant,
+			input.Scope.Project,
+			input.Scope.Namespace,
+			nextSnapshot.Attempt,
+			nullableString(nextSnapshot.WorkerID),
+			nullableTime(nextSnapshot.ClaimedAt),
+			nullableTime(nextSnapshot.LeaseUntil),
+			nullableTime(nextSnapshot.LastFailedAt),
+			nullableString(nextSnapshot.LastError),
+			nullableTime(nextSnapshot.NextAttemptAt),
+			nullableTime(nextSnapshot.ExhaustedAt),
+			nullableTime(nextSnapshot.ProcessedAt),
+		),
+		input.AppliedAt.UTC(),
+	)
+	if err != nil {
+		return governance.GovernanceRecoveryOutcome{}, fmt.Errorf("update governance recovery target: %w", err)
+	}
+
+	beforeSnapshotJSON, err := marshalGovernanceRecoverySnapshot(governance.NewGovernanceRecoverySnapshot(currentSnapshot, input.AppliedAt.UTC()))
+	if err != nil {
+		return governance.GovernanceRecoveryOutcome{}, err
+	}
+	afterSnapshotJSON, err := marshalGovernanceRecoverySnapshot(governance.NewGovernanceRecoverySnapshot(updatedSnapshot, input.AppliedAt.UTC()))
+	if err != nil {
+		return governance.GovernanceRecoveryOutcome{}, err
+	}
+
+	recovery := governance.GovernanceRecoveryRecord{
+		ID:         uuid.NewString(),
+		RawEventID: currentResource.ID,
+		Scope:      input.Scope,
+		Action:     input.Action,
+		Actor:      input.Actor,
+		Reason:     input.Reason,
+		Before:     governance.NewGovernanceRecoverySnapshot(currentSnapshot, input.AppliedAt.UTC()),
+		After:      governance.NewGovernanceRecoverySnapshot(updatedSnapshot, input.AppliedAt.UTC()),
+		OccurredAt: input.AppliedAt.UTC(),
+	}
+
+	const insertLedgerQuery = `
+INSERT INTO governance_recovery_ledger (
+	id,
+	raw_event_id,
+	tenant,
+	project,
+	namespace,
+	action,
+	actor,
+	reason,
+	before_snapshot,
+	after_snapshot,
+	created_at
+) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)
+`
+
+	if _, err := tx.Exec(
+		ctx,
+		insertLedgerQuery,
+		recovery.ID,
+		recovery.RawEventID,
+		recovery.Scope.Tenant,
+		recovery.Scope.Project,
+		recovery.Scope.Namespace,
+		string(recovery.Action),
+		recovery.Actor,
+		recovery.Reason,
+		beforeSnapshotJSON,
+		afterSnapshotJSON,
+		recovery.OccurredAt,
+	); err != nil {
+		return governance.GovernanceRecoveryOutcome{}, fmt.Errorf("insert governance recovery ledger: %w", err)
+	}
+
+	if err := tx.Commit(ctx); err != nil {
+		return governance.GovernanceRecoveryOutcome{}, fmt.Errorf("commit governance recovery transaction: %w", err)
+	}
+
+	return governance.GovernanceRecoveryOutcome{
+		RawEvent: updatedResource,
+		Recovery: recovery,
+	}, nil
 }
 
 func (r *Repository) ListMaintenanceScopes(ctx context.Context, limit int) ([]memory.Scope, error) {
@@ -1469,6 +1878,10 @@ RETURNING id, tenant, project, namespace, class, state, content, created_at, upd
 		return memory.CanonicalMemory{}, err
 	}
 
+	if err := r.recordEmbeddingRebuildRequiredTx(ctx, tx, canonical, versionNumber, record.CreatedAt); err != nil {
+		return memory.CanonicalMemory{}, err
+	}
+
 	if err := tx.Commit(ctx); err != nil {
 		return memory.CanonicalMemory{}, fmt.Errorf("commit manual create transaction: %w", err)
 	}
@@ -1543,6 +1956,10 @@ RETURNING id, tenant, project, namespace, class, state, content, created_at, upd
 	if err := writeManualProvenance(ctx, tx, record.Scope, record.MemoryID, "manual_update_memory", record.RequestID, record.Actor, record.UpdatedAt, map[string]any{
 		"reason": record.Reason,
 	}); err != nil {
+		return memory.CanonicalMemory{}, err
+	}
+
+	if err := r.recordEmbeddingRebuildRequiredTx(ctx, tx, canonical, currentVersion+1, record.UpdatedAt); err != nil {
 		return memory.CanonicalMemory{}, err
 	}
 
@@ -1651,6 +2068,10 @@ RETURNING id, tenant, project, namespace, class, state, content, created_at, upd
 		return memory.CanonicalMemory{}, err
 	}
 
+	if err := r.recordEmbeddingRebuildRequiredTx(ctx, tx, canonical, currentVersion+1, record.AppliedAt); err != nil {
+		return memory.CanonicalMemory{}, err
+	}
+
 	if err := tx.Commit(ctx); err != nil {
 		return memory.CanonicalMemory{}, fmt.Errorf("commit manual merge transaction: %w", err)
 	}
@@ -1736,11 +2157,665 @@ RETURNING id, tenant, project, namespace, class, state, content, created_at, upd
 		return memory.CanonicalMemory{}, err
 	}
 
+	if err := r.recordEmbeddingRebuildRequiredTx(ctx, tx, canonical, currentVersion+1, record.AppliedAt); err != nil {
+		return memory.CanonicalMemory{}, err
+	}
+
 	if err := tx.Commit(ctx); err != nil {
 		return memory.CanonicalMemory{}, fmt.Errorf("commit manual reclassify transaction: %w", err)
 	}
 
 	return canonical, nil
+}
+
+func (r *Repository) RecordEmbeddingRebuildRequired(ctx context.Context, record memory.EmbeddingRebuildRecord) error {
+	return recordEmbeddingRebuildRequired(ctx, r.db, record)
+}
+
+func recordEmbeddingRebuildRequired(ctx context.Context, db queryRower, record memory.EmbeddingRebuildRecord) error {
+	const query = `
+INSERT INTO embedding_rebuilds (
+	memory_id,
+	tenant,
+	project,
+	namespace,
+	source_version,
+	content_hash,
+	requested_provider,
+	requested_model,
+	requested_dimensions,
+	status,
+	failure_reason,
+	requested_at,
+	last_attempted_at,
+	active_vector_revision_id
+) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14)
+ON CONFLICT (memory_id) DO UPDATE SET
+	tenant = EXCLUDED.tenant,
+	project = EXCLUDED.project,
+	namespace = EXCLUDED.namespace,
+	source_version = EXCLUDED.source_version,
+	content_hash = EXCLUDED.content_hash,
+	requested_provider = EXCLUDED.requested_provider,
+	requested_model = EXCLUDED.requested_model,
+	requested_dimensions = EXCLUDED.requested_dimensions,
+	status = EXCLUDED.status,
+	failure_reason = EXCLUDED.failure_reason,
+	requested_at = EXCLUDED.requested_at,
+	last_attempted_at = EXCLUDED.last_attempted_at,
+	active_vector_revision_id = COALESCE(EXCLUDED.active_vector_revision_id, embedding_rebuilds.active_vector_revision_id)
+`
+
+	if _, err := db.Exec(
+		ctx,
+		query,
+		record.MemoryID,
+		record.Scope.Tenant,
+		record.Scope.Project,
+		record.Scope.Namespace,
+		record.SourceVersion,
+		record.ContentHash,
+		record.RequestedProvider,
+		record.RequestedModel,
+		record.RequestedDimensions,
+		record.Status,
+		nullableString(record.FailureReason),
+		record.RequestedAt,
+		nullableTime(record.LastAttemptedAt),
+		nullableString(record.ActiveVectorRevision),
+	); err != nil {
+		return fmt.Errorf("record embedding rebuild required: %w", err)
+	}
+
+	return nil
+}
+
+func (r *Repository) AppendVectorRevision(ctx context.Context, revision memory.VectorRevision) error {
+	const query = `
+INSERT INTO vector_revisions (
+	id,
+	memory_id,
+	tenant,
+	project,
+	namespace,
+	source_version,
+	content_hash,
+	provider,
+	model,
+	dimensions,
+	embedding,
+	status,
+	failure_reason,
+	superseded_by,
+	generated_at,
+	activated_at,
+	last_rebuild_request_at
+) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11::vector, $12, $13, $14, $15, $16, $17)
+`
+
+	if _, err := r.db.Exec(
+		ctx,
+		query,
+		revision.ID,
+		revision.MemoryID,
+		revision.Scope.Tenant,
+		revision.Scope.Project,
+		revision.Scope.Namespace,
+	revision.SourceVersion,
+	revision.ContentHash,
+	revision.Provider,
+	revision.Model,
+	revision.Dimensions,
+	nullableVectorLiteral(revision.Embedding),
+	revision.Status,
+	nullableString(revision.FailureReason),
+	nullableString(revision.SupersededBy),
+	revision.GeneratedAt,
+		nullableTime(revision.ActivatedAt),
+		nullableTime(revision.LastRebuildRequest),
+	); err != nil {
+		return fmt.Errorf("append vector revision: %w", err)
+	}
+
+	return nil
+}
+
+func (r *Repository) PromoteVectorRevision(ctx context.Context, revision memory.VectorRevision) error {
+	tx, err := r.tx.BeginTx(ctx, pgx.TxOptions{})
+	if err != nil {
+		return fmt.Errorf("begin vector promotion transaction: %w", err)
+	}
+	defer tx.Rollback(ctx)
+
+	currentCanonical, err := readScopedCanonicalMemory(ctx, tx, revision.Scope, revision.MemoryID)
+	if err != nil {
+		return err
+	}
+	currentVersion, err := currentMemoryVersion(ctx, tx, revision.MemoryID)
+	if err != nil {
+		return err
+	}
+	if currentVersion != revision.SourceVersion || contentHash(currentCanonical.Content) != revision.ContentHash {
+		return pgx.ErrNoRows
+	}
+
+	const supersedeQuery = `
+UPDATE vector_revisions
+SET status = $5,
+	superseded_by = $6,
+	activated_at = $7
+WHERE memory_id = $1
+	AND tenant = $2
+	AND project = $3
+	AND namespace = $4
+	AND status = 'active'
+`
+
+	if _, err := tx.Exec(
+		ctx,
+		supersedeQuery,
+		revision.MemoryID,
+		revision.Scope.Tenant,
+		revision.Scope.Project,
+		revision.Scope.Namespace,
+		memory.VectorRevisionStatusSuperseded,
+		revision.ID,
+		revision.ActivatedAt,
+	); err != nil {
+		return fmt.Errorf("supersede active vector revision: %w", err)
+	}
+
+	const activateQuery = `
+UPDATE vector_revisions
+SET status = $7,
+	activated_at = $8
+WHERE id = $1
+	AND memory_id = $2
+	AND tenant = $3
+	AND project = $4
+	AND namespace = $5
+	AND source_version = $6
+	AND content_hash = $9
+`
+
+	tag, err := tx.Exec(
+		ctx,
+		activateQuery,
+		revision.ID,
+		revision.MemoryID,
+		revision.Scope.Tenant,
+		revision.Scope.Project,
+		revision.Scope.Namespace,
+		revision.SourceVersion,
+		memory.VectorRevisionStatusActive,
+		revision.ActivatedAt,
+		revision.ContentHash,
+	)
+	if err != nil {
+		return fmt.Errorf("activate vector revision: %w", err)
+	}
+	if tag.RowsAffected() == 0 {
+		return pgx.ErrNoRows
+	}
+
+	const mirrorQuery = `
+UPDATE canonical_memories
+SET embedding = $5::vector,
+	updated_at = $6
+WHERE id = $1
+	AND tenant = $2
+	AND project = $3
+	AND namespace = $4
+`
+
+	if _, err := tx.Exec(
+		ctx,
+		mirrorQuery,
+		revision.MemoryID,
+		revision.Scope.Tenant,
+		revision.Scope.Project,
+		revision.Scope.Namespace,
+		vectorLiteral(revision.Embedding),
+		revision.ActivatedAt,
+	); err != nil {
+		return fmt.Errorf("mirror active vector onto canonical memory: %w", err)
+	}
+
+	const rebuildQuery = `
+UPDATE embedding_rebuilds
+SET
+	active_vector_revision_id = $5,
+	status = $6,
+	failure_reason = NULL
+WHERE memory_id = $1
+	AND tenant = $2
+	AND project = $3
+	AND namespace = $4
+`
+
+	if _, err := tx.Exec(
+		ctx,
+		rebuildQuery,
+		revision.MemoryID,
+		revision.Scope.Tenant,
+		revision.Scope.Project,
+		revision.Scope.Namespace,
+		revision.ID,
+		memory.EmbeddingRebuildStatusCurrent,
+	); err != nil {
+		return fmt.Errorf("update embedding rebuild active revision: %w", err)
+	}
+
+	if err := tx.Commit(ctx); err != nil {
+		return fmt.Errorf("commit vector promotion transaction: %w", err)
+	}
+
+	return nil
+}
+
+func (r *Repository) ListEligibleEmbeddingRebuilds(ctx context.Context, limit int) ([]memory.EmbeddingRebuildRecord, error) {
+	if limit <= 0 {
+		return nil, fmt.Errorf("limit must be greater than zero")
+	}
+
+	const query = `
+SELECT
+	er.memory_id,
+	er.tenant,
+	er.project,
+	er.namespace,
+	er.source_version,
+	er.content_hash,
+	er.requested_provider,
+	er.requested_model,
+	er.requested_dimensions,
+	er.status,
+	er.failure_reason,
+	er.requested_at,
+	er.last_attempted_at,
+	er.active_vector_revision_id
+FROM embedding_rebuilds er
+JOIN canonical_memories cm
+	ON cm.id = er.memory_id
+	AND cm.tenant = er.tenant
+	AND cm.project = er.project
+	AND cm.namespace = er.namespace
+WHERE er.status = $1
+	AND cm.state NOT IN ('suppressed', 'forgotten', 'deleted')
+ORDER BY requested_at ASC
+LIMIT $2
+`
+
+	rows, err := r.db.Query(ctx, query, memory.EmbeddingRebuildStatusPending, limit)
+	if err != nil {
+		return nil, fmt.Errorf("list eligible embedding rebuilds: %w", err)
+	}
+	defer rows.Close()
+
+	records := make([]memory.EmbeddingRebuildRecord, 0)
+	for rows.Next() {
+		var record memory.EmbeddingRebuildRecord
+		var failureReason sql.NullString
+		var lastAttemptedAt sql.NullTime
+		var activeVectorRevision sql.NullString
+		if err := rows.Scan(
+			&record.MemoryID,
+			&record.Scope.Tenant,
+			&record.Scope.Project,
+			&record.Scope.Namespace,
+			&record.SourceVersion,
+			&record.ContentHash,
+			&record.RequestedProvider,
+			&record.RequestedModel,
+			&record.RequestedDimensions,
+			&record.Status,
+			&failureReason,
+			&record.RequestedAt,
+			&lastAttemptedAt,
+			&activeVectorRevision,
+		); err != nil {
+			return nil, fmt.Errorf("scan eligible embedding rebuild: %w", err)
+		}
+		if failureReason.Valid {
+			record.FailureReason = failureReason.String
+		}
+		if lastAttemptedAt.Valid {
+			record.LastAttemptedAt = lastAttemptedAt.Time
+		}
+		if activeVectorRevision.Valid {
+			record.ActiveVectorRevision = activeVectorRevision.String
+		}
+		records = append(records, record)
+	}
+
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("iterate eligible embedding rebuilds: %w", err)
+	}
+
+	return records, nil
+}
+
+func (r *Repository) ListEmbeddingLifecycleCandidates(ctx context.Context, scope memory.Scope, limit int) ([]memory.EmbeddingLifecycleCandidate, error) {
+	if err := scope.Validate(); err != nil {
+		return nil, err
+	}
+	if limit <= 0 {
+		return nil, fmt.Errorf("limit must be greater than zero")
+	}
+
+	const query = `
+SELECT
+	cm.id,
+	cm.tenant,
+	cm.project,
+	cm.namespace,
+	cm.class,
+	cm.content,
+	COALESCE(mv.version, 0) AS current_version,
+	er.status,
+	er.source_version,
+	er.content_hash,
+	er.requested_provider,
+	er.requested_model,
+	er.requested_dimensions,
+	er.active_vector_revision_id,
+	vr.provider,
+	vr.model,
+	vr.dimensions
+FROM canonical_memories cm
+LEFT JOIN (
+	SELECT memory_id, MAX(version) AS version
+	FROM memory_versions
+	GROUP BY memory_id
+) mv ON mv.memory_id = cm.id
+LEFT JOIN embedding_rebuilds er
+	ON er.memory_id = cm.id
+	AND er.tenant = cm.tenant
+	AND er.project = cm.project
+	AND er.namespace = cm.namespace
+LEFT JOIN vector_revisions vr
+	ON vr.id = er.active_vector_revision_id
+	AND vr.memory_id = cm.id
+	AND vr.tenant = cm.tenant
+	AND vr.project = cm.project
+	AND vr.namespace = cm.namespace
+WHERE cm.tenant = $1
+	AND cm.project = $2
+	AND cm.namespace = $3
+	AND cm.state NOT IN ('suppressed', 'forgotten', 'deleted')
+	AND cm.class IN ('profile', 'episodic', 'procedural', 'summary')
+ORDER BY cm.updated_at ASC, cm.id ASC
+LIMIT $4
+`
+
+	rows, err := r.db.Query(ctx, query, scope.Tenant, scope.Project, scope.Namespace, limit)
+	if err != nil {
+		return nil, fmt.Errorf("list embedding lifecycle candidates: %w", err)
+	}
+	defer rows.Close()
+
+	candidates := make([]memory.EmbeddingLifecycleCandidate, 0)
+	for rows.Next() {
+		var candidate memory.EmbeddingLifecycleCandidate
+		var content string
+		var rebuildStatus sql.NullString
+		var rebuildSourceVersion sql.NullInt64
+		var rebuildContentHash sql.NullString
+		var requestedProvider sql.NullString
+		var requestedModel sql.NullString
+		var requestedDimensions sql.NullInt32
+		var activeVectorRevision sql.NullString
+		var activeProvider sql.NullString
+		var activeModel sql.NullString
+		var activeDimensions sql.NullInt32
+		if err := rows.Scan(
+			&candidate.MemoryID,
+			&candidate.Scope.Tenant,
+			&candidate.Scope.Project,
+			&candidate.Scope.Namespace,
+			&candidate.Class,
+			&content,
+			&candidate.CurrentSourceVersion,
+			&rebuildStatus,
+			&rebuildSourceVersion,
+			&rebuildContentHash,
+			&requestedProvider,
+			&requestedModel,
+			&requestedDimensions,
+			&activeVectorRevision,
+			&activeProvider,
+			&activeModel,
+			&activeDimensions,
+		); err != nil {
+			return nil, fmt.Errorf("scan embedding lifecycle candidate: %w", err)
+		}
+
+		candidate.CurrentContentHash = contentHash(content)
+		if rebuildStatus.Valid {
+			candidate.RebuildStatus = memory.EmbeddingRebuildStatus(rebuildStatus.String)
+		}
+		if rebuildSourceVersion.Valid && rebuildContentHash.Valid &&
+			rebuildSourceVersion.Int64 == candidate.CurrentSourceVersion &&
+			rebuildContentHash.String == candidate.CurrentContentHash {
+			if requestedProvider.Valid {
+				candidate.RequestedProvider = requestedProvider.String
+			}
+			if requestedModel.Valid {
+				candidate.RequestedModel = requestedModel.String
+			}
+			if requestedDimensions.Valid {
+				candidate.RequestedDimensions = int(requestedDimensions.Int32)
+			}
+			if activeVectorRevision.Valid {
+				candidate.ActiveVectorRevision = activeVectorRevision.String
+			}
+			if activeProvider.Valid {
+				candidate.ActiveProvider = activeProvider.String
+			}
+			if activeModel.Valid {
+				candidate.ActiveModel = activeModel.String
+			}
+			if activeDimensions.Valid {
+				candidate.ActiveDimensions = int(activeDimensions.Int32)
+			}
+		} else {
+			candidate.RebuildStatus = ""
+		}
+
+		candidates = append(candidates, candidate)
+	}
+
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("iterate embedding lifecycle candidates: %w", err)
+	}
+
+	return candidates, nil
+}
+
+func (r *Repository) ClaimEmbeddingRebuilds(ctx context.Context, scope memory.Scope, limit int, attemptedAt time.Time) ([]memory.EmbeddingRebuildRecord, error) {
+	if err := scope.Validate(); err != nil {
+		return nil, err
+	}
+	if limit <= 0 {
+		return nil, fmt.Errorf("limit must be greater than zero")
+	}
+	if attemptedAt.IsZero() {
+		return nil, fmt.Errorf("attempted at is required")
+	}
+
+	const query = `
+WITH claimed AS (
+	UPDATE embedding_rebuilds er
+	SET
+		status = $5,
+		last_attempted_at = $6,
+		failure_reason = NULL
+	WHERE er.memory_id IN (
+		SELECT er2.memory_id
+		FROM embedding_rebuilds er2
+		JOIN canonical_memories cm
+			ON cm.id = er2.memory_id
+			AND cm.tenant = er2.tenant
+			AND cm.project = er2.project
+			AND cm.namespace = er2.namespace
+		WHERE er2.tenant = $1
+			AND er2.project = $2
+			AND er2.namespace = $3
+			AND er2.status IN ($4, $7)
+			AND cm.state NOT IN ('suppressed', 'forgotten', 'deleted')
+		ORDER BY er2.requested_at ASC
+		LIMIT $8
+		FOR UPDATE SKIP LOCKED
+	)
+	RETURNING
+		er.memory_id,
+		er.tenant,
+		er.project,
+		er.namespace,
+		er.source_version,
+		er.content_hash,
+		er.requested_provider,
+		er.requested_model,
+		er.requested_dimensions,
+		er.status,
+		er.failure_reason,
+		er.requested_at,
+		er.last_attempted_at,
+		er.active_vector_revision_id
+)
+SELECT
+	claimed.memory_id,
+	claimed.tenant,
+	claimed.project,
+	claimed.namespace,
+	cm.class,
+	cm.content,
+	claimed.source_version,
+	claimed.content_hash,
+	claimed.requested_provider,
+	claimed.requested_model,
+	claimed.requested_dimensions,
+	claimed.status,
+	claimed.failure_reason,
+	claimed.requested_at,
+	claimed.last_attempted_at,
+	claimed.active_vector_revision_id
+FROM claimed
+JOIN canonical_memories cm
+	ON cm.id = claimed.memory_id
+	AND cm.tenant = claimed.tenant
+	AND cm.project = claimed.project
+	AND cm.namespace = claimed.namespace
+ORDER BY claimed.requested_at ASC
+`
+
+	rows, err := r.db.Query(
+		ctx,
+		query,
+		scope.Tenant,
+		scope.Project,
+		scope.Namespace,
+		memory.EmbeddingRebuildStatusPending,
+		memory.EmbeddingRebuildStatusRebuilding,
+		attemptedAt,
+		memory.EmbeddingRebuildStatusFailed,
+		limit,
+	)
+	if err != nil {
+		return nil, fmt.Errorf("claim embedding rebuilds: %w", err)
+	}
+	defer rows.Close()
+
+	records := make([]memory.EmbeddingRebuildRecord, 0)
+	for rows.Next() {
+		var record memory.EmbeddingRebuildRecord
+		var failureReason sql.NullString
+		var lastAttemptedAt sql.NullTime
+		var activeVectorRevision sql.NullString
+		if err := rows.Scan(
+			&record.MemoryID,
+			&record.Scope.Tenant,
+			&record.Scope.Project,
+			&record.Scope.Namespace,
+			&record.Class,
+			&record.Content,
+			&record.SourceVersion,
+			&record.ContentHash,
+			&record.RequestedProvider,
+			&record.RequestedModel,
+			&record.RequestedDimensions,
+			&record.Status,
+			&failureReason,
+			&record.RequestedAt,
+			&lastAttemptedAt,
+			&activeVectorRevision,
+		); err != nil {
+			return nil, fmt.Errorf("scan claimed embedding rebuild: %w", err)
+		}
+		if failureReason.Valid {
+			record.FailureReason = failureReason.String
+		}
+		if lastAttemptedAt.Valid {
+			record.LastAttemptedAt = lastAttemptedAt.Time
+		}
+		if activeVectorRevision.Valid {
+			record.ActiveVectorRevision = activeVectorRevision.String
+		}
+		records = append(records, record)
+	}
+
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("iterate claimed embedding rebuilds: %w", err)
+	}
+
+	return records, nil
+}
+
+func (r *Repository) RecordFailedVectorRevision(ctx context.Context, record memory.EmbeddingRebuildRecord, revision memory.VectorRevision) error {
+	return r.AppendVectorRevision(ctx, revision)
+}
+
+func (r *Repository) RecordEmbeddingRebuildFailure(ctx context.Context, record memory.EmbeddingRebuildRecord, failureCause string, failedAt time.Time) error {
+	if strings.TrimSpace(record.MemoryID) == "" {
+		return fmt.Errorf("memory id is required")
+	}
+	if err := record.Scope.Validate(); err != nil {
+		return err
+	}
+	if strings.TrimSpace(failureCause) == "" {
+		return fmt.Errorf("failure cause is required")
+	}
+	if failedAt.IsZero() {
+		return fmt.Errorf("failed at is required")
+	}
+
+	const query = `
+UPDATE embedding_rebuilds
+SET
+	status = $5,
+	failure_reason = $6,
+	last_attempted_at = $7
+WHERE memory_id = $1
+	AND tenant = $2
+	AND project = $3
+	AND namespace = $4
+`
+
+	if _, err := r.db.Exec(
+		ctx,
+		query,
+		record.MemoryID,
+		record.Scope.Tenant,
+		record.Scope.Project,
+		record.Scope.Namespace,
+		memory.EmbeddingRebuildStatusFailed,
+		failureCause,
+		failedAt,
+	); err != nil {
+		return fmt.Errorf("record embedding rebuild failure: %w", err)
+	}
+
+	return nil
 }
 
 func (r *Repository) ApplyLifecycleAction(ctx context.Context, action governance.LifecycleAction) (memory.CanonicalMemory, error) {
@@ -1899,25 +2974,41 @@ func (r *Repository) SearchSemantic(ctx context.Context, input retrieval.SearchI
 
 	const query = `
 SELECT
-	id,
-	tenant,
-	project,
-	namespace,
-	class,
-	state,
-	content,
-	created_at,
-	updated_at,
-	GREATEST(0, 1 - (embedding <=> $4::vector)) AS semantic_score
-FROM canonical_memories
-WHERE tenant = $1
-	AND project = $2
-	AND namespace = $3
-	AND state NOT IN ('suppressed', 'forgotten', 'deleted')
-	AND embedding IS NOT NULL
-	AND class IN ('profile', 'episodic', 'procedural', 'summary')
-	AND ($5::timestamptz IS NULL OR updated_at >= $5)
-	AND ($6::timestamptz IS NULL OR updated_at <= $6)
+	cm.id,
+	cm.tenant,
+	cm.project,
+	cm.namespace,
+	cm.class,
+	cm.state,
+	cm.content,
+	cm.created_at,
+	cm.updated_at,
+	GREATEST(0, 1 - (vr.embedding <=> $4::vector)) AS semantic_score
+FROM canonical_memories cm
+JOIN embedding_rebuilds er
+	ON er.memory_id = cm.id
+	AND er.tenant = cm.tenant
+	AND er.project = cm.project
+	AND er.namespace = cm.namespace
+	AND er.status = 'current'
+	AND er.active_vector_revision_id IS NOT NULL
+JOIN vector_revisions vr
+	ON vr.id = er.active_vector_revision_id
+	AND vr.memory_id = cm.id
+	AND vr.tenant = cm.tenant
+	AND vr.project = cm.project
+	AND vr.namespace = cm.namespace
+	AND vr.status = 'active'
+	AND vr.source_version = er.source_version
+	AND vr.content_hash = er.content_hash
+	AND vr.embedding IS NOT NULL
+WHERE cm.tenant = $1
+	AND cm.project = $2
+	AND cm.namespace = $3
+	AND cm.state NOT IN ('suppressed', 'forgotten', 'deleted')
+	AND cm.class IN ('profile', 'episodic', 'procedural', 'summary')
+	AND ($5::timestamptz IS NULL OR cm.updated_at >= $5)
+	AND ($6::timestamptz IS NULL OR cm.updated_at <= $6)
 ORDER BY semantic_score DESC, updated_at DESC
 LIMIT $7
 `
@@ -2287,6 +3378,52 @@ RETURNING id, tenant, project, namespace, class, state, content, created_at, upd
 	return canonical, nil
 }
 
+func (r *Repository) recordEmbeddingRebuildRequiredTx(ctx context.Context, tx pgx.Tx, canonical memory.CanonicalMemory, sourceVersion int64, requestedAt time.Time) error {
+	target, ok, err := r.resolveEmbeddingTarget(canonical.Class)
+	if err != nil {
+		return err
+	}
+	if !ok {
+		return nil
+	}
+
+	record := memory.EmbeddingRebuildRecord{
+		MemoryID:          canonical.ID,
+		Scope:             canonical.Scope,
+		SourceVersion:     sourceVersion,
+		ContentHash:       contentHash(canonical.Content),
+		RequestedProvider: target.Provider,
+		RequestedModel:    target.Model,
+		RequestedDimensions: target.Dimensions,
+		Status:            memory.EmbeddingRebuildStatusPending,
+		RequestedAt:       requestedAt,
+	}
+
+	if err := recordEmbeddingRebuildRequired(ctx, tx, record); err != nil {
+		return err
+	}
+
+	return nil
+}
+
+func (r *Repository) resolveEmbeddingTarget(class memory.MemoryClass) (embedding.Target, bool, error) {
+	if r.embeddingRouter.Default == (embedding.Target{}) && len(r.embeddingRouter.ByClass) == 0 {
+		return embedding.Target{}, false, nil
+	}
+
+	target, err := r.embeddingRouter.ResolveTarget(string(class))
+	if err != nil {
+		return embedding.Target{}, false, fmt.Errorf("resolve embedding target: %w", err)
+	}
+
+	return target, true, nil
+}
+
+func contentHash(content string) string {
+	sum := sha256.Sum256([]byte(content))
+	return "sha256:" + hex.EncodeToString(sum[:])
+}
+
 func upsertRelationProjection(ctx context.Context, tx pgx.Tx, canonical memory.CanonicalMemory, updatedAt time.Time) error {
 	if canonical.Class != memory.MemoryClassRelation {
 		return nil
@@ -2559,6 +3696,102 @@ func scanCandidate(scanner candidateScanner) (governance.CandidateMemory, error)
 	return candidate, nil
 }
 
+func scanGovernanceRawEvent(scanner governanceRawEventScanner, now time.Time) (governance.GovernanceRawEvent, governance.RawEventGovernanceSnapshot, error) {
+	var event memory.RawEvent
+	var snapshot governance.RawEventGovernanceSnapshot
+	var sourceTimestamp sql.NullTime
+	var workerID sql.NullString
+	var claimedAt sql.NullTime
+	var leaseUntil sql.NullTime
+	var lastFailedAt sql.NullTime
+	var lastError sql.NullString
+	var nextAttemptAt sql.NullTime
+	var exhaustedAt sql.NullTime
+	var processedAt sql.NullTime
+
+	if err := scanner.Scan(
+		&event.ID,
+		&event.Scope.Tenant,
+		&event.Scope.Project,
+		&event.Scope.Namespace,
+		&event.EventType,
+		&event.Content,
+		&sourceTimestamp,
+		&event.CreatedAt,
+		&snapshot.Attempt,
+		&workerID,
+		&claimedAt,
+		&leaseUntil,
+		&lastFailedAt,
+		&lastError,
+		&nextAttemptAt,
+		&exhaustedAt,
+		&processedAt,
+	); err != nil {
+		return governance.GovernanceRawEvent{}, governance.RawEventGovernanceSnapshot{}, fmt.Errorf("scan governance raw event: %w", err)
+	}
+
+	if sourceTimestamp.Valid {
+		event.SourceTimestamp = sourceTimestamp.Time
+	}
+	if workerID.Valid {
+		snapshot.WorkerID = workerID.String
+	}
+	if claimedAt.Valid {
+		snapshot.ClaimedAt = claimedAt.Time
+	}
+	if leaseUntil.Valid {
+		snapshot.LeaseUntil = leaseUntil.Time
+	}
+	if lastFailedAt.Valid {
+		snapshot.LastFailedAt = lastFailedAt.Time
+	}
+	if lastError.Valid {
+		snapshot.LastError = lastError.String
+	}
+	if nextAttemptAt.Valid {
+		snapshot.NextAttemptAt = nextAttemptAt.Time
+	}
+	if exhaustedAt.Valid {
+		snapshot.ExhaustedAt = exhaustedAt.Time
+	}
+	if processedAt.Valid {
+		snapshot.ProcessedAt = processedAt.Time
+	}
+
+	return governance.NewGovernanceRawEvent(event, snapshot, now.UTC()), snapshot, nil
+}
+
+func scanGovernanceRecoveryRecord(scanner provenanceScanner) (governance.GovernanceRecoveryRecord, error) {
+	var record governance.GovernanceRecoveryRecord
+	var beforeSnapshot []byte
+	var afterSnapshot []byte
+	if err := scanner.Scan(
+		&record.ID,
+		&record.RawEventID,
+		&record.Scope.Tenant,
+		&record.Scope.Project,
+		&record.Scope.Namespace,
+		&record.Action,
+		&record.Actor,
+		&record.Reason,
+		&beforeSnapshot,
+		&afterSnapshot,
+		&record.OccurredAt,
+	); err != nil {
+		return governance.GovernanceRecoveryRecord{}, fmt.Errorf("scan governance recovery record: %w", err)
+	}
+
+	if err := json.Unmarshal(beforeSnapshot, &record.Before); err != nil {
+		return governance.GovernanceRecoveryRecord{}, fmt.Errorf("unmarshal governance recovery before snapshot: %w", err)
+	}
+	if err := json.Unmarshal(afterSnapshot, &record.After); err != nil {
+		return governance.GovernanceRecoveryRecord{}, fmt.Errorf("unmarshal governance recovery after snapshot: %w", err)
+	}
+
+	return record, nil
+}
+
 func nullableString(value string) any {
 	if strings.TrimSpace(value) == "" {
 		return nil
@@ -2660,6 +3893,23 @@ func nullableTime(value time.Time) any {
 	return value
 }
 
+func nullableInt(value *int) any {
+	if value == nil {
+		return nil
+	}
+
+	return *value
+}
+
+func marshalGovernanceRecoverySnapshot(snapshot governance.GovernanceRecoverySnapshot) ([]byte, error) {
+	payload, err := json.Marshal(snapshot)
+	if err != nil {
+		return nil, fmt.Errorf("marshal governance recovery snapshot: %w", err)
+	}
+
+	return payload, nil
+}
+
 func vectorLiteral(values []float32) string {
 	parts := make([]string, 0, len(values))
 	for _, value := range values {
@@ -2667,6 +3917,14 @@ func vectorLiteral(values []float32) string {
 	}
 
 	return "[" + strings.Join(parts, ",") + "]"
+}
+
+func nullableVectorLiteral(values []float32) any {
+	if len(values) == 0 {
+		return nil
+	}
+
+	return vectorLiteral(values)
 }
 
 func isUniqueViolation(err error) bool {

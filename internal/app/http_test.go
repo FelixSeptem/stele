@@ -12,6 +12,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/FelixSeptem/stele/internal/governance"
 	"github.com/FelixSeptem/stele/internal/jobs"
 	"github.com/FelixSeptem/stele/internal/memory"
 	"github.com/FelixSeptem/stele/internal/policy"
@@ -181,6 +182,78 @@ func (s *stubManualMutationService) MergeMemory(ctx context.Context, input memor
 func (s *stubManualMutationService) ReclassifyMemory(ctx context.Context, input memory.ManualReclassifyMemoryInput) (memory.MemoryResource, error) {
 	s.gotReclassifyInput = input
 	return s.resource, s.err
+}
+
+type stubGovernanceAdminService struct {
+	gotListInput    governance.ListGovernanceRawEventsInput
+	gotReadInput    governance.ReadGovernanceRawEventInput
+	gotHistoryInput governance.ListGovernanceRecoveryHistoryInput
+	gotApplyInput   governance.ApplyGovernanceRecoveryInput
+
+	page    governance.GovernanceRawEventPage
+	event   governance.GovernanceRawEvent
+	history []governance.GovernanceRecoveryRecord
+	outcome governance.GovernanceRecoveryOutcome
+
+	listErr    error
+	readErr    error
+	historyErr error
+	applyErr   error
+
+	validateList  bool
+	validateRead  bool
+	validateApply bool
+}
+
+func (s *stubGovernanceAdminService) ListGovernanceRawEvents(ctx context.Context, input governance.ListGovernanceRawEventsInput) (governance.GovernanceRawEventPage, error) {
+	s.gotListInput = input
+	if s.validateList {
+		if err := input.Validate(); err != nil {
+			return governance.GovernanceRawEventPage{}, err
+		}
+	}
+	if s.listErr != nil {
+		return governance.GovernanceRawEventPage{}, s.listErr
+	}
+
+	return s.page, nil
+}
+
+func (s *stubGovernanceAdminService) ReadGovernanceRawEvent(ctx context.Context, input governance.ReadGovernanceRawEventInput) (governance.GovernanceRawEvent, error) {
+	s.gotReadInput = input
+	if s.validateRead {
+		if err := input.Validate(); err != nil {
+			return governance.GovernanceRawEvent{}, err
+		}
+	}
+	if s.readErr != nil {
+		return governance.GovernanceRawEvent{}, s.readErr
+	}
+
+	return s.event, nil
+}
+
+func (s *stubGovernanceAdminService) ListGovernanceRecoveryHistory(ctx context.Context, input governance.ListGovernanceRecoveryHistoryInput) ([]governance.GovernanceRecoveryRecord, error) {
+	s.gotHistoryInput = input
+	if s.historyErr != nil {
+		return nil, s.historyErr
+	}
+
+	return s.history, nil
+}
+
+func (s *stubGovernanceAdminService) ApplyGovernanceRecovery(ctx context.Context, input governance.ApplyGovernanceRecoveryInput) (governance.GovernanceRecoveryOutcome, error) {
+	s.gotApplyInput = input
+	if s.validateApply {
+		if err := input.Validate(); err != nil {
+			return governance.GovernanceRecoveryOutcome{}, err
+		}
+	}
+	if s.applyErr != nil {
+		return governance.GovernanceRecoveryOutcome{}, s.applyErr
+	}
+
+	return s.outcome, nil
 }
 
 func TestNewHTTPHandlerServesHealthAndReadiness(t *testing.T) {
@@ -689,6 +762,426 @@ func TestNewHTTPHandlerReturnsAdminGovernanceStatus(t *testing.T) {
 	}
 }
 
+func TestNewHTTPHandlerListsAdminGovernanceRawEvents(t *testing.T) {
+	now := time.Date(2026, 6, 12, 2, 0, 0, 0, time.UTC)
+	cursor := governance.GovernanceRawEventCursor{
+		CreatedAt:  now.Add(-time.Minute),
+		RawEventID: "evt_prev",
+	}.Encode()
+	service := &stubGovernanceAdminService{
+		validateList: true,
+		page: governance.GovernanceRawEventPage{
+			Items: []governance.GovernanceRawEvent{
+				{
+					ID:           "evt_123",
+					Scope:        memory.Scope{Tenant: "tenant-a", Project: "project-a", Namespace: "namespace-a"},
+					EventType:    "conversation.message",
+					Content:      "retry later",
+					CreatedAt:    now.Add(-2 * time.Minute),
+					State:        governance.GovernanceRawEventStateRetryWait,
+					Attempt:      2,
+					LastFailedAt: now.Add(-time.Minute),
+					LastError:    "timeout",
+				},
+			},
+			NextCursor: "next_cursor",
+		},
+	}
+	handler := NewHTTPHandler(HTTPDependencies{
+		AdminAPIKeys:    map[string]struct{}{"admin-key": {}},
+		GovernanceAdmin: service,
+	})
+
+	req := httptest.NewRequest(
+		http.MethodGet,
+		"/v1/admin/governance/raw-events?state=retry_wait&event_type=conversation.message&attempt_gte=1&attempt_lte=3&failed_from=2026-06-12T01:00:00Z&failed_to=2026-06-12T02:00:00Z&next_attempt_from=2026-06-12T02:00:00Z&next_attempt_to=2026-06-12T03:00:00Z&limit=5&cursor="+cursor,
+		nil,
+	)
+	setAdminScopeHeaders(req)
+	rec := httptest.NewRecorder()
+
+	handler.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d, want %d", rec.Code, http.StatusOK)
+	}
+	if service.gotListInput.Scope.Namespace != "namespace-a" {
+		t.Fatalf("scope = %+v, want resolved request scope", service.gotListInput.Scope)
+	}
+	if service.gotListInput.State != governance.GovernanceRawEventStateRetryWait {
+		t.Fatalf("state = %q, want retry_wait", service.gotListInput.State)
+	}
+	if service.gotListInput.EventType != "conversation.message" {
+		t.Fatalf("event type = %q, want conversation.message", service.gotListInput.EventType)
+	}
+	if service.gotListInput.AttemptGTE == nil || *service.gotListInput.AttemptGTE != 1 {
+		t.Fatalf("attempt_gte = %v, want 1", service.gotListInput.AttemptGTE)
+	}
+	if service.gotListInput.AttemptLTE == nil || *service.gotListInput.AttemptLTE != 3 {
+		t.Fatalf("attempt_lte = %v, want 3", service.gotListInput.AttemptLTE)
+	}
+	if service.gotListInput.Limit != 5 {
+		t.Fatalf("limit = %d, want 5", service.gotListInput.Limit)
+	}
+	if service.gotListInput.Cursor != cursor {
+		t.Fatalf("cursor = %q, want %q", service.gotListInput.Cursor, cursor)
+	}
+
+	var payload governance.GovernanceRawEventPage
+	if err := json.NewDecoder(rec.Body).Decode(&payload); err != nil {
+		t.Fatalf("json.NewDecoder() error = %v", err)
+	}
+	if len(payload.Items) != 1 || payload.Items[0].ID != "evt_123" {
+		t.Fatalf("items = %+v, want one raw event", payload.Items)
+	}
+	if payload.NextCursor != "next_cursor" {
+		t.Fatalf("next cursor = %q, want next_cursor", payload.NextCursor)
+	}
+}
+
+func TestNewHTTPHandlerReturnsAdminGovernanceRawEventDetail(t *testing.T) {
+	now := time.Date(2026, 6, 12, 2, 0, 0, 0, time.UTC)
+	service := &stubGovernanceAdminService{
+		validateRead: true,
+		event: governance.GovernanceRawEvent{
+			ID:            "evt_123",
+			Scope:         memory.Scope{Tenant: "tenant-a", Project: "project-a", Namespace: "namespace-a"},
+			EventType:     "conversation.message",
+			Content:       "retry later",
+			CreatedAt:     now.Add(-2 * time.Minute),
+			State:         governance.GovernanceRawEventStateRetryWait,
+			Attempt:       2,
+			LastFailedAt:  now.Add(-time.Minute),
+			LastError:     "timeout",
+			NextAttemptAt: now.Add(10 * time.Minute),
+		},
+	}
+	handler := NewHTTPHandler(HTTPDependencies{
+		AdminAPIKeys:    map[string]struct{}{"admin-key": {}},
+		GovernanceAdmin: service,
+	})
+
+	req := httptest.NewRequest(http.MethodGet, "/v1/admin/governance/raw-events/evt_123", nil)
+	setAdminScopeHeaders(req)
+	rec := httptest.NewRecorder()
+
+	handler.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d, want %d", rec.Code, http.StatusOK)
+	}
+	if service.gotReadInput.RawEventID != "evt_123" {
+		t.Fatalf("raw event id = %q, want evt_123", service.gotReadInput.RawEventID)
+	}
+
+	var payload governance.GovernanceRawEvent
+	if err := json.NewDecoder(rec.Body).Decode(&payload); err != nil {
+		t.Fatalf("json.NewDecoder() error = %v", err)
+	}
+	if payload.ID != "evt_123" || payload.State != governance.GovernanceRawEventStateRetryWait {
+		t.Fatalf("payload = %+v, want detail response", payload)
+	}
+}
+
+func TestNewHTTPHandlerReturnsAdminGovernanceRecoveryHistory(t *testing.T) {
+	service := &stubGovernanceAdminService{
+		history: []governance.GovernanceRecoveryRecord{
+			{
+				ID:         "grl_1",
+				RawEventID: "evt_123",
+				Scope:      memory.Scope{Tenant: "tenant-a", Project: "project-a", Namespace: "namespace-a"},
+				Action:     governance.GovernanceRecoveryActionRetry,
+				Actor:      "operator-a",
+				Reason:     "retry now",
+				Before: governance.GovernanceRecoverySnapshot{
+					State:   governance.GovernanceRawEventStateRetryWait,
+					Attempt: 2,
+				},
+				After: governance.GovernanceRecoverySnapshot{
+					State:   governance.GovernanceRawEventStatePending,
+					Attempt: 2,
+				},
+				OccurredAt: time.Date(2026, 6, 12, 2, 5, 0, 0, time.UTC),
+			},
+		},
+	}
+	handler := NewHTTPHandler(HTTPDependencies{
+		AdminAPIKeys:    map[string]struct{}{"admin-key": {}},
+		GovernanceAdmin: service,
+	})
+
+	req := httptest.NewRequest(http.MethodGet, "/v1/admin/governance/raw-events/evt_123/recovery-history", nil)
+	setAdminScopeHeaders(req)
+	rec := httptest.NewRecorder()
+
+	handler.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d, want %d", rec.Code, http.StatusOK)
+	}
+	if service.gotHistoryInput.RawEventID != "evt_123" {
+		t.Fatalf("raw event id = %q, want evt_123", service.gotHistoryInput.RawEventID)
+	}
+
+	var payload struct {
+		History []governance.GovernanceRecoveryRecord `json:"history"`
+	}
+	if err := json.NewDecoder(rec.Body).Decode(&payload); err != nil {
+		t.Fatalf("json.NewDecoder() error = %v", err)
+	}
+	if len(payload.History) != 1 || payload.History[0].Action != governance.GovernanceRecoveryActionRetry {
+		t.Fatalf("history = %+v, want one retry record", payload.History)
+	}
+}
+
+func TestNewHTTPHandlerAppliesAdminGovernanceRecoveryActions(t *testing.T) {
+	now := time.Date(2026, 6, 12, 2, 0, 0, 0, time.UTC)
+
+	tests := []struct {
+		name         string
+		path         string
+		body         string
+		wantAction   governance.GovernanceRecoveryAction
+		wantSchedule time.Time
+	}{
+		{
+			name:       "retry",
+			path:       "/v1/admin/governance/raw-events/evt_123:retry",
+			body:       `{"reason":"retry now"}`,
+			wantAction: governance.GovernanceRecoveryActionRetry,
+		},
+		{
+			name:         "reschedule",
+			path:         "/v1/admin/governance/raw-events/evt_123:reschedule",
+			body:         `{"reason":"delay until quiet hours","scheduled_for":"2099-06-12T03:00:00Z"}`,
+			wantAction:   governance.GovernanceRecoveryActionReschedule,
+			wantSchedule: time.Date(2099, 6, 12, 3, 0, 0, 0, time.UTC),
+		},
+		{
+			name:       "requeue",
+			path:       "/v1/admin/governance/raw-events/evt_123:requeue",
+			body:       `{"reason":"clear exhausted state"}`,
+			wantAction: governance.GovernanceRecoveryActionRequeue,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			service := &stubGovernanceAdminService{
+				validateApply: true,
+				outcome: governance.GovernanceRecoveryOutcome{
+					RawEvent: governance.GovernanceRawEvent{
+						ID:      "evt_123",
+						Scope:   memory.Scope{Tenant: "tenant-a", Project: "project-a", Namespace: "namespace-a"},
+						State:   governance.GovernanceRawEventStatePending,
+						Attempt: 2,
+					},
+					Recovery: governance.GovernanceRecoveryRecord{
+						ID:         "grl_1",
+						RawEventID: "evt_123",
+						Scope:      memory.Scope{Tenant: "tenant-a", Project: "project-a", Namespace: "namespace-a"},
+						Action:     tt.wantAction,
+						Actor:      "operator-a",
+						Reason:     "operator request",
+						OccurredAt: now,
+					},
+				},
+			}
+			handler := NewHTTPHandler(HTTPDependencies{
+				AdminAPIKeys:    map[string]struct{}{"admin-key": {}},
+				GovernanceAdmin: service,
+			})
+
+			req := httptest.NewRequest(http.MethodPost, tt.path, strings.NewReader(tt.body))
+			setAdminActionHeaders(req)
+			rec := httptest.NewRecorder()
+
+			handler.ServeHTTP(rec, req)
+
+			if rec.Code != http.StatusOK {
+				t.Fatalf("status = %d, want %d", rec.Code, http.StatusOK)
+			}
+			if service.gotApplyInput.RawEventID != "evt_123" {
+				t.Fatalf("raw event id = %q, want evt_123", service.gotApplyInput.RawEventID)
+			}
+			if service.gotApplyInput.Action != tt.wantAction {
+				t.Fatalf("action = %q, want %q", service.gotApplyInput.Action, tt.wantAction)
+			}
+			if service.gotApplyInput.Actor != "operator-a" {
+				t.Fatalf("actor = %q, want operator-a", service.gotApplyInput.Actor)
+			}
+			if tt.wantAction == governance.GovernanceRecoveryActionReschedule && !service.gotApplyInput.ScheduledFor.Equal(tt.wantSchedule) {
+				t.Fatalf("scheduled_for = %v, want %v", service.gotApplyInput.ScheduledFor, tt.wantSchedule)
+			}
+		})
+	}
+}
+
+func TestNewHTTPHandlerValidatesAdminGovernanceRequests(t *testing.T) {
+	tests := []struct {
+		name       string
+		method     string
+		path       string
+		body       string
+		headers    func(*http.Request)
+		wantStatus int
+		wantBody   string
+	}{
+		{
+			name:   "missing actor on action",
+			method: http.MethodPost,
+			path:   "/v1/admin/governance/raw-events/evt_123:retry",
+			body:   `{"reason":"retry now"}`,
+			headers: func(req *http.Request) {
+				setAdminScopeHeaders(req)
+				req.Header.Set("Content-Type", "application/json")
+			},
+			wantStatus: http.StatusBadRequest,
+			wantBody:   "actor is required",
+		},
+		{
+			name:   "invalid scheduled_for",
+			method: http.MethodPost,
+			path:   "/v1/admin/governance/raw-events/evt_123:reschedule",
+			body:   `{"reason":"delay","scheduled_for":"not-a-time"}`,
+			headers: func(req *http.Request) {
+				setAdminActionHeaders(req)
+			},
+			wantStatus: http.StatusBadRequest,
+			wantBody:   "invalid scheduled_for",
+		},
+		{
+			name:   "invalid action target",
+			method: http.MethodPost,
+			path:   "/v1/admin/governance/raw-events/retry",
+			body:   `{"reason":"retry now"}`,
+			headers: func(req *http.Request) {
+				setAdminActionHeaders(req)
+			},
+			wantStatus: http.StatusBadRequest,
+			wantBody:   "invalid governance raw event action target",
+		},
+		{
+			name:   "invalid state filter",
+			method: http.MethodGet,
+			path:   "/v1/admin/governance/raw-events?state=bogus",
+			headers: func(req *http.Request) {
+				setAdminScopeHeaders(req)
+			},
+			wantStatus: http.StatusBadRequest,
+			wantBody:   "state \"bogus\" is invalid",
+		},
+		{
+			name:   "invalid attempt filter",
+			method: http.MethodGet,
+			path:   "/v1/admin/governance/raw-events?attempt_gte=nope",
+			headers: func(req *http.Request) {
+				setAdminScopeHeaders(req)
+			},
+			wantStatus: http.StatusBadRequest,
+			wantBody:   "invalid attempt_gte",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			handler := NewHTTPHandler(HTTPDependencies{
+				AdminAPIKeys: map[string]struct{}{"admin-key": {}},
+				GovernanceAdmin: &stubGovernanceAdminService{
+					validateList:  true,
+					validateApply: true,
+				},
+			})
+
+			req := httptest.NewRequest(tt.method, tt.path, strings.NewReader(tt.body))
+			tt.headers(req)
+			rec := httptest.NewRecorder()
+
+			handler.ServeHTTP(rec, req)
+
+			if rec.Code != tt.wantStatus {
+				t.Fatalf("status = %d, want %d", rec.Code, tt.wantStatus)
+			}
+			if body := rec.Body.String(); !strings.Contains(body, tt.wantBody) {
+				t.Fatalf("body = %q, want substring %q", body, tt.wantBody)
+			}
+		})
+	}
+}
+
+func TestNewHTTPHandlerMapsAdminGovernanceErrors(t *testing.T) {
+	tests := []struct {
+		name       string
+		method     string
+		path       string
+		body       string
+		service    *stubGovernanceAdminService
+		wantStatus int
+		wantBody   string
+	}{
+		{
+			name:       "detail not found",
+			method:     http.MethodGet,
+			path:       "/v1/admin/governance/raw-events/evt_missing",
+			service:    &stubGovernanceAdminService{readErr: pgx.ErrNoRows, validateRead: true},
+			wantStatus: http.StatusNotFound,
+			wantBody:   "raw event not found",
+		},
+		{
+			name:       "recovery history not found",
+			method:     http.MethodGet,
+			path:       "/v1/admin/governance/raw-events/evt_missing/recovery-history",
+			service:    &stubGovernanceAdminService{historyErr: pgx.ErrNoRows},
+			wantStatus: http.StatusNotFound,
+			wantBody:   "raw event not found",
+		},
+		{
+			name:       "recovery conflict",
+			method:     http.MethodPost,
+			path:       "/v1/admin/governance/raw-events/evt_123:retry",
+			body:       `{"reason":"retry now"}`,
+			service:    &stubGovernanceAdminService{applyErr: governance.ErrGovernanceRecoveryConflict, validateApply: true},
+			wantStatus: http.StatusConflict,
+			wantBody:   governance.ErrGovernanceRecoveryConflict.Error(),
+		},
+		{
+			name:       "recovery rejected",
+			method:     http.MethodPost,
+			path:       "/v1/admin/governance/raw-events/evt_123:retry",
+			body:       `{"reason":"retry now"}`,
+			service:    &stubGovernanceAdminService{applyErr: governance.ErrGovernanceRecoveryRejected, validateApply: true},
+			wantStatus: http.StatusUnprocessableEntity,
+			wantBody:   governance.ErrGovernanceRecoveryRejected.Error(),
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			handler := NewHTTPHandler(HTTPDependencies{
+				AdminAPIKeys:    map[string]struct{}{"admin-key": {}},
+				GovernanceAdmin: tt.service,
+			})
+
+			req := httptest.NewRequest(tt.method, tt.path, strings.NewReader(tt.body))
+			if tt.method == http.MethodGet {
+				setAdminScopeHeaders(req)
+			} else {
+				setAdminActionHeaders(req)
+			}
+			rec := httptest.NewRecorder()
+
+			handler.ServeHTTP(rec, req)
+
+			if rec.Code != tt.wantStatus {
+				t.Fatalf("status = %d, want %d", rec.Code, tt.wantStatus)
+			}
+			if body := rec.Body.String(); !strings.Contains(body, tt.wantBody) {
+				t.Fatalf("body = %q, want substring %q", body, tt.wantBody)
+			}
+		})
+	}
+}
+
 func TestNewHTTPHandlerRejectsMissingAdminAPIKey(t *testing.T) {
 	handler := NewHTTPHandler(HTTPDependencies{
 		AdminAPIKeys:         map[string]struct{}{"admin-key": {}},
@@ -1001,4 +1494,17 @@ func TestNewHTTPHandlerReclassifiesAdminMemory(t *testing.T) {
 	if service.gotReclassifyInput.TargetClass != memory.MemoryClassProcedural {
 		t.Fatalf("target class = %q, want procedural", service.gotReclassifyInput.TargetClass)
 	}
+}
+
+func setAdminScopeHeaders(req *http.Request) {
+	req.Header.Set("X-API-Key", "admin-key")
+	req.Header.Set("X-Stele-Tenant", "tenant-a")
+	req.Header.Set("X-Stele-Project", "project-a")
+	req.Header.Set("X-Stele-Namespace", "namespace-a")
+}
+
+func setAdminActionHeaders(req *http.Request) {
+	setAdminScopeHeaders(req)
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("X-Stele-Actor", "operator-a")
 }

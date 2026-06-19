@@ -17,9 +17,14 @@ The service MUST expose baseline operational signals for API, governance, retrie
 - **WHEN** the service handles ingest, governance, retrieval, or forgetting work
 - **THEN** the runtime exposes metrics or tracing hook points for latency, throughput, error rate, and backlog-oriented inspection
 
+#### Scenario: Operator monitors embedding lifecycle backlogs
+- **WHEN** semantic projection work accumulates because embeddings are missing, stale, failed, or provider-mismatched
+- **THEN** the runtime exposes backlog and execution telemetry for embedding rebuild eligibility, attempted generation, promotion outcomes, and provider or model drift processing
+
 ### Requirement: Actionable readiness and backlog diagnostics
 The service MUST surface operational diagnostics that help explain degraded or unhealthy states.
 
 #### Scenario: Backlog grows while dependencies remain reachable
 - **WHEN** workers fall behind or maintenance work accumulates
 - **THEN** operators can distinguish backlog pressure from simple dependency failure through the emitted diagnostics
+

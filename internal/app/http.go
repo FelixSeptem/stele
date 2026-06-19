@@ -13,6 +13,7 @@ import (
 	"time"
 
 	"github.com/FelixSeptem/stele/internal/auth"
+	"github.com/FelixSeptem/stele/internal/governance"
 	"github.com/FelixSeptem/stele/internal/jobs"
 	"github.com/FelixSeptem/stele/internal/memory"
 	"github.com/FelixSeptem/stele/internal/policy"
@@ -35,6 +36,7 @@ type HTTPDependencies struct {
 	MemorySearcher        retrieval.MemorySearcher
 	ContextAssembler      retrieval.ContextAssembler
 	GovernanceStatusRead  GovernanceStatusReader
+	GovernanceAdmin       GovernanceAdminService
 	MemoryHistoryRead     MemoryHistoryReader
 	JobExecutionRead      JobExecutionReader
 	Logger                *log.Logger
@@ -61,6 +63,13 @@ type MemoryLifecycleActionService interface {
 	Apply(ctx context.Context, input memory.LifecycleActionInput) error
 }
 
+type GovernanceAdminService interface {
+	ListGovernanceRawEvents(ctx context.Context, input governance.ListGovernanceRawEventsInput) (governance.GovernanceRawEventPage, error)
+	ReadGovernanceRawEvent(ctx context.Context, input governance.ReadGovernanceRawEventInput) (governance.GovernanceRawEvent, error)
+	ListGovernanceRecoveryHistory(ctx context.Context, input governance.ListGovernanceRecoveryHistoryInput) ([]governance.GovernanceRecoveryRecord, error)
+	ApplyGovernanceRecovery(ctx context.Context, input governance.ApplyGovernanceRecoveryInput) (governance.GovernanceRecoveryOutcome, error)
+}
+
 type ManualMemoryMutationService interface {
 	CreateMemory(ctx context.Context, input memory.ManualCreateMemoryInput) (memory.MemoryResource, error)
 	UpdateMemory(ctx context.Context, input memory.ManualUpdateMemoryInput) (memory.MemoryResource, error)
@@ -74,6 +83,11 @@ type JobExecutionReader interface {
 
 type lifecycleActionRequest struct {
 	Reason string `json:"reason"`
+}
+
+type governanceRecoveryRequest struct {
+	Reason       string `json:"reason"`
+	ScheduledFor string `json:"scheduled_for"`
 }
 
 type manualCreateMemoryRequest struct {
@@ -214,6 +228,42 @@ func NewHTTPHandler(deps HTTPDependencies) http.Handler {
 		}),
 	)
 	mux.Handle("GET /v1/admin/jobs/governance/status", adminGovernance)
+
+	adminGovernanceRawEvents := auth.APIKeyMiddleware(deps.AdminAPIKeys)(
+		auth.ScopeMiddleware()(
+			http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				handleAdminGovernanceRawEventList(w, r, deps.GovernanceAdmin)
+			}),
+		),
+	)
+	mux.Handle("GET /v1/admin/governance/raw-events", adminGovernanceRawEvents)
+
+	adminGovernanceRawEventDetail := auth.APIKeyMiddleware(deps.AdminAPIKeys)(
+		auth.ScopeMiddleware()(
+			http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				handleAdminGovernanceRawEventDetail(w, r, deps.GovernanceAdmin)
+			}),
+		),
+	)
+	mux.Handle("GET /v1/admin/governance/raw-events/{raw_event_id}", adminGovernanceRawEventDetail)
+
+	adminGovernanceRecoveryHistory := auth.APIKeyMiddleware(deps.AdminAPIKeys)(
+		auth.ScopeMiddleware()(
+			http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				handleAdminGovernanceRecoveryHistory(w, r, deps.GovernanceAdmin)
+			}),
+		),
+	)
+	mux.Handle("GET /v1/admin/governance/raw-events/{raw_event_id}/recovery-history", adminGovernanceRecoveryHistory)
+
+	adminGovernanceRawEventAction := auth.APIKeyMiddleware(deps.AdminAPIKeys)(
+		auth.ScopeMiddleware()(
+			http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				handleAdminGovernanceRawEventAction(w, r, deps.GovernanceAdmin)
+			}),
+		),
+	)
+	mux.Handle("POST /v1/admin/governance/raw-events/{raw_event_action}", adminGovernanceRawEventAction)
 
 	adminJobStatus := auth.APIKeyMiddleware(deps.AdminAPIKeys)(
 		auth.ScopeMiddleware()(
@@ -622,6 +672,196 @@ func handleMemoryHistory(w http.ResponseWriter, r *http.Request, reader MemoryHi
 	writeJSON(w, http.StatusOK, history)
 }
 
+func handleAdminGovernanceRawEventList(w http.ResponseWriter, r *http.Request, service GovernanceAdminService) {
+	if service == nil {
+		http.Error(w, "governance admin service is not configured", http.StatusServiceUnavailable)
+		return
+	}
+
+	scope, ok := auth.ScopeFromContext(r.Context())
+	if !ok {
+		http.Error(w, "scope context is missing", http.StatusInternalServerError)
+		return
+	}
+
+	limit := 20
+	if raw := strings.TrimSpace(r.URL.Query().Get("limit")); raw != "" {
+		parsed, err := strconv.Atoi(raw)
+		if err != nil || parsed <= 0 {
+			http.Error(w, "invalid limit", http.StatusBadRequest)
+			return
+		}
+		if parsed > 100 {
+			parsed = 100
+		}
+		limit = parsed
+	}
+
+	input := governance.ListGovernanceRawEventsInput{
+		Scope:     scope,
+		State:     governance.GovernanceRawEventState(strings.TrimSpace(r.URL.Query().Get("state"))),
+		EventType: strings.TrimSpace(r.URL.Query().Get("event_type")),
+		Limit:     limit,
+		Cursor:    strings.TrimSpace(r.URL.Query().Get("cursor")),
+		Now:       time.Now().UTC(),
+	}
+
+	if raw := strings.TrimSpace(r.URL.Query().Get("attempt_gte")); raw != "" {
+		parsed, err := strconv.Atoi(raw)
+		if err != nil {
+			http.Error(w, "invalid attempt_gte", http.StatusBadRequest)
+			return
+		}
+		input.AttemptGTE = &parsed
+	}
+	if raw := strings.TrimSpace(r.URL.Query().Get("attempt_lte")); raw != "" {
+		parsed, err := strconv.Atoi(raw)
+		if err != nil {
+			http.Error(w, "invalid attempt_lte", http.StatusBadRequest)
+			return
+		}
+		input.AttemptLTE = &parsed
+	}
+	if raw := strings.TrimSpace(r.URL.Query().Get("failed_from")); raw != "" {
+		parsed, err := time.Parse(time.RFC3339, raw)
+		if err != nil {
+			http.Error(w, "invalid failed_from", http.StatusBadRequest)
+			return
+		}
+		input.FailedFrom = parsed
+	}
+	if raw := strings.TrimSpace(r.URL.Query().Get("failed_to")); raw != "" {
+		parsed, err := time.Parse(time.RFC3339, raw)
+		if err != nil {
+			http.Error(w, "invalid failed_to", http.StatusBadRequest)
+			return
+		}
+		input.FailedTo = parsed
+	}
+	if raw := strings.TrimSpace(r.URL.Query().Get("next_attempt_from")); raw != "" {
+		parsed, err := time.Parse(time.RFC3339, raw)
+		if err != nil {
+			http.Error(w, "invalid next_attempt_from", http.StatusBadRequest)
+			return
+		}
+		input.NextAttemptFrom = parsed
+	}
+	if raw := strings.TrimSpace(r.URL.Query().Get("next_attempt_to")); raw != "" {
+		parsed, err := time.Parse(time.RFC3339, raw)
+		if err != nil {
+			http.Error(w, "invalid next_attempt_to", http.StatusBadRequest)
+			return
+		}
+		input.NextAttemptTo = parsed
+	}
+
+	page, err := service.ListGovernanceRawEvents(r.Context(), input)
+	if err != nil {
+		writeAdminGovernanceError(w, err, "failed to list governance raw events")
+		return
+	}
+
+	writeJSON(w, http.StatusOK, page)
+}
+
+func handleAdminGovernanceRawEventDetail(w http.ResponseWriter, r *http.Request, service GovernanceAdminService) {
+	if service == nil {
+		http.Error(w, "governance admin service is not configured", http.StatusServiceUnavailable)
+		return
+	}
+
+	scope, ok := auth.ScopeFromContext(r.Context())
+	if !ok {
+		http.Error(w, "scope context is missing", http.StatusInternalServerError)
+		return
+	}
+
+	resource, err := service.ReadGovernanceRawEvent(r.Context(), governance.ReadGovernanceRawEventInput{
+		Scope:      scope,
+		RawEventID: r.PathValue("raw_event_id"),
+		Now:        time.Now().UTC(),
+	})
+	if err != nil {
+		writeAdminGovernanceError(w, err, "failed to read governance raw event")
+		return
+	}
+
+	writeJSON(w, http.StatusOK, resource)
+}
+
+func handleAdminGovernanceRecoveryHistory(w http.ResponseWriter, r *http.Request, service GovernanceAdminService) {
+	if service == nil {
+		http.Error(w, "governance admin service is not configured", http.StatusServiceUnavailable)
+		return
+	}
+
+	scope, ok := auth.ScopeFromContext(r.Context())
+	if !ok {
+		http.Error(w, "scope context is missing", http.StatusInternalServerError)
+		return
+	}
+
+	history, err := service.ListGovernanceRecoveryHistory(r.Context(), governance.ListGovernanceRecoveryHistoryInput{
+		Scope:      scope,
+		RawEventID: r.PathValue("raw_event_id"),
+	})
+	if err != nil {
+		writeAdminGovernanceError(w, err, "failed to read governance recovery history")
+		return
+	}
+
+	writeJSON(w, http.StatusOK, map[string]any{"history": history})
+}
+
+func handleAdminGovernanceRawEventAction(w http.ResponseWriter, r *http.Request, service GovernanceAdminService) {
+	if service == nil {
+		http.Error(w, "governance admin service is not configured", http.StatusServiceUnavailable)
+		return
+	}
+
+	var req governanceRecoveryRequest
+	if !decodeJSONBody(w, r, &req) {
+		return
+	}
+
+	scope, ok := auth.ScopeFromContext(r.Context())
+	if !ok {
+		http.Error(w, "scope context is missing", http.StatusInternalServerError)
+		return
+	}
+
+	rawEventID, action, err := parseGovernanceRawEventActionTarget(r.PathValue("raw_event_action"))
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusBadRequest)
+		return
+	}
+
+	input := governance.ApplyGovernanceRecoveryInput{
+		Scope:      scope,
+		RawEventID: rawEventID,
+		Action:     action,
+		Actor:      strings.TrimSpace(r.Header.Get("X-Stele-Actor")),
+		Reason:     req.Reason,
+		AppliedAt:  time.Now().UTC(),
+	}
+	if strings.TrimSpace(req.ScheduledFor) != "" {
+		scheduledFor, err := time.Parse(time.RFC3339, req.ScheduledFor)
+		if err != nil {
+			http.Error(w, "invalid scheduled_for", http.StatusBadRequest)
+			return
+		}
+		input.ScheduledFor = scheduledFor
+	}
+
+	outcome, err := service.ApplyGovernanceRecovery(r.Context(), input)
+	if err != nil {
+		writeAdminGovernanceError(w, err, "failed to apply governance recovery")
+		return
+	}
+
+	writeJSON(w, http.StatusOK, outcome)
+}
+
 func handleRecentJobExecutions(w http.ResponseWriter, r *http.Request, reader JobExecutionReader) {
 	if reader == nil {
 		http.Error(w, "job execution reader is not configured", http.StatusServiceUnavailable)
@@ -924,6 +1164,23 @@ func writeAdminManualMutationError(w http.ResponseWriter, err error, fallback st
 	}
 }
 
+func writeAdminGovernanceError(w http.ResponseWriter, err error, fallback string) {
+	switch {
+	case errors.Is(err, governance.ErrGovernanceRecoveryConflict):
+		http.Error(w, err.Error(), http.StatusConflict)
+	case errors.Is(err, governance.ErrGovernanceRecoveryRejected):
+		http.Error(w, err.Error(), http.StatusUnprocessableEntity)
+	case errors.Is(err, pgx.ErrNoRows):
+		http.Error(w, "raw event not found", http.StatusNotFound)
+	default:
+		if strings.Contains(err.Error(), "required") || strings.Contains(err.Error(), "invalid") || strings.Contains(err.Error(), "must be") {
+			http.Error(w, err.Error(), http.StatusBadRequest)
+			return
+		}
+		http.Error(w, fallback, http.StatusInternalServerError)
+	}
+}
+
 func parseMemoryClasses(values []string) []memory.MemoryClass {
 	if len(values) == 0 {
 		return nil
@@ -972,4 +1229,18 @@ func parseAdminMutationActionTarget(value string, expectedAction string) (string
 	}
 
 	return memoryID, nil
+}
+
+func parseGovernanceRawEventActionTarget(value string) (string, governance.GovernanceRecoveryAction, error) {
+	rawEventID, actionName, ok := strings.Cut(value, ":")
+	if !ok || strings.TrimSpace(rawEventID) == "" {
+		return "", "", fmt.Errorf("invalid governance raw event action target")
+	}
+
+	action := governance.GovernanceRecoveryAction(actionName)
+	if !action.Valid() {
+		return "", "", fmt.Errorf("invalid governance raw event action target")
+	}
+
+	return rawEventID, action, nil
 }

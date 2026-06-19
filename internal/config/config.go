@@ -21,6 +21,7 @@ type Config struct {
 	HTTPAddr    string
 	PostgresDSN string
 	Auth        AuthConfig
+	Embedding   EmbeddingConfig
 	Jobs        JobConfig
 }
 
@@ -30,6 +31,19 @@ type AuthConfig struct {
 	DefaultTenant    string
 	DefaultProject   string
 	DefaultNamespace string
+}
+
+type EmbeddingRouteConfig struct {
+	Provider   string
+	Model      string
+	Dimensions int
+}
+
+type EmbeddingConfig struct {
+	DefaultProvider   string
+	DefaultModel      string
+	DefaultDimensions int
+	ClassRoutes       map[string]EmbeddingRouteConfig
 }
 
 type JobConfig struct {
@@ -108,6 +122,14 @@ func LoadFromEnv() (Config, error) {
 	if err != nil {
 		return Config{}, err
 	}
+	defaultEmbeddingDimensions, err := loadIntWithDefault("STELE_EMBEDDING_DEFAULT_DIMENSIONS", 0)
+	if err != nil {
+		return Config{}, err
+	}
+	classRoutes, err := loadEmbeddingClassRoutes("STELE_EMBEDDING_CLASS_ROUTES")
+	if err != nil {
+		return Config{}, err
+	}
 
 	return Config{
 		Mode:        mode,
@@ -119,6 +141,12 @@ func LoadFromEnv() (Config, error) {
 			DefaultTenant:    strings.TrimSpace(os.Getenv("STELE_AUTH_DEFAULT_TENANT")),
 			DefaultProject:   strings.TrimSpace(os.Getenv("STELE_AUTH_DEFAULT_PROJECT")),
 			DefaultNamespace: strings.TrimSpace(os.Getenv("STELE_AUTH_DEFAULT_NAMESPACE")),
+		},
+		Embedding: EmbeddingConfig{
+			DefaultProvider:   strings.TrimSpace(os.Getenv("STELE_EMBEDDING_DEFAULT_PROVIDER")),
+			DefaultModel:      strings.TrimSpace(os.Getenv("STELE_EMBEDDING_DEFAULT_MODEL")),
+			DefaultDimensions: defaultEmbeddingDimensions,
+			ClassRoutes:       classRoutes,
 		},
 		Jobs: JobConfig{
 			MaintenanceInterval:        maintenanceInterval,
@@ -189,4 +217,52 @@ func loadIntWithDefault(key string, fallback int) (int, error) {
 	}
 
 	return value, nil
+}
+
+func loadEmbeddingClassRoutes(key string) (map[string]EmbeddingRouteConfig, error) {
+	raw := strings.TrimSpace(os.Getenv(key))
+	if raw == "" {
+		return nil, nil
+	}
+
+	routes := make(map[string]EmbeddingRouteConfig)
+	for _, entry := range strings.Split(raw, ",") {
+		entry = strings.TrimSpace(entry)
+		if entry == "" {
+			continue
+		}
+
+		className, routeRaw, ok := strings.Cut(entry, "=")
+		if !ok {
+			return nil, fmt.Errorf("%s is invalid: route %q must use class=provider:model:dimensions format", key, entry)
+		}
+		parts := strings.Split(strings.TrimSpace(routeRaw), ":")
+		if len(parts) != 3 {
+			return nil, fmt.Errorf("%s is invalid: route %q must use class=provider:model:dimensions format", key, entry)
+		}
+
+		dimensions, err := strconv.Atoi(strings.TrimSpace(parts[2]))
+		if err != nil {
+			return nil, fmt.Errorf("%s is invalid: route %q has invalid dimensions: %w", key, entry, err)
+		}
+		if dimensions <= 0 {
+			return nil, fmt.Errorf("%s is invalid: route %q must use positive dimensions", key, entry)
+		}
+
+		className = strings.TrimSpace(className)
+		if className == "" {
+			return nil, fmt.Errorf("%s is invalid: route %q is missing class name", key, entry)
+		}
+
+		routes[className] = EmbeddingRouteConfig{
+			Provider:   strings.TrimSpace(parts[0]),
+			Model:      strings.TrimSpace(parts[1]),
+			Dimensions: dimensions,
+		}
+		if routes[className].Provider == "" || routes[className].Model == "" {
+			return nil, fmt.Errorf("%s is invalid: route %q requires provider and model", key, entry)
+		}
+	}
+
+	return routes, nil
 }

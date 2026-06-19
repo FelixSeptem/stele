@@ -328,6 +328,60 @@ func TestServiceSearchAppliesSummaryRelationAndClassFilters(t *testing.T) {
 	}
 }
 
+func TestServiceSearchKeepsLexicalAndRelationHitsWhenSemanticHasNoMatches(t *testing.T) {
+	scope := memory.Scope{
+		Tenant:    "tenant-a",
+		Project:   "project-a",
+		Namespace: "namespace-a",
+	}
+
+	service := NewService(ServiceDependencies{
+		Lexical: &stubLexicalSource{
+			hits: []ScoredMemory{
+				{
+					Memory:       memory.CanonicalMemory{ID: "mem_profile", Scope: scope, Class: memory.MemoryClassProfile, State: memory.MemoryStateActive, Content: "User prefers concise answers."},
+					LexicalScore: 0.9,
+				},
+			},
+		},
+		Semantic: &stubSemanticSource{},
+		Relations: &stubRelationSource{
+			hits: []ScoredMemory{
+				{
+					Memory:        memory.CanonicalMemory{ID: "mem_relation", Scope: scope, Class: memory.MemoryClassRelation, State: memory.MemoryStateActive, Content: "entity:user relation:interested_in target:concise_answers"},
+					RelationScore: 0.4,
+				},
+			},
+		},
+	})
+
+	result, err := service.Search(context.Background(), SearchInput{
+		Scope:            scope,
+		Query:            "concise answers",
+		QueryEmbedding:   []float32{0.1, 0.2, 0.3},
+		IncludeRelations: true,
+	})
+	if err != nil {
+		t.Fatalf("Search() error = %v", err)
+	}
+
+	if len(result.Hits) != 2 {
+		t.Fatalf("len(result.Hits) = %d, want 2", len(result.Hits))
+	}
+
+	if result.Hits[0].Memory.ID != "mem_profile" {
+		t.Fatalf("result.Hits[0].Memory.ID = %q, want mem_profile", result.Hits[0].Memory.ID)
+	}
+
+	if result.Hits[1].Memory.ID != "mem_relation" {
+		t.Fatalf("result.Hits[1].Memory.ID = %q, want mem_relation", result.Hits[1].Memory.ID)
+	}
+
+	if result.Hits[0].Score.Semantic != 0 || result.Hits[1].Score.Semantic != 0 {
+		t.Fatalf("semantic scores = (%v, %v), want zero semantic contribution", result.Hits[0].Score.Semantic, result.Hits[1].Score.Semantic)
+	}
+}
+
 func TestServiceAssembleContextHonorsBudgetAndKeepsSummary(t *testing.T) {
 	scope := memory.Scope{
 		Tenant:    "tenant-a",

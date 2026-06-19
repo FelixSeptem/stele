@@ -74,6 +74,43 @@ CREATE TABLE IF NOT EXISTS memory_versions (
     UNIQUE (memory_id, version)
 );
 
+CREATE TABLE IF NOT EXISTS embedding_rebuilds (
+    memory_id uuid PRIMARY KEY REFERENCES canonical_memories(id) ON DELETE CASCADE,
+    tenant text NOT NULL,
+    project text NOT NULL,
+    namespace text NOT NULL,
+    source_version bigint NOT NULL,
+    content_hash text NOT NULL,
+    requested_provider text NOT NULL,
+    requested_model text NOT NULL,
+    requested_dimensions integer NOT NULL DEFAULT 0,
+    status text NOT NULL,
+    failure_reason text,
+    requested_at timestamptz NOT NULL,
+    last_attempted_at timestamptz,
+    active_vector_revision_id uuid
+);
+
+CREATE TABLE IF NOT EXISTS vector_revisions (
+    id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+    memory_id uuid NOT NULL REFERENCES canonical_memories(id) ON DELETE CASCADE,
+    tenant text NOT NULL,
+    project text NOT NULL,
+    namespace text NOT NULL,
+    source_version bigint NOT NULL,
+    content_hash text NOT NULL,
+    provider text NOT NULL,
+    model text NOT NULL,
+    dimensions integer NOT NULL,
+    embedding vector,
+    status text NOT NULL,
+    failure_reason text,
+    superseded_by uuid,
+    generated_at timestamptz NOT NULL,
+    activated_at timestamptz,
+    last_rebuild_request_at timestamptz
+);
+
 CREATE TABLE IF NOT EXISTS provenance_links (
     id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
     raw_event_id uuid REFERENCES raw_events(id),
@@ -86,6 +123,20 @@ CREATE TABLE IF NOT EXISTS provenance_links (
     request_id text,
     actor text,
     source_context jsonb NOT NULL DEFAULT '{}'::jsonb,
+    created_at timestamptz NOT NULL DEFAULT now()
+);
+
+CREATE TABLE IF NOT EXISTS governance_recovery_ledger (
+    id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+    raw_event_id uuid NOT NULL REFERENCES raw_events(id),
+    tenant text NOT NULL,
+    project text NOT NULL,
+    namespace text NOT NULL,
+    action text NOT NULL,
+    actor text NOT NULL,
+    reason text NOT NULL,
+    before_snapshot jsonb NOT NULL DEFAULT '{}'::jsonb,
+    after_snapshot jsonb NOT NULL DEFAULT '{}'::jsonb,
     created_at timestamptz NOT NULL DEFAULT now()
 );
 
@@ -160,8 +211,26 @@ CREATE INDEX IF NOT EXISTS canonical_memories_search_text_idx
 CREATE INDEX IF NOT EXISTS memory_versions_memory_created_at_idx
     ON memory_versions (memory_id, created_at DESC);
 
+CREATE INDEX IF NOT EXISTS embedding_rebuilds_status_requested_at_idx
+    ON embedding_rebuilds (status, requested_at ASC);
+
+CREATE INDEX IF NOT EXISTS embedding_rebuilds_scope_status_idx
+    ON embedding_rebuilds (tenant, project, namespace, status, requested_at ASC);
+
 CREATE INDEX IF NOT EXISTS provenance_links_scope_created_at_idx
     ON provenance_links (tenant, project, namespace, created_at DESC);
+
+CREATE INDEX IF NOT EXISTS vector_revisions_memory_generated_at_idx
+    ON vector_revisions (memory_id, generated_at DESC);
+
+CREATE INDEX IF NOT EXISTS vector_revisions_scope_status_generated_at_idx
+    ON vector_revisions (tenant, project, namespace, status, generated_at DESC);
+
+CREATE INDEX IF NOT EXISTS governance_recovery_ledger_scope_created_at_idx
+    ON governance_recovery_ledger (tenant, project, namespace, created_at DESC);
+
+CREATE INDEX IF NOT EXISTS governance_recovery_ledger_raw_event_created_at_idx
+    ON governance_recovery_ledger (raw_event_id, created_at DESC);
 
 CREATE INDEX IF NOT EXISTS relation_projections_scope_updated_at_idx
     ON relation_projections (tenant, project, namespace, updated_at DESC);

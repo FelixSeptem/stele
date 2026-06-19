@@ -22,6 +22,14 @@ The service SHALL run governance work through a durable worker orchestration pat
 - **WHEN** a worker crashes or loses its lease before completing a claimed job
 - **THEN** the service can make that unfinished and non-exhausted event eligible for later reclaim by another worker without duplicating committed side effects
 
+#### Scenario: Operator requeues an exhausted raw event
+- **WHEN** an authorized recovery action clears the exhausted terminal state for a governance raw event
+- **THEN** the service returns that event to the ordinary worker claim path instead of executing it through a separate recovery-only processor
+
+#### Scenario: Recovery action does not seize leased ownership
+- **WHEN** an operator targets a governance raw event that is still under an active worker lease
+- **THEN** the service rejects the recovery action rather than bypassing the durable worker ownership contract
+
 ### Requirement: Idempotent maintenance execution
 The service MUST keep repeated governance and maintenance execution idempotent at the job, scope, and cadence-window level for restart and retry safety.
 
@@ -47,4 +55,19 @@ The service SHALL provide a scheduler-driven, scope-aware path for periodic main
 #### Scenario: Runtime-global cleanup remains singular
 - **WHEN** a maintenance job is runtime-global rather than scope-bound
 - **THEN** the scheduler executes it once per cadence window without multiplying the same cleanup work across all discovered scopes
+
+### Requirement: Asynchronous embedding reindex execution
+The service SHALL execute semantic backfill, rebuild, and provider-rotation work through the existing durable worker or scheduler runtime model rather than inline write paths.
+
+#### Scenario: Background runtime claims eligible embedding work
+- **WHEN** canonical memories are marked eligible for semantic backfill, rebuild, or provider-target drift correction
+- **THEN** the service can claim and process that work asynchronously without requiring a foreground memory mutation or retrieval request
+
+#### Scenario: Reindex execution retries safely after failure
+- **WHEN** embedding generation or activation fails for a claimed reindex target
+- **THEN** the service records durable failure state and can retry later without duplicating active-vector promotion or corrupting semantic lineage
+
+#### Scenario: Provider rotation reuses the same durable execution path
+- **WHEN** the desired embedding provider or model target changes for eligible canonical memory
+- **THEN** the service schedules provider-drift rebuild work through the same durable asynchronous execution path used for missing or stale embeddings
 

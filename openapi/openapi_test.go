@@ -52,6 +52,60 @@ func TestSpecYAMLIncludesManualMutationRoutes(t *testing.T) {
 	}
 }
 
+func TestSpecYAMLIncludesGovernanceRecoveryRoutes(t *testing.T) {
+	for _, want := range []string{
+		"/v1/admin/governance/raw-events",
+		"/v1/admin/governance/raw-events/{raw_event_id}",
+		"/v1/admin/governance/raw-events/{raw_event_id}/recovery-history",
+		"/v1/admin/governance/raw-events/{raw_event_id}:retry",
+		"/v1/admin/governance/raw-events/{raw_event_id}:reschedule",
+		"/v1/admin/governance/raw-events/{raw_event_id}:requeue",
+		"attempt_gte",
+		"attempt_lte",
+		"failed_from",
+		"failed_to",
+		"next_attempt_from",
+		"next_attempt_to",
+		"cursor",
+		"scheduled_for",
+		"next_cursor",
+	} {
+		if !strings.Contains(SpecYAML(), want) {
+			t.Fatalf("SpecYAML() missing %q", want)
+		}
+	}
+}
+
+func TestSpecYAMLIncludesGovernanceRecoverySchemas(t *testing.T) {
+	for _, want := range []string{
+		"GovernanceRawEvent",
+		"GovernanceRawEventListResponse",
+		"GovernanceRecoveryHistoryResponse",
+		"GovernanceRecoveryActionRequest",
+		"GovernanceRecoverySnapshot",
+		"GovernanceRecoveryRecord",
+		"GovernanceRecoveryOutcome",
+		"raw_event_id",
+		"worker_id",
+		"claimed_at",
+		"lease_until",
+		"last_failed_at",
+		"last_error",
+		"next_attempt_at",
+		"exhausted_at",
+		"processed_at",
+		"occurred_at",
+		"before",
+		"after",
+		"raw_event",
+		"recovery",
+	} {
+		if !strings.Contains(SpecYAML(), want) {
+			t.Fatalf("SpecYAML() missing %q", want)
+		}
+	}
+}
+
 func TestSpecYAMLContainsSearchTimeWindowFields(t *testing.T) {
 	spec := SpecYAML()
 

@@ -516,3 +516,144 @@ func (p *markingProcessor) ProcessClaimedRawEvent(ctx context.Context, claim gov
 	p.state.done = true
 	return nil
 }
+
+type recoveryAwareClaimer struct {
+	event         memory.RawEvent
+	attempt       int
+	nextAttemptAt time.Time
+	leaseUntil    time.Time
+	exhausted     bool
+	processed     bool
+}
+
+func (c *recoveryAwareClaimer) ClaimPendingRawEvents(ctx context.Context, input governance.ClaimPendingRawEventsInput) ([]governance.ClaimedRawEvent, error) {
+	if c.processed || c.exhausted {
+		return nil, nil
+	}
+	if !c.leaseUntil.IsZero() && input.Now.Before(c.leaseUntil) {
+		return nil, nil
+	}
+	if !c.nextAttemptAt.IsZero() && c.nextAttemptAt.After(input.Now) {
+		return nil, nil
+	}
+
+	c.attempt++
+	c.leaseUntil = input.Now.Add(input.LeaseDuration)
+	return []governance.ClaimedRawEvent{{
+		Event:      c.event,
+		WorkerID:   input.WorkerID,
+		ClaimedAt:  input.Now,
+		LeaseUntil: c.leaseUntil,
+		Attempt:    c.attempt,
+	}}, nil
+}
+
+type completionMarkingProcessor struct {
+	claimer   *recoveryAwareClaimer
+	gotClaims []governance.ClaimedRawEvent
+}
+
+func (p *completionMarkingProcessor) ProcessClaimedRawEvent(ctx context.Context, claim governance.ClaimedRawEvent) error {
+	p.gotClaims = append(p.gotClaims, claim)
+	p.claimer.processed = true
+	return nil
+}
+
+func TestGovernanceWorkerRunOnceProcessesRecoveredRetryWaitEventThroughClaimPath(t *testing.T) {
+	now := time.Date(2026, 6, 12, 3, 0, 0, 0, time.UTC)
+	claimer := &recoveryAwareClaimer{
+		event:      newClaimedRawEvent(t, "evt_retry_recovered", now).Event,
+		attempt:    2,
+		exhausted:  false,
+		processed:  false,
+		leaseUntil: time.Time{},
+		nextAttemptAt: now.Add(10 * time.Minute),
+	}
+	processor := &completionMarkingProcessor{claimer: claimer}
+	worker := GovernanceWorker{
+		Claimer:       claimer,
+		Processor:     processor,
+		WorkerID:      "worker-a",
+		BatchSize:     1,
+		LeaseDuration: 2 * time.Minute,
+		Now:           func() time.Time { return now },
+	}
+
+	processed, err := worker.RunOnce(context.Background())
+	if err != nil {
+		t.Fatalf("RunOnce() before recovery error = %v", err)
+	}
+	if processed != 0 {
+		t.Fatalf("processed before recovery = %d, want 0", processed)
+	}
+	if len(processor.gotClaims) != 0 {
+		t.Fatalf("len(processor.gotClaims) = %d, want 0 before recovery", len(processor.gotClaims))
+	}
+
+	claimer.nextAttemptAt = now
+	worker.Now = func() time.Time { return now.Add(time.Second) }
+
+	processed, err = worker.RunOnce(context.Background())
+	if err != nil {
+		t.Fatalf("RunOnce() after recovery error = %v", err)
+	}
+	if processed != 1 {
+		t.Fatalf("processed after recovery = %d, want 1", processed)
+	}
+	if len(processor.gotClaims) != 1 {
+		t.Fatalf("len(processor.gotClaims) = %d, want 1 after recovery", len(processor.gotClaims))
+	}
+	if processor.gotClaims[0].Attempt != 3 {
+		t.Fatalf("claim attempt = %d, want 3 to show ordinary re-claim with preserved history", processor.gotClaims[0].Attempt)
+	}
+}
+
+func TestGovernanceWorkerRunOnceProcessesRequeuedExhaustedEventAsFreshClaim(t *testing.T) {
+	now := time.Date(2026, 6, 12, 3, 10, 0, 0, time.UTC)
+	claimer := &recoveryAwareClaimer{
+		event:      newClaimedRawEvent(t, "evt_requeue", now).Event,
+		attempt:    5,
+		exhausted:  true,
+		processed:  false,
+		leaseUntil: time.Time{},
+	}
+	processor := &completionMarkingProcessor{claimer: claimer}
+	worker := GovernanceWorker{
+		Claimer:       claimer,
+		Processor:     processor,
+		WorkerID:      "worker-a",
+		BatchSize:     1,
+		LeaseDuration: 2 * time.Minute,
+		Now:           func() time.Time { return now },
+	}
+
+	processed, err := worker.RunOnce(context.Background())
+	if err != nil {
+		t.Fatalf("RunOnce() before requeue error = %v", err)
+	}
+	if processed != 0 {
+		t.Fatalf("processed before requeue = %d, want 0", processed)
+	}
+	if len(processor.gotClaims) != 0 {
+		t.Fatalf("len(processor.gotClaims) = %d, want 0 before requeue", len(processor.gotClaims))
+	}
+
+	claimer.exhausted = false
+	claimer.attempt = 0
+	claimer.nextAttemptAt = now
+	worker.Now = func() time.Time { return now.Add(time.Second) }
+
+	processed, err = worker.RunOnce(context.Background())
+	if err != nil {
+		t.Fatalf("RunOnce() after requeue error = %v", err)
+	}
+	if processed != 1 {
+		t.Fatalf("processed after requeue = %d, want 1", processed)
+	}
+	if len(processor.gotClaims) != 1 {
+		t.Fatalf("len(processor.gotClaims) = %d, want 1 after requeue", len(processor.gotClaims))
+	}
+	if processor.gotClaims[0].Attempt != 1 {
+		t.Fatalf("claim attempt = %d, want 1 after exhausted state reset", processor.gotClaims[0].Attempt)
+	}
+}

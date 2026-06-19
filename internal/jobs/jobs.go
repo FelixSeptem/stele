@@ -8,9 +8,11 @@ import (
 	"strings"
 	"time"
 
+	"github.com/FelixSeptem/stele/internal/embedding"
 	"github.com/FelixSeptem/stele/internal/governance"
 	"github.com/FelixSeptem/stele/internal/memory"
 	"github.com/FelixSeptem/stele/internal/telemetry"
+	"github.com/jackc/pgx/v5"
 )
 
 type NoopWorker struct{}
@@ -550,6 +552,20 @@ type jobExecutionCleaner interface {
 	DeleteJobExecutionsBefore(ctx context.Context, cutoff time.Time) (int, error)
 }
 
+type embeddingProviderResolver interface {
+	ResolveProvider(name string) (embedding.Provider, error)
+}
+
+type embeddingLifecycleStore interface {
+	ListEmbeddingLifecycleCandidates(ctx context.Context, scope memory.Scope, limit int) ([]memory.EmbeddingLifecycleCandidate, error)
+	RecordEmbeddingRebuildRequired(ctx context.Context, record memory.EmbeddingRebuildRecord) error
+	ClaimEmbeddingRebuilds(ctx context.Context, scope memory.Scope, limit int, attemptedAt time.Time) ([]memory.EmbeddingRebuildRecord, error)
+	AppendVectorRevision(ctx context.Context, revision memory.VectorRevision) error
+	PromoteVectorRevision(ctx context.Context, revision memory.VectorRevision) error
+	RecordFailedVectorRevision(ctx context.Context, record memory.EmbeddingRebuildRecord, revision memory.VectorRevision) error
+	RecordEmbeddingRebuildFailure(ctx context.Context, record memory.EmbeddingRebuildRecord, failureCause string, failedAt time.Time) error
+}
+
 type SummaryCompactionJob struct {
 	Scope          memory.Scope
 	CutoffWindow   time.Duration
@@ -765,6 +781,287 @@ func (j JobExecutionCleanupJob) triggerSource() string {
 	}
 
 	return "scheduler"
+}
+
+type EmbeddingRebuildJob struct {
+	Scope          memory.Scope
+	Router         embedding.Router
+	Providers      embeddingProviderResolver
+	Store          embeddingLifecycleStore
+	ExecutionStore ExecutionStore
+	Observer       telemetry.Observer
+	TriggerSource  string
+	Cadence        time.Duration
+	Now            func() time.Time
+	Limit          int
+	NewRevisionID  func() string
+}
+
+func (j EmbeddingRebuildJob) Name() string {
+	return "embedding_rebuild"
+}
+
+func (j EmbeddingRebuildJob) Run(ctx context.Context) (processed int, err error) {
+	startedAt := time.Now()
+	if err := j.Scope.Validate(); err != nil {
+		return 0, err
+	}
+	if j.Store == nil {
+		return 0, fmt.Errorf("embedding lifecycle store is required")
+	}
+	if j.NewRevisionID == nil {
+		return 0, fmt.Errorf("embedding revision id generator is required")
+	}
+
+	now := time.Now
+	if j.Now != nil {
+		now = j.Now
+	}
+	current := now().UTC()
+	defer func() {
+		if j.Observer == nil {
+			return
+		}
+
+		status := "ok"
+		errorMessage := ""
+		if err != nil {
+			status = "error"
+			processed = 0
+			errorMessage = err.Error()
+		}
+
+		j.Observer.RecordOperation(ctx, telemetry.OperationEvent{
+			Mode:       "scheduler",
+			Component:  "embedding_rebuild_job",
+			Operation:  "embedding_rebuild",
+			Status:     status,
+			Count:      processed,
+			Duration:   time.Since(startedAt),
+			Error:      errorMessage,
+			ObservedAt: current,
+		})
+	}()
+	runWindow := scheduledRunWindow(current, j.Cadence)
+
+	started, idempotencyKey, err := beginScheduledExecution(ctx, j.ExecutionStore, j.Name(), j.Scope, j.triggerSource(), runWindow)
+	if err != nil {
+		return 0, err
+	}
+	if !started {
+		return 0, nil
+	}
+
+	limit := j.Limit
+	if limit <= 0 {
+		limit = 100
+	}
+
+	queued, queueErr := j.queueLifecycleCandidates(ctx, current, limit)
+	if queueErr != nil {
+		j.recordBacklog(ctx, current, 0, queueErr)
+		if failErr := failScheduledExecution(ctx, j.ExecutionStore, idempotencyKey, current, queueErr); failErr != nil {
+			return 0, failErr
+		}
+		return 0, queueErr
+	}
+	j.recordBacklog(ctx, current, int64(queued), nil)
+
+	claims, err := j.Store.ClaimEmbeddingRebuilds(ctx, j.Scope, limit, current)
+	if err != nil {
+		if failErr := failScheduledExecution(ctx, j.ExecutionStore, idempotencyKey, current, err); failErr != nil {
+			return 0, failErr
+		}
+		return 0, err
+	}
+
+	processed = 0
+	for _, claim := range claims {
+		if err := j.processClaim(ctx, claim, current); err != nil {
+			if failErr := failScheduledExecution(ctx, j.ExecutionStore, idempotencyKey, current, err); failErr != nil {
+				return 0, failErr
+			}
+			return 0, err
+		}
+		processed++
+	}
+
+	if err := completeScheduledExecution(ctx, j.ExecutionStore, idempotencyKey, current, processed); err != nil {
+		return 0, err
+	}
+
+	return processed, nil
+}
+
+func (j EmbeddingRebuildJob) recordBacklog(ctx context.Context, observedAt time.Time, pending int64, recordErr error) {
+	if j.Observer == nil {
+		return
+	}
+
+	event := telemetry.BacklogEvent{
+		Mode:       "scheduler",
+		Component:  "embedding_rebuild_job",
+		Queue:      "embedding_rebuilds",
+		Pending:    pending,
+		ObservedAt: observedAt,
+	}
+	if recordErr != nil {
+		event.Status = "error"
+		event.Error = recordErr.Error()
+	} else {
+		event.Status = "ok"
+	}
+
+	j.Observer.RecordBacklog(ctx, event)
+}
+
+func (j EmbeddingRebuildJob) triggerSource() string {
+	if j.TriggerSource != "" {
+		return j.TriggerSource
+	}
+
+	return "scheduler"
+}
+
+func (j EmbeddingRebuildJob) queueLifecycleCandidates(ctx context.Context, requestedAt time.Time, limit int) (int, error) {
+	candidates, err := j.Store.ListEmbeddingLifecycleCandidates(ctx, j.Scope, limit)
+	if err != nil {
+		return 0, err
+	}
+
+	queued := 0
+	for _, candidate := range candidates {
+		target, ok, err := j.resolveTarget(candidate)
+		if err != nil {
+			return queued, err
+		}
+		if !ok {
+			continue
+		}
+
+		record := memory.EmbeddingRebuildRecord{
+			MemoryID:            candidate.MemoryID,
+			Scope:               candidate.Scope,
+			Class:               candidate.Class,
+			SourceVersion:       candidate.CurrentSourceVersion,
+			ContentHash:         candidate.CurrentContentHash,
+			RequestedProvider:   target.Provider,
+			RequestedModel:      target.Model,
+			RequestedDimensions: target.Dimensions,
+			Status:              memory.EmbeddingRebuildStatusPending,
+			RequestedAt:         requestedAt,
+		}
+
+		if candidate.ActiveVectorRevision != "" {
+			record.ActiveVectorRevision = candidate.ActiveVectorRevision
+		}
+
+		if err := j.Store.RecordEmbeddingRebuildRequired(ctx, record); err != nil {
+			return queued, err
+		}
+		queued++
+	}
+
+	return queued, nil
+}
+
+func (j EmbeddingRebuildJob) resolveTarget(candidate memory.EmbeddingLifecycleCandidate) (embedding.Target, bool, error) {
+	if j.Router.Default == (embedding.Target{}) && len(j.Router.ByClass) == 0 {
+		return embedding.Target{}, false, nil
+	}
+
+	target, err := j.Router.ResolveTarget(string(candidate.Class))
+	if err != nil {
+		return embedding.Target{}, false, err
+	}
+
+	switch {
+	case candidate.RebuildStatus == memory.EmbeddingRebuildStatusPending:
+		return embedding.Target{}, false, nil
+	case candidate.RebuildStatus == memory.EmbeddingRebuildStatusCurrent:
+		if !embedding.DetermineDrift(target, candidate.ActiveProvider, candidate.ActiveModel, candidate.ActiveDimensions) {
+			return embedding.Target{}, false, nil
+		}
+	}
+
+	return target, true, nil
+}
+
+func (j EmbeddingRebuildJob) processClaim(ctx context.Context, claim memory.EmbeddingRebuildRecord, processedAt time.Time) error {
+	if j.Providers == nil {
+		return fmt.Errorf("embedding provider resolver is required")
+	}
+
+	provider, err := j.Providers.ResolveProvider(claim.RequestedProvider)
+	if err != nil {
+		return err
+	}
+
+	result, err := provider.GenerateEmbedding(ctx, embedding.ProviderRequest{
+		Text: claim.Content,
+		Target: embedding.Target{
+			Provider:   claim.RequestedProvider,
+			Model:      claim.RequestedModel,
+			Dimensions: claim.RequestedDimensions,
+		},
+	})
+	if err != nil {
+		return j.recordFailure(ctx, claim, processedAt, err)
+	}
+
+	revision := memory.VectorRevision{
+		ID:                 j.NewRevisionID(),
+		MemoryID:           claim.MemoryID,
+		Scope:              claim.Scope,
+		SourceVersion:      claim.SourceVersion,
+		ContentHash:        claim.ContentHash,
+		Provider:           result.Provider,
+		Model:              result.Model,
+		Dimensions:         result.Dimensions,
+		Embedding:          result.Embedding,
+		Status:             memory.VectorRevisionStatusGenerated,
+		GeneratedAt:        processedAt,
+		LastRebuildRequest: claim.RequestedAt,
+	}
+
+	if err := j.Store.AppendVectorRevision(ctx, revision); err != nil {
+		return err
+	}
+
+	revision.Status = memory.VectorRevisionStatusActive
+	revision.ActivatedAt = processedAt
+	if err := j.Store.PromoteVectorRevision(ctx, revision); err != nil {
+		if errors.Is(err, pgx.ErrNoRows) {
+			return nil
+		}
+		return err
+	}
+
+	return nil
+}
+
+func (j EmbeddingRebuildJob) recordFailure(ctx context.Context, claim memory.EmbeddingRebuildRecord, failedAt time.Time, cause error) error {
+	revision := memory.VectorRevision{
+		ID:                 j.NewRevisionID(),
+		MemoryID:           claim.MemoryID,
+		Scope:              claim.Scope,
+		SourceVersion:      claim.SourceVersion,
+		ContentHash:        claim.ContentHash,
+		Provider:           claim.RequestedProvider,
+		Model:              claim.RequestedModel,
+		Dimensions:         claim.RequestedDimensions,
+		Embedding:          []float32{},
+		Status:             memory.VectorRevisionStatusFailed,
+		FailureReason:      cause.Error(),
+		GeneratedAt:        failedAt,
+		LastRebuildRequest: claim.RequestedAt,
+	}
+
+	if err := j.Store.RecordFailedVectorRevision(ctx, claim, revision); err != nil {
+		return err
+	}
+
+	return j.Store.RecordEmbeddingRebuildFailure(ctx, claim, cause.Error(), failedAt)
 }
 
 func scheduledRunWindow(current time.Time, cadence time.Duration) time.Time {

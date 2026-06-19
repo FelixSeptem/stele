@@ -1,4 +1,7 @@
 DROP TABLE IF EXISTS deletion_markers;
+DROP TABLE IF EXISTS vector_revisions;
+DROP TABLE IF EXISTS embedding_rebuilds;
+DROP TABLE IF EXISTS governance_recovery_ledger;
 DROP TABLE IF EXISTS job_executions;
 DROP TABLE IF EXISTS relation_projections;
 DROP TABLE IF EXISTS provenance_links;

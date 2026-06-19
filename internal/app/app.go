@@ -8,6 +8,7 @@ import (
 
 	"github.com/FelixSeptem/stele/internal/auth"
 	"github.com/FelixSeptem/stele/internal/config"
+	"github.com/FelixSeptem/stele/internal/embedding"
 	"github.com/FelixSeptem/stele/internal/governance"
 	"github.com/FelixSeptem/stele/internal/jobs"
 	"github.com/FelixSeptem/stele/internal/memory"
@@ -364,7 +365,7 @@ func buildAPIRuntime(ctx context.Context, cfg config.Config, deps apiRuntimeDepe
 		return apiRuntime{}, fmt.Errorf("open postgres pool: %w", err)
 	}
 
-	repo := postgres.NewRepository(pool)
+	repo := postgres.NewRepositoryWithEmbeddingRouter(pool, embeddingRouterFromConfig(cfg.Embedding))
 	ingestor := memory.NewService(repo, time.Now, deps.observer)
 	queryService := memory.NewQueryService(repo)
 	lifecycleService := memory.LifecycleService{
@@ -403,6 +404,7 @@ func buildAPIRuntime(ctx context.Context, cfg config.Config, deps apiRuntimeDepe
 		now:      time.Now,
 		observer: deps.observer,
 	}
+	httpDeps.GovernanceAdmin = repo
 	httpDeps.MemoryHistoryRead = memoryHistoryReaderFunc(func(ctx context.Context, scope memory.Scope, memoryID string) (memory.MemoryHistory, error) {
 		return repo.ReadMemoryHistory(ctx, scope, memoryID, true)
 	})
@@ -440,7 +442,7 @@ func buildWorkerRuntime(ctx context.Context, cfg config.Config, deps workerRunti
 		return workerRuntime{}, fmt.Errorf("open postgres pool: %w", err)
 	}
 
-	repo := postgres.NewRepository(pool)
+	repo := postgres.NewRepositoryWithEmbeddingRouter(pool, embeddingRouterFromConfig(cfg.Embedding))
 	now := deps.now
 	summary := governance.SummaryProcessor{
 		Source:         repo,
@@ -534,7 +536,7 @@ func buildSchedulerRuntime(ctx context.Context, cfg config.Config, deps schedule
 		return schedulerRuntime{}, fmt.Errorf("scheduler default scope: %w", err)
 	}
 
-	repo := postgres.NewRepository(pool)
+	repo := postgres.NewRepositoryWithEmbeddingRouter(pool, embeddingRouterFromConfig(cfg.Embedding))
 	now := deps.now
 	summary := governance.SummaryProcessor{
 		Source:         repo,
@@ -560,10 +562,35 @@ func buildSchedulerRuntime(ctx context.Context, cfg config.Config, deps schedule
 	summaryInterval := firstPositiveDuration(cfg.Jobs.SummaryCompactionInterval, cfg.Jobs.MaintenanceInterval, 15*time.Minute)
 	retentionInterval := firstPositiveDuration(cfg.Jobs.RetentionInterval, cfg.Jobs.MaintenanceInterval, 15*time.Minute)
 	cleanupInterval := firstPositiveDuration(cfg.Jobs.CleanupInterval, cfg.Jobs.MaintenanceInterval, 15*time.Minute)
-	schedulerInterval := minPositiveDuration(summaryInterval, retentionInterval, cleanupInterval, cfg.Jobs.MaintenanceInterval, 15*time.Minute)
+	embeddingInterval := firstPositiveDuration(cfg.Jobs.MaintenanceInterval, 15*time.Minute)
+	schedulerInterval := minPositiveDuration(summaryInterval, retentionInterval, cleanupInterval, embeddingInterval, cfg.Jobs.MaintenanceInterval, 15*time.Minute)
+
+	embeddingRouter := embeddingRouterFromConfig(cfg.Embedding)
+	embeddingProviders := embedding.StaticProviderRegistry{}
 
 	scheduler := jobs.MaintenanceScheduler{
 		Jobs: []jobs.MaintenanceJob{
+			jobs.ScopeDispatchJob{
+				NameValue:       "embedding_rebuild_dispatch",
+				ScopeSource:     repo,
+				ScopeBatchLimit: cfg.Jobs.MaintenanceScopeBatchLimit,
+				FallbackScope:   scope,
+				Dispatch: func(scope memory.Scope) jobs.MaintenanceJob {
+					return jobs.EmbeddingRebuildJob{
+						Scope:          scope,
+						Router:         embeddingRouter,
+						Providers:      embeddingProviders,
+						Store:          repo,
+						ExecutionStore: repo,
+						Observer:       deps.observer,
+						TriggerSource:  "scheduler",
+						Cadence:        embeddingInterval,
+						Now:            now,
+						Limit:          100,
+						NewRevisionID:  newID,
+					}
+				},
+			},
 			jobs.ScopeDispatchJob{
 				NameValue:       "summary_compaction_dispatch",
 				ScopeSource:     repo,
@@ -622,6 +649,31 @@ func buildSchedulerRuntime(ctx context.Context, cfg config.Config, deps schedule
 			pool.Close()
 		},
 	}, nil
+}
+
+func embeddingRouterFromConfig(cfg config.EmbeddingConfig) embedding.Router {
+	router := embedding.Router{
+		Default: embedding.Target{
+			Provider:   cfg.DefaultProvider,
+			Model:      cfg.DefaultModel,
+			Dimensions: cfg.DefaultDimensions,
+		},
+	}
+
+	if len(cfg.ClassRoutes) == 0 {
+		return router
+	}
+
+	router.ByClass = make(map[string]embedding.Target, len(cfg.ClassRoutes))
+	for className, route := range cfg.ClassRoutes {
+		router.ByClass[className] = embedding.Target{
+			Provider:   route.Provider,
+			Model:      route.Model,
+			Dimensions: route.Dimensions,
+		}
+	}
+
+	return router
 }
 
 func newID() string {
