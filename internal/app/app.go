@@ -4,6 +4,8 @@ import (
 	"context"
 	"fmt"
 	"net/http"
+	"sort"
+	"strings"
 	"time"
 
 	"github.com/FelixSeptem/stele/internal/auth"
@@ -83,17 +85,19 @@ type transactionStarter interface {
 }
 
 type apiRuntimeDependencies struct {
-	openPool          func(ctx context.Context, dsn string) (postgresRuntimeStore, error)
-	bootstrapDatabase func(ctx context.Context, db postgresRuntimeStore) error
-	newServer         func(addr string, deps HTTPDependencies) httpServer
-	observer          telemetry.Observer
+	openPool           func(ctx context.Context, dsn string) (postgresRuntimeStore, error)
+	bootstrapDatabase  func(ctx context.Context, db postgresRuntimeStore) error
+	newServer          func(addr string, deps HTTPDependencies) httpServer
+	embeddingProviders map[string]embedding.Provider
+	observer           telemetry.Observer
 }
 
 type workerRuntimeDependencies struct {
-	openPool          func(ctx context.Context, dsn string) (postgresRuntimeStore, error)
-	bootstrapDatabase func(ctx context.Context, db postgresRuntimeStore) error
-	now               func() time.Time
-	observer          telemetry.Observer
+	openPool           func(ctx context.Context, dsn string) (postgresRuntimeStore, error)
+	bootstrapDatabase  func(ctx context.Context, db postgresRuntimeStore) error
+	embeddingProviders map[string]embedding.Provider
+	now                func() time.Time
+	observer           telemetry.Observer
 }
 
 type backgroundWorker interface {
@@ -101,14 +105,21 @@ type backgroundWorker interface {
 }
 
 type schedulerRuntimeDependencies struct {
-	openPool          func(ctx context.Context, dsn string) (postgresRuntimeStore, error)
-	bootstrapDatabase func(ctx context.Context, db postgresRuntimeStore) error
-	now               func() time.Time
-	observer          telemetry.Observer
+	openPool           func(ctx context.Context, dsn string) (postgresRuntimeStore, error)
+	bootstrapDatabase  func(ctx context.Context, db postgresRuntimeStore) error
+	embeddingProviders map[string]embedding.Provider
+	now                func() time.Time
+	observer           telemetry.Observer
 }
 
 type backgroundScheduler interface {
 	Start(ctx context.Context) error
+}
+
+type embeddingRuntime struct {
+	Router    embedding.Router
+	Providers embedding.ProviderResolver
+	Status    memory.EmbeddingRuntimeStatus
 }
 
 const governanceWorkerLeaseDuration = 2 * time.Minute
@@ -360,12 +371,17 @@ func buildAPIRuntime(ctx context.Context, cfg config.Config, deps apiRuntimeDepe
 		deps.observer = telemetry.NoopObserver()
 	}
 
+	embeddingRuntime, err := buildEmbeddingRuntime(cfg.Embedding, deps.embeddingProviders)
+	if err != nil {
+		return apiRuntime{}, err
+	}
+
 	pool, err := deps.openPool(ctx, cfg.PostgresDSN)
 	if err != nil {
 		return apiRuntime{}, fmt.Errorf("open postgres pool: %w", err)
 	}
 
-	repo := postgres.NewRepositoryWithEmbeddingRouter(pool, embeddingRouterFromConfig(cfg.Embedding))
+	repo := postgres.NewRepositoryWithEmbeddingRouter(pool, embeddingRuntime.Router)
 	ingestor := memory.NewService(repo, time.Now, deps.observer)
 	queryService := memory.NewQueryService(repo)
 	lifecycleService := memory.LifecycleService{
@@ -395,6 +411,7 @@ func buildAPIRuntime(ctx context.Context, cfg config.Config, deps apiRuntimeDepe
 	httpDeps.MemoryQuery = queryService
 	httpDeps.MemoryLifecycleAction = lifecycleService
 	httpDeps.MemoryManualMutation = manualMutationService
+	httpDeps.EmbeddingAdminRead = memory.NewEmbeddingAdminQueryService(repo, embeddingRuntime.Status)
 	httpDeps.MemorySearcher = retrievalService
 	httpDeps.ContextAssembler = retrievalService
 	httpDeps.GovernanceStatusRead = observedGovernanceStatusReader{
@@ -437,12 +454,17 @@ func buildWorkerRuntime(ctx context.Context, cfg config.Config, deps workerRunti
 		deps.observer = telemetry.NoopObserver()
 	}
 
+	embeddingRuntime, err := buildEmbeddingRuntime(cfg.Embedding, deps.embeddingProviders)
+	if err != nil {
+		return workerRuntime{}, err
+	}
+
 	pool, err := deps.openPool(ctx, cfg.PostgresDSN)
 	if err != nil {
 		return workerRuntime{}, fmt.Errorf("open postgres pool: %w", err)
 	}
 
-	repo := postgres.NewRepositoryWithEmbeddingRouter(pool, embeddingRouterFromConfig(cfg.Embedding))
+	repo := postgres.NewRepositoryWithEmbeddingRouter(pool, embeddingRuntime.Router)
 	now := deps.now
 	summary := governance.SummaryProcessor{
 		Source:         repo,
@@ -521,6 +543,11 @@ func buildSchedulerRuntime(ctx context.Context, cfg config.Config, deps schedule
 		deps.observer = telemetry.NoopObserver()
 	}
 
+	embeddingRuntime, err := buildEmbeddingRuntime(cfg.Embedding, deps.embeddingProviders)
+	if err != nil {
+		return schedulerRuntime{}, err
+	}
+
 	pool, err := deps.openPool(ctx, cfg.PostgresDSN)
 	if err != nil {
 		return schedulerRuntime{}, fmt.Errorf("open postgres pool: %w", err)
@@ -536,7 +563,7 @@ func buildSchedulerRuntime(ctx context.Context, cfg config.Config, deps schedule
 		return schedulerRuntime{}, fmt.Errorf("scheduler default scope: %w", err)
 	}
 
-	repo := postgres.NewRepositoryWithEmbeddingRouter(pool, embeddingRouterFromConfig(cfg.Embedding))
+	repo := postgres.NewRepositoryWithEmbeddingRouter(pool, embeddingRuntime.Router)
 	now := deps.now
 	summary := governance.SummaryProcessor{
 		Source:         repo,
@@ -565,9 +592,6 @@ func buildSchedulerRuntime(ctx context.Context, cfg config.Config, deps schedule
 	embeddingInterval := firstPositiveDuration(cfg.Jobs.MaintenanceInterval, 15*time.Minute)
 	schedulerInterval := minPositiveDuration(summaryInterval, retentionInterval, cleanupInterval, embeddingInterval, cfg.Jobs.MaintenanceInterval, 15*time.Minute)
 
-	embeddingRouter := embeddingRouterFromConfig(cfg.Embedding)
-	embeddingProviders := embedding.StaticProviderRegistry{}
-
 	scheduler := jobs.MaintenanceScheduler{
 		Jobs: []jobs.MaintenanceJob{
 			jobs.ScopeDispatchJob{
@@ -578,8 +602,8 @@ func buildSchedulerRuntime(ctx context.Context, cfg config.Config, deps schedule
 				Dispatch: func(scope memory.Scope) jobs.MaintenanceJob {
 					return jobs.EmbeddingRebuildJob{
 						Scope:          scope,
-						Router:         embeddingRouter,
-						Providers:      embeddingProviders,
+						Router:         embeddingRuntime.Router,
+						Providers:      embeddingRuntime.Providers,
 						Store:          repo,
 						ExecutionStore: repo,
 						Observer:       deps.observer,
@@ -674,6 +698,110 @@ func embeddingRouterFromConfig(cfg config.EmbeddingConfig) embedding.Router {
 	}
 
 	return router
+}
+
+func buildEmbeddingRuntime(cfg config.EmbeddingConfig, overrides map[string]embedding.Provider) (embeddingRuntime, error) {
+	router := embeddingRouterFromConfig(cfg)
+	defaultConfigured := strings.TrimSpace(cfg.DefaultProvider) != "" ||
+		strings.TrimSpace(cfg.DefaultModel) != "" ||
+		cfg.DefaultDimensions > 0
+	if defaultConfigured {
+		if err := router.Default.Validate(); err != nil {
+			return embeddingRuntime{}, fmt.Errorf("default embedding route: %w", err)
+		}
+	}
+	if len(router.ByClass) > 0 && !defaultConfigured {
+		return embeddingRuntime{}, fmt.Errorf("default embedding route is required when class routes are configured")
+	}
+	for className, target := range router.ByClass {
+		if err := target.Validate(); err != nil {
+			return embeddingRuntime{}, fmt.Errorf("embedding class route %q: %w", className, err)
+		}
+	}
+
+	registry := embedding.StaticProviderRegistry{}
+	for name, provider := range overrides {
+		if strings.TrimSpace(name) == "" || provider == nil {
+			continue
+		}
+		registry[strings.TrimSpace(name)] = provider
+	}
+	if len(overrides) == 0 && strings.TrimSpace(cfg.OpenAI.APIKey) != "" {
+		provider, err := embedding.NewOpenAIProvider(embedding.OpenAIProviderConfig{
+			APIKey:  cfg.OpenAI.APIKey,
+			BaseURL: cfg.OpenAI.BaseURL,
+			Timeout: cfg.OpenAI.Timeout,
+		})
+		if err != nil {
+			return embeddingRuntime{}, fmt.Errorf("configure openai embedding provider: %w", err)
+		}
+		registry["openai"] = provider
+	}
+
+	for _, providerName := range requiredEmbeddingProviders(router, defaultConfigured) {
+		if _, err := registry.ResolveProvider(providerName); err != nil {
+			return embeddingRuntime{}, fmt.Errorf("embedding provider runtime: %w", err)
+		}
+	}
+
+	if len(registry) == 0 {
+		return embeddingRuntime{
+			Router: router,
+			Status: memory.EmbeddingRuntimeStatus{
+				Configured:             defaultConfigured || len(router.ByClass) > 0,
+				SemanticRebuildEnabled: false,
+				Reason:                 "semantic rebuild execution is inactive because no embedding routes are configured",
+			},
+		}, nil
+	}
+
+	return embeddingRuntime{
+		Router:    router,
+		Providers: registry,
+		Status: memory.EmbeddingRuntimeStatus{
+			Configured:             defaultConfigured || len(router.ByClass) > 0,
+			SemanticRebuildEnabled: defaultConfigured || len(router.ByClass) > 0,
+			RegisteredProviders:    registeredEmbeddingProviders(registry),
+		},
+	}, nil
+}
+
+func requiredEmbeddingProviders(router embedding.Router, includeDefault bool) []string {
+	seen := make(map[string]struct{})
+	providers := make([]string, 0, len(router.ByClass)+1)
+	if includeDefault {
+		provider := strings.TrimSpace(router.Default.Provider)
+		if provider != "" {
+			seen[provider] = struct{}{}
+			providers = append(providers, provider)
+		}
+	}
+	for _, target := range router.ByClass {
+		provider := strings.TrimSpace(target.Provider)
+		if provider == "" {
+			continue
+		}
+		if _, ok := seen[provider]; ok {
+			continue
+		}
+		seen[provider] = struct{}{}
+		providers = append(providers, provider)
+	}
+
+	return providers
+}
+
+func registeredEmbeddingProviders(registry embedding.StaticProviderRegistry) []string {
+	if len(registry) == 0 {
+		return nil
+	}
+
+	providers := make([]string, 0, len(registry))
+	for name := range registry {
+		providers = append(providers, name)
+	}
+	sort.Strings(providers)
+	return providers
 }
 
 func newID() string {

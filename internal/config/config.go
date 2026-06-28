@@ -39,11 +39,18 @@ type EmbeddingRouteConfig struct {
 	Dimensions int
 }
 
+type OpenAIEmbeddingProviderConfig struct {
+	APIKey  string
+	BaseURL string
+	Timeout time.Duration
+}
+
 type EmbeddingConfig struct {
 	DefaultProvider   string
 	DefaultModel      string
 	DefaultDimensions int
 	ClassRoutes       map[string]EmbeddingRouteConfig
+	OpenAI            OpenAIEmbeddingProviderConfig
 }
 
 type JobConfig struct {
@@ -126,6 +133,10 @@ func LoadFromEnv() (Config, error) {
 	if err != nil {
 		return Config{}, err
 	}
+	openAIEmbeddingTimeout, err := loadDurationWithDefault("STELE_EMBEDDING_OPENAI_TIMEOUT", 30*time.Second)
+	if err != nil {
+		return Config{}, err
+	}
 	classRoutes, err := loadEmbeddingClassRoutes("STELE_EMBEDDING_CLASS_ROUTES")
 	if err != nil {
 		return Config{}, err
@@ -147,6 +158,11 @@ func LoadFromEnv() (Config, error) {
 			DefaultModel:      strings.TrimSpace(os.Getenv("STELE_EMBEDDING_DEFAULT_MODEL")),
 			DefaultDimensions: defaultEmbeddingDimensions,
 			ClassRoutes:       classRoutes,
+			OpenAI: OpenAIEmbeddingProviderConfig{
+				APIKey:  strings.TrimSpace(os.Getenv("STELE_EMBEDDING_OPENAI_API_KEY")),
+				BaseURL: strings.TrimSpace(getEnvOrDefault("STELE_EMBEDDING_OPENAI_BASE_URL", "https://api.openai.com/v1")),
+				Timeout: openAIEmbeddingTimeout,
+			},
 		},
 		Jobs: JobConfig{
 			MaintenanceInterval:        maintenanceInterval,

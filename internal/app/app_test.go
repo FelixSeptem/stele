@@ -13,6 +13,7 @@ import (
 	"time"
 
 	"github.com/FelixSeptem/stele/internal/config"
+	"github.com/FelixSeptem/stele/internal/embedding"
 	"github.com/FelixSeptem/stele/internal/jobs"
 	"github.com/FelixSeptem/stele/internal/telemetry"
 	pgxmock "github.com/pashagolub/pgxmock/v4"
@@ -45,6 +46,17 @@ func (s *stubAPIServer) Shutdown(ctx context.Context) error {
 type stubAppObserver struct {
 	operations []telemetry.OperationEvent
 	backlogs   []telemetry.BacklogEvent
+}
+
+type stubEmbeddingProvider struct{}
+
+func (stubEmbeddingProvider) GenerateEmbedding(ctx context.Context, input embedding.ProviderRequest) (embedding.ProviderResult, error) {
+	return embedding.ProviderResult{
+		Provider:   input.Target.Provider,
+		Model:      input.Target.Model,
+		Dimensions: input.Target.Dimensions,
+		Embedding:  []float32{0.1, 0.2, 0.3},
+	}, nil
 }
 
 func (s *stubAppObserver) RecordOperation(ctx context.Context, event telemetry.OperationEvent) {
@@ -585,6 +597,164 @@ func TestBuildSchedulerRuntimeAssemblesScopeDispatchJobs(t *testing.T) {
 
 	if _, ok := scheduler.Jobs[3].(jobs.JobExecutionCleanupJob); !ok {
 		t.Fatalf("scheduler.Jobs[3] type = %T, want jobs.JobExecutionCleanupJob", scheduler.Jobs[3])
+	}
+}
+
+func TestBuildSchedulerRuntimeAllowsLexicalOnlyEmbeddingConfiguration(t *testing.T) {
+	mock, err := pgxmock.NewPool()
+	if err != nil {
+		t.Fatalf("pgxmock.NewPool() error = %v", err)
+	}
+	defer mock.Close()
+
+	cfg := config.Config{
+		Mode:        config.ModeScheduler,
+		PostgresDSN: "postgres://runtime",
+		Auth: config.AuthConfig{
+			DefaultTenant:    "tenant-a",
+			DefaultProject:   "project-a",
+			DefaultNamespace: "namespace-a",
+		},
+	}
+
+	if _, err := buildSchedulerRuntime(context.Background(), cfg, schedulerRuntimeDependencies{
+		openPool: func(ctx context.Context, dsn string) (postgresRuntimeStore, error) {
+			return mock, nil
+		},
+		bootstrapDatabase: func(ctx context.Context, db postgresRuntimeStore) error {
+			return nil
+		},
+		now: func() time.Time {
+			return time.Date(2026, 6, 19, 12, 0, 0, 0, time.UTC)
+		},
+	}); err != nil {
+		t.Fatalf("buildSchedulerRuntime() error = %v, want lexical-only startup to succeed", err)
+	}
+}
+
+func TestBuildSchedulerRuntimeRejectsUnknownConfiguredEmbeddingProvider(t *testing.T) {
+	mock, err := pgxmock.NewPool()
+	if err != nil {
+		t.Fatalf("pgxmock.NewPool() error = %v", err)
+	}
+	defer mock.Close()
+
+	cfg := config.Config{
+		Mode:        config.ModeScheduler,
+		PostgresDSN: "postgres://runtime",
+		Auth: config.AuthConfig{
+			DefaultTenant:    "tenant-a",
+			DefaultProject:   "project-a",
+			DefaultNamespace: "namespace-a",
+		},
+		Embedding: config.EmbeddingConfig{
+			DefaultProvider:   "openai",
+			DefaultModel:      "text-embedding-3-small",
+			DefaultDimensions: 1536,
+		},
+	}
+
+	_, err = buildSchedulerRuntime(context.Background(), cfg, schedulerRuntimeDependencies{
+		openPool: func(ctx context.Context, dsn string) (postgresRuntimeStore, error) {
+			return mock, nil
+		},
+		bootstrapDatabase: func(ctx context.Context, db postgresRuntimeStore) error {
+			return nil
+		},
+		now: func() time.Time {
+			return time.Date(2026, 6, 19, 12, 0, 0, 0, time.UTC)
+		},
+	})
+	if err == nil {
+		t.Fatal("buildSchedulerRuntime() error = nil, want unknown provider validation failure")
+	}
+}
+
+func TestBuildEmbeddingRuntimeRegistersConfiguredOpenAIProvider(t *testing.T) {
+	runtime, err := buildEmbeddingRuntime(config.EmbeddingConfig{
+		DefaultProvider:   "openai",
+		DefaultModel:      "text-embedding-3-small",
+		DefaultDimensions: 1536,
+		OpenAI: config.OpenAIEmbeddingProviderConfig{
+			APIKey:  "test-openai-key",
+			BaseURL: "https://embeddings.example.com/v1",
+			Timeout: 30 * time.Second,
+		},
+	}, nil)
+	if err != nil {
+		t.Fatalf("buildEmbeddingRuntime() error = %v", err)
+	}
+
+	if runtime.Providers == nil {
+		t.Fatal("runtime.Providers = nil, want configured resolver")
+	}
+
+	if _, err := runtime.Providers.ResolveProvider("openai"); err != nil {
+		t.Fatalf("ResolveProvider(openai) error = %v, want configured provider", err)
+	}
+}
+
+func TestBuildSchedulerRuntimeWiresConfiguredEmbeddingProviderRegistry(t *testing.T) {
+	mock, err := pgxmock.NewPool()
+	if err != nil {
+		t.Fatalf("pgxmock.NewPool() error = %v", err)
+	}
+	defer mock.Close()
+
+	cfg := config.Config{
+		Mode:        config.ModeScheduler,
+		PostgresDSN: "postgres://runtime",
+		Auth: config.AuthConfig{
+			DefaultTenant:    "tenant-a",
+			DefaultProject:   "project-a",
+			DefaultNamespace: "namespace-a",
+		},
+		Embedding: config.EmbeddingConfig{
+			DefaultProvider:   "openai",
+			DefaultModel:      "text-embedding-3-small",
+			DefaultDimensions: 1536,
+		},
+	}
+
+	runtime, err := buildSchedulerRuntime(context.Background(), cfg, schedulerRuntimeDependencies{
+		openPool: func(ctx context.Context, dsn string) (postgresRuntimeStore, error) {
+			return mock, nil
+		},
+		bootstrapDatabase: func(ctx context.Context, db postgresRuntimeStore) error {
+			return nil
+		},
+		now: func() time.Time {
+			return time.Date(2026, 6, 19, 12, 0, 0, 0, time.UTC)
+		},
+		embeddingProviders: map[string]embedding.Provider{
+			"openai": stubEmbeddingProvider{},
+		},
+	})
+	if err != nil {
+		t.Fatalf("buildSchedulerRuntime() error = %v", err)
+	}
+
+	scheduler, ok := runtime.scheduler.(jobs.MaintenanceScheduler)
+	if !ok {
+		t.Fatalf("runtime scheduler type = %T, want jobs.MaintenanceScheduler", runtime.scheduler)
+	}
+
+	dispatch, ok := scheduler.Jobs[0].(jobs.ScopeDispatchJob)
+	if !ok {
+		t.Fatalf("scheduler.Jobs[0] type = %T, want jobs.ScopeDispatchJob", scheduler.Jobs[0])
+	}
+
+	job, ok := dispatch.Dispatch(dispatch.FallbackScope).(jobs.EmbeddingRebuildJob)
+	if !ok {
+		t.Fatalf("dispatch.Dispatch(...) type = %T, want jobs.EmbeddingRebuildJob", dispatch.Dispatch(dispatch.FallbackScope))
+	}
+
+	if job.Providers == nil {
+		t.Fatal("job.Providers = nil, want configured provider resolver")
+	}
+
+	if _, err := job.Providers.ResolveProvider("openai"); err != nil {
+		t.Fatalf("ResolveProvider(openai) error = %v, want configured provider", err)
 	}
 }
 

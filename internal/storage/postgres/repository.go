@@ -2261,16 +2261,16 @@ INSERT INTO vector_revisions (
 		revision.Scope.Tenant,
 		revision.Scope.Project,
 		revision.Scope.Namespace,
-	revision.SourceVersion,
-	revision.ContentHash,
-	revision.Provider,
-	revision.Model,
-	revision.Dimensions,
-	nullableVectorLiteral(revision.Embedding),
-	revision.Status,
-	nullableString(revision.FailureReason),
-	nullableString(revision.SupersededBy),
-	revision.GeneratedAt,
+		revision.SourceVersion,
+		revision.ContentHash,
+		revision.Provider,
+		revision.Model,
+		revision.Dimensions,
+		nullableVectorLiteral(revision.Embedding),
+		revision.Status,
+		nullableString(revision.FailureReason),
+		nullableString(revision.SupersededBy),
+		revision.GeneratedAt,
 		nullableTime(revision.ActivatedAt),
 		nullableTime(revision.LastRebuildRequest),
 	); err != nil {
@@ -2630,6 +2630,561 @@ LIMIT $4
 	}
 
 	return candidates, nil
+}
+
+func (r *Repository) ListEmbeddingRebuilds(ctx context.Context, input memory.ListEmbeddingRebuildsInput) ([]memory.EmbeddingRebuildView, error) {
+	if err := input.Validate(); err != nil {
+		return nil, err
+	}
+
+	const query = `
+SELECT
+	er.memory_id,
+	er.tenant,
+	er.project,
+	er.namespace,
+	cm.class,
+	cm.state,
+	er.source_version,
+	er.content_hash,
+	er.requested_provider,
+	er.requested_model,
+	er.requested_dimensions,
+	er.status,
+	er.failure_reason,
+	er.requested_at,
+	er.last_attempted_at,
+	er.active_vector_revision_id,
+	vr.provider,
+	vr.model,
+	vr.dimensions
+FROM canonical_memories cm
+LEFT JOIN embedding_rebuilds er
+	ON er.memory_id = cm.id
+	AND er.tenant = cm.tenant
+	AND er.project = cm.project
+	AND er.namespace = cm.namespace
+LEFT JOIN vector_revisions vr
+	ON vr.id = er.active_vector_revision_id
+	AND vr.memory_id = cm.id
+	AND vr.tenant = cm.tenant
+	AND vr.project = cm.project
+	AND vr.namespace = cm.namespace
+WHERE cm.tenant = $1
+	AND cm.project = $2
+	AND cm.namespace = $3
+	AND er.memory_id IS NOT NULL
+	AND ($4 = '' OR er.status = $4)
+	AND ($5 = '' OR er.requested_provider = $5)
+	AND ($6 = '' OR er.requested_model = $6)
+ORDER BY er.requested_at DESC, er.memory_id ASC
+LIMIT $7
+`
+
+	rows, err := r.db.Query(
+		ctx,
+		query,
+		input.Scope.Tenant,
+		input.Scope.Project,
+		input.Scope.Namespace,
+		input.Status,
+		input.RequestedProvider,
+		input.RequestedModel,
+		input.Limit,
+	)
+	if err != nil {
+		return nil, fmt.Errorf("list embedding rebuilds: %w", err)
+	}
+	defer rows.Close()
+
+	items := make([]memory.EmbeddingRebuildView, 0)
+	for rows.Next() {
+		var item memory.EmbeddingRebuildView
+		var failureReason sql.NullString
+		var lastAttemptedAt sql.NullTime
+		var activeVectorRevision sql.NullString
+		var activeProvider sql.NullString
+		var activeModel sql.NullString
+		var activeDimensions sql.NullInt32
+		if err := rows.Scan(
+			&item.MemoryID,
+			&item.Scope.Tenant,
+			&item.Scope.Project,
+			&item.Scope.Namespace,
+			&item.Class,
+			&item.State,
+			new(int64),
+			new(string),
+			&item.RequestedProvider,
+			&item.RequestedModel,
+			&item.RequestedDimensions,
+			&item.Status,
+			&failureReason,
+			&item.RequestedAt,
+			&lastAttemptedAt,
+			&activeVectorRevision,
+			&activeProvider,
+			&activeModel,
+			&activeDimensions,
+		); err != nil {
+			return nil, fmt.Errorf("scan embedding rebuild: %w", err)
+		}
+		if failureReason.Valid {
+			item.FailureReason = failureReason.String
+		}
+		if lastAttemptedAt.Valid {
+			item.LastAttemptedAt = lastAttemptedAt.Time
+		}
+		if activeVectorRevision.Valid {
+			item.ActiveVectorRevision = activeVectorRevision.String
+		}
+		if activeProvider.Valid {
+			item.ActiveProvider = activeProvider.String
+		}
+		if activeModel.Valid {
+			item.ActiveModel = activeModel.String
+		}
+		if activeDimensions.Valid {
+			item.ActiveDimensions = int(activeDimensions.Int32)
+		}
+		item.Drifted = embedding.DetermineDrift(
+			embedding.Target{
+				Provider:   item.RequestedProvider,
+				Model:      item.RequestedModel,
+				Dimensions: item.RequestedDimensions,
+			},
+			item.ActiveProvider,
+			item.ActiveModel,
+			item.ActiveDimensions,
+		)
+		if input.Drifted != nil && item.Drifted != *input.Drifted {
+			continue
+		}
+
+		items = append(items, item)
+		if len(items) >= input.Limit {
+			break
+		}
+	}
+
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("iterate embedding rebuilds: %w", err)
+	}
+
+	return items, nil
+}
+
+func (r *Repository) ReadMemoryEmbedding(ctx context.Context, scope memory.Scope, memoryID string) (memory.EmbeddingMemoryInspection, error) {
+	if err := scope.Validate(); err != nil {
+		return memory.EmbeddingMemoryInspection{}, err
+	}
+	if strings.TrimSpace(memoryID) == "" {
+		return memory.EmbeddingMemoryInspection{}, fmt.Errorf("memory id is required")
+	}
+
+	const summaryQuery = `
+SELECT
+	cm.id,
+	cm.tenant,
+	cm.project,
+	cm.namespace,
+	cm.class,
+	cm.state,
+	COALESCE(mv.version, 0) AS current_source_version,
+	COALESCE(er.content_hash, '') AS current_content_hash,
+	er.requested_provider,
+	er.requested_model,
+	er.requested_dimensions,
+	er.status,
+	er.failure_reason,
+	er.requested_at,
+	er.last_attempted_at,
+	er.active_vector_revision_id,
+	vr.provider,
+	vr.model,
+	vr.dimensions
+FROM canonical_memories cm
+LEFT JOIN (
+	SELECT memory_id, MAX(version) AS version
+	FROM memory_versions
+	GROUP BY memory_id
+) mv ON mv.memory_id = cm.id
+LEFT JOIN embedding_rebuilds er
+	ON er.memory_id = cm.id
+	AND er.tenant = cm.tenant
+	AND er.project = cm.project
+	AND er.namespace = cm.namespace
+LEFT JOIN vector_revisions vr
+	ON vr.id = er.active_vector_revision_id
+	AND vr.memory_id = cm.id
+	AND vr.tenant = cm.tenant
+	AND vr.project = cm.project
+	AND vr.namespace = cm.namespace
+WHERE cm.tenant = $1
+	AND cm.project = $2
+	AND cm.namespace = $3
+	AND cm.id = $4
+`
+
+	var inspection memory.EmbeddingMemoryInspection
+	var failureReason sql.NullString
+	var requestedProvider sql.NullString
+	var requestedModel sql.NullString
+	var requestedDimensions sql.NullInt32
+	var rebuildStatus sql.NullString
+	var requestedAt sql.NullTime
+	var lastAttemptedAt sql.NullTime
+	var activeVectorRevision sql.NullString
+	var activeProvider sql.NullString
+	var activeModel sql.NullString
+	var activeDimensions sql.NullInt32
+	if err := r.db.QueryRow(ctx, summaryQuery, scope.Tenant, scope.Project, scope.Namespace, memoryID).Scan(
+		&inspection.Memory.ID,
+		&inspection.Memory.Scope.Tenant,
+		&inspection.Memory.Scope.Project,
+		&inspection.Memory.Scope.Namespace,
+		&inspection.Memory.Class,
+		&inspection.Memory.State,
+		&inspection.Memory.CurrentSourceVersion,
+		&inspection.Memory.CurrentContentHash,
+		&requestedProvider,
+		&requestedModel,
+		&requestedDimensions,
+		&rebuildStatus,
+		&failureReason,
+		&requestedAt,
+		&lastAttemptedAt,
+		&activeVectorRevision,
+		&activeProvider,
+		&activeModel,
+		&activeDimensions,
+	); err != nil {
+		return memory.EmbeddingMemoryInspection{}, err
+	}
+
+	inspection.Rebuild.MemoryID = inspection.Memory.ID
+	inspection.Rebuild.Scope = inspection.Memory.Scope
+	inspection.Rebuild.Class = inspection.Memory.Class
+	inspection.Rebuild.State = inspection.Memory.State
+	if requestedProvider.Valid {
+		inspection.Rebuild.RequestedProvider = requestedProvider.String
+	}
+	if requestedModel.Valid {
+		inspection.Rebuild.RequestedModel = requestedModel.String
+	}
+	if requestedDimensions.Valid {
+		inspection.Rebuild.RequestedDimensions = int(requestedDimensions.Int32)
+	}
+	if rebuildStatus.Valid {
+		inspection.Rebuild.Status = memory.EmbeddingRebuildStatus(rebuildStatus.String)
+	}
+	if failureReason.Valid {
+		inspection.Rebuild.FailureReason = failureReason.String
+	}
+	if requestedAt.Valid {
+		inspection.Rebuild.RequestedAt = requestedAt.Time
+	}
+	if lastAttemptedAt.Valid {
+		inspection.Rebuild.LastAttemptedAt = lastAttemptedAt.Time
+	}
+	if activeVectorRevision.Valid {
+		inspection.Rebuild.ActiveVectorRevision = activeVectorRevision.String
+	}
+	if activeProvider.Valid {
+		inspection.Rebuild.ActiveProvider = activeProvider.String
+	}
+	if activeModel.Valid {
+		inspection.Rebuild.ActiveModel = activeModel.String
+	}
+	if activeDimensions.Valid {
+		inspection.Rebuild.ActiveDimensions = int(activeDimensions.Int32)
+	}
+	if inspection.Rebuild.RequestedProvider != "" {
+		inspection.Rebuild.Drifted = embedding.DetermineDrift(
+			embedding.Target{
+				Provider:   inspection.Rebuild.RequestedProvider,
+				Model:      inspection.Rebuild.RequestedModel,
+				Dimensions: inspection.Rebuild.RequestedDimensions,
+			},
+			inspection.Rebuild.ActiveProvider,
+			inspection.Rebuild.ActiveModel,
+			inspection.Rebuild.ActiveDimensions,
+		)
+	}
+
+	const revisionsQuery = `
+SELECT
+	id,
+	memory_id,
+	source_version,
+	content_hash,
+	provider,
+	model,
+	dimensions,
+	status,
+	failure_reason,
+	superseded_by,
+	generated_at,
+	activated_at,
+	last_rebuild_request_at
+FROM vector_revisions
+WHERE tenant = $1
+	AND project = $2
+	AND namespace = $3
+	AND memory_id = $4
+ORDER BY generated_at DESC, id DESC
+`
+
+	rows, err := r.db.Query(ctx, revisionsQuery, scope.Tenant, scope.Project, scope.Namespace, memoryID)
+	if err != nil {
+		return memory.EmbeddingMemoryInspection{}, fmt.Errorf("list memory embedding revisions: %w", err)
+	}
+	defer rows.Close()
+
+	revisions := make([]memory.EmbeddingVectorRevisionView, 0)
+	for rows.Next() {
+		var revision memory.EmbeddingVectorRevisionView
+		var failureReason sql.NullString
+		var supersededBy sql.NullString
+		var activatedAt sql.NullTime
+		var lastRebuildRequest sql.NullTime
+		var ignoredMemoryID string
+		if err := rows.Scan(
+			&revision.ID,
+			&ignoredMemoryID,
+			&revision.SourceVersion,
+			&revision.ContentHash,
+			&revision.Provider,
+			&revision.Model,
+			&revision.Dimensions,
+			&revision.Status,
+			&failureReason,
+			&supersededBy,
+			&revision.GeneratedAt,
+			&activatedAt,
+			&lastRebuildRequest,
+		); err != nil {
+			return memory.EmbeddingMemoryInspection{}, fmt.Errorf("scan memory embedding revision: %w", err)
+		}
+		if failureReason.Valid {
+			revision.FailureReason = failureReason.String
+		}
+		if supersededBy.Valid {
+			revision.SupersededBy = supersededBy.String
+		}
+		if activatedAt.Valid {
+			revision.ActivatedAt = activatedAt.Time
+		}
+		if lastRebuildRequest.Valid {
+			revision.LastRebuildRequest = lastRebuildRequest.Time
+		}
+		revisions = append(revisions, revision)
+	}
+
+	if err := rows.Err(); err != nil {
+		return memory.EmbeddingMemoryInspection{}, fmt.Errorf("iterate memory embedding revisions: %w", err)
+	}
+
+	inspection.Revisions = revisions
+	return inspection, nil
+}
+
+func (r *Repository) ApplyEmbeddingRecovery(ctx context.Context, input memory.ApplyEmbeddingRecoveryInput) (memory.EmbeddingRecoveryOutcome, error) {
+	if err := input.Validate(); err != nil {
+		return memory.EmbeddingRecoveryOutcome{}, err
+	}
+
+	tx, err := r.tx.BeginTx(ctx, pgx.TxOptions{})
+	if err != nil {
+		return memory.EmbeddingRecoveryOutcome{}, fmt.Errorf("begin embedding recovery transaction: %w", err)
+	}
+	defer tx.Rollback(ctx)
+
+	const selectQuery = `
+SELECT
+	cm.id,
+	cm.tenant,
+	cm.project,
+	cm.namespace,
+	cm.class,
+	cm.state,
+	er.requested_provider,
+	er.requested_model,
+	er.requested_dimensions,
+	er.status,
+	er.failure_reason,
+	er.requested_at,
+	er.last_attempted_at,
+	er.active_vector_revision_id,
+	vr.provider,
+	vr.model,
+	vr.dimensions
+FROM canonical_memories cm
+JOIN embedding_rebuilds er
+	ON er.memory_id = cm.id
+	AND er.tenant = cm.tenant
+	AND er.project = cm.project
+	AND er.namespace = cm.namespace
+LEFT JOIN vector_revisions vr
+	ON vr.id = er.active_vector_revision_id
+	AND vr.memory_id = cm.id
+	AND vr.tenant = cm.tenant
+	AND vr.project = cm.project
+	AND vr.namespace = cm.namespace
+WHERE cm.id = $1
+	AND cm.tenant = $2
+	AND cm.project = $3
+	AND cm.namespace = $4
+FOR UPDATE
+`
+
+	current, err := scanEmbeddingRebuildView(tx.QueryRow(ctx, selectQuery, input.MemoryID, input.Scope.Tenant, input.Scope.Project, input.Scope.Namespace))
+	if err != nil {
+		return memory.EmbeddingRecoveryOutcome{}, fmt.Errorf("read embedding recovery target: %w", err)
+	}
+
+	next, err := memory.ApplyEmbeddingRecovery(current, input)
+	if err != nil {
+		return memory.EmbeddingRecoveryOutcome{}, err
+	}
+
+	const updateQuery = `
+WITH updated AS (
+	UPDATE embedding_rebuilds
+	SET
+		status = $5,
+		failure_reason = $6,
+		requested_at = $7
+	WHERE memory_id = $1
+		AND tenant = $2
+		AND project = $3
+		AND namespace = $4
+	RETURNING
+		memory_id,
+		tenant,
+		project,
+		namespace,
+		requested_provider,
+		requested_model,
+		requested_dimensions,
+		status,
+		failure_reason,
+		requested_at,
+		last_attempted_at,
+		active_vector_revision_id
+)
+SELECT
+	updated.memory_id,
+	updated.tenant,
+	updated.project,
+	updated.namespace,
+	cm.class,
+	cm.state,
+	updated.requested_provider,
+	updated.requested_model,
+	updated.requested_dimensions,
+	updated.status,
+	updated.failure_reason,
+	updated.requested_at,
+	updated.last_attempted_at,
+	updated.active_vector_revision_id,
+	vr.provider,
+	vr.model,
+	vr.dimensions
+FROM updated
+JOIN canonical_memories cm
+	ON cm.id = updated.memory_id
+	AND cm.tenant = updated.tenant
+	AND cm.project = updated.project
+	AND cm.namespace = updated.namespace
+LEFT JOIN vector_revisions vr
+	ON vr.id = updated.active_vector_revision_id
+	AND vr.memory_id = updated.memory_id
+	AND vr.tenant = updated.tenant
+	AND vr.project = updated.project
+	AND vr.namespace = updated.namespace
+`
+
+	updated, err := scanEmbeddingRebuildView(
+		tx.QueryRow(
+			ctx,
+			updateQuery,
+			input.MemoryID,
+			input.Scope.Tenant,
+			input.Scope.Project,
+			input.Scope.Namespace,
+			next.Status,
+			nullableString(next.FailureReason),
+			next.RequestedAt,
+		),
+	)
+	if err != nil {
+		return memory.EmbeddingRecoveryOutcome{}, fmt.Errorf("update embedding recovery target: %w", err)
+	}
+
+	beforeSnapshotJSON, err := marshalEmbeddingRecoverySnapshot(memory.NewEmbeddingRecoverySnapshot(current))
+	if err != nil {
+		return memory.EmbeddingRecoveryOutcome{}, err
+	}
+	afterSnapshotJSON, err := marshalEmbeddingRecoverySnapshot(memory.NewEmbeddingRecoverySnapshot(updated))
+	if err != nil {
+		return memory.EmbeddingRecoveryOutcome{}, err
+	}
+
+	recovery := memory.EmbeddingRecoveryRecord{
+		ID:         uuid.NewString(),
+		MemoryID:   updated.MemoryID,
+		Scope:      input.Scope,
+		Action:     input.Action,
+		Actor:      input.Actor,
+		Reason:     input.Reason,
+		Before:     memory.NewEmbeddingRecoverySnapshot(current),
+		After:      memory.NewEmbeddingRecoverySnapshot(updated),
+		OccurredAt: input.AppliedAt.UTC(),
+	}
+
+	const insertLedgerQuery = `
+INSERT INTO embedding_recovery_ledger (
+	id,
+	memory_id,
+	tenant,
+	project,
+	namespace,
+	action,
+	actor,
+	reason,
+	before_snapshot,
+	after_snapshot,
+	created_at
+) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)
+`
+
+	if _, err := tx.Exec(
+		ctx,
+		insertLedgerQuery,
+		recovery.ID,
+		recovery.MemoryID,
+		recovery.Scope.Tenant,
+		recovery.Scope.Project,
+		recovery.Scope.Namespace,
+		string(recovery.Action),
+		recovery.Actor,
+		recovery.Reason,
+		beforeSnapshotJSON,
+		afterSnapshotJSON,
+		recovery.OccurredAt,
+	); err != nil {
+		return memory.EmbeddingRecoveryOutcome{}, fmt.Errorf("insert embedding recovery ledger: %w", err)
+	}
+
+	if err := tx.Commit(ctx); err != nil {
+		return memory.EmbeddingRecoveryOutcome{}, fmt.Errorf("commit embedding recovery transaction: %w", err)
+	}
+
+	return memory.EmbeddingRecoveryOutcome{
+		Rebuild:  updated,
+		Recovery: recovery,
+	}, nil
 }
 
 func (r *Repository) ClaimEmbeddingRebuilds(ctx context.Context, scope memory.Scope, limit int, attemptedAt time.Time) ([]memory.EmbeddingRebuildRecord, error) {
@@ -3388,15 +3943,15 @@ func (r *Repository) recordEmbeddingRebuildRequiredTx(ctx context.Context, tx pg
 	}
 
 	record := memory.EmbeddingRebuildRecord{
-		MemoryID:          canonical.ID,
-		Scope:             canonical.Scope,
-		SourceVersion:     sourceVersion,
-		ContentHash:       contentHash(canonical.Content),
-		RequestedProvider: target.Provider,
-		RequestedModel:    target.Model,
+		MemoryID:            canonical.ID,
+		Scope:               canonical.Scope,
+		SourceVersion:       sourceVersion,
+		ContentHash:         contentHash(canonical.Content),
+		RequestedProvider:   target.Provider,
+		RequestedModel:      target.Model,
 		RequestedDimensions: target.Dimensions,
-		Status:            memory.EmbeddingRebuildStatusPending,
-		RequestedAt:       requestedAt,
+		Status:              memory.EmbeddingRebuildStatusPending,
+		RequestedAt:         requestedAt,
 	}
 
 	if err := recordEmbeddingRebuildRequired(ctx, tx, record); err != nil {
@@ -3792,6 +4347,69 @@ func scanGovernanceRecoveryRecord(scanner provenanceScanner) (governance.Governa
 	return record, nil
 }
 
+func scanEmbeddingRebuildView(scanner provenanceScanner) (memory.EmbeddingRebuildView, error) {
+	var rebuild memory.EmbeddingRebuildView
+	var failureReason sql.NullString
+	var lastAttemptedAt sql.NullTime
+	var activeVectorRevision sql.NullString
+	var activeProvider sql.NullString
+	var activeModel sql.NullString
+	var activeDimensions sql.NullInt32
+
+	if err := scanner.Scan(
+		&rebuild.MemoryID,
+		&rebuild.Scope.Tenant,
+		&rebuild.Scope.Project,
+		&rebuild.Scope.Namespace,
+		&rebuild.Class,
+		&rebuild.State,
+		&rebuild.RequestedProvider,
+		&rebuild.RequestedModel,
+		&rebuild.RequestedDimensions,
+		&rebuild.Status,
+		&failureReason,
+		&rebuild.RequestedAt,
+		&lastAttemptedAt,
+		&activeVectorRevision,
+		&activeProvider,
+		&activeModel,
+		&activeDimensions,
+	); err != nil {
+		return memory.EmbeddingRebuildView{}, fmt.Errorf("scan embedding rebuild: %w", err)
+	}
+
+	if failureReason.Valid {
+		rebuild.FailureReason = failureReason.String
+	}
+	if lastAttemptedAt.Valid {
+		rebuild.LastAttemptedAt = lastAttemptedAt.Time
+	}
+	if activeVectorRevision.Valid {
+		rebuild.ActiveVectorRevision = activeVectorRevision.String
+	}
+	if activeProvider.Valid {
+		rebuild.ActiveProvider = activeProvider.String
+	}
+	if activeModel.Valid {
+		rebuild.ActiveModel = activeModel.String
+	}
+	if activeDimensions.Valid {
+		rebuild.ActiveDimensions = int(activeDimensions.Int32)
+	}
+	rebuild.Drifted = embedding.DetermineDrift(
+		embedding.Target{
+			Provider:   rebuild.RequestedProvider,
+			Model:      rebuild.RequestedModel,
+			Dimensions: rebuild.RequestedDimensions,
+		},
+		rebuild.ActiveProvider,
+		rebuild.ActiveModel,
+		rebuild.ActiveDimensions,
+	)
+
+	return rebuild, nil
+}
+
 func nullableString(value string) any {
 	if strings.TrimSpace(value) == "" {
 		return nil
@@ -3905,6 +4523,15 @@ func marshalGovernanceRecoverySnapshot(snapshot governance.GovernanceRecoverySna
 	payload, err := json.Marshal(snapshot)
 	if err != nil {
 		return nil, fmt.Errorf("marshal governance recovery snapshot: %w", err)
+	}
+
+	return payload, nil
+}
+
+func marshalEmbeddingRecoverySnapshot(snapshot memory.EmbeddingRecoverySnapshot) ([]byte, error) {
+	payload, err := json.Marshal(snapshot)
+	if err != nil {
+		return nil, fmt.Errorf("marshal embedding recovery snapshot: %w", err)
 	}
 
 	return payload, nil

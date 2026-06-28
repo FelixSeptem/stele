@@ -10,7 +10,7 @@ import (
 func TestSpecYAMLContainsBaselineEndpoints(t *testing.T) {
 	spec := SpecYAML()
 
-	for _, want := range []string{"/health", "/ready", "/v1/events", "/v1/memories/search", "/v1/context/assemble", "/v1/admin/jobs/governance/status", "/v1/admin/jobs/status", "/v1/admin/memories/{memory_id}/history"} {
+	for _, want := range []string{"/health", "/ready", "/v1/events", "/v1/memories/search", "/v1/context/assemble", "/v1/admin/jobs/governance/status", "/v1/admin/jobs/status", "/v1/admin/memories/{memory_id}/history", "/v1/admin/embedding/rebuilds", "/v1/admin/memories/{memory_id}/embedding"} {
 		if !strings.Contains(spec, want) {
 			t.Fatalf("SpecYAML() missing path %q", want)
 		}
@@ -98,6 +98,50 @@ func TestSpecYAMLIncludesGovernanceRecoverySchemas(t *testing.T) {
 		"before",
 		"after",
 		"raw_event",
+		"recovery",
+	} {
+		if !strings.Contains(SpecYAML(), want) {
+			t.Fatalf("SpecYAML() missing %q", want)
+		}
+	}
+}
+
+func TestSpecYAMLIncludesEmbeddingAdminInspectionSchemas(t *testing.T) {
+	for _, want := range []string{
+		"/v1/admin/embedding/rebuilds",
+		"/v1/admin/memories/{memory_id}/embedding",
+		"requested_provider",
+		"requested_model",
+		"requested_dimensions",
+		"active_vector_revision_id",
+		"drifted",
+		"semantic_rebuild_enabled",
+		"registered_providers",
+		"EmbeddingRuntimeStatus",
+		"EmbeddingRebuildView",
+		"EmbeddingRebuildListResponse",
+		"EmbeddingMemoryInspection",
+		"EmbeddingVectorRevision",
+	} {
+		if !strings.Contains(SpecYAML(), want) {
+			t.Fatalf("SpecYAML() missing %q", want)
+		}
+	}
+}
+
+func TestSpecYAMLIncludesEmbeddingRecoveryRoutesAndSchemas(t *testing.T) {
+	for _, want := range []string{
+		"/v1/admin/embedding/rebuilds/{memory_id}:retry",
+		"/v1/admin/embedding/rebuilds/{memory_id}:requeue",
+		"EmbeddingRecoveryAction",
+		"EmbeddingRecoveryActionRequest",
+		"EmbeddingRecoverySnapshot",
+		"EmbeddingRecoveryRecord",
+		"EmbeddingRecoveryOutcome",
+		"occurred_at",
+		"before",
+		"after",
+		"rebuild",
 		"recovery",
 	} {
 		if !strings.Contains(SpecYAML(), want) {

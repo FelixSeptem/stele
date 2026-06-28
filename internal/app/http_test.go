@@ -184,6 +184,41 @@ func (s *stubManualMutationService) ReclassifyMemory(ctx context.Context, input 
 	return s.resource, s.err
 }
 
+type stubEmbeddingAdminService struct {
+	gotListInput    memory.ListEmbeddingRebuildsInput
+	gotReadScope    memory.Scope
+	gotReadMemoryID string
+	gotApplyInput   memory.ApplyEmbeddingRecoveryInput
+	page            memory.EmbeddingRebuildPage
+	inspection      memory.EmbeddingMemoryInspection
+	outcome         memory.EmbeddingRecoveryOutcome
+	listErr         error
+	readErr         error
+	applyErr        error
+	validateList    bool
+}
+
+func (s *stubEmbeddingAdminService) ListEmbeddingRebuilds(ctx context.Context, input memory.ListEmbeddingRebuildsInput) (memory.EmbeddingRebuildPage, error) {
+	s.gotListInput = input
+	if s.validateList {
+		if err := input.Validate(); err != nil {
+			return memory.EmbeddingRebuildPage{}, err
+		}
+	}
+	return s.page, s.listErr
+}
+
+func (s *stubEmbeddingAdminService) GetMemoryEmbedding(ctx context.Context, scope memory.Scope, memoryID string) (memory.EmbeddingMemoryInspection, error) {
+	s.gotReadScope = scope
+	s.gotReadMemoryID = memoryID
+	return s.inspection, s.readErr
+}
+
+func (s *stubEmbeddingAdminService) ApplyEmbeddingRecovery(ctx context.Context, input memory.ApplyEmbeddingRecoveryInput) (memory.EmbeddingRecoveryOutcome, error) {
+	s.gotApplyInput = input
+	return s.outcome, s.applyErr
+}
+
 type stubGovernanceAdminService struct {
 	gotListInput    governance.ListGovernanceRawEventsInput
 	gotReadInput    governance.ReadGovernanceRawEventInput
@@ -1263,6 +1298,295 @@ func TestNewHTTPHandlerReturnsAdminMemoryHistory(t *testing.T) {
 
 	if len(payload.Versions) != 1 || len(payload.Provenance) != 1 {
 		t.Fatalf("history payload = %+v, want one version and one provenance record", payload)
+	}
+}
+
+func TestNewHTTPHandlerListsAdminEmbeddingRebuilds(t *testing.T) {
+	service := &stubEmbeddingAdminService{
+		validateList: true,
+		page: memory.EmbeddingRebuildPage{
+			Runtime: memory.EmbeddingRuntimeStatus{
+				Configured:             false,
+				SemanticRebuildEnabled: false,
+				Reason:                 "semantic rebuild execution is inactive because no embedding routes are configured",
+			},
+			Items: []memory.EmbeddingRebuildView{
+				{
+					MemoryID:            "mem_123",
+					Scope:               memory.Scope{Tenant: "tenant-a", Project: "project-a", Namespace: "namespace-a"},
+					Class:               memory.MemoryClassProfile,
+					State:               memory.MemoryStateActive,
+					Status:              memory.EmbeddingRebuildStatusFailed,
+					RequestedProvider:   "openai",
+					RequestedModel:      "text-embedding-3-small",
+					RequestedDimensions: 1536,
+					FailureReason:       "provider unavailable",
+					Drifted:             true,
+				},
+			},
+		},
+	}
+	handler := NewHTTPHandler(HTTPDependencies{
+		AdminAPIKeys:       map[string]struct{}{"admin-key": {}},
+		EmbeddingAdminRead: service,
+	})
+
+	req := httptest.NewRequest(http.MethodGet, "/v1/admin/embedding/rebuilds?status=failed&requested_provider=openai&requested_model=text-embedding-3-small&drifted=true&limit=5", nil)
+	setAdminScopeHeaders(req)
+	rec := httptest.NewRecorder()
+
+	handler.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d, want %d", rec.Code, http.StatusOK)
+	}
+	if service.gotListInput.Status != memory.EmbeddingRebuildStatusFailed {
+		t.Fatalf("status filter = %q, want failed", service.gotListInput.Status)
+	}
+	if service.gotListInput.RequestedProvider != "openai" {
+		t.Fatalf("provider filter = %q, want openai", service.gotListInput.RequestedProvider)
+	}
+	if service.gotListInput.Drifted == nil || !*service.gotListInput.Drifted {
+		t.Fatalf("drifted filter = %v, want true", service.gotListInput.Drifted)
+	}
+
+	var payload memory.EmbeddingRebuildPage
+	if err := json.NewDecoder(rec.Body).Decode(&payload); err != nil {
+		t.Fatalf("json.NewDecoder() error = %v", err)
+	}
+	if payload.Runtime.SemanticRebuildEnabled {
+		t.Fatal("payload.Runtime.SemanticRebuildEnabled = true, want false")
+	}
+	if len(payload.Items) != 1 || !payload.Items[0].Drifted {
+		t.Fatalf("items = %+v, want one drifted rebuild item", payload.Items)
+	}
+}
+
+func TestNewHTTPHandlerReturnsAdminMemoryEmbeddingInspection(t *testing.T) {
+	service := &stubEmbeddingAdminService{
+		inspection: memory.EmbeddingMemoryInspection{
+			Runtime: memory.EmbeddingRuntimeStatus{
+				Configured:             true,
+				SemanticRebuildEnabled: true,
+				RegisteredProviders:    []string{"openai"},
+			},
+			Memory: memory.EmbeddingMemorySummary{
+				ID:                   "mem_123",
+				Scope:                memory.Scope{Tenant: "tenant-a", Project: "project-a", Namespace: "namespace-a"},
+				Class:                memory.MemoryClassProfile,
+				State:                memory.MemoryStateActive,
+				CurrentSourceVersion: 3,
+				CurrentContentHash:   "hash_123",
+			},
+			Rebuild: memory.EmbeddingRebuildView{
+				MemoryID:             "mem_123",
+				Scope:                memory.Scope{Tenant: "tenant-a", Project: "project-a", Namespace: "namespace-a"},
+				Status:               memory.EmbeddingRebuildStatusCurrent,
+				RequestedProvider:    "openai",
+				RequestedModel:       "text-embedding-3-small",
+				RequestedDimensions:  1536,
+				ActiveVectorRevision: "vec_active",
+			},
+			Revisions: []memory.EmbeddingVectorRevisionView{
+				{
+					ID:            "vec_active",
+					Provider:      "openai",
+					Model:         "text-embedding-3-small",
+					Dimensions:    1536,
+					Status:        memory.VectorRevisionStatusActive,
+					SourceVersion: 3,
+				},
+			},
+		},
+	}
+	handler := NewHTTPHandler(HTTPDependencies{
+		AdminAPIKeys:       map[string]struct{}{"admin-key": {}},
+		EmbeddingAdminRead: service,
+	})
+
+	req := httptest.NewRequest(http.MethodGet, "/v1/admin/memories/mem_123/embedding", nil)
+	setAdminScopeHeaders(req)
+	rec := httptest.NewRecorder()
+
+	handler.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d, want %d", rec.Code, http.StatusOK)
+	}
+	if service.gotReadMemoryID != "mem_123" {
+		t.Fatalf("memory id = %q, want mem_123", service.gotReadMemoryID)
+	}
+
+	var payload memory.EmbeddingMemoryInspection
+	if err := json.NewDecoder(rec.Body).Decode(&payload); err != nil {
+		t.Fatalf("json.NewDecoder() error = %v", err)
+	}
+	if payload.Memory.ID != "mem_123" {
+		t.Fatalf("payload.Memory.ID = %q, want mem_123", payload.Memory.ID)
+	}
+	if len(payload.Revisions) != 1 || payload.Revisions[0].ID != "vec_active" {
+		t.Fatalf("revisions = %+v, want one active revision", payload.Revisions)
+	}
+}
+
+func TestNewHTTPHandlerValidatesAdminEmbeddingInspectionRequests(t *testing.T) {
+	tests := []struct {
+		name       string
+		path       string
+		wantStatus int
+		wantBody   string
+	}{
+		{
+			name:       "invalid status filter",
+			path:       "/v1/admin/embedding/rebuilds?status=bogus",
+			wantStatus: http.StatusBadRequest,
+			wantBody:   "embedding rebuild status \"bogus\" is invalid",
+		},
+		{
+			name:       "invalid drifted filter",
+			path:       "/v1/admin/embedding/rebuilds?drifted=maybe",
+			wantStatus: http.StatusBadRequest,
+			wantBody:   "invalid drifted",
+		},
+		{
+			name:       "invalid limit",
+			path:       "/v1/admin/embedding/rebuilds?limit=0",
+			wantStatus: http.StatusBadRequest,
+			wantBody:   "invalid limit",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			handler := NewHTTPHandler(HTTPDependencies{
+				AdminAPIKeys:       map[string]struct{}{"admin-key": {}},
+				EmbeddingAdminRead: &stubEmbeddingAdminService{validateList: true},
+			})
+
+			req := httptest.NewRequest(http.MethodGet, tt.path, nil)
+			setAdminScopeHeaders(req)
+			rec := httptest.NewRecorder()
+
+			handler.ServeHTTP(rec, req)
+
+			if rec.Code != tt.wantStatus {
+				t.Fatalf("status = %d, want %d", rec.Code, tt.wantStatus)
+			}
+			if body := rec.Body.String(); !strings.Contains(body, tt.wantBody) {
+				t.Fatalf("body = %q, want substring %q", body, tt.wantBody)
+			}
+		})
+	}
+}
+
+func TestNewHTTPHandlerAppliesAdminEmbeddingRecoveryActions(t *testing.T) {
+	tests := []struct {
+		name       string
+		path       string
+		wantAction memory.EmbeddingRecoveryAction
+	}{
+		{
+			name:       "retry",
+			path:       "/v1/admin/embedding/rebuilds/mem_123:retry",
+			wantAction: memory.EmbeddingRecoveryActionRetry,
+		},
+		{
+			name:       "requeue",
+			path:       "/v1/admin/embedding/rebuilds/mem_123:requeue",
+			wantAction: memory.EmbeddingRecoveryActionRequeue,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			service := &stubEmbeddingAdminService{
+				outcome: memory.EmbeddingRecoveryOutcome{
+					Rebuild: memory.EmbeddingRebuildView{
+						MemoryID: "mem_123",
+						Status:   memory.EmbeddingRebuildStatusPending,
+					},
+					Recovery: memory.EmbeddingRecoveryRecord{
+						ID:         "erl_1",
+						MemoryID:   "mem_123",
+						Scope:      memory.Scope{Tenant: "tenant-a", Project: "project-a", Namespace: "namespace-a"},
+						Action:     tt.wantAction,
+						Actor:      "operator-a",
+						Reason:     "operator request",
+						OccurredAt: time.Date(2026, 6, 28, 12, 0, 0, 0, time.UTC),
+					},
+				},
+			}
+			handler := NewHTTPHandler(HTTPDependencies{
+				AdminAPIKeys:       map[string]struct{}{"admin-key": {}},
+				EmbeddingAdminRead: service,
+			})
+
+			req := httptest.NewRequest(http.MethodPost, tt.path, strings.NewReader(`{"reason":"operator request"}`))
+			setAdminActionHeaders(req)
+			rec := httptest.NewRecorder()
+
+			handler.ServeHTTP(rec, req)
+
+			if rec.Code != http.StatusOK {
+				t.Fatalf("status = %d, want %d", rec.Code, http.StatusOK)
+			}
+			if service.gotApplyInput.Action != tt.wantAction {
+				t.Fatalf("action = %q, want %q", service.gotApplyInput.Action, tt.wantAction)
+			}
+			if service.gotApplyInput.Actor != "operator-a" {
+				t.Fatalf("actor = %q, want operator-a", service.gotApplyInput.Actor)
+			}
+		})
+	}
+}
+
+func TestNewHTTPHandlerMapsAdminEmbeddingRecoveryErrors(t *testing.T) {
+	tests := []struct {
+		name       string
+		path       string
+		body       string
+		service    *stubEmbeddingAdminService
+		wantStatus int
+		wantBody   string
+	}{
+		{
+			name:       "conflict",
+			path:       "/v1/admin/embedding/rebuilds/mem_123:retry",
+			body:       `{"reason":"retry now"}`,
+			service:    &stubEmbeddingAdminService{applyErr: memory.ErrEmbeddingRecoveryConflict},
+			wantStatus: http.StatusConflict,
+			wantBody:   memory.ErrEmbeddingRecoveryConflict.Error(),
+		},
+		{
+			name:       "invalid target",
+			path:       "/v1/admin/embedding/rebuilds/retry",
+			body:       `{"reason":"retry now"}`,
+			service:    &stubEmbeddingAdminService{},
+			wantStatus: http.StatusBadRequest,
+			wantBody:   "invalid embedding rebuild action target",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			handler := NewHTTPHandler(HTTPDependencies{
+				AdminAPIKeys:       map[string]struct{}{"admin-key": {}},
+				EmbeddingAdminRead: tt.service,
+			})
+
+			req := httptest.NewRequest(http.MethodPost, tt.path, strings.NewReader(tt.body))
+			setAdminActionHeaders(req)
+			rec := httptest.NewRecorder()
+
+			handler.ServeHTTP(rec, req)
+
+			if rec.Code != tt.wantStatus {
+				t.Fatalf("status = %d, want %d", rec.Code, tt.wantStatus)
+			}
+			if body := rec.Body.String(); !strings.Contains(body, tt.wantBody) {
+				t.Fatalf("body = %q, want substring %q", body, tt.wantBody)
+			}
+		})
 	}
 }
 

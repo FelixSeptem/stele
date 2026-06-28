@@ -466,6 +466,133 @@ paths:
                 $ref: '#/components/schemas/MemoryHistory'
         '401':
           description: Missing or invalid admin API key
+  /v1/admin/embedding/rebuilds:
+    get:
+      operationId: listAdminEmbeddingRebuilds
+      parameters:
+        - $ref: '#/components/parameters/AdminAPIKey'
+        - $ref: '#/components/parameters/TenantHeader'
+        - $ref: '#/components/parameters/ProjectHeader'
+        - $ref: '#/components/parameters/NamespaceHeader'
+        - in: query
+          name: status
+          required: false
+          schema:
+            type: string
+            enum: [pending, rebuilding, failed, current]
+        - in: query
+          name: requested_provider
+          required: false
+          schema:
+            type: string
+        - in: query
+          name: requested_model
+          required: false
+          schema:
+            type: string
+        - in: query
+          name: drifted
+          required: false
+          schema:
+            type: boolean
+        - in: query
+          name: limit
+          required: false
+          schema:
+            type: integer
+      responses:
+        '200':
+          description: Scoped embedding rebuild backlog inspection
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/EmbeddingRebuildListResponse'
+        '400':
+          description: Invalid request
+        '401':
+          description: Missing or invalid admin API key
+  /v1/admin/embedding/rebuilds/{memory_id}:retry:
+    post:
+      operationId: retryAdminEmbeddingRebuild
+      parameters:
+        - $ref: '#/components/parameters/MemoryIDPath'
+        - $ref: '#/components/parameters/AdminAPIKey'
+        - $ref: '#/components/parameters/ActorHeader'
+        - $ref: '#/components/parameters/TenantHeader'
+        - $ref: '#/components/parameters/ProjectHeader'
+        - $ref: '#/components/parameters/NamespaceHeader'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/EmbeddingRecoveryActionRequest'
+      responses:
+        '200':
+          description: Embedding recovery applied
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/EmbeddingRecoveryOutcome'
+        '400':
+          description: Invalid request
+        '401':
+          description: Missing or invalid admin API key
+        '404':
+          description: Memory not found
+        '409':
+          description: Recovery conflict
+  /v1/admin/embedding/rebuilds/{memory_id}:requeue:
+    post:
+      operationId: requeueAdminEmbeddingRebuild
+      parameters:
+        - $ref: '#/components/parameters/MemoryIDPath'
+        - $ref: '#/components/parameters/AdminAPIKey'
+        - $ref: '#/components/parameters/ActorHeader'
+        - $ref: '#/components/parameters/TenantHeader'
+        - $ref: '#/components/parameters/ProjectHeader'
+        - $ref: '#/components/parameters/NamespaceHeader'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/EmbeddingRecoveryActionRequest'
+      responses:
+        '200':
+          description: Embedding recovery applied
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/EmbeddingRecoveryOutcome'
+        '400':
+          description: Invalid request
+        '401':
+          description: Missing or invalid admin API key
+        '404':
+          description: Memory not found
+        '409':
+          description: Recovery conflict
+  /v1/admin/memories/{memory_id}/embedding:
+    get:
+      operationId: getAdminMemoryEmbedding
+      parameters:
+        - $ref: '#/components/parameters/MemoryIDPath'
+        - $ref: '#/components/parameters/AdminAPIKey'
+        - $ref: '#/components/parameters/TenantHeader'
+        - $ref: '#/components/parameters/ProjectHeader'
+        - $ref: '#/components/parameters/NamespaceHeader'
+      responses:
+        '200':
+          description: Embedding rebuild and revision inspection for one memory
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/EmbeddingMemoryInspection'
+        '401':
+          description: Missing or invalid admin API key
+        '404':
+          description: Memory not found
   /v1/admin/memories:
     post:
       operationId: createAdminMemory
@@ -1092,6 +1219,241 @@ components:
           $ref: '#/components/schemas/GovernanceRawEvent'
         recovery:
           $ref: '#/components/schemas/GovernanceRecoveryRecord'
+    EmbeddingRuntimeStatus:
+      type: object
+      required:
+        - configured
+        - semantic_rebuild_enabled
+      properties:
+        configured:
+          type: boolean
+        semantic_rebuild_enabled:
+          type: boolean
+        registered_providers:
+          type: array
+          items:
+            type: string
+        reason:
+          type: string
+    EmbeddingRebuildView:
+      type: object
+      required:
+        - memory_id
+        - scope
+        - class
+        - state
+        - status
+        - drifted
+      properties:
+        memory_id:
+          type: string
+        scope:
+          $ref: '#/components/schemas/Scope'
+        class:
+          type: string
+        state:
+          type: string
+        status:
+          type: string
+          enum: [pending, rebuilding, failed, current]
+        requested_provider:
+          type: string
+        requested_model:
+          type: string
+        requested_dimensions:
+          type: integer
+        active_vector_revision_id:
+          type: string
+        active_provider:
+          type: string
+        active_model:
+          type: string
+        active_dimensions:
+          type: integer
+        failure_reason:
+          type: string
+        drifted:
+          type: boolean
+        requested_at:
+          type: string
+          format: date-time
+        last_attempted_at:
+          type: string
+          format: date-time
+    EmbeddingRebuildListResponse:
+      type: object
+      required:
+        - runtime
+        - items
+      properties:
+        runtime:
+          $ref: '#/components/schemas/EmbeddingRuntimeStatus'
+        items:
+          type: array
+          items:
+            $ref: '#/components/schemas/EmbeddingRebuildView'
+    EmbeddingMemorySummary:
+      type: object
+      required:
+        - id
+        - scope
+        - class
+        - state
+        - current_source_version
+        - current_content_hash
+      properties:
+        id:
+          type: string
+        scope:
+          $ref: '#/components/schemas/Scope'
+        class:
+          type: string
+        state:
+          type: string
+        current_source_version:
+          type: integer
+        current_content_hash:
+          type: string
+    EmbeddingVectorRevision:
+      type: object
+      required:
+        - id
+        - provider
+        - model
+        - dimensions
+        - status
+        - source_version
+        - content_hash
+        - generated_at
+      properties:
+        id:
+          type: string
+        provider:
+          type: string
+        model:
+          type: string
+        dimensions:
+          type: integer
+        status:
+          type: string
+          enum: [generated, active, superseded, failed]
+        failure_reason:
+          type: string
+        superseded_by:
+          type: string
+        source_version:
+          type: integer
+        content_hash:
+          type: string
+        generated_at:
+          type: string
+          format: date-time
+        activated_at:
+          type: string
+          format: date-time
+        last_rebuild_request_at:
+          type: string
+          format: date-time
+    EmbeddingRecoveryAction:
+      type: string
+      enum: [retry, requeue]
+    EmbeddingRecoveryActionRequest:
+      type: object
+      required:
+        - reason
+      properties:
+        reason:
+          type: string
+    EmbeddingRecoverySnapshot:
+      type: object
+      required:
+        - status
+      properties:
+        status:
+          type: string
+          enum: [pending, rebuilding, failed, current]
+        requested_provider:
+          type: string
+        requested_model:
+          type: string
+        requested_dimensions:
+          type: integer
+        failure_reason:
+          type: string
+        requested_at:
+          type: string
+          format: date-time
+        last_attempted_at:
+          type: string
+          format: date-time
+        active_vector_revision_id:
+          type: string
+        active_provider:
+          type: string
+        active_model:
+          type: string
+        active_dimensions:
+          type: integer
+    EmbeddingRecoveryRecord:
+      type: object
+      required:
+        - id
+        - memory_id
+        - scope
+        - action
+        - actor
+        - reason
+        - before
+        - after
+        - occurred_at
+      properties:
+        id:
+          type: string
+        memory_id:
+          type: string
+        scope:
+          $ref: '#/components/schemas/Scope'
+        action:
+          $ref: '#/components/schemas/EmbeddingRecoveryAction'
+        actor:
+          type: string
+        reason:
+          type: string
+        before:
+          $ref: '#/components/schemas/EmbeddingRecoverySnapshot'
+        after:
+          $ref: '#/components/schemas/EmbeddingRecoverySnapshot'
+        occurred_at:
+          type: string
+          format: date-time
+    EmbeddingRecoveryOutcome:
+      type: object
+      required:
+        - rebuild
+        - recovery
+      properties:
+        rebuild:
+          $ref: '#/components/schemas/EmbeddingRebuildView'
+        recovery:
+          $ref: '#/components/schemas/EmbeddingRecoveryRecord'
+    EmbeddingMemoryInspection:
+      type: object
+      required:
+        - runtime
+        - memory
+        - rebuild
+        - revisions
+      properties:
+        runtime:
+          $ref: '#/components/schemas/EmbeddingRuntimeStatus'
+        memory:
+          $ref: '#/components/schemas/EmbeddingMemorySummary'
+        rebuild:
+          $ref: '#/components/schemas/EmbeddingRebuildView'
+        revisions:
+          type: array
+          items:
+            $ref: '#/components/schemas/EmbeddingVectorRevision'
     MemoryVersion:
       type: object
       required:

@@ -42,6 +42,9 @@ Embedding routing variables:
 - `STELE_EMBEDDING_DEFAULT_MODEL`: default model name recorded on rebuild eligibility and vector revisions
 - `STELE_EMBEDDING_DEFAULT_DIMENSIONS`: default vector dimension target used for drift detection and rebuild eligibility
 - `STELE_EMBEDDING_CLASS_ROUTES`: optional comma-separated per-class overrides in `class=provider:model:dimensions` format
+- `STELE_EMBEDDING_OPENAI_API_KEY`: API key for the built-in OpenAI-compatible embedding provider
+- `STELE_EMBEDDING_OPENAI_BASE_URL`: optional base URL override for OpenAI-compatible deployments, default `https://api.openai.com/v1`
+- `STELE_EMBEDDING_OPENAI_TIMEOUT`: outbound embedding request timeout, default `30s`
 
 Job tuning variables:
 
@@ -57,6 +60,32 @@ Job tuning variables:
 - `STELE_JOBS_GOVERNANCE_RETRY_BACKOFF`: retry wait after a failed governance attempt, default `30s`
 - `STELE_JOBS_GOVERNANCE_LEASE_RENEW_INTERVAL`: cadence for renewing an in-flight governance claim lease, default `30s`
 - `STELE_JOBS_MAINTENANCE_SCOPE_BATCH_LIMIT`: maximum discovered scopes evaluated per scheduler tick, default `100`
+
+## Embedding Deployment Modes
+
+Lexical-only deployment:
+
+- Leave `STELE_EMBEDDING_DEFAULT_PROVIDER`, `STELE_EMBEDDING_DEFAULT_MODEL`, `STELE_EMBEDDING_DEFAULT_DIMENSIONS`, and `STELE_EMBEDDING_CLASS_ROUTES` unset.
+- `api`, `worker`, and `scheduler` still start normally.
+- Hybrid retrieval remains available through lexical and relation signals, while semantic rebuild execution stays intentionally inactive.
+- Admin embedding diagnostics report `semantic_rebuild_enabled=false` together with the degraded runtime reason.
+
+Provider-backed deployment:
+
+- Configure at least one embedding route target through `STELE_EMBEDDING_DEFAULT_*` or `STELE_EMBEDDING_CLASS_ROUTES`.
+- Provide the matching provider credentials and endpoint settings, for example `STELE_EMBEDDING_OPENAI_API_KEY` for the built-in OpenAI-compatible provider.
+- All three runtime modes use the same provider registration rules, so `api`, `worker`, and `scheduler` resolve the same provider names.
+- Startup fails fast if a configured route points at an unknown provider or if provider-specific settings are incomplete.
+
+Example provider-backed environment:
+
+```bash
+export STELE_EMBEDDING_DEFAULT_PROVIDER=openai
+export STELE_EMBEDDING_DEFAULT_MODEL=text-embedding-3-small
+export STELE_EMBEDDING_DEFAULT_DIMENSIONS=1536
+export STELE_EMBEDDING_CLASS_ROUTES='profile=openai:text-embedding-3-small:1536,episodic=openai:text-embedding-3-small:1536'
+export STELE_EMBEDDING_OPENAI_API_KEY='<provider-key>'
+```
 
 ## Local Bootstrap With Compose
 
@@ -107,6 +136,8 @@ docker run --rm -p 8080:8080 \
 
 ## Smoke Check
 
+### Baseline startup
+
 1. Check liveness:
 
 ```bash
@@ -130,6 +161,8 @@ Expected:
 ```json
 {"status":"ready"}
 ```
+
+`/ready` only confirms baseline process dependencies such as PostgreSQL connectivity. It does not prove semantic rebuild execution is wired.
 
 3. Ingest one event:
 
@@ -180,6 +213,61 @@ curl 'http://localhost:8080/v1/admin/governance/raw-events?state=retry_wait&atte
   -H 'X-Stele-Namespace: namespace-a'
 ```
 
+### Semantic readiness
+
+Provider-backed deployment:
+
+1. Confirm embedding runtime wiring through backlog inspection:
+
+```bash
+curl 'http://localhost:8080/v1/admin/embedding/rebuilds?limit=5' \
+  -H 'X-API-Key: dev-admin-key' \
+  -H 'X-Stele-Tenant: tenant-a' \
+  -H 'X-Stele-Project: project-a' \
+  -H 'X-Stele-Namespace: namespace-a'
+```
+
+Expected runtime shape:
+
+```json
+{
+  "runtime": {
+    "configured": true,
+    "semantic_rebuild_enabled": true,
+    "registered_providers": ["openai"]
+  },
+  "items": []
+}
+```
+
+2. Inspect one memory after governance promotion to verify rebuild state, active vector lineage, drift visibility, and failure context:
+
+```bash
+curl http://localhost:8080/v1/admin/memories/<memory-id>/embedding \
+  -H 'X-API-Key: dev-admin-key' \
+  -H 'X-Stele-Tenant: tenant-a' \
+  -H 'X-Stele-Project: project-a' \
+  -H 'X-Stele-Namespace: namespace-a'
+```
+
+Lexical-only deployment:
+
+1. Run the same backlog inspection call.
+2. Expect baseline startup to stay healthy while semantic wiring is reported as intentionally inactive:
+
+```json
+{
+  "runtime": {
+    "configured": false,
+    "semantic_rebuild_enabled": false,
+    "reason": "semantic rebuild execution is inactive because no embedding routes are configured"
+  },
+  "items": []
+}
+```
+
+3. Treat `semantic_rebuild_enabled=false` plus the degraded reason as the success condition for a lexical-only deployment, not as an incident.
+
 ## Memory Management Surface
 
 `Stele` now exposes two distinct memory management boundaries:
@@ -213,6 +301,13 @@ Privileged governance recovery routes:
 - `POST /v1/admin/governance/raw-events/{raw_event_id}:reschedule`
 - `POST /v1/admin/governance/raw-events/{raw_event_id}:requeue`
 
+Privileged embedding inspection and recovery routes:
+
+- `GET /v1/admin/embedding/rebuilds`
+- `GET /v1/admin/memories/{memory_id}/embedding`
+- `POST /v1/admin/embedding/rebuilds/{memory_id}:retry`
+- `POST /v1/admin/embedding/rebuilds/{memory_id}:requeue`
+
 Privileged manual mutation and lifecycle actions require:
 
 - admin API key
@@ -225,6 +320,11 @@ Privileged governance recovery actions use the same admin boundary and additiona
 - `X-Stele-Actor` for every recovery action
 - `reason` in the JSON body for every recovery action
 - `scheduled_for` only for `:reschedule`
+
+Privileged embedding recovery actions use the same admin boundary and require:
+
+- `X-Stele-Actor` for every recovery action
+- `reason` in the JSON body for every recovery action
 
 Governance recovery query filters:
 
@@ -266,8 +366,15 @@ Governance recovery notes:
 - The scheduler discovers missing embeddings and provider or model drift through durable `embedding_rebuilds` state, then claims rebuild work without blocking write paths.
 - Every generation attempt is audited in append-only `vector_revisions`, including failed attempts and superseded lineage. Activation uses compare-and-promote guards so stale content never becomes the active semantic projection.
 - Routing metadata comes from `STELE_EMBEDDING_DEFAULT_*` and optional `STELE_EMBEDDING_CLASS_ROUTES` overrides. These settings define the desired target used for eligibility, drift detection, and audit history.
-- Provider implementations remain an internal runtime integration point. If no provider is registered for the configured target, rebuild attempts remain retryable failures and retrieval falls back to lexical plus relation signals.
-- Admin rebuild controls, bulk rotation controls, and embedding-specific inspection endpoints remain an explicit non-goal in this phase.
+- Provider implementations remain an internal runtime integration point. The built-in runtime currently wires an OpenAI-compatible adapter from environment configuration.
+- If no embedding routes are configured, the service stays in lexical-only mode and surfaces semantic inactivity through admin embedding diagnostics.
+- If an embedding route is configured but the matching provider cannot be registered, startup fails instead of silently degrading.
+- Admin embedding inspection exposes rebuild backlog, one-memory vector lineage, provider or model drift, and failed attempt context without requiring direct database access.
+- `POST /v1/admin/embedding/rebuilds/{memory_id}:retry` only restores failed rebuild work to `pending`.
+- `POST /v1/admin/embedding/rebuilds/{memory_id}:requeue` returns eligible current or failed rebuild work to `pending` so the ordinary background rebuild job can pick it up again.
+- Rebuild records already in `rebuilding` state are rejected rather than being force-taken over.
+- Every embedding recovery action is written to append-only `embedding_recovery_ledger` with actor, reason, and before or after rebuild snapshots.
+- Embedding recovery never mutates `vector_revisions` directly. Background execution still owns append, compare, and promote behavior.
 
 ## Example Flow
 
@@ -433,6 +540,52 @@ curl http://localhost:8080/v1/admin/governance/raw-events/<raw-event-id>/recover
   -H 'X-Stele-Tenant: tenant-a' \
   -H 'X-Stele-Project: project-a' \
   -H 'X-Stele-Namespace: namespace-a'
+```
+
+15. Inspect embedding rebuild backlog for one scope:
+
+```bash
+curl 'http://localhost:8080/v1/admin/embedding/rebuilds?status=failed&limit=20' \
+  -H 'X-API-Key: dev-admin-key' \
+  -H 'X-Stele-Tenant: tenant-a' \
+  -H 'X-Stele-Project: project-a' \
+  -H 'X-Stele-Namespace: namespace-a'
+```
+
+16. Inspect one memory's embedding lineage:
+
+```bash
+curl http://localhost:8080/v1/admin/memories/<memory-id>/embedding \
+  -H 'X-API-Key: dev-admin-key' \
+  -H 'X-Stele-Tenant: tenant-a' \
+  -H 'X-Stele-Project: project-a' \
+  -H 'X-Stele-Namespace: namespace-a'
+```
+
+17. Retry one failed embedding rebuild:
+
+```bash
+curl -X POST http://localhost:8080/v1/admin/embedding/rebuilds/<memory-id>:retry \
+  -H 'Content-Type: application/json' \
+  -H 'X-API-Key: dev-admin-key' \
+  -H 'X-Stele-Actor: operator-a' \
+  -H 'X-Stele-Tenant: tenant-a' \
+  -H 'X-Stele-Project: project-a' \
+  -H 'X-Stele-Namespace: namespace-a' \
+  -d '{"reason":"retry after provider recovery"}'
+```
+
+18. Requeue one current or previously failed embedding rebuild back into ordinary scheduler ownership:
+
+```bash
+curl -X POST http://localhost:8080/v1/admin/embedding/rebuilds/<memory-id>:requeue \
+  -H 'Content-Type: application/json' \
+  -H 'X-API-Key: dev-admin-key' \
+  -H 'X-Stele-Actor: operator-a' \
+  -H 'X-Stele-Tenant: tenant-a' \
+  -H 'X-Stele-Project: project-a' \
+  -H 'X-Stele-Namespace: namespace-a' \
+  -d '{"reason":"requeue after routing update"}'
 ```
 
 ## Operational Notes

@@ -33,6 +33,7 @@ type HTTPDependencies struct {
 	MemoryQuery           MemoryQueryService
 	MemoryLifecycleAction MemoryLifecycleActionService
 	MemoryManualMutation  ManualMemoryMutationService
+	EmbeddingAdminRead    EmbeddingAdminQueryService
 	MemorySearcher        retrieval.MemorySearcher
 	ContextAssembler      retrieval.ContextAssembler
 	GovernanceStatusRead  GovernanceStatusReader
@@ -75,6 +76,12 @@ type ManualMemoryMutationService interface {
 	UpdateMemory(ctx context.Context, input memory.ManualUpdateMemoryInput) (memory.MemoryResource, error)
 	MergeMemory(ctx context.Context, input memory.ManualMergeMemoryInput) (memory.MemoryResource, error)
 	ReclassifyMemory(ctx context.Context, input memory.ManualReclassifyMemoryInput) (memory.MemoryResource, error)
+}
+
+type EmbeddingAdminQueryService interface {
+	ListEmbeddingRebuilds(ctx context.Context, input memory.ListEmbeddingRebuildsInput) (memory.EmbeddingRebuildPage, error)
+	GetMemoryEmbedding(ctx context.Context, scope memory.Scope, memoryID string) (memory.EmbeddingMemoryInspection, error)
+	ApplyEmbeddingRecovery(ctx context.Context, input memory.ApplyEmbeddingRecoveryInput) (memory.EmbeddingRecoveryOutcome, error)
 }
 
 type JobExecutionReader interface {
@@ -282,6 +289,33 @@ func NewHTTPHandler(deps HTTPDependencies) http.Handler {
 		),
 	)
 	mux.Handle("GET /v1/admin/memories/{memory_id}/history", adminMemoryHistory)
+
+	adminEmbeddingRebuilds := auth.APIKeyMiddleware(deps.AdminAPIKeys)(
+		auth.ScopeMiddleware()(
+			http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				handleAdminEmbeddingRebuildList(w, r, deps.EmbeddingAdminRead)
+			}),
+		),
+	)
+	mux.Handle("GET /v1/admin/embedding/rebuilds", adminEmbeddingRebuilds)
+
+	adminEmbeddingRebuildAction := auth.APIKeyMiddleware(deps.AdminAPIKeys)(
+		auth.ScopeMiddleware()(
+			http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				handleAdminEmbeddingRebuildAction(w, r, deps.EmbeddingAdminRead)
+			}),
+		),
+	)
+	mux.Handle("POST /v1/admin/embedding/rebuilds/{embedding_action}", adminEmbeddingRebuildAction)
+
+	adminMemoryEmbedding := auth.APIKeyMiddleware(deps.AdminAPIKeys)(
+		auth.ScopeMiddleware()(
+			http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				handleAdminMemoryEmbedding(w, r, deps.EmbeddingAdminRead)
+			}),
+		),
+	)
+	mux.Handle("GET /v1/admin/memories/{memory_id}/embedding", adminMemoryEmbedding)
 
 	adminMemoryCreate := auth.APIKeyMiddleware(deps.AdminAPIKeys)(
 		auth.ScopeMiddleware()(
@@ -672,6 +706,89 @@ func handleMemoryHistory(w http.ResponseWriter, r *http.Request, reader MemoryHi
 	writeJSON(w, http.StatusOK, history)
 }
 
+func handleAdminEmbeddingRebuildList(w http.ResponseWriter, r *http.Request, service EmbeddingAdminQueryService) {
+	if service == nil {
+		http.Error(w, "embedding admin service is not configured", http.StatusServiceUnavailable)
+		return
+	}
+
+	scope, ok := auth.ScopeFromContext(r.Context())
+	if !ok {
+		http.Error(w, "scope context is missing", http.StatusInternalServerError)
+		return
+	}
+
+	limit := 20
+	if raw := strings.TrimSpace(r.URL.Query().Get("limit")); raw != "" {
+		parsed, err := strconv.Atoi(raw)
+		if err != nil || parsed <= 0 {
+			http.Error(w, "invalid limit", http.StatusBadRequest)
+			return
+		}
+		if parsed > 100 {
+			parsed = 100
+		}
+		limit = parsed
+	}
+
+	input := memory.ListEmbeddingRebuildsInput{
+		Scope:             scope,
+		Status:            memory.EmbeddingRebuildStatus(strings.TrimSpace(r.URL.Query().Get("status"))),
+		RequestedProvider: strings.TrimSpace(r.URL.Query().Get("requested_provider")),
+		RequestedModel:    strings.TrimSpace(r.URL.Query().Get("requested_model")),
+		Limit:             limit,
+	}
+	if raw := strings.TrimSpace(r.URL.Query().Get("drifted")); raw != "" {
+		parsed, err := strconv.ParseBool(raw)
+		if err != nil {
+			http.Error(w, "invalid drifted", http.StatusBadRequest)
+			return
+		}
+		input.Drifted = &parsed
+	}
+	if err := input.Validate(); err != nil {
+		http.Error(w, err.Error(), http.StatusBadRequest)
+		return
+	}
+
+	page, err := service.ListEmbeddingRebuilds(r.Context(), input)
+	if err != nil {
+		http.Error(w, "failed to read embedding rebuilds", http.StatusInternalServerError)
+		return
+	}
+
+	writeJSON(w, http.StatusOK, page)
+}
+
+func handleAdminMemoryEmbedding(w http.ResponseWriter, r *http.Request, service EmbeddingAdminQueryService) {
+	if service == nil {
+		http.Error(w, "embedding admin service is not configured", http.StatusServiceUnavailable)
+		return
+	}
+
+	scope, ok := auth.ScopeFromContext(r.Context())
+	if !ok {
+		http.Error(w, "scope context is missing", http.StatusInternalServerError)
+		return
+	}
+
+	inspection, err := service.GetMemoryEmbedding(r.Context(), scope, r.PathValue("memory_id"))
+	if err != nil {
+		if errors.Is(err, pgx.ErrNoRows) {
+			http.Error(w, "memory not found", http.StatusNotFound)
+			return
+		}
+		if strings.Contains(err.Error(), "memory id is required") || strings.Contains(err.Error(), "tenant is required") || strings.Contains(err.Error(), "project is required") || strings.Contains(err.Error(), "namespace is required") {
+			http.Error(w, err.Error(), http.StatusBadRequest)
+			return
+		}
+		http.Error(w, "failed to read memory embedding", http.StatusInternalServerError)
+		return
+	}
+
+	writeJSON(w, http.StatusOK, inspection)
+}
+
 func handleAdminGovernanceRawEventList(w http.ResponseWriter, r *http.Request, service GovernanceAdminService) {
 	if service == nil {
 		http.Error(w, "governance admin service is not configured", http.StatusServiceUnavailable)
@@ -856,6 +973,45 @@ func handleAdminGovernanceRawEventAction(w http.ResponseWriter, r *http.Request,
 	outcome, err := service.ApplyGovernanceRecovery(r.Context(), input)
 	if err != nil {
 		writeAdminGovernanceError(w, err, "failed to apply governance recovery")
+		return
+	}
+
+	writeJSON(w, http.StatusOK, outcome)
+}
+
+func handleAdminEmbeddingRebuildAction(w http.ResponseWriter, r *http.Request, service EmbeddingAdminQueryService) {
+	if service == nil {
+		http.Error(w, "embedding admin service is not configured", http.StatusServiceUnavailable)
+		return
+	}
+
+	var req lifecycleActionRequest
+	if !decodeJSONBody(w, r, &req) {
+		return
+	}
+
+	scope, ok := auth.ScopeFromContext(r.Context())
+	if !ok {
+		http.Error(w, "scope context is missing", http.StatusInternalServerError)
+		return
+	}
+
+	memoryID, action, err := parseEmbeddingRebuildActionTarget(r.PathValue("embedding_action"))
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusBadRequest)
+		return
+	}
+
+	outcome, err := service.ApplyEmbeddingRecovery(r.Context(), memory.ApplyEmbeddingRecoveryInput{
+		Scope:     scope,
+		MemoryID:  memoryID,
+		Action:    action,
+		Actor:     strings.TrimSpace(r.Header.Get("X-Stele-Actor")),
+		Reason:    req.Reason,
+		AppliedAt: time.Now().UTC(),
+	})
+	if err != nil {
+		writeAdminEmbeddingError(w, err, "failed to apply embedding recovery")
 		return
 	}
 
@@ -1181,6 +1337,21 @@ func writeAdminGovernanceError(w http.ResponseWriter, err error, fallback string
 	}
 }
 
+func writeAdminEmbeddingError(w http.ResponseWriter, err error, fallback string) {
+	switch {
+	case errors.Is(err, memory.ErrEmbeddingRecoveryConflict):
+		http.Error(w, err.Error(), http.StatusConflict)
+	case errors.Is(err, pgx.ErrNoRows):
+		http.Error(w, "memory not found", http.StatusNotFound)
+	default:
+		if strings.Contains(err.Error(), "required") || strings.Contains(err.Error(), "invalid") || strings.Contains(err.Error(), "must be") {
+			http.Error(w, err.Error(), http.StatusBadRequest)
+			return
+		}
+		http.Error(w, fallback, http.StatusInternalServerError)
+	}
+}
+
 func parseMemoryClasses(values []string) []memory.MemoryClass {
 	if len(values) == 0 {
 		return nil
@@ -1243,4 +1414,18 @@ func parseGovernanceRawEventActionTarget(value string) (string, governance.Gover
 	}
 
 	return rawEventID, action, nil
+}
+
+func parseEmbeddingRebuildActionTarget(value string) (string, memory.EmbeddingRecoveryAction, error) {
+	memoryID, actionName, ok := strings.Cut(value, ":")
+	if !ok || strings.TrimSpace(memoryID) == "" {
+		return "", "", fmt.Errorf("invalid embedding rebuild action target")
+	}
+
+	action := memory.EmbeddingRecoveryAction(actionName)
+	if !action.Valid() {
+		return "", "", fmt.Errorf("invalid embedding rebuild action target")
+	}
+
+	return memoryID, action, nil
 }

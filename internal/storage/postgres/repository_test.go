@@ -2978,15 +2978,15 @@ func TestRepositoryRecordEmbeddingRebuildRequiredUpsertsEligibility(t *testing.T
 	defer mock.Close()
 
 	record := memory.EmbeddingRebuildRecord{
-		MemoryID:          "mem_embed",
-		Scope:             memory.Scope{Tenant: "tenant-a", Project: "project-a", Namespace: "namespace-a"},
-		SourceVersion:     3,
-		ContentHash:       "sha256:abc",
-		RequestedProvider: "openai",
-		RequestedModel:    "text-embedding-3-small",
+		MemoryID:            "mem_embed",
+		Scope:               memory.Scope{Tenant: "tenant-a", Project: "project-a", Namespace: "namespace-a"},
+		SourceVersion:       3,
+		ContentHash:         "sha256:abc",
+		RequestedProvider:   "openai",
+		RequestedModel:      "text-embedding-3-small",
 		RequestedDimensions: 1536,
-		Status:            memory.EmbeddingRebuildStatusPending,
-		RequestedAt:       time.Date(2026, 6, 12, 8, 0, 0, 0, time.UTC),
+		Status:              memory.EmbeddingRebuildStatusPending,
+		RequestedAt:         time.Date(2026, 6, 12, 8, 0, 0, 0, time.UTC),
 	}
 
 	mock.ExpectExec("INSERT INTO embedding_rebuilds").
@@ -3274,6 +3274,272 @@ func TestRepositoryListEmbeddingLifecycleCandidatesReturnsVisibleCanonicalAndDri
 	}
 	if candidates[1].CurrentContentHash != testContentHash("User likes travel.") {
 		t.Fatalf("candidates[1].CurrentContentHash = %q, want content hash", candidates[1].CurrentContentHash)
+	}
+}
+
+func TestRepositoryListEmbeddingRebuildsReturnsScopedRecordsWithDriftContext(t *testing.T) {
+	mock, err := pgxmock.NewPool()
+	if err != nil {
+		t.Fatalf("pgxmock.NewPool() error = %v", err)
+	}
+	defer mock.Close()
+
+	scope := memory.Scope{Tenant: "tenant-a", Project: "project-a", Namespace: "namespace-a"}
+	drifted := true
+	requestedAt := time.Date(2026, 6, 28, 10, 0, 0, 0, time.UTC)
+	lastAttemptedAt := requestedAt.Add(5 * time.Minute)
+	mock.ExpectQuery("SELECT[\\s\\S]*FROM canonical_memories cm[\\s\\S]*LEFT JOIN embedding_rebuilds er[\\s\\S]*LEFT JOIN vector_revisions vr").
+		WithArgs(scope.Tenant, scope.Project, scope.Namespace, memory.EmbeddingRebuildStatusFailed, "openai", "text-embedding-3-small", 10).
+		WillReturnRows(pgxmock.NewRows([]string{
+			"memory_id", "tenant", "project", "namespace", "class", "state", "source_version", "content_hash",
+			"requested_provider", "requested_model", "requested_dimensions", "status", "failure_reason", "requested_at",
+			"last_attempted_at", "active_vector_revision_id", "active_provider", "active_model", "active_dimensions",
+		}).AddRow(
+			"mem_123", scope.Tenant, scope.Project, scope.Namespace, memory.MemoryClassProfile, memory.MemoryStateActive, int64(3), testContentHash("User prefers concise answers."),
+			"openai", "text-embedding-3-small", 1536, memory.EmbeddingRebuildStatusFailed, "provider unavailable", requestedAt,
+			lastAttemptedAt, "vec_active", "legacy-provider", "legacy-model", 1024,
+		))
+
+	repo := NewRepository(mock)
+	items, err := repo.ListEmbeddingRebuilds(context.Background(), memory.ListEmbeddingRebuildsInput{
+		Scope:             scope,
+		Status:            memory.EmbeddingRebuildStatusFailed,
+		RequestedProvider: "openai",
+		RequestedModel:    "text-embedding-3-small",
+		Drifted:           &drifted,
+		Limit:             10,
+	})
+	if err != nil {
+		t.Fatalf("ListEmbeddingRebuilds() error = %v", err)
+	}
+
+	if len(items) != 1 {
+		t.Fatalf("len(items) = %d, want 1", len(items))
+	}
+	if !items[0].Drifted {
+		t.Fatal("items[0].Drifted = false, want true")
+	}
+	if items[0].FailureReason != "provider unavailable" {
+		t.Fatalf("FailureReason = %q, want provider unavailable", items[0].FailureReason)
+	}
+}
+
+func TestRepositoryReadMemoryEmbeddingReturnsRebuildAndRevisionHistory(t *testing.T) {
+	mock, err := pgxmock.NewPool()
+	if err != nil {
+		t.Fatalf("pgxmock.NewPool() error = %v", err)
+	}
+	defer mock.Close()
+
+	scope := memory.Scope{Tenant: "tenant-a", Project: "project-a", Namespace: "namespace-a"}
+	generatedAt := time.Date(2026, 6, 28, 11, 0, 0, 0, time.UTC)
+	mock.ExpectQuery("SELECT[\\s\\S]*FROM canonical_memories cm[\\s\\S]*LEFT JOIN embedding_rebuilds er[\\s\\S]*LEFT JOIN vector_revisions vr").
+		WithArgs(scope.Tenant, scope.Project, scope.Namespace, "mem_123").
+		WillReturnRows(pgxmock.NewRows([]string{
+			"memory_id", "tenant", "project", "namespace", "class", "state", "current_source_version", "current_content_hash",
+			"requested_provider", "requested_model", "requested_dimensions", "status", "failure_reason", "requested_at",
+			"last_attempted_at", "active_vector_revision_id", "active_provider", "active_model", "active_dimensions",
+		}).AddRow(
+			"mem_123", scope.Tenant, scope.Project, scope.Namespace, memory.MemoryClassProfile, memory.MemoryStateActive, int64(3), testContentHash("User prefers concise answers."),
+			"openai", "text-embedding-3-small", 1536, memory.EmbeddingRebuildStatusCurrent, nil, generatedAt,
+			generatedAt, "vec_active", "openai", "text-embedding-3-small", 1536,
+		))
+	mock.ExpectQuery("SELECT[\\s\\S]*FROM vector_revisions").
+		WithArgs(scope.Tenant, scope.Project, scope.Namespace, "mem_123").
+		WillReturnRows(pgxmock.NewRows([]string{
+			"id", "memory_id", "source_version", "content_hash", "provider", "model", "dimensions", "status", "failure_reason", "superseded_by", "generated_at", "activated_at", "last_rebuild_request_at",
+		}).AddRow(
+			"vec_active", "mem_123", int64(3), testContentHash("User prefers concise answers."), "openai", "text-embedding-3-small", 1536, memory.VectorRevisionStatusActive, nil, nil, generatedAt, generatedAt, generatedAt,
+		))
+
+	repo := NewRepository(mock)
+	inspection, err := repo.ReadMemoryEmbedding(context.Background(), scope, "mem_123")
+	if err != nil {
+		t.Fatalf("ReadMemoryEmbedding() error = %v", err)
+	}
+
+	if inspection.Memory.ID != "mem_123" {
+		t.Fatalf("Memory.ID = %q, want mem_123", inspection.Memory.ID)
+	}
+	if inspection.Rebuild.ActiveVectorRevision != "vec_active" {
+		t.Fatalf("ActiveVectorRevision = %q, want vec_active", inspection.Rebuild.ActiveVectorRevision)
+	}
+	if len(inspection.Revisions) != 1 || inspection.Revisions[0].ID != "vec_active" {
+		t.Fatalf("Revisions = %+v, want one active revision", inspection.Revisions)
+	}
+}
+
+func TestRepositoryApplyEmbeddingRecoveryRetriesFailedRecordAndWritesLedger(t *testing.T) {
+	mock, err := pgxmock.NewPool()
+	if err != nil {
+		t.Fatalf("pgxmock.NewPool() error = %v", err)
+	}
+	defer mock.Close()
+
+	scope := memory.Scope{Tenant: "tenant-a", Project: "project-a", Namespace: "namespace-a"}
+	appliedAt := time.Date(2026, 6, 28, 12, 0, 0, 0, time.UTC)
+	requestedAt := appliedAt.Add(-time.Hour)
+	lastAttemptedAt := appliedAt.Add(-30 * time.Minute)
+
+	mock.ExpectBegin()
+	mock.ExpectQuery("SELECT[\\s\\S]*FROM canonical_memories cm[\\s\\S]*JOIN embedding_rebuilds er[\\s\\S]*LEFT JOIN vector_revisions vr[\\s\\S]*FOR UPDATE").
+		WithArgs("mem_123", scope.Tenant, scope.Project, scope.Namespace).
+		WillReturnRows(pgxmock.NewRows([]string{
+			"memory_id", "tenant", "project", "namespace", "class", "state", "requested_provider", "requested_model", "requested_dimensions",
+			"status", "failure_reason", "requested_at", "last_attempted_at", "active_vector_revision_id", "active_provider", "active_model", "active_dimensions",
+		}).AddRow(
+			"mem_123", scope.Tenant, scope.Project, scope.Namespace, memory.MemoryClassProfile, memory.MemoryStateActive, "openai", "text-embedding-3-small", 1536,
+			memory.EmbeddingRebuildStatusFailed, "provider unavailable", requestedAt, lastAttemptedAt, "vec_active", "openai", "text-embedding-3-small", 1536,
+		))
+	mock.ExpectQuery("UPDATE embedding_rebuilds[\\s\\S]*RETURNING").
+		WithArgs("mem_123", scope.Tenant, scope.Project, scope.Namespace, memory.EmbeddingRebuildStatusPending, nil, appliedAt).
+		WillReturnRows(pgxmock.NewRows([]string{
+			"memory_id", "tenant", "project", "namespace", "class", "state", "requested_provider", "requested_model", "requested_dimensions",
+			"status", "failure_reason", "requested_at", "last_attempted_at", "active_vector_revision_id", "active_provider", "active_model", "active_dimensions",
+		}).AddRow(
+			"mem_123", scope.Tenant, scope.Project, scope.Namespace, memory.MemoryClassProfile, memory.MemoryStateActive, "openai", "text-embedding-3-small", 1536,
+			memory.EmbeddingRebuildStatusPending, nil, appliedAt, lastAttemptedAt, "vec_active", "openai", "text-embedding-3-small", 1536,
+		))
+	mock.ExpectExec("INSERT INTO embedding_recovery_ledger").
+		WithArgs(
+			pgxmock.AnyArg(),
+			"mem_123",
+			scope.Tenant,
+			scope.Project,
+			scope.Namespace,
+			string(memory.EmbeddingRecoveryActionRetry),
+			"operator-a",
+			"retry now",
+			pgxmock.AnyArg(),
+			pgxmock.AnyArg(),
+			appliedAt,
+		).
+		WillReturnResult(pgxmock.NewResult("INSERT", 1))
+	mock.ExpectCommit()
+
+	repo := NewRepository(mock)
+	outcome, err := repo.ApplyEmbeddingRecovery(context.Background(), memory.ApplyEmbeddingRecoveryInput{
+		Scope:     scope,
+		MemoryID:  "mem_123",
+		Action:    memory.EmbeddingRecoveryActionRetry,
+		Actor:     "operator-a",
+		Reason:    "retry now",
+		AppliedAt: appliedAt,
+	})
+	if err != nil {
+		t.Fatalf("ApplyEmbeddingRecovery() error = %v", err)
+	}
+
+	if outcome.Rebuild.Status != memory.EmbeddingRebuildStatusPending {
+		t.Fatalf("Rebuild.Status = %q, want pending", outcome.Rebuild.Status)
+	}
+	if outcome.Recovery.Action != memory.EmbeddingRecoveryActionRetry {
+		t.Fatalf("Recovery.Action = %q, want retry", outcome.Recovery.Action)
+	}
+}
+
+func TestRepositoryApplyEmbeddingRecoveryRejectsRebuildingRecord(t *testing.T) {
+	mock, err := pgxmock.NewPool()
+	if err != nil {
+		t.Fatalf("pgxmock.NewPool() error = %v", err)
+	}
+	defer mock.Close()
+
+	scope := memory.Scope{Tenant: "tenant-a", Project: "project-a", Namespace: "namespace-a"}
+	appliedAt := time.Date(2026, 6, 28, 12, 0, 0, 0, time.UTC)
+
+	mock.ExpectBegin()
+	mock.ExpectQuery("SELECT[\\s\\S]*FROM canonical_memories cm[\\s\\S]*JOIN embedding_rebuilds er[\\s\\S]*LEFT JOIN vector_revisions vr[\\s\\S]*FOR UPDATE").
+		WithArgs("mem_123", scope.Tenant, scope.Project, scope.Namespace).
+		WillReturnRows(pgxmock.NewRows([]string{
+			"memory_id", "tenant", "project", "namespace", "class", "state", "requested_provider", "requested_model", "requested_dimensions",
+			"status", "failure_reason", "requested_at", "last_attempted_at", "active_vector_revision_id", "active_provider", "active_model", "active_dimensions",
+		}).AddRow(
+			"mem_123", scope.Tenant, scope.Project, scope.Namespace, memory.MemoryClassProfile, memory.MemoryStateActive, "openai", "text-embedding-3-small", 1536,
+			memory.EmbeddingRebuildStatusRebuilding, nil, appliedAt, appliedAt, "vec_active", "openai", "text-embedding-3-small", 1536,
+		))
+	mock.ExpectRollback()
+
+	repo := NewRepository(mock)
+	_, err = repo.ApplyEmbeddingRecovery(context.Background(), memory.ApplyEmbeddingRecoveryInput{
+		Scope:     scope,
+		MemoryID:  "mem_123",
+		Action:    memory.EmbeddingRecoveryActionRetry,
+		Actor:     "operator-a",
+		Reason:    "retry now",
+		AppliedAt: appliedAt,
+	})
+	if !errors.Is(err, memory.ErrEmbeddingRecoveryConflict) {
+		t.Fatalf("error = %v, want ErrEmbeddingRecoveryConflict", err)
+	}
+}
+
+func TestRepositoryApplyEmbeddingRecoveryRequeuesCurrentRecordAndWritesLedger(t *testing.T) {
+	mock, err := pgxmock.NewPool()
+	if err != nil {
+		t.Fatalf("pgxmock.NewPool() error = %v", err)
+	}
+	defer mock.Close()
+
+	scope := memory.Scope{Tenant: "tenant-a", Project: "project-a", Namespace: "namespace-a"}
+	appliedAt := time.Date(2026, 6, 28, 12, 0, 0, 0, time.UTC)
+	requestedAt := appliedAt.Add(-2 * time.Hour)
+	lastAttemptedAt := appliedAt.Add(-90 * time.Minute)
+
+	mock.ExpectBegin()
+	mock.ExpectQuery("SELECT[\\s\\S]*FROM canonical_memories cm[\\s\\S]*JOIN embedding_rebuilds er[\\s\\S]*LEFT JOIN vector_revisions vr[\\s\\S]*FOR UPDATE").
+		WithArgs("mem_123", scope.Tenant, scope.Project, scope.Namespace).
+		WillReturnRows(pgxmock.NewRows([]string{
+			"memory_id", "tenant", "project", "namespace", "class", "state", "requested_provider", "requested_model", "requested_dimensions",
+			"status", "failure_reason", "requested_at", "last_attempted_at", "active_vector_revision_id", "active_provider", "active_model", "active_dimensions",
+		}).AddRow(
+			"mem_123", scope.Tenant, scope.Project, scope.Namespace, memory.MemoryClassProfile, memory.MemoryStateActive, "openai", "text-embedding-3-small", 1536,
+			memory.EmbeddingRebuildStatusCurrent, nil, requestedAt, lastAttemptedAt, "vec_active", "openai", "text-embedding-3-small", 1536,
+		))
+	mock.ExpectQuery("UPDATE embedding_rebuilds[\\s\\S]*RETURNING").
+		WithArgs("mem_123", scope.Tenant, scope.Project, scope.Namespace, memory.EmbeddingRebuildStatusPending, nil, appliedAt).
+		WillReturnRows(pgxmock.NewRows([]string{
+			"memory_id", "tenant", "project", "namespace", "class", "state", "requested_provider", "requested_model", "requested_dimensions",
+			"status", "failure_reason", "requested_at", "last_attempted_at", "active_vector_revision_id", "active_provider", "active_model", "active_dimensions",
+		}).AddRow(
+			"mem_123", scope.Tenant, scope.Project, scope.Namespace, memory.MemoryClassProfile, memory.MemoryStateActive, "openai", "text-embedding-3-small", 1536,
+			memory.EmbeddingRebuildStatusPending, nil, appliedAt, lastAttemptedAt, "vec_active", "openai", "text-embedding-3-small", 1536,
+		))
+	mock.ExpectExec("INSERT INTO embedding_recovery_ledger").
+		WithArgs(
+			pgxmock.AnyArg(),
+			"mem_123",
+			scope.Tenant,
+			scope.Project,
+			scope.Namespace,
+			string(memory.EmbeddingRecoveryActionRequeue),
+			"operator-a",
+			"refresh current routing",
+			pgxmock.AnyArg(),
+			pgxmock.AnyArg(),
+			appliedAt,
+		).
+		WillReturnResult(pgxmock.NewResult("INSERT", 1))
+	mock.ExpectCommit()
+
+	repo := NewRepository(mock)
+	outcome, err := repo.ApplyEmbeddingRecovery(context.Background(), memory.ApplyEmbeddingRecoveryInput{
+		Scope:     scope,
+		MemoryID:  "mem_123",
+		Action:    memory.EmbeddingRecoveryActionRequeue,
+		Actor:     "operator-a",
+		Reason:    "refresh current routing",
+		AppliedAt: appliedAt,
+	})
+	if err != nil {
+		t.Fatalf("ApplyEmbeddingRecovery() error = %v", err)
+	}
+
+	if outcome.Rebuild.Status != memory.EmbeddingRebuildStatusPending {
+		t.Fatalf("Rebuild.Status = %q, want pending", outcome.Rebuild.Status)
+	}
+	if outcome.Recovery.Action != memory.EmbeddingRecoveryActionRequeue {
+		t.Fatalf("Recovery.Action = %q, want requeue", outcome.Recovery.Action)
 	}
 }
 

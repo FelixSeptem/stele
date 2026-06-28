@@ -1,6 +1,9 @@
 package config
 
-import "testing"
+import (
+	"testing"
+	"time"
+)
 
 func TestLoadFromEnvParsesEmbeddingDefaultsAndClassRoutes(t *testing.T) {
 	t.Setenv("STELE_MODE", "api")
@@ -40,5 +43,28 @@ func TestLoadFromEnvRejectsInvalidEmbeddingRouteFormat(t *testing.T) {
 	_, err := LoadFromEnv()
 	if err == nil {
 		t.Fatal("LoadFromEnv() error = nil, want invalid embedding route format")
+	}
+}
+
+func TestLoadFromEnvParsesOpenAIEmbeddingProviderSettings(t *testing.T) {
+	t.Setenv("STELE_MODE", "api")
+	t.Setenv("STELE_POSTGRES_DSN", "postgres://example")
+	t.Setenv("STELE_EMBEDDING_OPENAI_API_KEY", "test-openai-key")
+	t.Setenv("STELE_EMBEDDING_OPENAI_BASE_URL", "https://embeddings.example.com/v1")
+	t.Setenv("STELE_EMBEDDING_OPENAI_TIMEOUT", "45s")
+
+	cfg, err := LoadFromEnv()
+	if err != nil {
+		t.Fatalf("LoadFromEnv() error = %v", err)
+	}
+
+	if cfg.Embedding.OpenAI.APIKey != "test-openai-key" {
+		t.Fatalf("OpenAI.APIKey = %q, want test-openai-key", cfg.Embedding.OpenAI.APIKey)
+	}
+	if cfg.Embedding.OpenAI.BaseURL != "https://embeddings.example.com/v1" {
+		t.Fatalf("OpenAI.BaseURL = %q, want configured base URL", cfg.Embedding.OpenAI.BaseURL)
+	}
+	if cfg.Embedding.OpenAI.Timeout != 45*time.Second {
+		t.Fatalf("OpenAI.Timeout = %v, want 45s", cfg.Embedding.OpenAI.Timeout)
 	}
 }

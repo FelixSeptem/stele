@@ -8,7 +8,7 @@ In addition to event ingest, search, and context assembly, the API now exposes d
 
 - `api`: ingest, retrieval, context assembly, health/readiness, and admin inspection routes
 - `worker`: continuous governance processing loop with lease-aware retries
-- `scheduler`: periodic maintenance dispatch for summary compaction, retention expiry, and cleanup
+- `scheduler`: periodic maintenance dispatch for embedding rebuilds, summary compaction, retention expiry, and cleanup
 
 ## Quick Start
 
@@ -25,4 +25,4 @@ curl http://localhost:8080/health
 curl http://localhost:8080/ready
 ```
 
-Self-hosting details, required PostgreSQL extensions, config variables, and smoke checks live in [docs/self-hosting.md](docs/self-hosting.md).
+`/ready` confirms baseline dependency readiness only. Self-hosting details, provider-backed versus lexical-only embedding configuration, and semantic rebuild smoke checks live in [docs/self-hosting.md](docs/self-hosting.md).

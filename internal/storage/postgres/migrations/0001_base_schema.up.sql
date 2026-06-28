@@ -140,6 +140,20 @@ CREATE TABLE IF NOT EXISTS governance_recovery_ledger (
     created_at timestamptz NOT NULL DEFAULT now()
 );
 
+CREATE TABLE IF NOT EXISTS embedding_recovery_ledger (
+    id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+    memory_id uuid NOT NULL REFERENCES canonical_memories(id),
+    tenant text NOT NULL,
+    project text NOT NULL,
+    namespace text NOT NULL,
+    action text NOT NULL,
+    actor text NOT NULL,
+    reason text NOT NULL,
+    before_snapshot jsonb NOT NULL DEFAULT '{}'::jsonb,
+    after_snapshot jsonb NOT NULL DEFAULT '{}'::jsonb,
+    created_at timestamptz NOT NULL DEFAULT now()
+);
+
 CREATE TABLE IF NOT EXISTS deletion_markers (
     id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
     memory_id uuid REFERENCES canonical_memories(id),
@@ -231,6 +245,12 @@ CREATE INDEX IF NOT EXISTS governance_recovery_ledger_scope_created_at_idx
 
 CREATE INDEX IF NOT EXISTS governance_recovery_ledger_raw_event_created_at_idx
     ON governance_recovery_ledger (raw_event_id, created_at DESC);
+
+CREATE INDEX IF NOT EXISTS embedding_recovery_ledger_scope_created_at_idx
+    ON embedding_recovery_ledger (tenant, project, namespace, created_at DESC);
+
+CREATE INDEX IF NOT EXISTS embedding_recovery_ledger_memory_created_at_idx
+    ON embedding_recovery_ledger (memory_id, created_at DESC);
 
 CREATE INDEX IF NOT EXISTS relation_projections_scope_updated_at_idx
     ON relation_projections (tenant, project, namespace, updated_at DESC);
