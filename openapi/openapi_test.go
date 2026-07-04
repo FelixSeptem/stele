@@ -133,16 +133,45 @@ func TestSpecYAMLIncludesEmbeddingRecoveryRoutesAndSchemas(t *testing.T) {
 	for _, want := range []string{
 		"/v1/admin/embedding/rebuilds/{memory_id}:retry",
 		"/v1/admin/embedding/rebuilds/{memory_id}:requeue",
+		"/v1/admin/embedding/recovery-history",
+		"/v1/admin/memories/{memory_id}/embedding/recovery-history",
 		"EmbeddingRecoveryAction",
 		"EmbeddingRecoveryActionRequest",
 		"EmbeddingRecoverySnapshot",
 		"EmbeddingRecoveryRecord",
+		"EmbeddingRecoveryHistoryResponse",
 		"EmbeddingRecoveryOutcome",
+		"cutover_plan_id",
 		"occurred_at",
 		"before",
 		"after",
 		"rebuild",
 		"recovery",
+	} {
+		if !strings.Contains(SpecYAML(), want) {
+			t.Fatalf("SpecYAML() missing %q", want)
+		}
+	}
+}
+
+func TestSpecYAMLIncludesEmbeddingCutoverRoutesAndSchemas(t *testing.T) {
+	for _, want := range []string{
+		"/v1/admin/embedding/cutovers",
+		"/v1/admin/embedding/cutovers/{cutover_plan_id}",
+		"/v1/admin/embedding/cutovers/{cutover_plan_id}:activate",
+		"/v1/admin/embedding/cutovers/{cutover_plan_id}:pause",
+		"/v1/admin/embedding/cutovers/{cutover_plan_id}:cancel",
+		"EmbeddingCutoverTarget",
+		"EmbeddingCutoverPlanRequest",
+		"EmbeddingCutoverActionRequest",
+		"EmbeddingCutoverPlanStatus",
+		"EmbeddingCutoverItemStatus",
+		"EmbeddingCutoverProgress",
+		"EmbeddingCutoverItem",
+		"EmbeddingCutoverPlan",
+		"EmbeddingCutoverPlanListResponse",
+		"wave_size",
+		"classes",
 	} {
 		if !strings.Contains(SpecYAML(), want) {
 			t.Fatalf("SpecYAML() missing %q", want)

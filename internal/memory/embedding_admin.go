@@ -182,15 +182,16 @@ func NewEmbeddingRecoverySnapshot(rebuild EmbeddingRebuildView) EmbeddingRecover
 }
 
 type EmbeddingRecoveryRecord struct {
-	ID         string                    `json:"id"`
-	MemoryID   string                    `json:"memory_id"`
-	Scope      Scope                     `json:"scope"`
-	Action     EmbeddingRecoveryAction   `json:"action"`
-	Actor      string                    `json:"actor"`
-	Reason     string                    `json:"reason"`
-	Before     EmbeddingRecoverySnapshot `json:"before"`
-	After      EmbeddingRecoverySnapshot `json:"after"`
-	OccurredAt time.Time                 `json:"occurred_at"`
+	ID            string                    `json:"id"`
+	MemoryID      string                    `json:"memory_id"`
+	Scope         Scope                     `json:"scope"`
+	CutoverPlanID string                    `json:"cutover_plan_id,omitempty"`
+	Action        EmbeddingRecoveryAction   `json:"action"`
+	Actor         string                    `json:"actor"`
+	Reason        string                    `json:"reason"`
+	Before        EmbeddingRecoverySnapshot `json:"before"`
+	After         EmbeddingRecoverySnapshot `json:"after"`
+	OccurredAt    time.Time                 `json:"occurred_at"`
 }
 
 type EmbeddingRecoveryOutcome struct {
@@ -202,6 +203,11 @@ type EmbeddingAdminStore interface {
 	ListEmbeddingRebuilds(ctx context.Context, input ListEmbeddingRebuildsInput) ([]EmbeddingRebuildView, error)
 	ReadMemoryEmbedding(ctx context.Context, scope Scope, memoryID string) (EmbeddingMemoryInspection, error)
 	ApplyEmbeddingRecovery(ctx context.Context, input ApplyEmbeddingRecoveryInput) (EmbeddingRecoveryOutcome, error)
+	CreateEmbeddingCutoverPlan(ctx context.Context, input CreateEmbeddingCutoverPlanInput) (EmbeddingCutoverPlan, error)
+	ListEmbeddingCutoverPlans(ctx context.Context, input ListEmbeddingCutoverPlansInput) ([]EmbeddingCutoverPlan, error)
+	ReadEmbeddingCutoverPlan(ctx context.Context, input ReadEmbeddingCutoverPlanInput) (EmbeddingCutoverPlan, error)
+	ApplyEmbeddingCutoverPlanAction(ctx context.Context, input ApplyEmbeddingCutoverPlanActionInput) (EmbeddingCutoverPlan, error)
+	ListEmbeddingRecoveryHistory(ctx context.Context, input ListEmbeddingRecoveryHistoryInput) ([]EmbeddingRecoveryRecord, error)
 }
 
 type EmbeddingAdminQueryService struct {
@@ -265,6 +271,74 @@ func (s *EmbeddingAdminQueryService) ApplyEmbeddingRecovery(ctx context.Context,
 	return s.store.ApplyEmbeddingRecovery(ctx, input)
 }
 
+func (s *EmbeddingAdminQueryService) CreateEmbeddingCutoverPlan(ctx context.Context, input CreateEmbeddingCutoverPlanInput) (EmbeddingCutoverPlan, error) {
+	if err := input.Validate(); err != nil {
+		return EmbeddingCutoverPlan{}, err
+	}
+	if s.store == nil {
+		return EmbeddingCutoverPlan{}, fmt.Errorf("embedding admin store is not configured")
+	}
+
+	return s.store.CreateEmbeddingCutoverPlan(ctx, input)
+}
+
+func (s *EmbeddingAdminQueryService) ListEmbeddingCutoverPlans(ctx context.Context, input ListEmbeddingCutoverPlansInput) ([]EmbeddingCutoverPlan, error) {
+	if err := input.Validate(); err != nil {
+		return nil, err
+	}
+	if s.store == nil {
+		return nil, fmt.Errorf("embedding admin store is not configured")
+	}
+
+	return s.store.ListEmbeddingCutoverPlans(ctx, input)
+}
+
+func (s *EmbeddingAdminQueryService) ReadEmbeddingCutoverPlan(ctx context.Context, input ReadEmbeddingCutoverPlanInput) (EmbeddingCutoverPlan, error) {
+	if err := input.Validate(); err != nil {
+		return EmbeddingCutoverPlan{}, err
+	}
+	if s.store == nil {
+		return EmbeddingCutoverPlan{}, fmt.Errorf("embedding admin store is not configured")
+	}
+
+	return s.store.ReadEmbeddingCutoverPlan(ctx, input)
+}
+
+func (s *EmbeddingAdminQueryService) ApplyEmbeddingCutoverPlanAction(ctx context.Context, input ApplyEmbeddingCutoverPlanActionInput) (EmbeddingCutoverPlan, error) {
+	if err := input.Validate(); err != nil {
+		return EmbeddingCutoverPlan{}, err
+	}
+	if s.store == nil {
+		return EmbeddingCutoverPlan{}, fmt.Errorf("embedding admin store is not configured")
+	}
+
+	if input.Action == EmbeddingCutoverPlanActionActivate {
+		plan, err := s.store.ReadEmbeddingCutoverPlan(ctx, ReadEmbeddingCutoverPlanInput{
+			Scope:  input.Scope,
+			PlanID: input.PlanID,
+		})
+		if err != nil {
+			return EmbeddingCutoverPlan{}, err
+		}
+		if err := validateEmbeddingCutoverRuntimeSupport(s.runtime, plan.Target); err != nil {
+			return EmbeddingCutoverPlan{}, err
+		}
+	}
+
+	return s.store.ApplyEmbeddingCutoverPlanAction(ctx, input)
+}
+
+func (s *EmbeddingAdminQueryService) ListEmbeddingRecoveryHistory(ctx context.Context, input ListEmbeddingRecoveryHistoryInput) ([]EmbeddingRecoveryRecord, error) {
+	if err := input.Validate(); err != nil {
+		return nil, err
+	}
+	if s.store == nil {
+		return nil, fmt.Errorf("embedding admin store is not configured")
+	}
+
+	return s.store.ListEmbeddingRecoveryHistory(ctx, input)
+}
+
 func ApplyEmbeddingRecovery(current EmbeddingRebuildView, input ApplyEmbeddingRecoveryInput) (EmbeddingRebuildView, error) {
 	if err := input.Validate(); err != nil {
 		return EmbeddingRebuildView{}, err
@@ -299,4 +373,25 @@ func cloneEmbeddingRuntimeStatus(status EmbeddingRuntimeStatus) EmbeddingRuntime
 
 	cloned.RegisteredProviders = append([]string(nil), status.RegisteredProviders...)
 	return cloned
+}
+
+func validateEmbeddingCutoverRuntimeSupport(runtime EmbeddingRuntimeStatus, target EmbeddingCutoverTarget) error {
+	if err := target.Validate(); err != nil {
+		return err
+	}
+	if !runtime.Configured || !runtime.SemanticRebuildEnabled {
+		reason := strings.TrimSpace(runtime.Reason)
+		if reason == "" {
+			reason = "semantic rebuild runtime is not available"
+		}
+		return fmt.Errorf("%w: %s", ErrEmbeddingCutoverRejected, reason)
+	}
+
+	for _, provider := range runtime.RegisteredProviders {
+		if strings.EqualFold(strings.TrimSpace(provider), strings.TrimSpace(target.Provider)) {
+			return nil
+		}
+	}
+
+	return fmt.Errorf("%w: embedding provider %q is not registered in current runtime", ErrEmbeddingCutoverRejected, target.Provider)
 }

@@ -268,6 +268,92 @@ Lexical-only deployment:
 
 3. Treat `semantic_rebuild_enabled=false` plus the degraded reason as the success condition for a lexical-only deployment, not as an incident.
 
+### Embedding provider cutover rollout
+
+Use cutover plans when you need to migrate one scope toward a new embedding provider or model target without rewriting existing vector lineage.
+
+1. Create a cutover plan with an explicit immutable target snapshot and bounded wave size:
+
+```bash
+curl -X POST http://localhost:8080/v1/admin/embedding/cutovers \
+  -H 'Content-Type: application/json' \
+  -H 'X-API-Key: dev-admin-key' \
+  -H 'X-Stele-Actor: operator-a' \
+  -H 'X-Stele-Tenant: tenant-a' \
+  -H 'X-Stele-Project: project-a' \
+  -H 'X-Stele-Namespace: namespace-a' \
+  -d '{"target":{"provider":"openai","model":"text-embedding-3-large","dimensions":3072},"classes":["profile","episodic"],"wave_size":25,"reason":"migrate semantic target"}'
+```
+
+2. Activate the plan only after runtime inspection confirms the target provider is currently registered:
+
+```bash
+curl -X POST http://localhost:8080/v1/admin/embedding/cutovers/<plan-id>:activate \
+  -H 'Content-Type: application/json' \
+  -H 'X-API-Key: dev-admin-key' \
+  -H 'X-Stele-Actor: operator-a' \
+  -H 'X-Stele-Tenant: tenant-a' \
+  -H 'X-Stele-Project: project-a' \
+  -H 'X-Stele-Namespace: namespace-a' \
+  -d '{"reason":"start bounded rollout"}'
+```
+
+3. Monitor the rollout through both plan summary and item detail. `queued` shows unscheduled future work, `rebuilding` shows the currently dispatched wave, and `failed` highlights the hotspot set that needs operator attention:
+
+```bash
+curl 'http://localhost:8080/v1/admin/embedding/cutovers?status=active&limit=10' \
+  -H 'X-API-Key: dev-admin-key' \
+  -H 'X-Stele-Tenant: tenant-a' \
+  -H 'X-Stele-Project: project-a' \
+  -H 'X-Stele-Namespace: namespace-a'
+
+curl http://localhost:8080/v1/admin/embedding/cutovers/<plan-id> \
+  -H 'X-API-Key: dev-admin-key' \
+  -H 'X-Stele-Tenant: tenant-a' \
+  -H 'X-Stele-Project: project-a' \
+  -H 'X-Stele-Namespace: namespace-a'
+```
+
+4. Pause or cancel only when you want to stop future waves. Already rebuilding work keeps normal worker ownership. `pause` preserves unscheduled work for a later resume, while `cancel` leaves historical and already-dispatched work auditable but prevents the remaining queued set from advancing:
+
+```bash
+curl -X POST http://localhost:8080/v1/admin/embedding/cutovers/<plan-id>:pause \
+  -H 'Content-Type: application/json' \
+  -H 'X-API-Key: dev-admin-key' \
+  -H 'X-Stele-Actor: operator-a' \
+  -H 'X-Stele-Tenant: tenant-a' \
+  -H 'X-Stele-Project: project-a' \
+  -H 'X-Stele-Namespace: namespace-a' \
+  -d '{"reason":"hold next wave during incident review"}'
+
+curl -X POST http://localhost:8080/v1/admin/embedding/cutovers/<plan-id>:cancel \
+  -H 'Content-Type: application/json' \
+  -H 'X-API-Key: dev-admin-key' \
+  -H 'X-Stele-Actor: operator-a' \
+  -H 'X-Stele-Tenant: tenant-a' \
+  -H 'X-Stele-Project: project-a' \
+  -H 'X-Stele-Namespace: namespace-a' \
+  -d '{"reason":"abort rollout after provider regression"}'
+```
+
+5. During rollout incidents, inspect recovery audit at both scope and memory granularity. These queries let you confirm which retries or requeues happened inside the plan and who applied them:
+
+```bash
+curl 'http://localhost:8080/v1/admin/embedding/recovery-history?cutover_plan_id=<plan-id>&limit=20' \
+  -H 'X-API-Key: dev-admin-key' \
+  -H 'X-Stele-Tenant: tenant-a' \
+  -H 'X-Stele-Project: project-a' \
+  -H 'X-Stele-Namespace: namespace-a'
+
+curl 'http://localhost:8080/v1/admin/memories/<memory-id>/embedding/recovery-history?cutover_plan_id=<plan-id>&limit=20' \
+  -H 'X-API-Key: dev-admin-key' \
+  -H 'X-Stele-Tenant: tenant-a' \
+  -H 'X-Stele-Project: project-a' \
+  -H 'X-Stele-Namespace: namespace-a'
+```
+
+6. Rollback is modeled as a new forward cutover plan toward the prior provider, model, and dimensions. Do not mutate `vector_revisions` in place and do not try to reactivate an old revision as an ad hoc rollback shortcut.
+
 ## Memory Management Surface
 
 `Stele` now exposes two distinct memory management boundaries:
@@ -304,7 +390,15 @@ Privileged governance recovery routes:
 Privileged embedding inspection and recovery routes:
 
 - `GET /v1/admin/embedding/rebuilds`
+- `GET /v1/admin/embedding/cutovers`
+- `POST /v1/admin/embedding/cutovers`
+- `GET /v1/admin/embedding/cutovers/{cutover_plan_id}`
+- `POST /v1/admin/embedding/cutovers/{cutover_plan_id}:activate`
+- `POST /v1/admin/embedding/cutovers/{cutover_plan_id}:pause`
+- `POST /v1/admin/embedding/cutovers/{cutover_plan_id}:cancel`
+- `GET /v1/admin/embedding/recovery-history`
 - `GET /v1/admin/memories/{memory_id}/embedding`
+- `GET /v1/admin/memories/{memory_id}/embedding/recovery-history`
 - `POST /v1/admin/embedding/rebuilds/{memory_id}:retry`
 - `POST /v1/admin/embedding/rebuilds/{memory_id}:requeue`
 
@@ -370,11 +464,17 @@ Governance recovery notes:
 - If no embedding routes are configured, the service stays in lexical-only mode and surfaces semantic inactivity through admin embedding diagnostics.
 - If an embedding route is configured but the matching provider cannot be registered, startup fails instead of silently degrading.
 - Admin embedding inspection exposes rebuild backlog, one-memory vector lineage, provider or model drift, and failed attempt context without requiring direct database access.
+- Provider cutovers stay durable as operator-owned plans with immutable target snapshots, scoped membership, bounded wave size, and append-only audit context.
+- The scheduler advances active cutover plans in bounded waves through the ordinary `embedding_rebuilds` path before claiming work for execution.
+- Pausing a cutover stops future waves while leaving the already dispatched or rebuilding wave under ordinary worker ownership.
+- Cancelling a cutover prevents unscheduled remaining items from advancing but does not erase already completed, rebuilding, or failed rollout history.
 - `POST /v1/admin/embedding/rebuilds/{memory_id}:retry` only restores failed rebuild work to `pending`.
 - `POST /v1/admin/embedding/rebuilds/{memory_id}:requeue` returns eligible current or failed rebuild work to `pending` so the ordinary background rebuild job can pick it up again.
 - Rebuild records already in `rebuilding` state are rejected rather than being force-taken over.
 - Every embedding recovery action is written to append-only `embedding_recovery_ledger` with actor, reason, and before or after rebuild snapshots.
+- Recovery history can be filtered by `cutover_plan_id`, actor, action, and time window so rollout incidents remain explainable without direct database access.
 - Embedding recovery never mutates `vector_revisions` directly. Background execution still owns append, compare, and promote behavior.
+- Reverse cutover is the only supported rollback model. Create a new plan toward the earlier target instead of rewriting vector history in place.
 
 ## Example Flow
 
@@ -588,6 +688,81 @@ curl -X POST http://localhost:8080/v1/admin/embedding/rebuilds/<memory-id>:reque
   -d '{"reason":"requeue after routing update"}'
 ```
 
+19. List recent and active embedding cutover plans:
+
+```bash
+curl 'http://localhost:8080/v1/admin/embedding/cutovers?limit=10' \
+  -H 'X-API-Key: dev-admin-key' \
+  -H 'X-Stele-Tenant: tenant-a' \
+  -H 'X-Stele-Project: project-a' \
+  -H 'X-Stele-Namespace: namespace-a'
+```
+
+20. Read one embedding cutover plan in detail:
+
+```bash
+curl http://localhost:8080/v1/admin/embedding/cutovers/<plan-id> \
+  -H 'X-API-Key: dev-admin-key' \
+  -H 'X-Stele-Tenant: tenant-a' \
+  -H 'X-Stele-Project: project-a' \
+  -H 'X-Stele-Namespace: namespace-a'
+```
+
+21. Create one embedding cutover plan:
+
+```bash
+curl -X POST http://localhost:8080/v1/admin/embedding/cutovers \
+  -H 'Content-Type: application/json' \
+  -H 'X-API-Key: dev-admin-key' \
+  -H 'X-Stele-Actor: operator-a' \
+  -H 'X-Stele-Tenant: tenant-a' \
+  -H 'X-Stele-Project: project-a' \
+  -H 'X-Stele-Namespace: namespace-a' \
+  -d '{"target":{"provider":"openai","model":"text-embedding-3-large","dimensions":3072},"classes":["profile"],"wave_size":10,"reason":"test provider cutover"}'
+```
+
+22. Activate or pause one cutover plan:
+
+```bash
+curl -X POST http://localhost:8080/v1/admin/embedding/cutovers/<plan-id>:activate \
+  -H 'Content-Type: application/json' \
+  -H 'X-API-Key: dev-admin-key' \
+  -H 'X-Stele-Actor: operator-a' \
+  -H 'X-Stele-Tenant: tenant-a' \
+  -H 'X-Stele-Project: project-a' \
+  -H 'X-Stele-Namespace: namespace-a' \
+  -d '{"reason":"start rollout"}'
+
+curl -X POST http://localhost:8080/v1/admin/embedding/cutovers/<plan-id>:pause \
+  -H 'Content-Type: application/json' \
+  -H 'X-API-Key: dev-admin-key' \
+  -H 'X-Stele-Actor: operator-a' \
+  -H 'X-Stele-Tenant: tenant-a' \
+  -H 'X-Stele-Project: project-a' \
+  -H 'X-Stele-Namespace: namespace-a' \
+  -d '{"reason":"stop next wave"}'
+```
+
+23. Inspect scope-level embedding recovery history during a rollout incident:
+
+```bash
+curl 'http://localhost:8080/v1/admin/embedding/recovery-history?cutover_plan_id=<plan-id>&limit=20' \
+  -H 'X-API-Key: dev-admin-key' \
+  -H 'X-Stele-Tenant: tenant-a' \
+  -H 'X-Stele-Project: project-a' \
+  -H 'X-Stele-Namespace: namespace-a'
+```
+
+24. Inspect one memory's embedding recovery history during the same incident:
+
+```bash
+curl 'http://localhost:8080/v1/admin/memories/<memory-id>/embedding/recovery-history?cutover_plan_id=<plan-id>&limit=20' \
+  -H 'X-API-Key: dev-admin-key' \
+  -H 'X-Stele-Tenant: tenant-a' \
+  -H 'X-Stele-Project: project-a' \
+  -H 'X-Stele-Namespace: namespace-a'
+```
+
 ## Operational Notes
 
 - `api` logs request completion and panic recovery in structured key-value style.
@@ -597,6 +772,7 @@ curl -X POST http://localhost:8080/v1/admin/embedding/rebuilds/<memory-id>:reque
 - Raw events that hit the retry ceiling are marked exhausted and stop automatic claim until an explicit admin recovery action intervenes.
 - The scheduler dispatch path is independent from public request traffic.
 - The embedding rebuild scheduler records backlog and execution telemetry for newly queued rebuild work, rebuild outcomes, and error paths through the shared observer hook.
+- Active embedding cutovers are advanced by the scheduler in bounded waves before the normal lifecycle discovery pass, so provider migrations reuse the same durable rebuild execution path as drift correction.
 - Summary compaction and retention sweep are dispatched per eligible discovered scope, with the configured default scope used only as a fallback when discovery returns none.
 - Job execution cleanup remains runtime-global and runs once per cadence window instead of being fanned out per discovered scope.
 - Telemetry hook points are wired for ingest, governance worker execution, retrieval, forgetting, governance backlog inspection, and embedding rebuild backlog plus execution inspection. The default runtime uses a no-op observer until a concrete metrics or tracing backend is attached.

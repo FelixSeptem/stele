@@ -140,12 +140,56 @@ CREATE TABLE IF NOT EXISTS governance_recovery_ledger (
     created_at timestamptz NOT NULL DEFAULT now()
 );
 
+CREATE TABLE IF NOT EXISTS embedding_cutover_plans (
+    id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+    tenant text NOT NULL,
+    project text NOT NULL,
+    namespace text NOT NULL,
+    status text NOT NULL,
+    target_provider text NOT NULL,
+    target_model text NOT NULL,
+    target_dimensions integer NOT NULL,
+    class_filters text[] NOT NULL DEFAULT '{}'::text[],
+    wave_size integer NOT NULL,
+    reason text NOT NULL,
+    created_by text NOT NULL,
+    created_at timestamptz NOT NULL DEFAULT now(),
+    last_action_by text,
+    last_action_reason text,
+    last_action_at timestamptz,
+    activated_at timestamptz,
+    paused_at timestamptz,
+    cancelled_at timestamptz,
+    completed_at timestamptz
+);
+
+CREATE TABLE IF NOT EXISTS embedding_cutover_items (
+    plan_id uuid NOT NULL REFERENCES embedding_cutover_plans(id) ON DELETE CASCADE,
+    memory_id uuid NOT NULL REFERENCES canonical_memories(id),
+    tenant text NOT NULL,
+    project text NOT NULL,
+    namespace text NOT NULL,
+    class text NOT NULL,
+    status text NOT NULL,
+    failure_reason text,
+    active_vector_revision_id uuid,
+    active_provider text,
+    active_model text,
+    active_dimensions integer,
+    requested_at timestamptz,
+    last_attempted_at timestamptz,
+    created_at timestamptz NOT NULL DEFAULT now(),
+    updated_at timestamptz NOT NULL DEFAULT now(),
+    PRIMARY KEY (plan_id, memory_id)
+);
+
 CREATE TABLE IF NOT EXISTS embedding_recovery_ledger (
     id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
     memory_id uuid NOT NULL REFERENCES canonical_memories(id),
     tenant text NOT NULL,
     project text NOT NULL,
     namespace text NOT NULL,
+    cutover_plan_id uuid REFERENCES embedding_cutover_plans(id),
     action text NOT NULL,
     actor text NOT NULL,
     reason text NOT NULL,
@@ -251,6 +295,18 @@ CREATE INDEX IF NOT EXISTS embedding_recovery_ledger_scope_created_at_idx
 
 CREATE INDEX IF NOT EXISTS embedding_recovery_ledger_memory_created_at_idx
     ON embedding_recovery_ledger (memory_id, created_at DESC);
+
+CREATE INDEX IF NOT EXISTS embedding_recovery_ledger_cutover_plan_created_at_idx
+    ON embedding_recovery_ledger (cutover_plan_id, created_at DESC);
+
+CREATE INDEX IF NOT EXISTS embedding_cutover_plans_scope_status_created_at_idx
+    ON embedding_cutover_plans (tenant, project, namespace, status, created_at DESC);
+
+CREATE INDEX IF NOT EXISTS embedding_cutover_items_plan_status_updated_at_idx
+    ON embedding_cutover_items (plan_id, status, updated_at DESC);
+
+CREATE INDEX IF NOT EXISTS embedding_cutover_items_scope_status_updated_at_idx
+    ON embedding_cutover_items (tenant, project, namespace, status, updated_at DESC);
 
 CREATE INDEX IF NOT EXISTS relation_projections_scope_updated_at_idx
     ON relation_projections (tenant, project, namespace, updated_at DESC);

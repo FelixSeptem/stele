@@ -242,16 +242,22 @@ type embeddingFailureUpdate struct {
 type stubEmbeddingLifecycleStore struct {
 	candidates            []memory.EmbeddingLifecycleCandidate
 	claims                []memory.EmbeddingRebuildRecord
+	dispatchSequence      []string
 	recordedRebuilds      []memory.EmbeddingRebuildRecord
 	appendedRevisions     []memory.VectorRevision
 	promotedRevisions     []memory.VectorRevision
 	failedRevisions       []memory.VectorRevision
 	failureUpdates        []embeddingFailureUpdate
+	dispatchedCutoverWave int
 	gotCandidateScope     memory.Scope
 	gotCandidateLimit     int
+	gotDispatchScope      memory.Scope
+	gotDispatchLimit      int
+	gotDispatchRequested  time.Time
 	gotClaimScope         memory.Scope
 	gotClaimLimit         int
 	gotClaimAttemptedAt   time.Time
+	dispatchErr           error
 	candidateErr          error
 	recordErr             error
 	claimErr              error
@@ -262,6 +268,7 @@ type stubEmbeddingLifecycleStore struct {
 }
 
 func (s *stubEmbeddingLifecycleStore) ListEmbeddingLifecycleCandidates(ctx context.Context, scope memory.Scope, limit int) ([]memory.EmbeddingLifecycleCandidate, error) {
+	s.dispatchSequence = append(s.dispatchSequence, "list_candidates")
 	s.gotCandidateScope = scope
 	s.gotCandidateLimit = limit
 	if s.candidateErr != nil {
@@ -271,12 +278,25 @@ func (s *stubEmbeddingLifecycleStore) ListEmbeddingLifecycleCandidates(ctx conte
 	return s.candidates, nil
 }
 
+func (s *stubEmbeddingLifecycleStore) DispatchEmbeddingCutoverWave(ctx context.Context, scope memory.Scope, requestedAt time.Time, limit int) (int, error) {
+	s.dispatchSequence = append(s.dispatchSequence, "dispatch_cutover")
+	s.gotDispatchScope = scope
+	s.gotDispatchLimit = limit
+	s.gotDispatchRequested = requestedAt
+	if s.dispatchErr != nil {
+		return 0, s.dispatchErr
+	}
+
+	return s.dispatchedCutoverWave, nil
+}
+
 func (s *stubEmbeddingLifecycleStore) RecordEmbeddingRebuildRequired(ctx context.Context, record memory.EmbeddingRebuildRecord) error {
 	s.recordedRebuilds = append(s.recordedRebuilds, record)
 	return s.recordErr
 }
 
 func (s *stubEmbeddingLifecycleStore) ClaimEmbeddingRebuilds(ctx context.Context, scope memory.Scope, limit int, attemptedAt time.Time) ([]memory.EmbeddingRebuildRecord, error) {
+	s.dispatchSequence = append(s.dispatchSequence, "claim_rebuilds")
 	s.gotClaimScope = scope
 	s.gotClaimLimit = limit
 	s.gotClaimAttemptedAt = attemptedAt
@@ -713,6 +733,80 @@ func TestEmbeddingRebuildJobRunQueuesBackfillAndProviderDriftCandidates(t *testi
 	}
 }
 
+func TestEmbeddingRebuildJobRunDispatchesCutoverWaveBeforeLifecycleDiscovery(t *testing.T) {
+	scope := memory.Scope{Tenant: "tenant-a", Project: "project-a", Namespace: "namespace-a"}
+	now := time.Date(2026, 7, 4, 10, 0, 0, 0, time.UTC)
+	store := &stubEmbeddingLifecycleStore{
+		dispatchedCutoverWave: 2,
+		candidates: []memory.EmbeddingLifecycleCandidate{
+			{
+				MemoryID:             "mem_missing",
+				Scope:                scope,
+				Class:                memory.MemoryClassProfile,
+				CurrentSourceVersion: 2,
+				CurrentContentHash:   "sha256:missing",
+			},
+		},
+	}
+	executions := &stubExecutionStore{beginStarted: true}
+	observer := &stubEmbeddingJobsObserver{}
+	job := EmbeddingRebuildJob{
+		Scope: scope,
+		Router: embedding.Router{
+			Default: embedding.Target{
+				Provider:   "openai",
+				Model:      "text-embedding-3-small",
+				Dimensions: 1536,
+			},
+		},
+		Store:          store,
+		ExecutionStore: executions,
+		TriggerSource:  "scheduler",
+		Now:            func() time.Time { return now },
+		Cadence:        time.Hour,
+		Limit:          10,
+		NewRevisionID:  func() string { return "vec_unused" },
+		Observer:       observer,
+	}
+
+	processed, err := job.Run(context.Background())
+	if err != nil {
+		t.Fatalf("Run() error = %v", err)
+	}
+
+	if processed != 0 {
+		t.Fatalf("processed = %d, want 0 when only dispatch and discovery queue work", processed)
+	}
+
+	if store.gotDispatchScope != scope {
+		t.Fatalf("gotDispatchScope = %+v, want %+v", store.gotDispatchScope, scope)
+	}
+
+	if store.gotDispatchLimit != 10 {
+		t.Fatalf("gotDispatchLimit = %d, want 10", store.gotDispatchLimit)
+	}
+
+	if !store.gotDispatchRequested.Equal(now) {
+		t.Fatalf("gotDispatchRequested = %v, want %v", store.gotDispatchRequested, now)
+	}
+
+	if len(store.dispatchSequence) != 3 {
+		t.Fatalf("dispatchSequence = %v, want dispatch -> discovery -> claim", store.dispatchSequence)
+	}
+
+	if store.dispatchSequence[0] != "dispatch_cutover" || store.dispatchSequence[1] != "list_candidates" || store.dispatchSequence[2] != "claim_rebuilds" {
+		t.Fatalf("dispatchSequence = %v, want dispatch -> discovery -> claim", store.dispatchSequence)
+	}
+
+	if len(observer.backlogs) != 1 {
+		t.Fatalf("len(observer.backlogs) = %d, want 1", len(observer.backlogs))
+	}
+
+	if observer.backlogs[0].Pending != 3 {
+		t.Fatalf("backlog pending = %d, want 3 including cutover dispatch and lifecycle discovery", observer.backlogs[0].Pending)
+	}
+}
+
 func TestEmbeddingRebuildJobRunAppendsAndPromotesGeneratedRevision(t *testing.T) {
 	scope := memory.Scope{Tenant: "tenant-a", Project: "project-a", Namespace: "namespace-a"}
 	now := time.Date(2026, 6, 14, 13, 15, 0, 0, time.UTC)
@@ -744,15 +838,15 @@ func TestEmbeddingRebuildJobRunAppendsAndPromotesGeneratedRevision(t *testing.T)
 	}
 	executions := &stubExecutionStore{beginStarted: true}
 	job := EmbeddingRebuildJob{
-		Scope:             scope,
-		Store:             store,
-		Providers:         &stubEmbeddingProviderResolver{providers: map[string]embedding.Provider{"openai": provider}},
-		ExecutionStore:    executions,
-		TriggerSource:     "scheduler",
-		Now:               func() time.Time { return now },
-		Cadence:           time.Hour,
-		Limit:             10,
-		NewRevisionID:     func() string { return "vec_new" },
+		Scope:          scope,
+		Store:          store,
+		Providers:      &stubEmbeddingProviderResolver{providers: map[string]embedding.Provider{"openai": provider}},
+		ExecutionStore: executions,
+		TriggerSource:  "scheduler",
+		Now:            func() time.Time { return now },
+		Cadence:        time.Hour,
+		Limit:          10,
+		NewRevisionID:  func() string { return "vec_new" },
 	}
 
 	processed, err := job.Run(context.Background())

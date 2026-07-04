@@ -36,3 +36,46 @@ The service MUST support operator inspection of governed memory history and hidd
 - **WHEN** a memory was suppressed, forgotten, expired, or deleted
 - **THEN** the admin surface can expose the relevant history, lifecycle state transitions, and provenance diagnostics while public retrieval remains lifecycle-safe by default
 
+### Requirement: Embedding rebuild and vector lineage inspection
+The service MUST support admin-only inspection of embedding rebuild state and vector revision lineage without requiring direct database access.
+
+#### Scenario: Operator inspects one memory's semantic lineage
+- **WHEN** an operator requests embedding inspection for a specific memory within an authorized scope
+- **THEN** the admin surface returns the current rebuild state, requested target, active vector revision identity, and append-only revision history needed to diagnose semantic drift or failure
+
+#### Scenario: Operator inspects rebuild backlog for a scope
+- **WHEN** an operator requests embedding backlog inspection for an authorized scope
+- **THEN** the admin surface returns rebuild records filtered by status, requested provider or model target, and failure or drift indicators so remediation decisions can be made without querying PostgreSQL directly
+
+### Requirement: Embedding remediation actions remain bounded and auditable
+The service MUST support narrowly scoped operator actions for retrying or requeueing eligible embedding rebuild work while preserving audit attribution and durable worker ownership rules.
+
+#### Scenario: Operator retries a failed embedding rebuild
+- **WHEN** an operator targets a failed and unleased embedding rebuild record with a retry action
+- **THEN** the admin surface records actor and reason attribution, restores that record to ordinary rebuild eligibility, and does not mutate vector revision history directly
+
+#### Scenario: Operator action is rejected for an actively leased rebuild
+- **WHEN** an operator targets embedding rebuild work that is already under an active worker lease
+- **THEN** the admin surface rejects the action rather than bypassing the durable background ownership contract
+
+### Requirement: Embedding recovery history is queryable without direct database access
+The service MUST support admin-only reads of embedding recovery history at both scope and memory granularity.
+
+#### Scenario: Operator lists scope-level embedding recovery history
+- **WHEN** an authorized operator requests embedding recovery history for a scope with optional filters such as action, actor, time window, or cutover plan id
+- **THEN** the admin surface returns the matching recovery records with attribution and before or after snapshots without requiring direct PostgreSQL access
+
+#### Scenario: Operator reads one memory's embedding recovery timeline
+- **WHEN** an authorized operator requests embedding recovery history for a specific memory within an authorized scope
+- **THEN** the admin surface returns the ordered retry and requeue history for that memory together with any linked cutover context
+
+### Requirement: Embedding cutover plans are inspectable and controllable from the admin surface
+The service MUST expose cutover plan inspection and bounded plan controls through the existing admin boundary.
+
+#### Scenario: Operator lists active and recent cutover plans
+- **WHEN** an authorized operator requests embedding cutover plans for a scope
+- **THEN** the admin surface returns plan identity, target snapshot, rollout status, and aggregate progress needed to detect stalled or failed cutovers
+
+#### Scenario: Operator pauses a cutover through the admin surface
+- **WHEN** an authorized operator requests a pause or cancel action for an eligible cutover plan
+- **THEN** the admin surface records actor and reason attribution and applies the bounded plan-state transition without taking over already rebuilding work

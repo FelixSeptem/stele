@@ -557,6 +557,7 @@ type embeddingProviderResolver interface {
 }
 
 type embeddingLifecycleStore interface {
+	DispatchEmbeddingCutoverWave(ctx context.Context, scope memory.Scope, requestedAt time.Time, limit int) (int, error)
 	ListEmbeddingLifecycleCandidates(ctx context.Context, scope memory.Scope, limit int) ([]memory.EmbeddingLifecycleCandidate, error)
 	RecordEmbeddingRebuildRequired(ctx context.Context, record memory.EmbeddingRebuildRecord) error
 	ClaimEmbeddingRebuilds(ctx context.Context, scope memory.Scope, limit int, attemptedAt time.Time) ([]memory.EmbeddingRebuildRecord, error)
@@ -857,6 +858,15 @@ func (j EmbeddingRebuildJob) Run(ctx context.Context) (processed int, err error)
 		limit = 100
 	}
 
+	dispatched, dispatchErr := j.Store.DispatchEmbeddingCutoverWave(ctx, j.Scope, current, limit)
+	if dispatchErr != nil {
+		j.recordBacklog(ctx, current, 0, dispatchErr)
+		if failErr := failScheduledExecution(ctx, j.ExecutionStore, idempotencyKey, current, dispatchErr); failErr != nil {
+			return 0, failErr
+		}
+		return 0, dispatchErr
+	}
+
 	queued, queueErr := j.queueLifecycleCandidates(ctx, current, limit)
 	if queueErr != nil {
 		j.recordBacklog(ctx, current, 0, queueErr)
@@ -865,7 +875,7 @@ func (j EmbeddingRebuildJob) Run(ctx context.Context) (processed int, err error)
 		}
 		return 0, queueErr
 	}
-	j.recordBacklog(ctx, current, int64(queued), nil)
+	j.recordBacklog(ctx, current, int64(dispatched+queued), nil)
 
 	claims, err := j.Store.ClaimEmbeddingRebuilds(ctx, j.Scope, limit, current)
 	if err != nil {

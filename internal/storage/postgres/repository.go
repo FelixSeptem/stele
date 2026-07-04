@@ -2172,6 +2172,86 @@ func (r *Repository) RecordEmbeddingRebuildRequired(ctx context.Context, record 
 	return recordEmbeddingRebuildRequired(ctx, r.db, record)
 }
 
+func (r *Repository) DispatchEmbeddingCutoverWave(ctx context.Context, scope memory.Scope, requestedAt time.Time, limit int) (int, error) {
+	if err := scope.Validate(); err != nil {
+		return 0, err
+	}
+	if requestedAt.IsZero() {
+		return 0, fmt.Errorf("requested at is required")
+	}
+	if limit <= 0 {
+		return 0, fmt.Errorf("limit must be greater than zero")
+	}
+
+	tx, err := r.tx.BeginTx(ctx, pgx.TxOptions{})
+	if err != nil {
+		return 0, fmt.Errorf("begin embedding cutover dispatch transaction: %w", err)
+	}
+	defer tx.Rollback(ctx)
+
+	plans, err := listActiveEmbeddingCutoverPlansForDispatch(ctx, tx, scope)
+	if err != nil {
+		return 0, err
+	}
+
+	remaining := limit
+	dispatched := 0
+	for _, plan := range plans {
+		if remaining == 0 {
+			break
+		}
+
+		waveLimit := plan.WaveSize
+		if waveLimit > remaining {
+			waveLimit = remaining
+		}
+		if waveLimit <= 0 {
+			continue
+		}
+
+		candidates, err := listEmbeddingCutoverWaveCandidates(ctx, tx, plan, waveLimit)
+		if err != nil {
+			return 0, err
+		}
+		for _, candidate := range candidates {
+			record := memory.EmbeddingRebuildRecord{
+				MemoryID:            candidate.MemoryID,
+				Scope:               candidate.Scope,
+				Class:               candidate.Class,
+				SourceVersion:       candidate.CurrentSourceVersion,
+				ContentHash:         contentHash(candidate.Content),
+				RequestedProvider:   plan.Target.Provider,
+				RequestedModel:      plan.Target.Model,
+				RequestedDimensions: plan.Target.Dimensions,
+				Status:              memory.EmbeddingRebuildStatusPending,
+				RequestedAt:         requestedAt.UTC(),
+			}
+			if candidate.ActiveVectorRevision != "" {
+				record.ActiveVectorRevision = candidate.ActiveVectorRevision
+			}
+
+			if err := recordEmbeddingRebuildRequired(ctx, tx, record); err != nil {
+				return 0, err
+			}
+			if err := markEmbeddingCutoverItemDispatched(ctx, tx, candidate, requestedAt.UTC()); err != nil {
+				return 0, err
+			}
+
+			dispatched++
+			remaining--
+			if remaining == 0 {
+				break
+			}
+		}
+	}
+
+	if err := tx.Commit(ctx); err != nil {
+		return 0, fmt.Errorf("commit embedding cutover dispatch transaction: %w", err)
+	}
+
+	return dispatched, nil
+}
+
 func recordEmbeddingRebuildRequired(ctx context.Context, db queryRower, record memory.EmbeddingRebuildRecord) error {
 	const query = `
 INSERT INTO embedding_rebuilds (
@@ -2404,6 +2484,10 @@ WHERE memory_id = $1
 		memory.EmbeddingRebuildStatusCurrent,
 	); err != nil {
 		return fmt.Errorf("update embedding rebuild active revision: %w", err)
+	}
+
+	if err := syncEmbeddingCutoverPromotion(ctx, tx, revision); err != nil {
+		return err
 	}
 
 	if err := tx.Commit(ctx); err != nil {
@@ -2989,6 +3073,403 @@ ORDER BY generated_at DESC, id DESC
 	return inspection, nil
 }
 
+func (r *Repository) CreateEmbeddingCutoverPlan(ctx context.Context, input memory.CreateEmbeddingCutoverPlanInput) (memory.EmbeddingCutoverPlan, error) {
+	if err := input.Validate(); err != nil {
+		return memory.EmbeddingCutoverPlan{}, err
+	}
+
+	const query = `
+INSERT INTO embedding_cutover_plans (
+	tenant,
+	project,
+	namespace,
+	status,
+	target_provider,
+	target_model,
+	target_dimensions,
+	class_filters,
+	wave_size,
+	reason,
+	created_by,
+	created_at
+) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12)
+RETURNING
+	id,
+	tenant,
+	project,
+	namespace,
+	status,
+	target_provider,
+	target_model,
+	target_dimensions,
+	class_filters,
+	wave_size,
+	reason,
+	created_by,
+	created_at,
+	last_action_by,
+	last_action_reason,
+	last_action_at,
+	activated_at,
+	paused_at,
+	cancelled_at,
+	completed_at
+`
+
+	plan, err := scanEmbeddingCutoverPlan(
+		r.db.QueryRow(
+			ctx,
+			query,
+			input.Scope.Tenant,
+			input.Scope.Project,
+			input.Scope.Namespace,
+			string(memory.EmbeddingCutoverPlanStatusDraft),
+			input.Target.Provider,
+			input.Target.Model,
+			input.Target.Dimensions,
+			embeddingCutoverPlanClassStrings(input.Classes),
+			input.WaveSize,
+			input.Reason,
+			input.Actor,
+			input.CreatedAt.UTC(),
+		),
+	)
+	if err != nil {
+		return memory.EmbeddingCutoverPlan{}, fmt.Errorf("create embedding cutover plan: %w", err)
+	}
+
+	return plan, nil
+}
+
+func (r *Repository) ListEmbeddingCutoverPlans(ctx context.Context, input memory.ListEmbeddingCutoverPlansInput) ([]memory.EmbeddingCutoverPlan, error) {
+	if err := input.Validate(); err != nil {
+		return nil, err
+	}
+
+	const query = `
+SELECT
+	p.id,
+	p.tenant,
+	p.project,
+	p.namespace,
+	p.status,
+	p.target_provider,
+	p.target_model,
+	p.target_dimensions,
+	p.class_filters,
+	p.wave_size,
+	p.reason,
+	p.created_by,
+	p.created_at,
+	p.last_action_by,
+	p.last_action_reason,
+	p.last_action_at,
+	p.activated_at,
+	p.paused_at,
+	p.cancelled_at,
+	p.completed_at,
+	COALESCE(stats.total, 0) AS total,
+	COALESCE(stats.queued, 0) AS queued,
+	COALESCE(stats.rebuilding, 0) AS rebuilding,
+	COALESCE(stats.current, 0) AS current,
+	COALESCE(stats.failed, 0) AS failed,
+	COALESCE(stats.skipped, 0) AS skipped,
+	COALESCE(stats.paused, 0) AS paused,
+	COALESCE(stats.cancelled, 0) AS cancelled
+FROM embedding_cutover_plans p
+LEFT JOIN LATERAL (
+	SELECT
+		COUNT(*) AS total,
+		COUNT(*) FILTER (WHERE status = 'queued') AS queued,
+		COUNT(*) FILTER (WHERE status = 'rebuilding') AS rebuilding,
+		COUNT(*) FILTER (WHERE status = 'current') AS current,
+		COUNT(*) FILTER (WHERE status = 'failed') AS failed,
+		COUNT(*) FILTER (WHERE status = 'skipped') AS skipped,
+		COUNT(*) FILTER (WHERE status = 'paused') AS paused,
+		COUNT(*) FILTER (WHERE status = 'cancelled') AS cancelled
+	FROM embedding_cutover_items i
+	WHERE i.plan_id = p.id
+) stats ON true
+WHERE p.tenant = $1
+	AND p.project = $2
+	AND p.namespace = $3
+	AND ($4 = '' OR p.status = $4)
+ORDER BY p.created_at DESC, p.id DESC
+LIMIT $5
+`
+
+	rows, err := r.db.Query(
+		ctx,
+		query,
+		input.Scope.Tenant,
+		input.Scope.Project,
+		input.Scope.Namespace,
+		string(input.Status),
+		input.Limit,
+	)
+	if err != nil {
+		return nil, fmt.Errorf("list embedding cutover plans: %w", err)
+	}
+	defer rows.Close()
+
+	plans := make([]memory.EmbeddingCutoverPlan, 0)
+	for rows.Next() {
+		plan, err := scanEmbeddingCutoverPlanWithProgress(rows)
+		if err != nil {
+			return nil, err
+		}
+		plans = append(plans, plan)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("iterate embedding cutover plans: %w", err)
+	}
+
+	return plans, nil
+}
+
+func (r *Repository) ReadEmbeddingCutoverPlan(ctx context.Context, input memory.ReadEmbeddingCutoverPlanInput) (memory.EmbeddingCutoverPlan, error) {
+	if err := input.Validate(); err != nil {
+		return memory.EmbeddingCutoverPlan{}, err
+	}
+
+	plan, err := readEmbeddingCutoverPlan(ctx, r.db, input)
+	if err != nil {
+		return memory.EmbeddingCutoverPlan{}, fmt.Errorf("read embedding cutover plan: %w", err)
+	}
+
+	return plan, nil
+}
+
+func (r *Repository) ApplyEmbeddingCutoverPlanAction(ctx context.Context, input memory.ApplyEmbeddingCutoverPlanActionInput) (memory.EmbeddingCutoverPlan, error) {
+	if err := input.Validate(); err != nil {
+		return memory.EmbeddingCutoverPlan{}, err
+	}
+
+	tx, err := r.tx.BeginTx(ctx, pgx.TxOptions{})
+	if err != nil {
+		return memory.EmbeddingCutoverPlan{}, fmt.Errorf("begin embedding cutover transaction: %w", err)
+	}
+	defer tx.Rollback(ctx)
+
+	const selectQuery = `
+SELECT
+	id,
+	tenant,
+	project,
+	namespace,
+	status,
+	target_provider,
+	target_model,
+	target_dimensions,
+	class_filters,
+	wave_size,
+	reason,
+	created_by,
+	created_at,
+	last_action_by,
+	last_action_reason,
+	last_action_at,
+	activated_at,
+	paused_at,
+	cancelled_at,
+	completed_at
+FROM embedding_cutover_plans
+WHERE id = $1
+	AND tenant = $2
+	AND project = $3
+	AND namespace = $4
+FOR UPDATE
+`
+
+	current, err := scanEmbeddingCutoverPlan(tx.QueryRow(ctx, selectQuery, input.PlanID, input.Scope.Tenant, input.Scope.Project, input.Scope.Namespace))
+	if err != nil {
+		return memory.EmbeddingCutoverPlan{}, fmt.Errorf("read embedding cutover target: %w", err)
+	}
+
+	next, err := memory.ApplyEmbeddingCutoverPlanAction(current, input)
+	if err != nil {
+		return memory.EmbeddingCutoverPlan{}, err
+	}
+
+	const updateQuery = `
+UPDATE embedding_cutover_plans
+SET
+	status = $5,
+	last_action_by = $6,
+	last_action_reason = $7,
+	last_action_at = $8,
+	activated_at = $9,
+	paused_at = $10,
+	cancelled_at = $11,
+	completed_at = $12
+WHERE id = $1
+	AND tenant = $2
+	AND project = $3
+	AND namespace = $4
+RETURNING
+	id,
+	tenant,
+	project,
+	namespace,
+	status,
+	target_provider,
+	target_model,
+	target_dimensions,
+	class_filters,
+	wave_size,
+	reason,
+	created_by,
+	created_at,
+	last_action_by,
+	last_action_reason,
+	last_action_at,
+	activated_at,
+	paused_at,
+	cancelled_at,
+	completed_at
+`
+
+	updated, err := scanEmbeddingCutoverPlan(
+		tx.QueryRow(
+			ctx,
+			updateQuery,
+			input.PlanID,
+			input.Scope.Tenant,
+			input.Scope.Project,
+			input.Scope.Namespace,
+			string(next.Status),
+			next.LastActionBy,
+			next.LastActionReason,
+			nullableTime(next.LastActionAt),
+			nullableTime(next.ActivatedAt),
+			nullableTime(next.PausedAt),
+			nullableTime(next.CancelledAt),
+			nullableTime(next.CompletedAt),
+		),
+	)
+	if err != nil {
+		return memory.EmbeddingCutoverPlan{}, fmt.Errorf("update embedding cutover target: %w", err)
+	}
+
+	if current.Status == memory.EmbeddingCutoverPlanStatusDraft && input.Action == memory.EmbeddingCutoverPlanActionActivate {
+		if err := registerEmbeddingCutoverItems(ctx, tx, updated, input.AppliedAt.UTC()); err != nil {
+			return memory.EmbeddingCutoverPlan{}, err
+		}
+	}
+	if current.Status == memory.EmbeddingCutoverPlanStatusPaused && input.Action == memory.EmbeddingCutoverPlanActionActivate {
+		if err := transitionEmbeddingCutoverItems(ctx, tx, updated.ID, updated.Scope, memory.EmbeddingCutoverItemStatusQueued, input.AppliedAt.UTC(), []memory.EmbeddingCutoverItemStatus{
+			memory.EmbeddingCutoverItemStatusPaused,
+		}); err != nil {
+			return memory.EmbeddingCutoverPlan{}, err
+		}
+	}
+	if input.Action == memory.EmbeddingCutoverPlanActionPause {
+		if err := transitionEmbeddingCutoverItems(ctx, tx, updated.ID, updated.Scope, memory.EmbeddingCutoverItemStatusPaused, input.AppliedAt.UTC(), []memory.EmbeddingCutoverItemStatus{
+			memory.EmbeddingCutoverItemStatusQueued,
+		}); err != nil {
+			return memory.EmbeddingCutoverPlan{}, err
+		}
+	}
+	if input.Action == memory.EmbeddingCutoverPlanActionCancel {
+		if err := transitionEmbeddingCutoverItems(ctx, tx, updated.ID, updated.Scope, memory.EmbeddingCutoverItemStatusCancelled, input.AppliedAt.UTC(), []memory.EmbeddingCutoverItemStatus{
+			memory.EmbeddingCutoverItemStatusQueued,
+			memory.EmbeddingCutoverItemStatusPaused,
+		}); err != nil {
+			return memory.EmbeddingCutoverPlan{}, err
+		}
+	}
+
+	if err := tx.Commit(ctx); err != nil {
+		return memory.EmbeddingCutoverPlan{}, fmt.Errorf("commit embedding cutover transaction: %w", err)
+	}
+
+	return updated, nil
+}
+
+func (r *Repository) ListEmbeddingRecoveryHistory(ctx context.Context, input memory.ListEmbeddingRecoveryHistoryInput) ([]memory.EmbeddingRecoveryRecord, error) {
+	if err := input.Validate(); err != nil {
+		return nil, err
+	}
+
+	query := strings.Builder{}
+	query.WriteString(`
+SELECT
+	id,
+	memory_id,
+	tenant,
+	project,
+	namespace,
+	cutover_plan_id,
+	action,
+	actor,
+	reason,
+	before_snapshot,
+	after_snapshot,
+	created_at
+FROM embedding_recovery_ledger
+WHERE tenant = $1
+	AND project = $2
+	AND namespace = $3
+`)
+
+	args := []any{input.Scope.Tenant, input.Scope.Project, input.Scope.Namespace}
+	position := 4
+
+	if strings.TrimSpace(input.MemoryID) != "" {
+		query.WriteString(fmt.Sprintf(" AND memory_id = $%d\n", position))
+		args = append(args, strings.TrimSpace(input.MemoryID))
+		position++
+	}
+	if input.Action != "" {
+		query.WriteString(fmt.Sprintf(" AND action = $%d\n", position))
+		args = append(args, string(input.Action))
+		position++
+	}
+	if strings.TrimSpace(input.Actor) != "" {
+		query.WriteString(fmt.Sprintf(" AND actor = $%d\n", position))
+		args = append(args, strings.TrimSpace(input.Actor))
+		position++
+	}
+	if strings.TrimSpace(input.CutoverPlanID) != "" {
+		query.WriteString(fmt.Sprintf(" AND cutover_plan_id = $%d\n", position))
+		args = append(args, strings.TrimSpace(input.CutoverPlanID))
+		position++
+	}
+	if !input.OccurredFrom.IsZero() {
+		query.WriteString(fmt.Sprintf(" AND created_at >= $%d\n", position))
+		args = append(args, input.OccurredFrom.UTC())
+		position++
+	}
+	if !input.OccurredTo.IsZero() {
+		query.WriteString(fmt.Sprintf(" AND created_at <= $%d\n", position))
+		args = append(args, input.OccurredTo.UTC())
+		position++
+	}
+
+	query.WriteString(fmt.Sprintf("ORDER BY created_at DESC, id DESC\nLIMIT $%d", position))
+	args = append(args, input.Limit)
+
+	rows, err := r.db.Query(ctx, query.String(), args...)
+	if err != nil {
+		return nil, fmt.Errorf("list embedding recovery history: %w", err)
+	}
+	defer rows.Close()
+
+	records := make([]memory.EmbeddingRecoveryRecord, 0)
+	for rows.Next() {
+		record, err := scanEmbeddingRecoveryRecord(rows)
+		if err != nil {
+			return nil, err
+		}
+		records = append(records, record)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("iterate embedding recovery history: %w", err)
+	}
+
+	return records, nil
+}
+
 func (r *Repository) ApplyEmbeddingRecovery(ctx context.Context, input memory.ApplyEmbeddingRecoveryInput) (memory.EmbeddingRecoveryOutcome, error) {
 	if err := input.Validate(); err != nil {
 		return memory.EmbeddingRecoveryOutcome{}, err
@@ -3131,16 +3612,22 @@ LEFT JOIN vector_revisions vr
 		return memory.EmbeddingRecoveryOutcome{}, err
 	}
 
+	cutoverPlanID, err := readEmbeddingRecoveryCutoverPlanID(ctx, tx, input.Scope, updated.MemoryID)
+	if err != nil {
+		return memory.EmbeddingRecoveryOutcome{}, err
+	}
+
 	recovery := memory.EmbeddingRecoveryRecord{
-		ID:         uuid.NewString(),
-		MemoryID:   updated.MemoryID,
-		Scope:      input.Scope,
-		Action:     input.Action,
-		Actor:      input.Actor,
-		Reason:     input.Reason,
-		Before:     memory.NewEmbeddingRecoverySnapshot(current),
-		After:      memory.NewEmbeddingRecoverySnapshot(updated),
-		OccurredAt: input.AppliedAt.UTC(),
+		ID:            uuid.NewString(),
+		MemoryID:      updated.MemoryID,
+		Scope:         input.Scope,
+		CutoverPlanID: cutoverPlanID,
+		Action:        input.Action,
+		Actor:         input.Actor,
+		Reason:        input.Reason,
+		Before:        memory.NewEmbeddingRecoverySnapshot(current),
+		After:         memory.NewEmbeddingRecoverySnapshot(updated),
+		OccurredAt:    input.AppliedAt.UTC(),
 	}
 
 	const insertLedgerQuery = `
@@ -3150,13 +3637,14 @@ INSERT INTO embedding_recovery_ledger (
 	tenant,
 	project,
 	namespace,
+	cutover_plan_id,
 	action,
 	actor,
 	reason,
 	before_snapshot,
 	after_snapshot,
 	created_at
-) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)
+) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12)
 `
 
 	if _, err := tx.Exec(
@@ -3167,6 +3655,7 @@ INSERT INTO embedding_recovery_ledger (
 		recovery.Scope.Tenant,
 		recovery.Scope.Project,
 		recovery.Scope.Namespace,
+		nullableString(recovery.CutoverPlanID),
 		string(recovery.Action),
 		recovery.Actor,
 		recovery.Reason,
@@ -3368,6 +3857,10 @@ WHERE memory_id = $1
 		failedAt,
 	); err != nil {
 		return fmt.Errorf("record embedding rebuild failure: %w", err)
+	}
+
+	if err := syncEmbeddingCutoverFailure(ctx, r.db, record, failureCause, failedAt.UTC()); err != nil {
+		return err
 	}
 
 	return nil
@@ -4347,6 +4840,778 @@ func scanGovernanceRecoveryRecord(scanner provenanceScanner) (governance.Governa
 	return record, nil
 }
 
+func readEmbeddingCutoverPlan(ctx context.Context, db queryRower, input memory.ReadEmbeddingCutoverPlanInput) (memory.EmbeddingCutoverPlan, error) {
+	const planQuery = `
+SELECT
+	id,
+	tenant,
+	project,
+	namespace,
+	status,
+	target_provider,
+	target_model,
+	target_dimensions,
+	class_filters,
+	wave_size,
+	reason,
+	created_by,
+	created_at,
+	last_action_by,
+	last_action_reason,
+	last_action_at,
+	activated_at,
+	paused_at,
+	cancelled_at,
+	completed_at
+FROM embedding_cutover_plans
+WHERE id = $1
+	AND tenant = $2
+	AND project = $3
+	AND namespace = $4
+`
+
+	plan, err := scanEmbeddingCutoverPlan(db.QueryRow(ctx, planQuery, input.PlanID, input.Scope.Tenant, input.Scope.Project, input.Scope.Namespace))
+	if err != nil {
+		return memory.EmbeddingCutoverPlan{}, err
+	}
+
+	const itemsQuery = `
+SELECT
+	plan_id,
+	memory_id,
+	tenant,
+	project,
+	namespace,
+	class,
+	status,
+	failure_reason,
+	active_vector_revision_id,
+	active_provider,
+	active_model,
+	active_dimensions,
+	requested_at,
+	last_attempted_at,
+	updated_at
+FROM embedding_cutover_items
+WHERE plan_id = $1
+	AND tenant = $2
+	AND project = $3
+	AND namespace = $4
+ORDER BY updated_at ASC, memory_id ASC
+`
+
+	rows, err := db.Query(ctx, itemsQuery, input.PlanID, input.Scope.Tenant, input.Scope.Project, input.Scope.Namespace)
+	if err != nil {
+		return memory.EmbeddingCutoverPlan{}, fmt.Errorf("list embedding cutover items: %w", err)
+	}
+	defer rows.Close()
+
+	items := make([]memory.EmbeddingCutoverItem, 0)
+	for rows.Next() {
+		item, err := scanEmbeddingCutoverItem(rows)
+		if err != nil {
+			return memory.EmbeddingCutoverPlan{}, err
+		}
+		items = append(items, item)
+	}
+	if err := rows.Err(); err != nil {
+		return memory.EmbeddingCutoverPlan{}, fmt.Errorf("iterate embedding cutover items: %w", err)
+	}
+
+	plan.Items = items
+	plan.Progress = calculateEmbeddingCutoverProgress(items)
+	return plan, nil
+}
+
+func registerEmbeddingCutoverItems(ctx context.Context, db queryRower, plan memory.EmbeddingCutoverPlan, appliedAt time.Time) error {
+	const query = `
+INSERT INTO embedding_cutover_items (
+	plan_id,
+	memory_id,
+	tenant,
+	project,
+	namespace,
+	class,
+	status,
+	failure_reason,
+	active_vector_revision_id,
+	active_provider,
+	active_model,
+	active_dimensions,
+	requested_at,
+	last_attempted_at,
+	created_at,
+	updated_at
+)
+SELECT
+	$1,
+	cm.id,
+	cm.tenant,
+	cm.project,
+	cm.namespace,
+	cm.class,
+	CASE
+		WHEN vr.provider = $5
+			AND vr.model = $6
+			AND vr.dimensions = $7
+			AND er.status = $8
+		THEN $9
+		WHEN er.requested_provider = $5
+			AND er.requested_model = $6
+			AND er.requested_dimensions = $7
+			AND er.status = $10
+		THEN $11
+		WHEN er.requested_provider = $5
+			AND er.requested_model = $6
+			AND er.requested_dimensions = $7
+			AND er.status = $12
+		THEN $13
+		WHEN er.requested_provider = $5
+			AND er.requested_model = $6
+			AND er.requested_dimensions = $7
+			AND er.status = $14
+		THEN $15
+		ELSE $16
+	END,
+	CASE
+		WHEN er.requested_provider = $5
+			AND er.requested_model = $6
+			AND er.requested_dimensions = $7
+			AND er.status = $14
+		THEN er.failure_reason
+		ELSE NULL
+	END,
+	er.active_vector_revision_id,
+	vr.provider,
+	vr.model,
+	vr.dimensions,
+	er.requested_at,
+	er.last_attempted_at,
+	$17,
+	$17
+FROM canonical_memories cm
+LEFT JOIN embedding_rebuilds er
+	ON er.memory_id = cm.id
+	AND er.tenant = cm.tenant
+	AND er.project = cm.project
+	AND er.namespace = cm.namespace
+LEFT JOIN vector_revisions vr
+	ON vr.id = er.active_vector_revision_id
+	AND vr.memory_id = cm.id
+	AND vr.tenant = cm.tenant
+	AND vr.project = cm.project
+	AND vr.namespace = cm.namespace
+WHERE cm.tenant = $2
+	AND cm.project = $3
+	AND cm.namespace = $4
+	AND cm.state NOT IN ('suppressed', 'forgotten', 'deleted')
+	AND cm.class = ANY($18)
+ON CONFLICT (plan_id, memory_id) DO NOTHING
+`
+
+	if _, err := db.Exec(
+		ctx,
+		query,
+		plan.ID,
+		plan.Scope.Tenant,
+		plan.Scope.Project,
+		plan.Scope.Namespace,
+		plan.Target.Provider,
+		plan.Target.Model,
+		plan.Target.Dimensions,
+		memory.EmbeddingRebuildStatusCurrent,
+		memory.EmbeddingCutoverItemStatusCurrent,
+		memory.EmbeddingRebuildStatusPending,
+		memory.EmbeddingCutoverItemStatusQueued,
+		memory.EmbeddingRebuildStatusRebuilding,
+		memory.EmbeddingCutoverItemStatusRebuilding,
+		memory.EmbeddingRebuildStatusFailed,
+		memory.EmbeddingCutoverItemStatusFailed,
+		memory.EmbeddingCutoverItemStatusQueued,
+		appliedAt.UTC(),
+		embeddingCutoverEligibleClassStrings(plan.Classes),
+	); err != nil {
+		return fmt.Errorf("register embedding cutover items: %w", err)
+	}
+
+	return nil
+}
+
+type embeddingCutoverDispatchCandidate struct {
+	PlanID               string
+	MemoryID             string
+	Scope                memory.Scope
+	Class                memory.MemoryClass
+	Status               memory.EmbeddingCutoverItemStatus
+	ActiveVectorRevision string
+	CurrentSourceVersion int64
+	Content              string
+}
+
+func listActiveEmbeddingCutoverPlansForDispatch(ctx context.Context, db queryRower, scope memory.Scope) ([]memory.EmbeddingCutoverPlan, error) {
+	const query = `
+SELECT
+	id,
+	tenant,
+	project,
+	namespace,
+	status,
+	target_provider,
+	target_model,
+	target_dimensions,
+	class_filters,
+	wave_size,
+	reason,
+	created_by,
+	created_at,
+	last_action_by,
+	last_action_reason,
+	last_action_at,
+	activated_at,
+	paused_at,
+	cancelled_at,
+	completed_at
+FROM embedding_cutover_plans
+WHERE tenant = $1
+	AND project = $2
+	AND namespace = $3
+	AND status = $4
+ORDER BY activated_at ASC NULLS FIRST, created_at ASC, id ASC
+FOR UPDATE
+`
+
+	rows, err := db.Query(ctx, query, scope.Tenant, scope.Project, scope.Namespace, memory.EmbeddingCutoverPlanStatusActive)
+	if err != nil {
+		return nil, fmt.Errorf("list active embedding cutover plans: %w", err)
+	}
+	defer rows.Close()
+
+	plans := make([]memory.EmbeddingCutoverPlan, 0)
+	for rows.Next() {
+		plan, err := scanEmbeddingCutoverPlan(rows)
+		if err != nil {
+			return nil, err
+		}
+		plans = append(plans, plan)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("iterate active embedding cutover plans: %w", err)
+	}
+
+	return plans, nil
+}
+
+func listEmbeddingCutoverWaveCandidates(ctx context.Context, db queryRower, plan memory.EmbeddingCutoverPlan, limit int) ([]embeddingCutoverDispatchCandidate, error) {
+	const query = `
+SELECT
+	eci.plan_id,
+	eci.memory_id,
+	eci.tenant,
+	eci.project,
+	eci.namespace,
+	eci.class,
+	eci.status,
+	eci.failure_reason,
+	eci.active_vector_revision_id,
+	eci.active_provider,
+	eci.active_model,
+	eci.active_dimensions,
+	eci.requested_at,
+	eci.last_attempted_at,
+	eci.updated_at,
+	COALESCE(mv.version, 0) AS current_source_version,
+	cm.content
+FROM embedding_cutover_items eci
+JOIN canonical_memories cm
+	ON cm.id = eci.memory_id
+	AND cm.tenant = eci.tenant
+	AND cm.project = eci.project
+	AND cm.namespace = eci.namespace
+LEFT JOIN (
+	SELECT memory_id, MAX(version) AS version
+	FROM memory_versions
+	GROUP BY memory_id
+) mv ON mv.memory_id = cm.id
+WHERE eci.plan_id = $1
+	AND eci.tenant = $2
+	AND eci.project = $3
+	AND eci.namespace = $4
+	AND eci.status = $5
+ORDER BY eci.updated_at ASC, eci.memory_id ASC
+LIMIT $6
+FOR UPDATE OF eci SKIP LOCKED
+`
+
+	rows, err := db.Query(ctx, query, plan.ID, plan.Scope.Tenant, plan.Scope.Project, plan.Scope.Namespace, memory.EmbeddingCutoverItemStatusQueued, limit)
+	if err != nil {
+		return nil, fmt.Errorf("list embedding cutover wave candidates: %w", err)
+	}
+	defer rows.Close()
+
+	candidates := make([]embeddingCutoverDispatchCandidate, 0)
+	for rows.Next() {
+		var candidate embeddingCutoverDispatchCandidate
+		var failureReason sql.NullString
+		var activeVectorRevision sql.NullString
+		var activeProvider sql.NullString
+		var activeModel sql.NullString
+		var activeDimensions sql.NullInt32
+		var requestedAt sql.NullTime
+		var lastAttemptedAt sql.NullTime
+		var updatedAt time.Time
+		if err := rows.Scan(
+			&candidate.PlanID,
+			&candidate.MemoryID,
+			&candidate.Scope.Tenant,
+			&candidate.Scope.Project,
+			&candidate.Scope.Namespace,
+			&candidate.Class,
+			&candidate.Status,
+			&failureReason,
+			&activeVectorRevision,
+			&activeProvider,
+			&activeModel,
+			&activeDimensions,
+			&requestedAt,
+			&lastAttemptedAt,
+			&updatedAt,
+			&candidate.CurrentSourceVersion,
+			&candidate.Content,
+		); err != nil {
+			return nil, fmt.Errorf("scan embedding cutover wave candidate: %w", err)
+		}
+		if activeVectorRevision.Valid {
+			candidate.ActiveVectorRevision = activeVectorRevision.String
+		}
+		candidates = append(candidates, candidate)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("iterate embedding cutover wave candidates: %w", err)
+	}
+
+	return candidates, nil
+}
+
+func markEmbeddingCutoverItemDispatched(ctx context.Context, db queryRower, candidate embeddingCutoverDispatchCandidate, requestedAt time.Time) error {
+	const query = `
+UPDATE embedding_cutover_items
+SET
+	status = $6,
+	failure_reason = NULL,
+	requested_at = $7,
+	updated_at = $8
+WHERE plan_id = $1
+	AND memory_id = $2
+	AND tenant = $3
+	AND project = $4
+	AND namespace = $5
+`
+
+	if _, err := db.Exec(
+		ctx,
+		query,
+		candidate.PlanID,
+		candidate.MemoryID,
+		candidate.Scope.Tenant,
+		candidate.Scope.Project,
+		candidate.Scope.Namespace,
+		memory.EmbeddingCutoverItemStatusRebuilding,
+		requestedAt,
+		requestedAt,
+	); err != nil {
+		return fmt.Errorf("mark embedding cutover item dispatched: %w", err)
+	}
+
+	return nil
+}
+
+func transitionEmbeddingCutoverItems(ctx context.Context, db queryRower, planID string, scope memory.Scope, nextStatus memory.EmbeddingCutoverItemStatus, updatedAt time.Time, currentStatuses []memory.EmbeddingCutoverItemStatus) error {
+	if len(currentStatuses) == 0 {
+		return nil
+	}
+
+	const query = `
+UPDATE embedding_cutover_items
+SET
+	status = $5,
+	updated_at = $6
+WHERE plan_id = $1
+	AND tenant = $2
+	AND project = $3
+	AND namespace = $4
+	AND status = ANY($7)
+`
+
+	if _, err := db.Exec(
+		ctx,
+		query,
+		planID,
+		scope.Tenant,
+		scope.Project,
+		scope.Namespace,
+		nextStatus,
+		updatedAt,
+		embeddingCutoverItemStatusStrings(currentStatuses),
+	); err != nil {
+		return fmt.Errorf("transition embedding cutover items: %w", err)
+	}
+
+	return nil
+}
+
+func syncEmbeddingCutoverPromotion(ctx context.Context, db queryRower, revision memory.VectorRevision) error {
+	const query = `
+UPDATE embedding_cutover_items eci
+SET
+	status = $8,
+	failure_reason = NULL,
+	active_vector_revision_id = $9,
+	active_provider = $10,
+	active_model = $11,
+	active_dimensions = $12,
+	last_attempted_at = $13,
+	updated_at = $14
+FROM embedding_cutover_plans ecp
+WHERE eci.plan_id = ecp.id
+	AND eci.memory_id = $1
+	AND eci.tenant = $2
+	AND eci.project = $3
+	AND eci.namespace = $4
+	AND ecp.target_provider = $5
+	AND ecp.target_model = $6
+	AND ecp.target_dimensions = $7
+	AND eci.status IN ($15, $16)
+`
+
+	if _, err := db.Exec(
+		ctx,
+		query,
+		revision.MemoryID,
+		revision.Scope.Tenant,
+		revision.Scope.Project,
+		revision.Scope.Namespace,
+		revision.Provider,
+		revision.Model,
+		revision.Dimensions,
+		memory.EmbeddingCutoverItemStatusCurrent,
+		revision.ID,
+		revision.Provider,
+		revision.Model,
+		revision.Dimensions,
+		revision.ActivatedAt,
+		revision.ActivatedAt,
+		memory.EmbeddingCutoverItemStatusRebuilding,
+		memory.EmbeddingCutoverItemStatusFailed,
+	); err != nil {
+		return fmt.Errorf("sync embedding cutover promotion: %w", err)
+	}
+
+	return nil
+}
+
+func syncEmbeddingCutoverFailure(ctx context.Context, db queryRower, record memory.EmbeddingRebuildRecord, failureCause string, failedAt time.Time) error {
+	const query = `
+UPDATE embedding_cutover_items eci
+SET
+	status = $5,
+	failure_reason = $6,
+	last_attempted_at = $7,
+	updated_at = $8
+FROM embedding_cutover_plans ecp
+WHERE eci.plan_id = ecp.id
+	AND eci.memory_id = $1
+	AND eci.tenant = $2
+	AND eci.project = $3
+	AND eci.namespace = $4
+	AND ecp.target_provider = $9
+	AND ecp.target_model = $10
+	AND ecp.target_dimensions = $11
+	AND eci.status = $12
+`
+
+	if _, err := db.Exec(
+		ctx,
+		query,
+		record.MemoryID,
+		record.Scope.Tenant,
+		record.Scope.Project,
+		record.Scope.Namespace,
+		memory.EmbeddingCutoverItemStatusFailed,
+		failureCause,
+		failedAt,
+		failedAt,
+		record.RequestedProvider,
+		record.RequestedModel,
+		record.RequestedDimensions,
+		memory.EmbeddingCutoverItemStatusRebuilding,
+	); err != nil {
+		return fmt.Errorf("sync embedding cutover failure: %w", err)
+	}
+
+	return nil
+}
+
+func readEmbeddingRecoveryCutoverPlanID(ctx context.Context, db queryRower, scope memory.Scope, memoryID string) (string, error) {
+	const query = `
+SELECT ecp.id
+FROM embedding_cutover_items eci
+JOIN embedding_cutover_plans ecp
+	ON ecp.id = eci.plan_id
+	AND ecp.tenant = eci.tenant
+	AND ecp.project = eci.project
+	AND ecp.namespace = eci.namespace
+WHERE eci.memory_id = $1
+	AND eci.tenant = $2
+	AND eci.project = $3
+	AND eci.namespace = $4
+	AND ecp.status IN ($5, $6)
+ORDER BY ecp.created_at DESC, ecp.id DESC
+LIMIT 1
+`
+
+	var planID string
+	err := db.QueryRow(
+		ctx,
+		query,
+		memoryID,
+		scope.Tenant,
+		scope.Project,
+		scope.Namespace,
+		string(memory.EmbeddingCutoverPlanStatusActive),
+		string(memory.EmbeddingCutoverPlanStatusPaused),
+	).Scan(&planID)
+	if err != nil {
+		if errors.Is(err, pgx.ErrNoRows) {
+			return "", nil
+		}
+		return "", fmt.Errorf("read embedding recovery cutover context: %w", err)
+	}
+
+	return planID, nil
+}
+
+func scanEmbeddingCutoverPlan(scanner provenanceScanner) (memory.EmbeddingCutoverPlan, error) {
+	var plan memory.EmbeddingCutoverPlan
+	var classFilters []string
+	var lastActionBy sql.NullString
+	var lastActionReason sql.NullString
+	var lastActionAt sql.NullTime
+	var activatedAt sql.NullTime
+	var pausedAt sql.NullTime
+	var cancelledAt sql.NullTime
+	var completedAt sql.NullTime
+
+	if err := scanner.Scan(
+		&plan.ID,
+		&plan.Scope.Tenant,
+		&plan.Scope.Project,
+		&plan.Scope.Namespace,
+		&plan.Status,
+		&plan.Target.Provider,
+		&plan.Target.Model,
+		&plan.Target.Dimensions,
+		&classFilters,
+		&plan.WaveSize,
+		&plan.Reason,
+		&plan.CreatedBy,
+		&plan.CreatedAt,
+		&lastActionBy,
+		&lastActionReason,
+		&lastActionAt,
+		&activatedAt,
+		&pausedAt,
+		&cancelledAt,
+		&completedAt,
+	); err != nil {
+		return memory.EmbeddingCutoverPlan{}, fmt.Errorf("scan embedding cutover plan: %w", err)
+	}
+
+	plan.Classes = embeddingCutoverPlanClasses(classFilters)
+	if lastActionBy.Valid {
+		plan.LastActionBy = lastActionBy.String
+	}
+	if lastActionReason.Valid {
+		plan.LastActionReason = lastActionReason.String
+	}
+	if lastActionAt.Valid {
+		plan.LastActionAt = lastActionAt.Time
+	}
+	if activatedAt.Valid {
+		plan.ActivatedAt = activatedAt.Time
+	}
+	if pausedAt.Valid {
+		plan.PausedAt = pausedAt.Time
+	}
+	if cancelledAt.Valid {
+		plan.CancelledAt = cancelledAt.Time
+	}
+	if completedAt.Valid {
+		plan.CompletedAt = completedAt.Time
+	}
+
+	return plan, nil
+}
+
+func scanEmbeddingCutoverPlanWithProgress(scanner provenanceScanner) (memory.EmbeddingCutoverPlan, error) {
+	var plan memory.EmbeddingCutoverPlan
+	var classFilters []string
+	var lastActionBy sql.NullString
+	var lastActionReason sql.NullString
+	var lastActionAt sql.NullTime
+	var activatedAt sql.NullTime
+	var pausedAt sql.NullTime
+	var cancelledAt sql.NullTime
+	var completedAt sql.NullTime
+
+	if err := scanner.Scan(
+		&plan.ID,
+		&plan.Scope.Tenant,
+		&plan.Scope.Project,
+		&plan.Scope.Namespace,
+		&plan.Status,
+		&plan.Target.Provider,
+		&plan.Target.Model,
+		&plan.Target.Dimensions,
+		&classFilters,
+		&plan.WaveSize,
+		&plan.Reason,
+		&plan.CreatedBy,
+		&plan.CreatedAt,
+		&lastActionBy,
+		&lastActionReason,
+		&lastActionAt,
+		&activatedAt,
+		&pausedAt,
+		&cancelledAt,
+		&completedAt,
+		&plan.Progress.Total,
+		&plan.Progress.Queued,
+		&plan.Progress.Rebuilding,
+		&plan.Progress.Current,
+		&plan.Progress.Failed,
+		&plan.Progress.Skipped,
+		&plan.Progress.Paused,
+		&plan.Progress.Cancelled,
+	); err != nil {
+		return memory.EmbeddingCutoverPlan{}, fmt.Errorf("scan embedding cutover plan with progress: %w", err)
+	}
+
+	plan.Classes = embeddingCutoverPlanClasses(classFilters)
+	if lastActionBy.Valid {
+		plan.LastActionBy = lastActionBy.String
+	}
+	if lastActionReason.Valid {
+		plan.LastActionReason = lastActionReason.String
+	}
+	if lastActionAt.Valid {
+		plan.LastActionAt = lastActionAt.Time
+	}
+	if activatedAt.Valid {
+		plan.ActivatedAt = activatedAt.Time
+	}
+	if pausedAt.Valid {
+		plan.PausedAt = pausedAt.Time
+	}
+	if cancelledAt.Valid {
+		plan.CancelledAt = cancelledAt.Time
+	}
+	if completedAt.Valid {
+		plan.CompletedAt = completedAt.Time
+	}
+
+	return plan, nil
+}
+
+func scanEmbeddingCutoverItem(scanner provenanceScanner) (memory.EmbeddingCutoverItem, error) {
+	var item memory.EmbeddingCutoverItem
+	var failureReason sql.NullString
+	var activeVectorRevision sql.NullString
+	var activeProvider sql.NullString
+	var activeModel sql.NullString
+	var activeDimensions sql.NullInt32
+	var requestedAt sql.NullTime
+	var lastAttemptedAt sql.NullTime
+
+	if err := scanner.Scan(
+		&item.PlanID,
+		&item.MemoryID,
+		&item.Scope.Tenant,
+		&item.Scope.Project,
+		&item.Scope.Namespace,
+		&item.Class,
+		&item.Status,
+		&failureReason,
+		&activeVectorRevision,
+		&activeProvider,
+		&activeModel,
+		&activeDimensions,
+		&requestedAt,
+		&lastAttemptedAt,
+		&item.UpdatedAt,
+	); err != nil {
+		return memory.EmbeddingCutoverItem{}, fmt.Errorf("scan embedding cutover item: %w", err)
+	}
+
+	if failureReason.Valid {
+		item.FailureReason = failureReason.String
+	}
+	if activeVectorRevision.Valid {
+		item.ActiveVectorRevision = activeVectorRevision.String
+	}
+	if activeProvider.Valid {
+		item.ActiveProvider = activeProvider.String
+	}
+	if activeModel.Valid {
+		item.ActiveModel = activeModel.String
+	}
+	if activeDimensions.Valid {
+		item.ActiveDimensions = int(activeDimensions.Int32)
+	}
+	if requestedAt.Valid {
+		item.RequestedAt = requestedAt.Time
+	}
+	if lastAttemptedAt.Valid {
+		item.LastAttemptedAt = lastAttemptedAt.Time
+	}
+
+	return item, nil
+}
+
+func scanEmbeddingRecoveryRecord(scanner provenanceScanner) (memory.EmbeddingRecoveryRecord, error) {
+	var record memory.EmbeddingRecoveryRecord
+	var cutoverPlanID sql.NullString
+	var beforeSnapshot []byte
+	var afterSnapshot []byte
+	if err := scanner.Scan(
+		&record.ID,
+		&record.MemoryID,
+		&record.Scope.Tenant,
+		&record.Scope.Project,
+		&record.Scope.Namespace,
+		&cutoverPlanID,
+		&record.Action,
+		&record.Actor,
+		&record.Reason,
+		&beforeSnapshot,
+		&afterSnapshot,
+		&record.OccurredAt,
+	); err != nil {
+		return memory.EmbeddingRecoveryRecord{}, fmt.Errorf("scan embedding recovery record: %w", err)
+	}
+
+	if cutoverPlanID.Valid {
+		record.CutoverPlanID = cutoverPlanID.String
+	}
+	if err := json.Unmarshal(beforeSnapshot, &record.Before); err != nil {
+		return memory.EmbeddingRecoveryRecord{}, fmt.Errorf("unmarshal embedding recovery before snapshot: %w", err)
+	}
+	if err := json.Unmarshal(afterSnapshot, &record.After); err != nil {
+		return memory.EmbeddingRecoveryRecord{}, fmt.Errorf("unmarshal embedding recovery after snapshot: %w", err)
+	}
+
+	return record, nil
+}
+
 func scanEmbeddingRebuildView(scanner provenanceScanner) (memory.EmbeddingRebuildView, error) {
 	var rebuild memory.EmbeddingRebuildView
 	var failureReason sql.NullString
@@ -4517,6 +5782,73 @@ func nullableInt(value *int) any {
 	}
 
 	return *value
+}
+
+func embeddingCutoverPlanClassStrings(classes []memory.MemoryClass) []string {
+	values := make([]string, 0, len(classes))
+	for _, class := range classes {
+		values = append(values, string(class))
+	}
+	if len(values) == 0 {
+		return []string{}
+	}
+
+	return values
+}
+
+func embeddingCutoverPlanClasses(values []string) []memory.MemoryClass {
+	classes := make([]memory.MemoryClass, 0, len(values))
+	for _, value := range values {
+		classes = append(classes, memory.MemoryClass(value))
+	}
+
+	return classes
+}
+
+func embeddingCutoverEligibleClassStrings(classes []memory.MemoryClass) []string {
+	if len(classes) == 0 {
+		return []string{
+			string(memory.MemoryClassProfile),
+			string(memory.MemoryClassEpisodic),
+			string(memory.MemoryClassProcedural),
+			string(memory.MemoryClassSummary),
+		}
+	}
+
+	return embeddingCutoverPlanClassStrings(classes)
+}
+
+func embeddingCutoverItemStatusStrings(statuses []memory.EmbeddingCutoverItemStatus) []string {
+	values := make([]string, 0, len(statuses))
+	for _, status := range statuses {
+		values = append(values, string(status))
+	}
+
+	return values
+}
+
+func calculateEmbeddingCutoverProgress(items []memory.EmbeddingCutoverItem) memory.EmbeddingCutoverProgress {
+	progress := memory.EmbeddingCutoverProgress{Total: len(items)}
+	for _, item := range items {
+		switch item.Status {
+		case memory.EmbeddingCutoverItemStatusQueued:
+			progress.Queued++
+		case memory.EmbeddingCutoverItemStatusRebuilding:
+			progress.Rebuilding++
+		case memory.EmbeddingCutoverItemStatusCurrent:
+			progress.Current++
+		case memory.EmbeddingCutoverItemStatusFailed:
+			progress.Failed++
+		case memory.EmbeddingCutoverItemStatusSkipped:
+			progress.Skipped++
+		case memory.EmbeddingCutoverItemStatusPaused:
+			progress.Paused++
+		case memory.EmbeddingCutoverItemStatusCancelled:
+			progress.Cancelled++
+		}
+	}
+
+	return progress
 }
 
 func marshalGovernanceRecoverySnapshot(snapshot governance.GovernanceRecoverySnapshot) ([]byte, error) {

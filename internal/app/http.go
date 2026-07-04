@@ -82,6 +82,11 @@ type EmbeddingAdminQueryService interface {
 	ListEmbeddingRebuilds(ctx context.Context, input memory.ListEmbeddingRebuildsInput) (memory.EmbeddingRebuildPage, error)
 	GetMemoryEmbedding(ctx context.Context, scope memory.Scope, memoryID string) (memory.EmbeddingMemoryInspection, error)
 	ApplyEmbeddingRecovery(ctx context.Context, input memory.ApplyEmbeddingRecoveryInput) (memory.EmbeddingRecoveryOutcome, error)
+	CreateEmbeddingCutoverPlan(ctx context.Context, input memory.CreateEmbeddingCutoverPlanInput) (memory.EmbeddingCutoverPlan, error)
+	ListEmbeddingCutoverPlans(ctx context.Context, input memory.ListEmbeddingCutoverPlansInput) ([]memory.EmbeddingCutoverPlan, error)
+	ReadEmbeddingCutoverPlan(ctx context.Context, input memory.ReadEmbeddingCutoverPlanInput) (memory.EmbeddingCutoverPlan, error)
+	ApplyEmbeddingCutoverPlanAction(ctx context.Context, input memory.ApplyEmbeddingCutoverPlanActionInput) (memory.EmbeddingCutoverPlan, error)
+	ListEmbeddingRecoveryHistory(ctx context.Context, input memory.ListEmbeddingRecoveryHistoryInput) ([]memory.EmbeddingRecoveryRecord, error)
 }
 
 type JobExecutionReader interface {
@@ -95,6 +100,13 @@ type lifecycleActionRequest struct {
 type governanceRecoveryRequest struct {
 	Reason       string `json:"reason"`
 	ScheduledFor string `json:"scheduled_for"`
+}
+
+type embeddingCutoverCreateRequest struct {
+	Target   memory.EmbeddingCutoverTarget `json:"target"`
+	Classes  []memory.MemoryClass          `json:"classes"`
+	WaveSize int                           `json:"wave_size"`
+	Reason   string                        `json:"reason"`
 }
 
 type manualCreateMemoryRequest struct {
@@ -308,6 +320,51 @@ func NewHTTPHandler(deps HTTPDependencies) http.Handler {
 	)
 	mux.Handle("POST /v1/admin/embedding/rebuilds/{embedding_action}", adminEmbeddingRebuildAction)
 
+	adminEmbeddingCutovers := auth.APIKeyMiddleware(deps.AdminAPIKeys)(
+		auth.ScopeMiddleware()(
+			http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				handleAdminEmbeddingCutoverList(w, r, deps.EmbeddingAdminRead)
+			}),
+		),
+	)
+	mux.Handle("GET /v1/admin/embedding/cutovers", adminEmbeddingCutovers)
+
+	adminEmbeddingCutoverCreate := auth.APIKeyMiddleware(deps.AdminAPIKeys)(
+		auth.ScopeMiddleware()(
+			http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				handleAdminEmbeddingCutoverCreate(w, r, deps.EmbeddingAdminRead)
+			}),
+		),
+	)
+	mux.Handle("POST /v1/admin/embedding/cutovers", adminEmbeddingCutoverCreate)
+
+	adminEmbeddingCutoverDetail := auth.APIKeyMiddleware(deps.AdminAPIKeys)(
+		auth.ScopeMiddleware()(
+			http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				handleAdminEmbeddingCutoverDetail(w, r, deps.EmbeddingAdminRead)
+			}),
+		),
+	)
+	mux.Handle("GET /v1/admin/embedding/cutovers/{cutover_plan_id}", adminEmbeddingCutoverDetail)
+
+	adminEmbeddingCutoverAction := auth.APIKeyMiddleware(deps.AdminAPIKeys)(
+		auth.ScopeMiddleware()(
+			http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				handleAdminEmbeddingCutoverAction(w, r, deps.EmbeddingAdminRead)
+			}),
+		),
+	)
+	mux.Handle("POST /v1/admin/embedding/cutovers/{cutover_action}", adminEmbeddingCutoverAction)
+
+	adminEmbeddingRecoveryHistory := auth.APIKeyMiddleware(deps.AdminAPIKeys)(
+		auth.ScopeMiddleware()(
+			http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				handleAdminEmbeddingRecoveryHistory(w, r, deps.EmbeddingAdminRead, "")
+			}),
+		),
+	)
+	mux.Handle("GET /v1/admin/embedding/recovery-history", adminEmbeddingRecoveryHistory)
+
 	adminMemoryEmbedding := auth.APIKeyMiddleware(deps.AdminAPIKeys)(
 		auth.ScopeMiddleware()(
 			http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -316,6 +373,15 @@ func NewHTTPHandler(deps HTTPDependencies) http.Handler {
 		),
 	)
 	mux.Handle("GET /v1/admin/memories/{memory_id}/embedding", adminMemoryEmbedding)
+
+	adminMemoryEmbeddingRecoveryHistory := auth.APIKeyMiddleware(deps.AdminAPIKeys)(
+		auth.ScopeMiddleware()(
+			http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				handleAdminEmbeddingRecoveryHistory(w, r, deps.EmbeddingAdminRead, r.PathValue("memory_id"))
+			}),
+		),
+	)
+	mux.Handle("GET /v1/admin/memories/{memory_id}/embedding/recovery-history", adminMemoryEmbeddingRecoveryHistory)
 
 	adminMemoryCreate := auth.APIKeyMiddleware(deps.AdminAPIKeys)(
 		auth.ScopeMiddleware()(
@@ -1018,6 +1084,200 @@ func handleAdminEmbeddingRebuildAction(w http.ResponseWriter, r *http.Request, s
 	writeJSON(w, http.StatusOK, outcome)
 }
 
+func handleAdminEmbeddingCutoverCreate(w http.ResponseWriter, r *http.Request, service EmbeddingAdminQueryService) {
+	if service == nil {
+		http.Error(w, "embedding admin service is not configured", http.StatusServiceUnavailable)
+		return
+	}
+
+	var req embeddingCutoverCreateRequest
+	if !decodeJSONBody(w, r, &req) {
+		return
+	}
+
+	scope, ok := auth.ScopeFromContext(r.Context())
+	if !ok {
+		http.Error(w, "scope context is missing", http.StatusInternalServerError)
+		return
+	}
+
+	plan, err := service.CreateEmbeddingCutoverPlan(r.Context(), memory.CreateEmbeddingCutoverPlanInput{
+		Scope:     scope,
+		Target:    req.Target,
+		Classes:   req.Classes,
+		WaveSize:  req.WaveSize,
+		Actor:     strings.TrimSpace(r.Header.Get("X-Stele-Actor")),
+		Reason:    req.Reason,
+		CreatedAt: time.Now().UTC(),
+	})
+	if err != nil {
+		writeAdminEmbeddingCutoverError(w, err, "failed to create embedding cutover plan")
+		return
+	}
+
+	writeJSON(w, http.StatusCreated, plan)
+}
+
+func handleAdminEmbeddingCutoverList(w http.ResponseWriter, r *http.Request, service EmbeddingAdminQueryService) {
+	if service == nil {
+		http.Error(w, "embedding admin service is not configured", http.StatusServiceUnavailable)
+		return
+	}
+
+	scope, ok := auth.ScopeFromContext(r.Context())
+	if !ok {
+		http.Error(w, "scope context is missing", http.StatusInternalServerError)
+		return
+	}
+
+	limit := 20
+	if raw := strings.TrimSpace(r.URL.Query().Get("limit")); raw != "" {
+		parsed, err := strconv.Atoi(raw)
+		if err != nil || parsed <= 0 {
+			http.Error(w, "invalid limit", http.StatusBadRequest)
+			return
+		}
+		if parsed > 100 {
+			parsed = 100
+		}
+		limit = parsed
+	}
+
+	plans, err := service.ListEmbeddingCutoverPlans(r.Context(), memory.ListEmbeddingCutoverPlansInput{
+		Scope:  scope,
+		Status: memory.EmbeddingCutoverPlanStatus(strings.TrimSpace(r.URL.Query().Get("status"))),
+		Limit:  limit,
+	})
+	if err != nil {
+		writeAdminEmbeddingCutoverError(w, err, "failed to list embedding cutover plans")
+		return
+	}
+
+	writeJSON(w, http.StatusOK, map[string]any{"plans": plans})
+}
+
+func handleAdminEmbeddingCutoverDetail(w http.ResponseWriter, r *http.Request, service EmbeddingAdminQueryService) {
+	if service == nil {
+		http.Error(w, "embedding admin service is not configured", http.StatusServiceUnavailable)
+		return
+	}
+
+	scope, ok := auth.ScopeFromContext(r.Context())
+	if !ok {
+		http.Error(w, "scope context is missing", http.StatusInternalServerError)
+		return
+	}
+
+	plan, err := service.ReadEmbeddingCutoverPlan(r.Context(), memory.ReadEmbeddingCutoverPlanInput{
+		Scope:  scope,
+		PlanID: r.PathValue("cutover_plan_id"),
+	})
+	if err != nil {
+		writeAdminEmbeddingCutoverError(w, err, "failed to read embedding cutover plan")
+		return
+	}
+
+	writeJSON(w, http.StatusOK, plan)
+}
+
+func handleAdminEmbeddingCutoverAction(w http.ResponseWriter, r *http.Request, service EmbeddingAdminQueryService) {
+	if service == nil {
+		http.Error(w, "embedding admin service is not configured", http.StatusServiceUnavailable)
+		return
+	}
+
+	var req lifecycleActionRequest
+	if !decodeJSONBody(w, r, &req) {
+		return
+	}
+
+	scope, ok := auth.ScopeFromContext(r.Context())
+	if !ok {
+		http.Error(w, "scope context is missing", http.StatusInternalServerError)
+		return
+	}
+
+	planID, action, err := parseEmbeddingCutoverActionTarget(r.PathValue("cutover_action"))
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusBadRequest)
+		return
+	}
+
+	plan, err := service.ApplyEmbeddingCutoverPlanAction(r.Context(), memory.ApplyEmbeddingCutoverPlanActionInput{
+		Scope:     scope,
+		PlanID:    planID,
+		Action:    action,
+		Actor:     strings.TrimSpace(r.Header.Get("X-Stele-Actor")),
+		Reason:    req.Reason,
+		AppliedAt: time.Now().UTC(),
+	})
+	if err != nil {
+		writeAdminEmbeddingCutoverError(w, err, "failed to apply embedding cutover action")
+		return
+	}
+
+	writeJSON(w, http.StatusOK, plan)
+}
+
+func handleAdminEmbeddingRecoveryHistory(w http.ResponseWriter, r *http.Request, service EmbeddingAdminQueryService, memoryID string) {
+	if service == nil {
+		http.Error(w, "embedding admin service is not configured", http.StatusServiceUnavailable)
+		return
+	}
+
+	scope, ok := auth.ScopeFromContext(r.Context())
+	if !ok {
+		http.Error(w, "scope context is missing", http.StatusInternalServerError)
+		return
+	}
+
+	limit := 20
+	if raw := strings.TrimSpace(r.URL.Query().Get("limit")); raw != "" {
+		parsed, err := strconv.Atoi(raw)
+		if err != nil || parsed <= 0 {
+			http.Error(w, "invalid limit", http.StatusBadRequest)
+			return
+		}
+		if parsed > 100 {
+			parsed = 100
+		}
+		limit = parsed
+	}
+
+	input := memory.ListEmbeddingRecoveryHistoryInput{
+		Scope:         scope,
+		MemoryID:      strings.TrimSpace(memoryID),
+		Action:        memory.EmbeddingRecoveryAction(strings.TrimSpace(r.URL.Query().Get("action"))),
+		Actor:         strings.TrimSpace(r.URL.Query().Get("actor")),
+		CutoverPlanID: strings.TrimSpace(r.URL.Query().Get("cutover_plan_id")),
+		Limit:         limit,
+	}
+	if raw := strings.TrimSpace(r.URL.Query().Get("occurred_from")); raw != "" {
+		parsed, err := time.Parse(time.RFC3339, raw)
+		if err != nil {
+			http.Error(w, "invalid occurred_from", http.StatusBadRequest)
+			return
+		}
+		input.OccurredFrom = parsed
+	}
+	if raw := strings.TrimSpace(r.URL.Query().Get("occurred_to")); raw != "" {
+		parsed, err := time.Parse(time.RFC3339, raw)
+		if err != nil {
+			http.Error(w, "invalid occurred_to", http.StatusBadRequest)
+			return
+		}
+		input.OccurredTo = parsed
+	}
+
+	history, err := service.ListEmbeddingRecoveryHistory(r.Context(), input)
+	if err != nil {
+		writeAdminEmbeddingError(w, err, "failed to read embedding recovery history")
+		return
+	}
+
+	writeJSON(w, http.StatusOK, map[string]any{"history": history})
+}
+
 func handleRecentJobExecutions(w http.ResponseWriter, r *http.Request, reader JobExecutionReader) {
 	if reader == nil {
 		http.Error(w, "job execution reader is not configured", http.StatusServiceUnavailable)
@@ -1352,6 +1612,23 @@ func writeAdminEmbeddingError(w http.ResponseWriter, err error, fallback string)
 	}
 }
 
+func writeAdminEmbeddingCutoverError(w http.ResponseWriter, err error, fallback string) {
+	switch {
+	case errors.Is(err, memory.ErrEmbeddingCutoverConflict):
+		http.Error(w, err.Error(), http.StatusConflict)
+	case errors.Is(err, memory.ErrEmbeddingCutoverRejected):
+		http.Error(w, err.Error(), http.StatusUnprocessableEntity)
+	case errors.Is(err, pgx.ErrNoRows):
+		http.Error(w, "cutover plan not found", http.StatusNotFound)
+	default:
+		if strings.Contains(err.Error(), "required") || strings.Contains(err.Error(), "invalid") || strings.Contains(err.Error(), "must be") {
+			http.Error(w, err.Error(), http.StatusBadRequest)
+			return
+		}
+		http.Error(w, fallback, http.StatusInternalServerError)
+	}
+}
+
 func parseMemoryClasses(values []string) []memory.MemoryClass {
 	if len(values) == 0 {
 		return nil
@@ -1428,4 +1705,18 @@ func parseEmbeddingRebuildActionTarget(value string) (string, memory.EmbeddingRe
 	}
 
 	return memoryID, action, nil
+}
+
+func parseEmbeddingCutoverActionTarget(value string) (string, memory.EmbeddingCutoverPlanAction, error) {
+	planID, actionName, ok := strings.Cut(value, ":")
+	if !ok || strings.TrimSpace(planID) == "" {
+		return "", "", fmt.Errorf("invalid embedding cutover action target")
+	}
+
+	action := memory.EmbeddingCutoverPlanAction(actionName)
+	if !action.Valid() {
+		return "", "", fmt.Errorf("invalid embedding cutover action target")
+	}
+
+	return planID, action, nil
 }

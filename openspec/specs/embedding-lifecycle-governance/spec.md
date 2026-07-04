@@ -36,3 +36,31 @@ The service MUST only activate a generated embedding when it still matches the c
 - **WHEN** a generated embedding still matches the targeted canonical source version and content hash
 - **THEN** the service atomically marks that vector revision active for retrieval and supersedes the previously active revision for that memory
 
+### Requirement: Embedding lifecycle state is operator-inspectable
+The service MUST expose enough derived embedding lifecycle state for operators to diagnose missing semantic coverage, drift, and rebuild failure without weakening append-only lineage rules.
+
+#### Scenario: Drift is visible before rebuild completion
+- **WHEN** the active vector revision no longer matches the currently routed provider, model, or dimensions target for a memory's current canonical projection
+- **THEN** operator inspection can report that drift state together with the requested replacement target and current active revision attribution
+
+#### Scenario: Failed rebuild retains diagnostic attribution
+- **WHEN** an embedding rebuild attempt fails for the current canonical projection
+- **THEN** operator inspection can report the failed requested target, failure reason, attempt timing, and the still-active or missing semantic projection state for that memory
+
+### Requirement: Embedding lifecycle inspection includes cutover attribution
+The service MUST expose cutover context alongside derived embedding lifecycle state when a memory is participating in or affected by a provider cutover.
+
+#### Scenario: Drifted memory is linked to an active cutover
+- **WHEN** an operator inspects a memory whose current active vector no longer matches an active cutover plan target
+- **THEN** the derived embedding inspection can report the linked cutover plan identity together with the requested replacement target and current active revision attribution
+
+#### Scenario: Failed cutover item retains lifecycle context
+- **WHEN** a memory fails rebuild during a provider cutover rollout
+- **THEN** operator inspection can report both the failed embedding target and the cutover plan context without weakening append-only lineage rules
+
+### Requirement: Recovery audit preserves rollout context
+The service MUST preserve cutover attribution on embedding recovery actions when operators intervene during a provider rollout.
+
+#### Scenario: Retry during cutover records plan attribution
+- **WHEN** an operator retries or requeues a memory that belongs to an active or paused cutover plan
+- **THEN** the recorded embedding recovery history can include the cutover plan identity together with the recovery before or after snapshots and operator attribution

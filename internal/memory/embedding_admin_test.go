@@ -8,15 +8,24 @@ import (
 )
 
 type stubEmbeddingAdminStore struct {
-	gotListInput    ListEmbeddingRebuildsInput
-	gotReadScope    Scope
-	gotReadMemoryID string
-	gotApplyInput   ApplyEmbeddingRecoveryInput
-	items           []EmbeddingRebuildView
-	inspection      EmbeddingMemoryInspection
-	outcome         EmbeddingRecoveryOutcome
-	err             error
-	applyErr        error
+	gotListInput       ListEmbeddingRebuildsInput
+	gotReadScope       Scope
+	gotReadMemoryID    string
+	gotApplyInput      ApplyEmbeddingRecoveryInput
+	gotCreateCutover   CreateEmbeddingCutoverPlanInput
+	gotListCutovers    ListEmbeddingCutoverPlansInput
+	gotReadCutover     ReadEmbeddingCutoverPlanInput
+	gotApplyCutover    ApplyEmbeddingCutoverPlanActionInput
+	gotRecoveryHistory ListEmbeddingRecoveryHistoryInput
+	items              []EmbeddingRebuildView
+	inspection         EmbeddingMemoryInspection
+	outcome            EmbeddingRecoveryOutcome
+	cutoverPlan        EmbeddingCutoverPlan
+	cutoverPlans       []EmbeddingCutoverPlan
+	recoveryHistory    []EmbeddingRecoveryRecord
+	err                error
+	applyErr           error
+	cutoverErr         error
 }
 
 func (s *stubEmbeddingAdminStore) ListEmbeddingRebuilds(ctx context.Context, input ListEmbeddingRebuildsInput) ([]EmbeddingRebuildView, error) {
@@ -33,6 +42,31 @@ func (s *stubEmbeddingAdminStore) ReadMemoryEmbedding(ctx context.Context, scope
 func (s *stubEmbeddingAdminStore) ApplyEmbeddingRecovery(ctx context.Context, input ApplyEmbeddingRecoveryInput) (EmbeddingRecoveryOutcome, error) {
 	s.gotApplyInput = input
 	return s.outcome, s.applyErr
+}
+
+func (s *stubEmbeddingAdminStore) CreateEmbeddingCutoverPlan(ctx context.Context, input CreateEmbeddingCutoverPlanInput) (EmbeddingCutoverPlan, error) {
+	s.gotCreateCutover = input
+	return s.cutoverPlan, s.cutoverErr
+}
+
+func (s *stubEmbeddingAdminStore) ListEmbeddingCutoverPlans(ctx context.Context, input ListEmbeddingCutoverPlansInput) ([]EmbeddingCutoverPlan, error) {
+	s.gotListCutovers = input
+	return s.cutoverPlans, s.cutoverErr
+}
+
+func (s *stubEmbeddingAdminStore) ReadEmbeddingCutoverPlan(ctx context.Context, input ReadEmbeddingCutoverPlanInput) (EmbeddingCutoverPlan, error) {
+	s.gotReadCutover = input
+	return s.cutoverPlan, s.cutoverErr
+}
+
+func (s *stubEmbeddingAdminStore) ApplyEmbeddingCutoverPlanAction(ctx context.Context, input ApplyEmbeddingCutoverPlanActionInput) (EmbeddingCutoverPlan, error) {
+	s.gotApplyCutover = input
+	return s.cutoverPlan, s.cutoverErr
+}
+
+func (s *stubEmbeddingAdminStore) ListEmbeddingRecoveryHistory(ctx context.Context, input ListEmbeddingRecoveryHistoryInput) ([]EmbeddingRecoveryRecord, error) {
+	s.gotRecoveryHistory = input
+	return s.recoveryHistory, s.cutoverErr
 }
 
 func TestEmbeddingAdminQueryServiceListRebuildsIncludesRuntimeStatus(t *testing.T) {

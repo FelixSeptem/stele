@@ -185,17 +185,26 @@ func (s *stubManualMutationService) ReclassifyMemory(ctx context.Context, input 
 }
 
 type stubEmbeddingAdminService struct {
-	gotListInput    memory.ListEmbeddingRebuildsInput
-	gotReadScope    memory.Scope
-	gotReadMemoryID string
-	gotApplyInput   memory.ApplyEmbeddingRecoveryInput
-	page            memory.EmbeddingRebuildPage
-	inspection      memory.EmbeddingMemoryInspection
-	outcome         memory.EmbeddingRecoveryOutcome
-	listErr         error
-	readErr         error
-	applyErr        error
-	validateList    bool
+	gotListInput       memory.ListEmbeddingRebuildsInput
+	gotReadScope       memory.Scope
+	gotReadMemoryID    string
+	gotApplyInput      memory.ApplyEmbeddingRecoveryInput
+	gotCreateCutover   memory.CreateEmbeddingCutoverPlanInput
+	gotListCutovers    memory.ListEmbeddingCutoverPlansInput
+	gotReadCutover     memory.ReadEmbeddingCutoverPlanInput
+	gotApplyCutover    memory.ApplyEmbeddingCutoverPlanActionInput
+	gotRecoveryHistory memory.ListEmbeddingRecoveryHistoryInput
+	page               memory.EmbeddingRebuildPage
+	inspection         memory.EmbeddingMemoryInspection
+	outcome            memory.EmbeddingRecoveryOutcome
+	cutoverPlan        memory.EmbeddingCutoverPlan
+	cutoverPlans       []memory.EmbeddingCutoverPlan
+	recoveryHistory    []memory.EmbeddingRecoveryRecord
+	listErr            error
+	readErr            error
+	applyErr           error
+	cutoverErr         error
+	validateList       bool
 }
 
 func (s *stubEmbeddingAdminService) ListEmbeddingRebuilds(ctx context.Context, input memory.ListEmbeddingRebuildsInput) (memory.EmbeddingRebuildPage, error) {
@@ -217,6 +226,31 @@ func (s *stubEmbeddingAdminService) GetMemoryEmbedding(ctx context.Context, scop
 func (s *stubEmbeddingAdminService) ApplyEmbeddingRecovery(ctx context.Context, input memory.ApplyEmbeddingRecoveryInput) (memory.EmbeddingRecoveryOutcome, error) {
 	s.gotApplyInput = input
 	return s.outcome, s.applyErr
+}
+
+func (s *stubEmbeddingAdminService) CreateEmbeddingCutoverPlan(ctx context.Context, input memory.CreateEmbeddingCutoverPlanInput) (memory.EmbeddingCutoverPlan, error) {
+	s.gotCreateCutover = input
+	return s.cutoverPlan, s.cutoverErr
+}
+
+func (s *stubEmbeddingAdminService) ListEmbeddingCutoverPlans(ctx context.Context, input memory.ListEmbeddingCutoverPlansInput) ([]memory.EmbeddingCutoverPlan, error) {
+	s.gotListCutovers = input
+	return s.cutoverPlans, s.cutoverErr
+}
+
+func (s *stubEmbeddingAdminService) ReadEmbeddingCutoverPlan(ctx context.Context, input memory.ReadEmbeddingCutoverPlanInput) (memory.EmbeddingCutoverPlan, error) {
+	s.gotReadCutover = input
+	return s.cutoverPlan, s.cutoverErr
+}
+
+func (s *stubEmbeddingAdminService) ApplyEmbeddingCutoverPlanAction(ctx context.Context, input memory.ApplyEmbeddingCutoverPlanActionInput) (memory.EmbeddingCutoverPlan, error) {
+	s.gotApplyCutover = input
+	return s.cutoverPlan, s.cutoverErr
+}
+
+func (s *stubEmbeddingAdminService) ListEmbeddingRecoveryHistory(ctx context.Context, input memory.ListEmbeddingRecoveryHistoryInput) ([]memory.EmbeddingRecoveryRecord, error) {
+	s.gotRecoveryHistory = input
+	return s.recoveryHistory, s.cutoverErr
 }
 
 type stubGovernanceAdminService struct {
@@ -1564,6 +1598,293 @@ func TestNewHTTPHandlerMapsAdminEmbeddingRecoveryErrors(t *testing.T) {
 			service:    &stubEmbeddingAdminService{},
 			wantStatus: http.StatusBadRequest,
 			wantBody:   "invalid embedding rebuild action target",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			handler := NewHTTPHandler(HTTPDependencies{
+				AdminAPIKeys:       map[string]struct{}{"admin-key": {}},
+				EmbeddingAdminRead: tt.service,
+			})
+
+			req := httptest.NewRequest(http.MethodPost, tt.path, strings.NewReader(tt.body))
+			setAdminActionHeaders(req)
+			rec := httptest.NewRecorder()
+
+			handler.ServeHTTP(rec, req)
+
+			if rec.Code != tt.wantStatus {
+				t.Fatalf("status = %d, want %d", rec.Code, tt.wantStatus)
+			}
+			if body := rec.Body.String(); !strings.Contains(body, tt.wantBody) {
+				t.Fatalf("body = %q, want substring %q", body, tt.wantBody)
+			}
+		})
+	}
+}
+
+func TestNewHTTPHandlerCreatesAdminEmbeddingCutoverPlan(t *testing.T) {
+	service := &stubEmbeddingAdminService{
+		cutoverPlan: memory.EmbeddingCutoverPlan{
+			ID:     "plan_123",
+			Scope:  memory.Scope{Tenant: "tenant-a", Project: "project-a", Namespace: "namespace-a"},
+			Status: memory.EmbeddingCutoverPlanStatusDraft,
+			Target: memory.EmbeddingCutoverTarget{
+				Provider:   "openai",
+				Model:      "text-embedding-3-small",
+				Dimensions: 1536,
+			},
+			WaveSize:  25,
+			CreatedBy: "operator-a",
+			CreatedAt: time.Date(2026, 6, 28, 13, 0, 0, 0, time.UTC),
+		},
+	}
+	handler := NewHTTPHandler(HTTPDependencies{
+		AdminAPIKeys:       map[string]struct{}{"admin-key": {}},
+		EmbeddingAdminRead: service,
+	})
+
+	req := httptest.NewRequest(http.MethodPost, "/v1/admin/embedding/cutovers", strings.NewReader(`{"target":{"provider":"openai","model":"text-embedding-3-small","dimensions":1536},"classes":["profile"],"wave_size":25,"reason":"migrate scope"}`))
+	setAdminActionHeaders(req)
+	rec := httptest.NewRecorder()
+
+	handler.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusCreated {
+		t.Fatalf("status = %d, want %d", rec.Code, http.StatusCreated)
+	}
+	if service.gotCreateCutover.Actor != "operator-a" {
+		t.Fatalf("actor = %q, want operator-a", service.gotCreateCutover.Actor)
+	}
+	if service.gotCreateCutover.Scope.Namespace != "namespace-a" {
+		t.Fatalf("scope = %+v, want request scope", service.gotCreateCutover.Scope)
+	}
+	if service.gotCreateCutover.WaveSize != 25 {
+		t.Fatalf("wave size = %d, want 25", service.gotCreateCutover.WaveSize)
+	}
+}
+
+func TestNewHTTPHandlerListsAdminEmbeddingCutoverPlans(t *testing.T) {
+	service := &stubEmbeddingAdminService{
+		cutoverPlans: []memory.EmbeddingCutoverPlan{
+			{
+				ID:     "plan_123",
+				Scope:  memory.Scope{Tenant: "tenant-a", Project: "project-a", Namespace: "namespace-a"},
+				Status: memory.EmbeddingCutoverPlanStatusActive,
+				Target: memory.EmbeddingCutoverTarget{Provider: "openai", Model: "text-embedding-3-small", Dimensions: 1536},
+				Progress: memory.EmbeddingCutoverProgress{
+					Total: 10,
+				},
+			},
+		},
+	}
+	handler := NewHTTPHandler(HTTPDependencies{
+		AdminAPIKeys:       map[string]struct{}{"admin-key": {}},
+		EmbeddingAdminRead: service,
+	})
+
+	req := httptest.NewRequest(http.MethodGet, "/v1/admin/embedding/cutovers?status=active&limit=5", nil)
+	setAdminScopeHeaders(req)
+	rec := httptest.NewRecorder()
+
+	handler.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d, want %d", rec.Code, http.StatusOK)
+	}
+	if service.gotListCutovers.Status != memory.EmbeddingCutoverPlanStatusActive {
+		t.Fatalf("status filter = %q, want active", service.gotListCutovers.Status)
+	}
+
+	var payload struct {
+		Plans []memory.EmbeddingCutoverPlan `json:"plans"`
+	}
+	if err := json.NewDecoder(rec.Body).Decode(&payload); err != nil {
+		t.Fatalf("json.NewDecoder() error = %v", err)
+	}
+	if len(payload.Plans) != 1 || payload.Plans[0].ID != "plan_123" {
+		t.Fatalf("plans = %+v, want one plan_123", payload.Plans)
+	}
+}
+
+func TestNewHTTPHandlerReturnsAdminEmbeddingCutoverDetail(t *testing.T) {
+	service := &stubEmbeddingAdminService{
+		cutoverPlan: memory.EmbeddingCutoverPlan{
+			ID:     "plan_123",
+			Scope:  memory.Scope{Tenant: "tenant-a", Project: "project-a", Namespace: "namespace-a"},
+			Status: memory.EmbeddingCutoverPlanStatusPaused,
+			Target: memory.EmbeddingCutoverTarget{Provider: "openai", Model: "text-embedding-3-small", Dimensions: 1536},
+		},
+	}
+	handler := NewHTTPHandler(HTTPDependencies{
+		AdminAPIKeys:       map[string]struct{}{"admin-key": {}},
+		EmbeddingAdminRead: service,
+	})
+
+	req := httptest.NewRequest(http.MethodGet, "/v1/admin/embedding/cutovers/plan_123", nil)
+	setAdminScopeHeaders(req)
+	rec := httptest.NewRecorder()
+
+	handler.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d, want %d", rec.Code, http.StatusOK)
+	}
+	if service.gotReadCutover.PlanID != "plan_123" {
+		t.Fatalf("plan id = %q, want plan_123", service.gotReadCutover.PlanID)
+	}
+}
+
+func TestNewHTTPHandlerAppliesAdminEmbeddingCutoverAction(t *testing.T) {
+	service := &stubEmbeddingAdminService{
+		cutoverPlan: memory.EmbeddingCutoverPlan{
+			ID:     "plan_123",
+			Scope:  memory.Scope{Tenant: "tenant-a", Project: "project-a", Namespace: "namespace-a"},
+			Status: memory.EmbeddingCutoverPlanStatusActive,
+			Target: memory.EmbeddingCutoverTarget{Provider: "openai", Model: "text-embedding-3-small", Dimensions: 1536},
+		},
+	}
+	handler := NewHTTPHandler(HTTPDependencies{
+		AdminAPIKeys:       map[string]struct{}{"admin-key": {}},
+		EmbeddingAdminRead: service,
+	})
+
+	req := httptest.NewRequest(http.MethodPost, "/v1/admin/embedding/cutovers/plan_123:pause", strings.NewReader(`{"reason":"halt next wave"}`))
+	setAdminActionHeaders(req)
+	rec := httptest.NewRecorder()
+
+	handler.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d, want %d", rec.Code, http.StatusOK)
+	}
+	if service.gotApplyCutover.Action != memory.EmbeddingCutoverPlanActionPause {
+		t.Fatalf("action = %q, want pause", service.gotApplyCutover.Action)
+	}
+	if service.gotApplyCutover.Actor != "operator-a" {
+		t.Fatalf("actor = %q, want operator-a", service.gotApplyCutover.Actor)
+	}
+	if service.gotApplyCutover.Scope.Project != "project-a" {
+		t.Fatalf("scope = %+v, want request scope", service.gotApplyCutover.Scope)
+	}
+}
+
+func TestNewHTTPHandlerListsAdminEmbeddingRecoveryHistory(t *testing.T) {
+	service := &stubEmbeddingAdminService{
+		recoveryHistory: []memory.EmbeddingRecoveryRecord{
+			{
+				ID:            "erl_123",
+				MemoryID:      "mem_123",
+				Scope:         memory.Scope{Tenant: "tenant-a", Project: "project-a", Namespace: "namespace-a"},
+				CutoverPlanID: "plan_123",
+				Action:        memory.EmbeddingRecoveryActionRetry,
+				Actor:         "operator-a",
+				Reason:        "retry now",
+				OccurredAt:    time.Date(2026, 6, 28, 12, 0, 0, 0, time.UTC),
+			},
+		},
+	}
+	handler := NewHTTPHandler(HTTPDependencies{
+		AdminAPIKeys:       map[string]struct{}{"admin-key": {}},
+		EmbeddingAdminRead: service,
+	})
+
+	req := httptest.NewRequest(http.MethodGet, "/v1/admin/memories/mem_123/embedding/recovery-history?action=retry&actor=operator-a&cutover_plan_id=plan_123&limit=10", nil)
+	setAdminScopeHeaders(req)
+	rec := httptest.NewRecorder()
+
+	handler.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d, want %d", rec.Code, http.StatusOK)
+	}
+	if service.gotRecoveryHistory.MemoryID != "mem_123" {
+		t.Fatalf("memory id = %q, want mem_123", service.gotRecoveryHistory.MemoryID)
+	}
+	if service.gotRecoveryHistory.CutoverPlanID != "plan_123" {
+		t.Fatalf("cutover plan id = %q, want plan_123", service.gotRecoveryHistory.CutoverPlanID)
+	}
+
+	var payload struct {
+		History []memory.EmbeddingRecoveryRecord `json:"history"`
+	}
+	if err := json.NewDecoder(rec.Body).Decode(&payload); err != nil {
+		t.Fatalf("json.NewDecoder() error = %v", err)
+	}
+	if len(payload.History) != 1 || payload.History[0].ID != "erl_123" {
+		t.Fatalf("history = %+v, want one erl_123 record", payload.History)
+	}
+}
+
+func TestNewHTTPHandlerListsScopeLevelAdminEmbeddingRecoveryHistory(t *testing.T) {
+	service := &stubEmbeddingAdminService{
+		recoveryHistory: []memory.EmbeddingRecoveryRecord{
+			{
+				ID:         "erl_234",
+				MemoryID:   "mem_234",
+				Scope:      memory.Scope{Tenant: "tenant-a", Project: "project-a", Namespace: "namespace-a"},
+				Action:     memory.EmbeddingRecoveryActionRequeue,
+				Actor:      "operator-b",
+				Reason:     "refresh route",
+				OccurredAt: time.Date(2026, 6, 28, 13, 0, 0, 0, time.UTC),
+			},
+		},
+	}
+	handler := NewHTTPHandler(HTTPDependencies{
+		AdminAPIKeys:       map[string]struct{}{"admin-key": {}},
+		EmbeddingAdminRead: service,
+	})
+
+	req := httptest.NewRequest(http.MethodGet, "/v1/admin/embedding/recovery-history?action=requeue&limit=5", nil)
+	setAdminScopeHeaders(req)
+	rec := httptest.NewRecorder()
+
+	handler.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d, want %d", rec.Code, http.StatusOK)
+	}
+	if service.gotRecoveryHistory.MemoryID != "" {
+		t.Fatalf("memory id = %q, want empty for scope history", service.gotRecoveryHistory.MemoryID)
+	}
+	if service.gotRecoveryHistory.Action != memory.EmbeddingRecoveryActionRequeue {
+		t.Fatalf("action = %q, want requeue", service.gotRecoveryHistory.Action)
+	}
+}
+
+func TestNewHTTPHandlerMapsAdminEmbeddingCutoverErrors(t *testing.T) {
+	tests := []struct {
+		name       string
+		path       string
+		body       string
+		service    *stubEmbeddingAdminService
+		wantStatus int
+		wantBody   string
+	}{
+		{
+			name:       "conflict",
+			path:       "/v1/admin/embedding/cutovers/plan_123:pause",
+			body:       `{"reason":"halt next wave"}`,
+			service:    &stubEmbeddingAdminService{cutoverErr: memory.ErrEmbeddingCutoverConflict},
+			wantStatus: http.StatusConflict,
+			wantBody:   memory.ErrEmbeddingCutoverConflict.Error(),
+		},
+		{
+			name:       "rejected",
+			path:       "/v1/admin/embedding/cutovers/plan_123:activate",
+			body:       `{"reason":"roll out now"}`,
+			service:    &stubEmbeddingAdminService{cutoverErr: memory.ErrEmbeddingCutoverRejected},
+			wantStatus: http.StatusUnprocessableEntity,
+			wantBody:   memory.ErrEmbeddingCutoverRejected.Error(),
+		},
+		{
+			name:       "invalid target",
+			path:       "/v1/admin/embedding/cutovers/pause",
+			body:       `{"reason":"halt next wave"}`,
+			service:    &stubEmbeddingAdminService{},
+			wantStatus: http.StatusBadRequest,
+			wantBody:   "invalid embedding cutover action target",
 		},
 	}
 

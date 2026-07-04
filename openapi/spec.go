@@ -573,6 +573,226 @@ paths:
           description: Memory not found
         '409':
           description: Recovery conflict
+  /v1/admin/embedding/recovery-history:
+    get:
+      operationId: listAdminEmbeddingRecoveryHistory
+      parameters:
+        - $ref: '#/components/parameters/AdminAPIKey'
+        - $ref: '#/components/parameters/TenantHeader'
+        - $ref: '#/components/parameters/ProjectHeader'
+        - $ref: '#/components/parameters/NamespaceHeader'
+        - in: query
+          name: action
+          required: false
+          schema:
+            $ref: '#/components/schemas/EmbeddingRecoveryAction'
+        - in: query
+          name: actor
+          required: false
+          schema:
+            type: string
+        - in: query
+          name: cutover_plan_id
+          required: false
+          schema:
+            type: string
+        - in: query
+          name: occurred_from
+          required: false
+          schema:
+            type: string
+            format: date-time
+        - in: query
+          name: occurred_to
+          required: false
+          schema:
+            type: string
+            format: date-time
+        - in: query
+          name: limit
+          required: false
+          schema:
+            type: integer
+      responses:
+        '200':
+          description: Scoped embedding recovery audit history
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/EmbeddingRecoveryHistoryResponse'
+        '400':
+          description: Invalid request
+        '401':
+          description: Missing or invalid admin API key
+  /v1/admin/embedding/cutovers:
+    get:
+      operationId: listAdminEmbeddingCutoverPlans
+      parameters:
+        - $ref: '#/components/parameters/AdminAPIKey'
+        - $ref: '#/components/parameters/TenantHeader'
+        - $ref: '#/components/parameters/ProjectHeader'
+        - $ref: '#/components/parameters/NamespaceHeader'
+        - in: query
+          name: status
+          required: false
+          schema:
+            $ref: '#/components/schemas/EmbeddingCutoverPlanStatus'
+        - in: query
+          name: limit
+          required: false
+          schema:
+            type: integer
+      responses:
+        '200':
+          description: Recent and active embedding cutover plans
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/EmbeddingCutoverPlanListResponse'
+        '400':
+          description: Invalid request
+        '401':
+          description: Missing or invalid admin API key
+    post:
+      operationId: createAdminEmbeddingCutoverPlan
+      parameters:
+        - $ref: '#/components/parameters/AdminAPIKey'
+        - $ref: '#/components/parameters/ActorHeader'
+        - $ref: '#/components/parameters/TenantHeader'
+        - $ref: '#/components/parameters/ProjectHeader'
+        - $ref: '#/components/parameters/NamespaceHeader'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/EmbeddingCutoverPlanRequest'
+      responses:
+        '201':
+          description: Embedding cutover plan created
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/EmbeddingCutoverPlan'
+        '400':
+          description: Invalid request
+        '401':
+          description: Missing or invalid admin API key
+  /v1/admin/embedding/cutovers/{cutover_plan_id}:
+    get:
+      operationId: getAdminEmbeddingCutoverPlan
+      parameters:
+        - $ref: '#/components/parameters/CutoverPlanIDPath'
+        - $ref: '#/components/parameters/AdminAPIKey'
+        - $ref: '#/components/parameters/TenantHeader'
+        - $ref: '#/components/parameters/ProjectHeader'
+        - $ref: '#/components/parameters/NamespaceHeader'
+      responses:
+        '200':
+          description: One embedding cutover plan with progress and item state
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/EmbeddingCutoverPlan'
+        '400':
+          description: Invalid request
+        '401':
+          description: Missing or invalid admin API key
+        '404':
+          description: Cutover plan not found
+  /v1/admin/embedding/cutovers/{cutover_plan_id}:activate:
+    post:
+      operationId: activateAdminEmbeddingCutoverPlan
+      parameters:
+        - $ref: '#/components/parameters/CutoverPlanIDPath'
+        - $ref: '#/components/parameters/AdminAPIKey'
+        - $ref: '#/components/parameters/ActorHeader'
+        - $ref: '#/components/parameters/TenantHeader'
+        - $ref: '#/components/parameters/ProjectHeader'
+        - $ref: '#/components/parameters/NamespaceHeader'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/EmbeddingCutoverActionRequest'
+      responses:
+        '200':
+          description: Embedding cutover plan activated
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/EmbeddingCutoverPlan'
+        '400':
+          description: Invalid request
+        '401':
+          description: Missing or invalid admin API key
+        '404':
+          description: Cutover plan not found
+        '409':
+          description: Cutover conflict
+  /v1/admin/embedding/cutovers/{cutover_plan_id}:pause:
+    post:
+      operationId: pauseAdminEmbeddingCutoverPlan
+      parameters:
+        - $ref: '#/components/parameters/CutoverPlanIDPath'
+        - $ref: '#/components/parameters/AdminAPIKey'
+        - $ref: '#/components/parameters/ActorHeader'
+        - $ref: '#/components/parameters/TenantHeader'
+        - $ref: '#/components/parameters/ProjectHeader'
+        - $ref: '#/components/parameters/NamespaceHeader'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/EmbeddingCutoverActionRequest'
+      responses:
+        '200':
+          description: Embedding cutover plan paused
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/EmbeddingCutoverPlan'
+        '400':
+          description: Invalid request
+        '401':
+          description: Missing or invalid admin API key
+        '404':
+          description: Cutover plan not found
+        '409':
+          description: Cutover conflict
+  /v1/admin/embedding/cutovers/{cutover_plan_id}:cancel:
+    post:
+      operationId: cancelAdminEmbeddingCutoverPlan
+      parameters:
+        - $ref: '#/components/parameters/CutoverPlanIDPath'
+        - $ref: '#/components/parameters/AdminAPIKey'
+        - $ref: '#/components/parameters/ActorHeader'
+        - $ref: '#/components/parameters/TenantHeader'
+        - $ref: '#/components/parameters/ProjectHeader'
+        - $ref: '#/components/parameters/NamespaceHeader'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/EmbeddingCutoverActionRequest'
+      responses:
+        '200':
+          description: Embedding cutover plan cancelled
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/EmbeddingCutoverPlan'
+        '400':
+          description: Invalid request
+        '401':
+          description: Missing or invalid admin API key
+        '404':
+          description: Cutover plan not found
+        '409':
+          description: Cutover conflict
   /v1/admin/memories/{memory_id}/embedding:
     get:
       operationId: getAdminMemoryEmbedding
@@ -589,6 +809,60 @@ paths:
             application/json:
               schema:
                 $ref: '#/components/schemas/EmbeddingMemoryInspection'
+        '401':
+          description: Missing or invalid admin API key
+        '404':
+          description: Memory not found
+  /v1/admin/memories/{memory_id}/embedding/recovery-history:
+    get:
+      operationId: listAdminMemoryEmbeddingRecoveryHistory
+      parameters:
+        - $ref: '#/components/parameters/MemoryIDPath'
+        - $ref: '#/components/parameters/AdminAPIKey'
+        - $ref: '#/components/parameters/TenantHeader'
+        - $ref: '#/components/parameters/ProjectHeader'
+        - $ref: '#/components/parameters/NamespaceHeader'
+        - in: query
+          name: action
+          required: false
+          schema:
+            $ref: '#/components/schemas/EmbeddingRecoveryAction'
+        - in: query
+          name: actor
+          required: false
+          schema:
+            type: string
+        - in: query
+          name: cutover_plan_id
+          required: false
+          schema:
+            type: string
+        - in: query
+          name: occurred_from
+          required: false
+          schema:
+            type: string
+            format: date-time
+        - in: query
+          name: occurred_to
+          required: false
+          schema:
+            type: string
+            format: date-time
+        - in: query
+          name: limit
+          required: false
+          schema:
+            type: integer
+      responses:
+        '200':
+          description: Recovery audit history for one memory
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/EmbeddingRecoveryHistoryResponse'
+        '400':
+          description: Invalid request
         '401':
           description: Missing or invalid admin API key
         '404':
@@ -840,6 +1114,12 @@ components:
     RawEventIDPath:
       in: path
       name: raw_event_id
+      required: true
+      schema:
+        type: string
+    CutoverPlanIDPath:
+      in: path
+      name: cutover_plan_id
       required: true
       schema:
         type: string
@@ -1413,6 +1693,8 @@ components:
           type: string
         scope:
           $ref: '#/components/schemas/Scope'
+        cutover_plan_id:
+          type: string
         action:
           $ref: '#/components/schemas/EmbeddingRecoveryAction'
         actor:
@@ -1436,6 +1718,192 @@ components:
           $ref: '#/components/schemas/EmbeddingRebuildView'
         recovery:
           $ref: '#/components/schemas/EmbeddingRecoveryRecord'
+    EmbeddingRecoveryHistoryResponse:
+      type: object
+      required:
+        - history
+      properties:
+        history:
+          type: array
+          items:
+            $ref: '#/components/schemas/EmbeddingRecoveryRecord'
+    EmbeddingCutoverPlanStatus:
+      type: string
+      enum: [draft, active, paused, cancelled, completed]
+    EmbeddingCutoverItemStatus:
+      type: string
+      enum: [queued, rebuilding, current, failed, skipped, paused, cancelled]
+    EmbeddingCutoverTarget:
+      type: object
+      required:
+        - provider
+        - model
+        - dimensions
+      properties:
+        provider:
+          type: string
+        model:
+          type: string
+        dimensions:
+          type: integer
+    EmbeddingCutoverProgress:
+      type: object
+      required:
+        - total
+        - queued
+        - rebuilding
+        - current
+        - failed
+        - skipped
+        - paused
+        - cancelled
+      properties:
+        total:
+          type: integer
+        queued:
+          type: integer
+        rebuilding:
+          type: integer
+        current:
+          type: integer
+        failed:
+          type: integer
+        skipped:
+          type: integer
+        paused:
+          type: integer
+        cancelled:
+          type: integer
+    EmbeddingCutoverItem:
+      type: object
+      required:
+        - plan_id
+        - memory_id
+        - scope
+        - class
+        - status
+      properties:
+        plan_id:
+          type: string
+        memory_id:
+          type: string
+        scope:
+          $ref: '#/components/schemas/Scope'
+        class:
+          type: string
+        status:
+          $ref: '#/components/schemas/EmbeddingCutoverItemStatus'
+        failure_reason:
+          type: string
+        active_vector_revision_id:
+          type: string
+        active_provider:
+          type: string
+        active_model:
+          type: string
+        active_dimensions:
+          type: integer
+        requested_at:
+          type: string
+          format: date-time
+        last_attempted_at:
+          type: string
+          format: date-time
+        updated_at:
+          type: string
+          format: date-time
+    EmbeddingCutoverPlanRequest:
+      type: object
+      required:
+        - target
+        - wave_size
+        - reason
+      properties:
+        target:
+          $ref: '#/components/schemas/EmbeddingCutoverTarget'
+        classes:
+          type: array
+          items:
+            type: string
+        wave_size:
+          type: integer
+        reason:
+          type: string
+    EmbeddingCutoverActionRequest:
+      type: object
+      required:
+        - reason
+      properties:
+        reason:
+          type: string
+    EmbeddingCutoverPlan:
+      type: object
+      required:
+        - id
+        - scope
+        - target
+        - wave_size
+        - status
+        - reason
+        - created_by
+        - created_at
+        - progress
+      properties:
+        id:
+          type: string
+        scope:
+          $ref: '#/components/schemas/Scope'
+        target:
+          $ref: '#/components/schemas/EmbeddingCutoverTarget'
+        classes:
+          type: array
+          items:
+            type: string
+        wave_size:
+          type: integer
+        status:
+          $ref: '#/components/schemas/EmbeddingCutoverPlanStatus'
+        reason:
+          type: string
+        created_by:
+          type: string
+        created_at:
+          type: string
+          format: date-time
+        last_action_by:
+          type: string
+        last_action_reason:
+          type: string
+        last_action_at:
+          type: string
+          format: date-time
+        activated_at:
+          type: string
+          format: date-time
+        paused_at:
+          type: string
+          format: date-time
+        cancelled_at:
+          type: string
+          format: date-time
+        completed_at:
+          type: string
+          format: date-time
+        progress:
+          $ref: '#/components/schemas/EmbeddingCutoverProgress'
+        items:
+          type: array
+          items:
+            $ref: '#/components/schemas/EmbeddingCutoverItem'
+    EmbeddingCutoverPlanListResponse:
+      type: object
+      required:
+        - plans
+      properties:
+        plans:
+          type: array
+          items:
+            $ref: '#/components/schemas/EmbeddingCutoverPlan'
     EmbeddingMemoryInspection:
       type: object
       required:

@@ -71,3 +71,38 @@ The service SHALL execute semantic backfill, rebuild, and provider-rotation work
 - **WHEN** the desired embedding provider or model target changes for eligible canonical memory
 - **THEN** the service schedules provider-drift rebuild work through the same durable asynchronous execution path used for missing or stale embeddings
 
+### Requirement: Embedding operator recovery reuses durable rebuild execution
+The service SHALL treat operator-triggered embedding retry or requeue actions as state transitions back into the ordinary durable rebuild path rather than as ad hoc execution shortcuts.
+
+#### Scenario: Requeue returns work to normal claim flow
+- **WHEN** an authorized operator requeues eligible embedding rebuild work
+- **THEN** the rebuild record becomes claimable by the existing background rebuild job instead of being executed inline by the admin request
+
+#### Scenario: Retry preserves idempotent execution semantics
+- **WHEN** operator remediation restores failed embedding work to pending eligibility
+- **THEN** later background execution still uses the same append, compare, and promote safeguards as scheduler-discovered rebuild work
+
+### Requirement: Embedding recovery actions do not seize active leases
+The service MUST reject embedding remediation actions that would bypass active background ownership of a rebuild record.
+
+#### Scenario: Operator targets rebuilding work
+- **WHEN** an operator attempts to retry or requeue a rebuild record that is currently rebuilding under an active lease
+- **THEN** the action is rejected and the existing worker ownership remains unchanged
+
+### Requirement: Scheduler dispatches provider cutover waves through the durable rebuild path
+The service SHALL advance active provider cutovers through scheduler-driven waves that reuse the existing embedding rebuild execution flow.
+
+#### Scenario: Active cutover schedules the next wave
+- **WHEN** an active provider cutover has remaining eligible items and the next cadence window arrives
+- **THEN** the scheduler advances only the next bounded wave of cutover items into ordinary rebuild eligibility instead of executing embeddings inline
+
+#### Scenario: Cutover wave failure remains retry-safe
+- **WHEN** one or more items in a cutover wave fail embedding generation or activation
+- **THEN** those failures remain visible through the normal durable rebuild and recovery path without corrupting plan progress or vector lineage
+
+### Requirement: Cutover controls do not seize active rebuild ownership
+The service MUST keep cutover pause or cancel behavior lease-safe for already rebuilding embedding work.
+
+#### Scenario: Operator pauses a plan with active rebuilds in flight
+- **WHEN** an operator pauses or cancels a cutover plan while some linked memories are already rebuilding
+- **THEN** the service stops future waves from advancing but leaves already rebuilding items under their current worker ownership until they complete or fail
