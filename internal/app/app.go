@@ -405,6 +405,7 @@ func buildAPIRuntime(ctx context.Context, cfg config.Config, deps apiRuntimeDepe
 		Semantic:  repo,
 		Relations: repo,
 		Citations: repo,
+		Insights:  repo,
 	}, deps.observer)
 	httpDeps := httpDependenciesFromConfigWithIngestor(cfg, ingestor)
 	httpDeps.Readiness = runtimeReadinessChecker(config.ModeAPI, pool, embeddingRuntime, false, deps.observer)
@@ -430,6 +431,7 @@ func buildAPIRuntime(ctx context.Context, cfg config.Config, deps apiRuntimeDepe
 		observer: deps.observer,
 	}
 	httpDeps.GovernanceAdmin = repo
+	httpDeps.DerivedInsightAdmin = repo
 	httpDeps.MemoryHistoryRead = memoryHistoryReaderFunc(func(ctx context.Context, scope memory.Scope, memoryID string) (memory.MemoryHistory, error) {
 		return repo.ReadMemoryHistory(ctx, scope, memoryID, true)
 	})
@@ -598,8 +600,9 @@ func buildSchedulerRuntime(ctx context.Context, cfg config.Config, deps schedule
 	summaryInterval := firstPositiveDuration(cfg.Jobs.SummaryCompactionInterval, cfg.Jobs.MaintenanceInterval, 15*time.Minute)
 	retentionInterval := firstPositiveDuration(cfg.Jobs.RetentionInterval, cfg.Jobs.MaintenanceInterval, 15*time.Minute)
 	cleanupInterval := firstPositiveDuration(cfg.Jobs.CleanupInterval, cfg.Jobs.MaintenanceInterval, 15*time.Minute)
+	derivedInsightInterval := firstPositiveDuration(cfg.Jobs.DerivedInsightDerivationInterval, cfg.Jobs.MaintenanceInterval, 15*time.Minute)
 	embeddingInterval := firstPositiveDuration(cfg.Jobs.MaintenanceInterval, 15*time.Minute)
-	schedulerInterval := minPositiveDuration(summaryInterval, retentionInterval, cleanupInterval, embeddingInterval, cfg.Jobs.MaintenanceInterval, 15*time.Minute)
+	schedulerInterval := minPositiveDuration(summaryInterval, retentionInterval, cleanupInterval, derivedInsightInterval, embeddingInterval, cfg.Jobs.MaintenanceInterval, 15*time.Minute)
 
 	scheduler := jobs.MaintenanceScheduler{
 		Jobs: []jobs.MaintenanceJob{
@@ -656,6 +659,24 @@ func buildSchedulerRuntime(ctx context.Context, cfg config.Config, deps schedule
 						ExecutionStore: repo,
 						TriggerSource:  "scheduler",
 						Limit:          100,
+					}
+				},
+			},
+			jobs.ScopeDispatchJob{
+				NameValue:       "derived_insight_derivation_dispatch",
+				ScopeSource:     repo,
+				ScopeBatchLimit: cfg.Jobs.MaintenanceScopeBatchLimit,
+				FallbackScope:   scope,
+				Dispatch: func(scope memory.Scope) jobs.MaintenanceJob {
+					return jobs.DerivedInsightDerivationJob{
+						Scope:           scope,
+						Store:           repo,
+						ExecutionStore:  repo,
+						TriggerSource:   "scheduler",
+						Cadence:         derivedInsightInterval,
+						MinimumEvidence: cfg.Jobs.DerivedInsightMinimumEvidence,
+						Limit:           cfg.Jobs.DerivedInsightBatchSize,
+						Now:             now,
 					}
 				},
 			},

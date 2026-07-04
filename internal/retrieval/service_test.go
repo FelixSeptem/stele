@@ -55,6 +55,20 @@ func (s *stubCitationSource) ListCitations(ctx context.Context, scope memory.Sco
 	return s.citations, s.err
 }
 
+type stubDerivedInsightSource struct {
+	gotInputs []memory.ListDerivedInsightsInput
+	items     map[memory.DerivedInsightType][]memory.DerivedInsight
+	err       error
+}
+
+func (s *stubDerivedInsightSource) ListDerivedInsights(ctx context.Context, input memory.ListDerivedInsightsInput) ([]memory.DerivedInsight, error) {
+	s.gotInputs = append(s.gotInputs, input)
+	if s.err != nil {
+		return nil, s.err
+	}
+	return s.items[input.Type], nil
+}
+
 type stubRetrievalObserver struct {
 	operations []telemetry.OperationEvent
 }
@@ -288,6 +302,155 @@ func TestServiceAssembleContextReturnsStructuredSections(t *testing.T) {
 
 	if len(contextResult.Citations) < 3 {
 		t.Fatalf("len(Citations) = %d, want at least %d", len(contextResult.Citations), 3)
+	}
+}
+
+func TestServiceAssembleContextExcludesExperienceInsightsByDefault(t *testing.T) {
+	scope := memory.Scope{Tenant: "tenant-a", Project: "project-a", Namespace: "namespace-a"}
+	insights := &stubDerivedInsightSource{}
+	service := NewService(ServiceDependencies{
+		Lexical: &stubLexicalSource{
+			hits: []ScoredMemory{
+				{Memory: memory.CanonicalMemory{ID: "mem_profile", Scope: scope, Class: memory.MemoryClassProfile, State: memory.MemoryStateActive, Content: "profile"}, LexicalScore: 1},
+			},
+		},
+		Insights: insights,
+	})
+
+	result, err := service.AssembleContext(context.Background(), AssembleContextInput{
+		Scope:  scope,
+		Query:  "provider failure",
+		Budget: 3,
+	})
+	if err != nil {
+		t.Fatalf("AssembleContext() error = %v", err)
+	}
+	if len(insights.gotInputs) != 0 {
+		t.Fatalf("insight list calls = %d, want 0 by default", len(insights.gotInputs))
+	}
+	if len(result.KnownFailures) != 0 || len(result.ExperienceLessons) != 0 {
+		t.Fatalf("insight sections = %+v/%+v, want empty by default", result.KnownFailures, result.ExperienceLessons)
+	}
+}
+
+func TestServiceAssembleContextIncludesRequestedExperienceInsightsWithCitations(t *testing.T) {
+	scope := memory.Scope{Tenant: "tenant-a", Project: "project-a", Namespace: "namespace-a"}
+	insights := &stubDerivedInsightSource{
+		items: map[memory.DerivedInsightType][]memory.DerivedInsight{
+			memory.DerivedInsightTypeFailurePattern: {
+				{
+					ID:      "insight_failure",
+					Scope:   scope,
+					Type:    memory.DerivedInsightTypeFailurePattern,
+					State:   memory.DerivedInsightStateActive,
+					Title:   "Repeated provider failure",
+					Summary: "Provider unavailable failed twice.",
+					Confidence: memory.DerivedInsightConfidence{
+						Score: 0.75,
+					},
+					Derivation: memory.DerivedInsightDerivation{
+						Source:      "failure_pattern_evaluator",
+						Fingerprint: "failure_pattern:fingerprint",
+						DerivedAt:   time.Date(2026, 7, 4, 12, 0, 0, 0, time.UTC),
+					},
+					Evidence: []memory.DerivedInsightEvidenceRef{
+						{Kind: memory.DerivedInsightEvidenceKindJobExecution, ID: "job_1", Relation: memory.DerivedInsightEvidenceRelationSupports},
+					},
+				},
+			},
+			memory.DerivedInsightTypeLesson: {
+				{
+					ID:      "insight_lesson",
+					Scope:   scope,
+					Type:    memory.DerivedInsightTypeLesson,
+					State:   memory.DerivedInsightStateActive,
+					Title:   "Avoid retry storm",
+					Summary: "Wait for provider recovery.",
+					Confidence: memory.DerivedInsightConfidence{
+						Score: 0.75,
+					},
+					Lesson: &memory.DerivedInsightLesson{
+						SourceFailurePatternID: "insight_failure",
+						Guidance:               "Wait for provider recovery.",
+					},
+					Derivation: memory.DerivedInsightDerivation{
+						Source:      "lesson_projection",
+						Fingerprint: "lesson:fingerprint",
+						DerivedAt:   time.Date(2026, 7, 4, 12, 0, 0, 0, time.UTC),
+					},
+					Evidence: []memory.DerivedInsightEvidenceRef{
+						{Kind: memory.DerivedInsightEvidenceKindJobExecution, ID: "job_1", Relation: memory.DerivedInsightEvidenceRelationSupports},
+					},
+				},
+			},
+		},
+	}
+	service := NewService(ServiceDependencies{
+		Lexical: &stubLexicalSource{
+			hits: []ScoredMemory{
+				{Memory: memory.CanonicalMemory{ID: "mem_profile", Scope: scope, Class: memory.MemoryClassProfile, State: memory.MemoryStateActive, Content: "profile"}, LexicalScore: 1},
+			},
+		},
+		Insights: insights,
+	})
+
+	result, err := service.AssembleContext(context.Background(), AssembleContextInput{
+		Scope:                     scope,
+		Query:                     "provider failure",
+		Budget:                    3,
+		IncludeExperienceInsights: true,
+	})
+	if err != nil {
+		t.Fatalf("AssembleContext() error = %v", err)
+	}
+	if len(insights.gotInputs) != 2 {
+		t.Fatalf("insight list calls = %d, want failure patterns and lessons", len(insights.gotInputs))
+	}
+	for _, input := range insights.gotInputs {
+		if input.Scope != scope || input.State != memory.DerivedInsightStateActive || input.IncludeHidden {
+			t.Fatalf("insight input = %+v, want active scoped visible input", input)
+		}
+	}
+	if len(result.KnownFailures) != 1 || len(result.ExperienceLessons) != 1 {
+		t.Fatalf("insight sections = %+v/%+v, want one failure and one lesson", result.KnownFailures, result.ExperienceLessons)
+	}
+	if len(result.KnownFailures[0].Citations) != 1 || result.KnownFailures[0].Citations[0].EvidenceID != "job_1" {
+		t.Fatalf("failure citations = %+v, want evidence job_1", result.KnownFailures[0].Citations)
+	}
+}
+
+func TestServiceAssembleContextTrimsExperienceInsightsUnderBudgetPressure(t *testing.T) {
+	scope := memory.Scope{Tenant: "tenant-a", Project: "project-a", Namespace: "namespace-a"}
+	insights := &stubDerivedInsightSource{
+		items: map[memory.DerivedInsightType][]memory.DerivedInsight{
+			memory.DerivedInsightTypeFailurePattern: {
+				{ID: "insight_failure", Scope: scope, Type: memory.DerivedInsightTypeFailurePattern, State: memory.DerivedInsightStateActive},
+			},
+		},
+	}
+	service := NewService(ServiceDependencies{
+		Lexical: &stubLexicalSource{
+			hits: []ScoredMemory{
+				{Memory: memory.CanonicalMemory{ID: "mem_profile", Scope: scope, Class: memory.MemoryClassProfile, State: memory.MemoryStateActive, Content: "profile"}, LexicalScore: 1},
+			},
+		},
+		Insights: insights,
+	})
+
+	result, err := service.AssembleContext(context.Background(), AssembleContextInput{
+		Scope:                     scope,
+		Query:                     "provider failure",
+		Budget:                    1,
+		IncludeExperienceInsights: true,
+	})
+	if err != nil {
+		t.Fatalf("AssembleContext() error = %v", err)
+	}
+	if len(insights.gotInputs) != 0 {
+		t.Fatalf("insight calls = %d, want no insight fetch when budget is exhausted by higher priority context", len(insights.gotInputs))
+	}
+	if len(result.KnownFailures) != 0 {
+		t.Fatalf("known failures = %+v, want empty under budget pressure", result.KnownFailures)
 	}
 }
 

@@ -40,10 +40,11 @@ func (i SearchInput) Validate() error {
 }
 
 type AssembleContextInput struct {
-	Scope            memory.Scope
-	Query            string
-	Budget           int
-	IncludeRelations bool
+	Scope                     memory.Scope
+	Query                     string
+	Budget                    int
+	IncludeRelations          bool
+	IncludeExperienceInsights bool
 }
 
 func (i AssembleContextInput) Validate() error {
@@ -82,13 +83,27 @@ type SearchResult struct {
 	Hits []SearchHit `json:"hits"`
 }
 
+type InsightCitation struct {
+	InsightID    string `json:"insight_id"`
+	EvidenceKind string `json:"evidence_kind"`
+	EvidenceID   string `json:"evidence_id"`
+	Relation     string `json:"relation"`
+}
+
+type ExperienceInsightContext struct {
+	Insight   memory.DerivedInsight `json:"insight"`
+	Citations []InsightCitation     `json:"citations"`
+}
+
 type AssembledContext struct {
-	Profile           []SearchHit `json:"profile"`
-	RecentSession     []SearchHit `json:"recent_session"`
-	RecentEpisodes    []SearchHit `json:"recent_episodes"`
-	RelevantSummaries []SearchHit `json:"relevant_summaries"`
-	RelatedEntities   []SearchHit `json:"related_entities"`
-	Citations         []Citation  `json:"citations"`
+	Profile           []SearchHit                `json:"profile"`
+	RecentSession     []SearchHit                `json:"recent_session"`
+	RecentEpisodes    []SearchHit                `json:"recent_episodes"`
+	RelevantSummaries []SearchHit                `json:"relevant_summaries"`
+	RelatedEntities   []SearchHit                `json:"related_entities"`
+	Citations         []Citation                 `json:"citations"`
+	KnownFailures     []ExperienceInsightContext `json:"known_failures,omitempty"`
+	ExperienceLessons []ExperienceInsightContext `json:"experience_lessons,omitempty"`
 }
 
 type ScoredMemory struct {
@@ -114,6 +129,10 @@ type CitationLister interface {
 	ListCitations(ctx context.Context, scope memory.Scope, memoryIDs []string) (map[string][]Citation, error)
 }
 
+type DerivedInsightLister interface {
+	ListDerivedInsights(ctx context.Context, input memory.ListDerivedInsightsInput) ([]memory.DerivedInsight, error)
+}
+
 type MemorySearcher interface {
 	Search(ctx context.Context, input SearchInput) (SearchResult, error)
 }
@@ -127,6 +146,7 @@ type ServiceDependencies struct {
 	Semantic  SemanticSearcher
 	Relations RelationSearcher
 	Citations CitationLister
+	Insights  DerivedInsightLister
 }
 
 type Service struct {
@@ -134,6 +154,7 @@ type Service struct {
 	semantic  SemanticSearcher
 	relations RelationSearcher
 	citations CitationLister
+	insights  DerivedInsightLister
 	observer  telemetry.Observer
 }
 
@@ -151,6 +172,7 @@ func NewService(deps ServiceDependencies, observers ...telemetry.Observer) *Serv
 		semantic:  deps.Semantic,
 		relations: deps.Relations,
 		citations: deps.Citations,
+		insights:  deps.Insights,
 		observer:  observer,
 	}
 }
@@ -296,7 +318,7 @@ func (s *Service) AssembleContext(ctx context.Context, input AssembleContextInpu
 		}
 
 		status := "ok"
-		count := len(output.Profile) + len(output.RecentSession) + len(output.RecentEpisodes) + len(output.RelevantSummaries) + len(output.RelatedEntities)
+		count := len(output.Profile) + len(output.RecentSession) + len(output.RecentEpisodes) + len(output.RelevantSummaries) + len(output.RelatedEntities) + len(output.KnownFailures) + len(output.ExperienceLessons)
 		errorMessage := ""
 		if err != nil {
 			status = "error"
@@ -338,6 +360,8 @@ func (s *Service) AssembleContext(ctx context.Context, input AssembleContextInpu
 		RelevantSummaries: make([]SearchHit, 0),
 		RelatedEntities:   make([]SearchHit, 0),
 		Citations:         make([]Citation, 0),
+		KnownFailures:     make([]ExperienceInsightContext, 0),
+		ExperienceLessons: make([]ExperienceInsightContext, 0),
 	}
 
 	profiles := make([]SearchHit, 0)
@@ -406,7 +430,77 @@ func (s *Service) AssembleContext(ctx context.Context, input AssembleContextInpu
 		remaining -= take
 	}
 
+	if input.IncludeExperienceInsights && remaining > 0 && s.insights != nil {
+		if err := s.appendExperienceInsights(ctx, input.Scope, &output, &remaining); err != nil {
+			return AssembledContext{}, err
+		}
+	}
+
 	return output, nil
+}
+
+func (s *Service) appendExperienceInsights(ctx context.Context, scope memory.Scope, output *AssembledContext, remaining *int) error {
+	if remaining == nil || *remaining <= 0 {
+		return nil
+	}
+
+	failures, err := s.insights.ListDerivedInsights(ctx, memory.ListDerivedInsightsInput{
+		Scope:            scope,
+		Type:             memory.DerivedInsightTypeFailurePattern,
+		State:            memory.DerivedInsightStateActive,
+		MinEvidenceCount: 1,
+		IncludeHidden:    false,
+		Limit:            *remaining,
+	})
+	if err != nil {
+		return err
+	}
+
+	take := minInt(len(failures), *remaining)
+	for _, insight := range failures[:take] {
+		output.KnownFailures = append(output.KnownFailures, experienceInsightContext(insight))
+	}
+	*remaining -= take
+	if *remaining <= 0 {
+		return nil
+	}
+
+	lessons, err := s.insights.ListDerivedInsights(ctx, memory.ListDerivedInsightsInput{
+		Scope:            scope,
+		Type:             memory.DerivedInsightTypeLesson,
+		State:            memory.DerivedInsightStateActive,
+		MinEvidenceCount: 1,
+		IncludeHidden:    false,
+		Limit:            *remaining,
+	})
+	if err != nil {
+		return err
+	}
+
+	take = minInt(len(lessons), *remaining)
+	for _, insight := range lessons[:take] {
+		output.ExperienceLessons = append(output.ExperienceLessons, experienceInsightContext(insight))
+	}
+	*remaining -= take
+
+	return nil
+}
+
+func experienceInsightContext(insight memory.DerivedInsight) ExperienceInsightContext {
+	citations := make([]InsightCitation, 0, len(insight.Evidence))
+	for _, evidence := range insight.Evidence {
+		citations = append(citations, InsightCitation{
+			InsightID:    insight.ID,
+			EvidenceKind: string(evidence.Kind),
+			EvidenceID:   evidence.ID,
+			Relation:     string(evidence.Relation),
+		})
+	}
+
+	return ExperienceInsightContext{
+		Insight:   insight,
+		Citations: citations,
+	}
 }
 
 func matchClassFilter(class memory.MemoryClass, filters []memory.MemoryClass) bool {

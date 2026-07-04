@@ -21,6 +21,9 @@ func TestLoadFromEnvReturnsConfigForValidMode(t *testing.T) {
 	t.Setenv("STELE_JOBS_SUMMARY_COMPACTION_INTERVAL", "40m")
 	t.Setenv("STELE_JOBS_RETENTION_INTERVAL", "50m")
 	t.Setenv("STELE_JOBS_CLEANUP_INTERVAL", "60m")
+	t.Setenv("STELE_JOBS_DERIVED_INSIGHT_DERIVATION_INTERVAL", "70m")
+	t.Setenv("STELE_JOBS_DERIVED_INSIGHT_BATCH_SIZE", "75")
+	t.Setenv("STELE_JOBS_DERIVED_INSIGHT_MINIMUM_EVIDENCE", "3")
 	t.Setenv("STELE_JOBS_JOB_EXECUTION_RETENTION", "72h")
 
 	cfg, err := LoadFromEnv()
@@ -74,6 +77,18 @@ func TestLoadFromEnvReturnsConfigForValidMode(t *testing.T) {
 
 	if cfg.Jobs.CleanupInterval != 60*time.Minute {
 		t.Fatalf("Jobs.CleanupInterval = %v, want 60m", cfg.Jobs.CleanupInterval)
+	}
+
+	if cfg.Jobs.DerivedInsightDerivationInterval != 70*time.Minute {
+		t.Fatalf("Jobs.DerivedInsightDerivationInterval = %v, want 70m", cfg.Jobs.DerivedInsightDerivationInterval)
+	}
+
+	if cfg.Jobs.DerivedInsightBatchSize != 75 {
+		t.Fatalf("Jobs.DerivedInsightBatchSize = %d, want 75", cfg.Jobs.DerivedInsightBatchSize)
+	}
+
+	if cfg.Jobs.DerivedInsightMinimumEvidence != 3 {
+		t.Fatalf("Jobs.DerivedInsightMinimumEvidence = %d, want 3", cfg.Jobs.DerivedInsightMinimumEvidence)
 	}
 
 	if cfg.Jobs.JobExecutionRetention != 72*time.Hour {

@@ -238,6 +238,58 @@ CREATE TABLE IF NOT EXISTS job_executions (
     finished_at timestamptz
 );
 
+CREATE TABLE IF NOT EXISTS derived_insights (
+    id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+    tenant text NOT NULL,
+    project text NOT NULL,
+    namespace text NOT NULL,
+    type text NOT NULL,
+    lifecycle_state text NOT NULL,
+    title text NOT NULL,
+    summary text NOT NULL,
+    confidence double precision NOT NULL,
+    confidence_method text,
+    payload jsonb NOT NULL DEFAULT '{}'::jsonb,
+    lesson jsonb,
+    derivation_source text NOT NULL,
+    derivation_fingerprint text NOT NULL,
+    derivation_metadata jsonb NOT NULL DEFAULT '{}'::jsonb,
+    evidence_window_start timestamptz,
+    evidence_window_end timestamptz,
+    derived_at timestamptz NOT NULL,
+    last_observed_at timestamptz,
+    created_at timestamptz NOT NULL DEFAULT now(),
+    updated_at timestamptz NOT NULL DEFAULT now()
+);
+
+CREATE TABLE IF NOT EXISTS derived_insight_evidence (
+    insight_id uuid NOT NULL REFERENCES derived_insights(id) ON DELETE CASCADE,
+    tenant text NOT NULL,
+    project text NOT NULL,
+    namespace text NOT NULL,
+    evidence_kind text NOT NULL,
+    evidence_id text NOT NULL,
+    relation text NOT NULL,
+    observed_at timestamptz,
+    metadata jsonb NOT NULL DEFAULT '{}'::jsonb,
+    created_at timestamptz NOT NULL DEFAULT now(),
+    PRIMARY KEY (insight_id, evidence_kind, evidence_id, relation)
+);
+
+CREATE TABLE IF NOT EXISTS derived_insight_lifecycle_ledger (
+    id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+    insight_id uuid NOT NULL REFERENCES derived_insights(id) ON DELETE CASCADE,
+    tenant text NOT NULL,
+    project text NOT NULL,
+    namespace text NOT NULL,
+    from_state text,
+    to_state text NOT NULL,
+    actor text NOT NULL,
+    reason text NOT NULL,
+    metadata jsonb NOT NULL DEFAULT '{}'::jsonb,
+    occurred_at timestamptz NOT NULL DEFAULT now()
+);
+
 CREATE INDEX IF NOT EXISTS raw_events_scope_created_at_idx
     ON raw_events (tenant, project, namespace, created_at DESC);
 
@@ -320,3 +372,18 @@ CREATE INDEX IF NOT EXISTS job_executions_scope_started_at_idx
 
 CREATE INDEX IF NOT EXISTS job_executions_job_name_started_at_idx
     ON job_executions (job_name, started_at DESC);
+
+CREATE UNIQUE INDEX IF NOT EXISTS derived_insights_scope_type_fingerprint_idx
+    ON derived_insights (tenant, project, namespace, type, derivation_fingerprint);
+
+CREATE INDEX IF NOT EXISTS derived_insights_scope_state_type_idx
+    ON derived_insights (tenant, project, namespace, lifecycle_state, type, updated_at DESC);
+
+CREATE INDEX IF NOT EXISTS derived_insights_scope_confidence_idx
+    ON derived_insights (tenant, project, namespace, confidence DESC, updated_at DESC);
+
+CREATE INDEX IF NOT EXISTS derived_insight_evidence_insight_idx
+    ON derived_insight_evidence (insight_id, created_at DESC);
+
+CREATE INDEX IF NOT EXISTS derived_insight_lifecycle_ledger_insight_idx
+    ON derived_insight_lifecycle_ledger (insight_id, occurred_at DESC);

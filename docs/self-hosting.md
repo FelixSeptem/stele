@@ -6,7 +6,7 @@
 
 - `api`: public ingest, memory read, retrieval, context assembly, and admin inspection or lifecycle routes
 - `worker`: continuous governance processing loop for claimed raw events
-- `scheduler`: periodic maintenance dispatch for embedding rebuild, summary compaction, retention sweep, and job execution cleanup
+- `scheduler`: periodic maintenance dispatch for embedding rebuild, derived insight derivation, summary compaction, retention sweep, and job execution cleanup
 
 The repository ships a production-oriented `Dockerfile` plus a local `docker-compose.yml` so operators can boot the full stack without reconstructing runtime wiring by hand.
 
@@ -52,6 +52,9 @@ Job tuning variables:
 - `STELE_JOBS_SUMMARY_COMPACTION_INTERVAL`: summary compaction cadence, default `STELE_JOBS_MAINTENANCE_INTERVAL`
 - `STELE_JOBS_RETENTION_INTERVAL`: retention and expiry sweep cadence, default `STELE_JOBS_MAINTENANCE_INTERVAL`
 - `STELE_JOBS_CLEANUP_INTERVAL`: maintenance cleanup cadence, default `STELE_JOBS_MAINTENANCE_INTERVAL`
+- `STELE_JOBS_DERIVED_INSIGHT_DERIVATION_INTERVAL`: governed experience insight derivation cadence, default `STELE_JOBS_MAINTENANCE_INTERVAL`
+- `STELE_JOBS_DERIVED_INSIGHT_BATCH_SIZE`: maximum failure evidence records read per scope and derivation run, default `100`
+- `STELE_JOBS_DERIVED_INSIGHT_MINIMUM_EVIDENCE`: minimum repeated evidence count required before activating a `failure_pattern`, default `2`
 - `STELE_JOBS_JOB_EXECUTION_RETENTION`: retention window for finished job execution records, default `168h`
 - `STELE_JOBS_WORKER_POLL_INTERVAL`: worker idle poll delay, default `5s`
 - `STELE_JOBS_WORKER_ERROR_BACKOFF`: worker retry backoff, default `15s`
@@ -440,6 +443,12 @@ Privileged embedding inspection and recovery routes:
 - `POST /v1/admin/embedding/rebuilds/{memory_id}:retry`
 - `POST /v1/admin/embedding/rebuilds/{memory_id}:requeue`
 
+Privileged derived insight inspection routes:
+
+- `GET /v1/admin/derived-insights`
+- `GET /v1/admin/derived-insights/{insight_id}`
+- `POST /v1/admin/derived-insights/{insight_id}:suppress`
+
 Privileged manual mutation and lifecycle actions require:
 
 - admin API key
@@ -457,6 +466,11 @@ Privileged embedding recovery actions use the same admin boundary and require:
 
 - `X-Stele-Actor` for every recovery action
 - `reason` in the JSON body for every recovery action
+
+Privileged derived insight suppression uses the same admin boundary and requires:
+
+- `actor` in the JSON body
+- `reason` in the JSON body
 
 Governance recovery query filters:
 
@@ -489,6 +503,52 @@ Governance recovery notes:
 - Every recovery action is written to the append-only `governance_recovery_ledger` with actor, reason, and before or after state snapshots.
 - Recovery never triggers direct execution. The existing governance worker picks the event up on a later poll through the normal durable claim path.
 - First phase boundaries stay narrow: single-item recovery only, no bulk remediation, no leased takeover, and no `ignore` or `drop` terminal action.
+
+## Governed Experience Insights
+
+- Derived insights are separate governed records, not canonical memories. They do not rewrite canonical memory rows, memory versions, vector revisions, or provenance in place.
+- The first active insight type is `failure_pattern`. The scheduler derives it from repeated scoped evidence such as failed job executions, failed embedding rebuild records, raw event governance errors, recovery history, and failure-related canonical memory content.
+- `lesson` insights are deterministic projections from an existing `failure_pattern`. A lesson must cite evidence and reference its source failure pattern.
+- `hypothesis`, `goal`, `contradiction`, and `causal_link` are reserved vocabulary only in this phase. Stele does not autonomously infer or activate those types.
+- Derivation is asynchronous. Ingest, manual mutation, retrieval, and context assembly requests do not run failure pattern derivation in the foreground.
+- Default context assembly excludes derived insights. Callers must set `include_experience_insights=true` on `POST /v1/context/assemble` to request `known_failures` and `experience_lessons` sections.
+- Suppressed, forgotten, deleted, and out-of-scope insights are excluded from context assembly. Admin inspection can still read hidden insight state, evidence, and lifecycle history with `include_hidden=true`.
+- `POST /v1/admin/derived-insights/{insight_id}:suppress` records an audited lifecycle transition and preserves linked evidence history.
+- This feature does not add MCP tools, a reasoning-provider abstraction, SDK behavior, UI behavior, global agent-self namespaces, or autonomous causal or goal inference.
+
+Derived insight inspection example:
+
+```bash
+curl 'http://localhost:8080/v1/admin/derived-insights?type=failure_pattern&state=active&min_evidence_count=2&limit=10' \
+  -H 'X-API-Key: dev-admin-key' \
+  -H 'X-Stele-Tenant: tenant-a' \
+  -H 'X-Stele-Project: project-a' \
+  -H 'X-Stele-Namespace: namespace-a'
+```
+
+Context assembly opt-in example:
+
+```bash
+curl -X POST http://localhost:8080/v1/context/assemble \
+  -H 'Content-Type: application/json' \
+  -H 'X-API-Key: dev-public-key' \
+  -H 'X-Stele-Tenant: tenant-a' \
+  -H 'X-Stele-Project: project-a' \
+  -H 'X-Stele-Namespace: namespace-a' \
+  -d '{"query":"prepare the next embedding rebuild run","budget":6,"include_experience_insights":true}'
+```
+
+Derived insight suppression example:
+
+```bash
+curl -X POST http://localhost:8080/v1/admin/derived-insights/<insight-id>:suppress \
+  -H 'Content-Type: application/json' \
+  -H 'X-API-Key: dev-admin-key' \
+  -H 'X-Stele-Tenant: tenant-a' \
+  -H 'X-Stele-Project: project-a' \
+  -H 'X-Stele-Namespace: namespace-a' \
+  -d '{"actor":"operator-a","reason":"noisy duplicate"}'
+```
 
 ## Embedding Lifecycle
 

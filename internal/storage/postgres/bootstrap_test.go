@@ -37,6 +37,9 @@ func TestBootstrapDatabaseRunsBaseMigration(t *testing.T) {
 	mock.ExpectExec("CREATE TABLE IF NOT EXISTS deletion_markers").WillReturnResult(pgxmock.NewResult("CREATE TABLE", 0))
 	mock.ExpectExec("CREATE TABLE IF NOT EXISTS relation_projections").WillReturnResult(pgxmock.NewResult("CREATE TABLE", 0))
 	mock.ExpectExec("CREATE TABLE IF NOT EXISTS job_executions").WillReturnResult(pgxmock.NewResult("CREATE TABLE", 0))
+	mock.ExpectExec("CREATE TABLE IF NOT EXISTS derived_insights").WillReturnResult(pgxmock.NewResult("CREATE TABLE", 0))
+	mock.ExpectExec("CREATE TABLE IF NOT EXISTS derived_insight_evidence").WillReturnResult(pgxmock.NewResult("CREATE TABLE", 0))
+	mock.ExpectExec("CREATE TABLE IF NOT EXISTS derived_insight_lifecycle_ledger").WillReturnResult(pgxmock.NewResult("CREATE TABLE", 0))
 	mock.ExpectExec("CREATE INDEX IF NOT EXISTS raw_events_scope_created_at_idx").WillReturnResult(pgxmock.NewResult("CREATE INDEX", 0))
 	mock.ExpectExec("CREATE INDEX IF NOT EXISTS raw_events_governance_claim_idx").WillReturnResult(pgxmock.NewResult("CREATE INDEX", 0))
 	mock.ExpectExec("CREATE INDEX IF NOT EXISTS candidate_memories_source_raw_event_idx").WillReturnResult(pgxmock.NewResult("CREATE INDEX", 0))
@@ -62,6 +65,11 @@ func TestBootstrapDatabaseRunsBaseMigration(t *testing.T) {
 	mock.ExpectExec("CREATE INDEX IF NOT EXISTS relation_projections_search_text_idx").WillReturnResult(pgxmock.NewResult("CREATE INDEX", 0))
 	mock.ExpectExec("CREATE INDEX IF NOT EXISTS job_executions_scope_started_at_idx").WillReturnResult(pgxmock.NewResult("CREATE INDEX", 0))
 	mock.ExpectExec("CREATE INDEX IF NOT EXISTS job_executions_job_name_started_at_idx").WillReturnResult(pgxmock.NewResult("CREATE INDEX", 0))
+	mock.ExpectExec("CREATE UNIQUE INDEX IF NOT EXISTS derived_insights_scope_type_fingerprint_idx").WillReturnResult(pgxmock.NewResult("CREATE INDEX", 0))
+	mock.ExpectExec("CREATE INDEX IF NOT EXISTS derived_insights_scope_state_type_idx").WillReturnResult(pgxmock.NewResult("CREATE INDEX", 0))
+	mock.ExpectExec("CREATE INDEX IF NOT EXISTS derived_insights_scope_confidence_idx").WillReturnResult(pgxmock.NewResult("CREATE INDEX", 0))
+	mock.ExpectExec("CREATE INDEX IF NOT EXISTS derived_insight_evidence_insight_idx").WillReturnResult(pgxmock.NewResult("CREATE INDEX", 0))
+	mock.ExpectExec("CREATE INDEX IF NOT EXISTS derived_insight_lifecycle_ledger_insight_idx").WillReturnResult(pgxmock.NewResult("CREATE INDEX", 0))
 	mock.ExpectCommit()
 
 	if err := BootstrapDatabase(context.Background(), mock); err != nil {

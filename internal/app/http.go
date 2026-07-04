@@ -39,6 +39,7 @@ type HTTPDependencies struct {
 	ContextAssembler      retrieval.ContextAssembler
 	GovernanceStatusRead  GovernanceStatusReader
 	GovernanceAdmin       GovernanceAdminService
+	DerivedInsightAdmin   DerivedInsightAdminService
 	MemoryHistoryRead     MemoryHistoryReader
 	JobExecutionRead      JobExecutionReader
 	Metrics               MetricsRecorder
@@ -73,6 +74,12 @@ type GovernanceAdminService interface {
 	ApplyGovernanceRecovery(ctx context.Context, input governance.ApplyGovernanceRecoveryInput) (governance.GovernanceRecoveryOutcome, error)
 }
 
+type DerivedInsightAdminService interface {
+	ListDerivedInsights(ctx context.Context, input memory.ListDerivedInsightsInput) ([]memory.DerivedInsight, error)
+	ReadDerivedInsight(ctx context.Context, input memory.ReadDerivedInsightInput) (memory.DerivedInsightDetail, error)
+	TransitionDerivedInsightLifecycle(ctx context.Context, transition memory.DerivedInsightLifecycleTransition) error
+}
+
 type ManualMemoryMutationService interface {
 	CreateMemory(ctx context.Context, input memory.ManualCreateMemoryInput) (memory.MemoryResource, error)
 	UpdateMemory(ctx context.Context, input memory.ManualUpdateMemoryInput) (memory.MemoryResource, error)
@@ -104,6 +111,11 @@ type MetricsRecorder interface {
 }
 
 type lifecycleActionRequest struct {
+	Reason string `json:"reason"`
+}
+
+type derivedInsightSuppressRequest struct {
+	Actor  string `json:"actor"`
 	Reason string `json:"reason"`
 }
 
@@ -167,9 +179,10 @@ type memorySearchRequest struct {
 }
 
 type contextAssembleRequest struct {
-	Query            string `json:"query"`
-	Budget           int    `json:"budget"`
-	IncludeRelations bool   `json:"include_relations"`
+	Query                     string `json:"query"`
+	Budget                    int    `json:"budget"`
+	IncludeRelations          bool   `json:"include_relations"`
+	IncludeExperienceInsights bool   `json:"include_experience_insights"`
 }
 
 func NewHTTPHandler(deps HTTPDependencies) http.Handler {
@@ -332,6 +345,33 @@ func NewHTTPHandler(deps HTTPDependencies) http.Handler {
 		),
 	)
 	mux.Handle("GET /v1/admin/memories/{memory_id}/history", adminMemoryHistory)
+
+	adminDerivedInsightList := auth.APIKeyMiddleware(deps.AdminAPIKeys)(
+		auth.ScopeMiddleware()(
+			http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				handleAdminDerivedInsightList(w, r, deps.DerivedInsightAdmin)
+			}),
+		),
+	)
+	mux.Handle("GET /v1/admin/derived-insights", adminDerivedInsightList)
+
+	adminDerivedInsightDetail := auth.APIKeyMiddleware(deps.AdminAPIKeys)(
+		auth.ScopeMiddleware()(
+			http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				handleAdminDerivedInsightDetail(w, r, deps.DerivedInsightAdmin)
+			}),
+		),
+	)
+	mux.Handle("GET /v1/admin/derived-insights/{insight_id}", adminDerivedInsightDetail)
+
+	adminDerivedInsightAction := auth.APIKeyMiddleware(deps.AdminAPIKeys)(
+		auth.ScopeMiddleware()(
+			http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				handleAdminDerivedInsightAction(w, r, deps.DerivedInsightAdmin)
+			}),
+		),
+	)
+	mux.Handle("POST /v1/admin/derived-insights/{insight_action}", adminDerivedInsightAction)
 
 	adminEmbeddingRebuilds := auth.APIKeyMiddleware(deps.AdminAPIKeys)(
 		auth.ScopeMiddleware()(
@@ -754,10 +794,11 @@ func handleContextAssembly(w http.ResponseWriter, r *http.Request, assembler ret
 	}
 
 	result, err := assembler.AssembleContext(r.Context(), retrieval.AssembleContextInput{
-		Scope:            scope,
-		Query:            req.Query,
-		Budget:           req.Budget,
-		IncludeRelations: req.IncludeRelations,
+		Scope:                     scope,
+		Query:                     req.Query,
+		Budget:                    req.Budget,
+		IncludeRelations:          req.IncludeRelations,
+		IncludeExperienceInsights: req.IncludeExperienceInsights,
 	})
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusBadRequest)
@@ -801,6 +842,178 @@ func handleMemoryHistory(w http.ResponseWriter, r *http.Request, reader MemoryHi
 	}
 
 	writeJSON(w, http.StatusOK, history)
+}
+
+func handleAdminDerivedInsightList(w http.ResponseWriter, r *http.Request, service DerivedInsightAdminService) {
+	if service == nil {
+		http.Error(w, "derived insight admin service is not configured", http.StatusServiceUnavailable)
+		return
+	}
+
+	scope, ok := auth.ScopeFromContext(r.Context())
+	if !ok {
+		http.Error(w, "scope context is missing", http.StatusInternalServerError)
+		return
+	}
+
+	limit := 20
+	if raw := strings.TrimSpace(r.URL.Query().Get("limit")); raw != "" {
+		parsed, err := strconv.Atoi(raw)
+		if err != nil || parsed <= 0 {
+			http.Error(w, "invalid limit", http.StatusBadRequest)
+			return
+		}
+		if parsed > 100 {
+			parsed = 100
+		}
+		limit = parsed
+	}
+
+	input := memory.ListDerivedInsightsInput{
+		Scope:            scope,
+		Type:             memory.DerivedInsightType(strings.TrimSpace(r.URL.Query().Get("type"))),
+		State:            memory.DerivedInsightState(strings.TrimSpace(r.URL.Query().Get("state"))),
+		MinEvidenceCount: 0,
+		Limit:            limit,
+	}
+	if raw := strings.TrimSpace(r.URL.Query().Get("min_confidence")); raw != "" {
+		parsed, err := strconv.ParseFloat(raw, 64)
+		if err != nil {
+			http.Error(w, "invalid min_confidence", http.StatusBadRequest)
+			return
+		}
+		input.MinConfidence = &parsed
+	}
+	if raw := strings.TrimSpace(r.URL.Query().Get("min_evidence_count")); raw != "" {
+		parsed, err := strconv.Atoi(raw)
+		if err != nil {
+			http.Error(w, "invalid min_evidence_count", http.StatusBadRequest)
+			return
+		}
+		input.MinEvidenceCount = parsed
+	}
+	if raw := strings.TrimSpace(r.URL.Query().Get("include_hidden")); raw != "" {
+		parsed, err := strconv.ParseBool(raw)
+		if err != nil {
+			http.Error(w, "invalid include_hidden", http.StatusBadRequest)
+			return
+		}
+		input.IncludeHidden = parsed
+	}
+	if err := input.Validate(); err != nil {
+		http.Error(w, err.Error(), http.StatusBadRequest)
+		return
+	}
+
+	items, err := service.ListDerivedInsights(r.Context(), input)
+	if err != nil {
+		http.Error(w, "failed to read derived insights", http.StatusInternalServerError)
+		return
+	}
+
+	writeJSON(w, http.StatusOK, map[string]any{"items": items})
+}
+
+func handleAdminDerivedInsightDetail(w http.ResponseWriter, r *http.Request, service DerivedInsightAdminService) {
+	if service == nil {
+		http.Error(w, "derived insight admin service is not configured", http.StatusServiceUnavailable)
+		return
+	}
+
+	scope, ok := auth.ScopeFromContext(r.Context())
+	if !ok {
+		http.Error(w, "scope context is missing", http.StatusInternalServerError)
+		return
+	}
+
+	includeHidden := false
+	if raw := strings.TrimSpace(r.URL.Query().Get("include_hidden")); raw != "" {
+		parsed, err := strconv.ParseBool(raw)
+		if err != nil {
+			http.Error(w, "invalid include_hidden", http.StatusBadRequest)
+			return
+		}
+		includeHidden = parsed
+	}
+
+	input := memory.ReadDerivedInsightInput{
+		Scope:         scope,
+		ID:            r.PathValue("insight_id"),
+		IncludeHidden: includeHidden,
+	}
+	if err := input.Validate(); err != nil {
+		http.Error(w, err.Error(), http.StatusBadRequest)
+		return
+	}
+
+	detail, err := service.ReadDerivedInsight(r.Context(), input)
+	if err != nil {
+		if errors.Is(err, pgx.ErrNoRows) {
+			http.Error(w, "derived insight not found", http.StatusNotFound)
+			return
+		}
+		http.Error(w, "failed to read derived insight", http.StatusInternalServerError)
+		return
+	}
+
+	writeJSON(w, http.StatusOK, detail)
+}
+
+func handleAdminDerivedInsightAction(w http.ResponseWriter, r *http.Request, service DerivedInsightAdminService) {
+	if service == nil {
+		http.Error(w, "derived insight admin service is not configured", http.StatusServiceUnavailable)
+		return
+	}
+
+	scope, ok := auth.ScopeFromContext(r.Context())
+	if !ok {
+		http.Error(w, "scope context is missing", http.StatusInternalServerError)
+		return
+	}
+
+	insightID, action, err := parseDerivedInsightActionTarget(r.PathValue("insight_action"))
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusBadRequest)
+		return
+	}
+	if action != "suppress" {
+		http.Error(w, "unsupported derived insight action", http.StatusBadRequest)
+		return
+	}
+
+	var request derivedInsightSuppressRequest
+	if r.Body != nil {
+		defer r.Body.Close()
+		if err := json.NewDecoder(r.Body).Decode(&request); err != nil {
+			http.Error(w, "invalid JSON body", http.StatusBadRequest)
+			return
+		}
+	}
+
+	transition := memory.DerivedInsightLifecycleTransition{
+		Scope:      scope,
+		InsightID:  insightID,
+		FromState:  memory.DerivedInsightStateActive,
+		ToState:    memory.DerivedInsightStateSuppressed,
+		Actor:      strings.TrimSpace(request.Actor),
+		Reason:     strings.TrimSpace(request.Reason),
+		OccurredAt: time.Now().UTC(),
+	}
+	if err := transition.Validate(); err != nil {
+		http.Error(w, err.Error(), http.StatusBadRequest)
+		return
+	}
+
+	if err := service.TransitionDerivedInsightLifecycle(r.Context(), transition); err != nil {
+		if errors.Is(err, pgx.ErrNoRows) {
+			http.Error(w, "derived insight not found", http.StatusNotFound)
+			return
+		}
+		http.Error(w, "failed to update derived insight lifecycle", http.StatusInternalServerError)
+		return
+	}
+
+	writeJSON(w, http.StatusOK, map[string]any{"status": "suppressed", "insight_id": insightID})
 }
 
 func handleAdminEmbeddingRebuildList(w http.ResponseWriter, r *http.Request, service EmbeddingAdminQueryService) {
@@ -1828,6 +2041,15 @@ func parseAdminMutationActionTarget(value string, expectedAction string) (string
 	}
 
 	return memoryID, nil
+}
+
+func parseDerivedInsightActionTarget(value string) (string, string, error) {
+	insightID, actionName, ok := strings.Cut(value, ":")
+	if !ok || strings.TrimSpace(insightID) == "" || strings.TrimSpace(actionName) == "" {
+		return "", "", fmt.Errorf("invalid derived insight action target")
+	}
+
+	return strings.TrimSpace(insightID), strings.TrimSpace(actionName), nil
 }
 
 func parseGovernanceRawEventActionTarget(value string) (string, governance.GovernanceRecoveryAction, error) {

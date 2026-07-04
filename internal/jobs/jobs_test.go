@@ -9,6 +9,7 @@ import (
 
 	"github.com/FelixSeptem/stele/internal/embedding"
 	"github.com/FelixSeptem/stele/internal/governance"
+	"github.com/FelixSeptem/stele/internal/insights"
 	"github.com/FelixSeptem/stele/internal/memory"
 	"github.com/FelixSeptem/stele/internal/telemetry"
 	"github.com/jackc/pgx/v5"
@@ -219,6 +220,35 @@ func (s *stubEmbeddingProviderResolver) ResolveProvider(name string) (embedding.
 	}
 
 	return provider, nil
+}
+
+type stubDerivedInsightStore struct {
+	evidence     []insights.FailureEvidence
+	listErr      error
+	upsertErr    error
+	listCalls    int
+	upserted     []memory.DerivedInsight
+	gotScope     memory.Scope
+	gotLimit     int
+	returnStored bool
+}
+
+func (s *stubDerivedInsightStore) ListFailureEvidence(ctx context.Context, scope memory.Scope, limit int) ([]insights.FailureEvidence, error) {
+	s.listCalls++
+	s.gotScope = scope
+	s.gotLimit = limit
+	if s.listErr != nil {
+		return nil, s.listErr
+	}
+	return s.evidence, nil
+}
+
+func (s *stubDerivedInsightStore) UpsertDerivedInsight(ctx context.Context, insight memory.DerivedInsight) (memory.DerivedInsight, error) {
+	if s.upsertErr != nil {
+		return memory.DerivedInsight{}, s.upsertErr
+	}
+	s.upserted = append(s.upserted, insight)
+	return insight, nil
 }
 
 type stubEmbeddingJobsObserver struct {
@@ -635,6 +665,114 @@ func TestJobExecutionCleanupJobRunDeletesOldExecutions(t *testing.T) {
 
 	if !cleaner.gotCutoff.Equal(now.Add(-24 * time.Hour)) {
 		t.Fatalf("cutoff = %v, want %v", cleaner.gotCutoff, now.Add(-24*time.Hour))
+	}
+}
+
+func TestDerivedInsightDerivationJobRunUpsertsPatternAndLesson(t *testing.T) {
+	scope := memory.Scope{Tenant: "tenant-a", Project: "project-a", Namespace: "namespace-a"}
+	now := time.Date(2026, 7, 4, 14, 0, 0, 0, time.UTC)
+	store := &stubDerivedInsightStore{
+		evidence: []insights.FailureEvidence{
+			{
+				Kind:       memory.DerivedInsightEvidenceKindJobExecution,
+				ID:         "job_1",
+				FailureKey: "provider unavailable",
+				ObservedAt: now.Add(-time.Hour),
+			},
+			{
+				Kind:       memory.DerivedInsightEvidenceKindJobExecution,
+				ID:         "job_2",
+				FailureKey: "provider unavailable",
+				ObservedAt: now.Add(-30 * time.Minute),
+			},
+		},
+	}
+	executions := &stubExecutionStore{beginStarted: true}
+
+	job := DerivedInsightDerivationJob{
+		Scope:           scope,
+		Store:           store,
+		ExecutionStore:  executions,
+		TriggerSource:   "scheduler",
+		Cadence:         time.Hour,
+		Window:          24 * time.Hour,
+		MinimumEvidence: 2,
+		Limit:           50,
+		Now:             func() time.Time { return now },
+	}
+
+	processed, err := job.Run(context.Background())
+	if err != nil {
+		t.Fatalf("Run() error = %v", err)
+	}
+	if processed != 2 {
+		t.Fatalf("processed = %d, want pattern and lesson", processed)
+	}
+	if store.listCalls != 1 || store.gotScope != scope || store.gotLimit != 50 {
+		t.Fatalf("list calls/scope/limit = %d/%+v/%d, want scoped limit 50", store.listCalls, store.gotScope, store.gotLimit)
+	}
+	if len(store.upserted) != 2 {
+		t.Fatalf("upserted = %d, want 2", len(store.upserted))
+	}
+	if store.upserted[0].Type != memory.DerivedInsightTypeFailurePattern || store.upserted[1].Type != memory.DerivedInsightTypeLesson {
+		t.Fatalf("upserted types = %s/%s, want failure_pattern/lesson", store.upserted[0].Type, store.upserted[1].Type)
+	}
+	if executions.completeCalls != 1 {
+		t.Fatalf("complete calls = %d, want 1", executions.completeCalls)
+	}
+}
+
+func TestDerivedInsightDerivationJobRunSkipsDuplicateExecutionWindow(t *testing.T) {
+	scope := memory.Scope{Tenant: "tenant-a", Project: "project-a", Namespace: "namespace-a"}
+	store := &stubDerivedInsightStore{}
+	executions := &stubExecutionStore{beginStarted: false}
+	now := time.Date(2026, 7, 4, 14, 30, 0, 0, time.UTC)
+
+	job := DerivedInsightDerivationJob{
+		Scope:          scope,
+		Store:          store,
+		ExecutionStore: executions,
+		Cadence:        time.Hour,
+		Now:            func() time.Time { return now },
+	}
+
+	processed, err := job.Run(context.Background())
+	if err != nil {
+		t.Fatalf("Run() error = %v", err)
+	}
+	if processed != 0 {
+		t.Fatalf("processed = %d, want 0", processed)
+	}
+	if store.listCalls != 0 || len(store.upserted) != 0 {
+		t.Fatalf("store list/upserts = %d/%d, want no foreground derivation work", store.listCalls, len(store.upserted))
+	}
+	if executions.beginCalls != 1 {
+		t.Fatalf("begin calls = %d, want 1", executions.beginCalls)
+	}
+}
+
+func TestDerivedInsightDerivationJobRunFailsSafelyWithoutPartialUnsupportedActivation(t *testing.T) {
+	scope := memory.Scope{Tenant: "tenant-a", Project: "project-a", Namespace: "namespace-a"}
+	store := &stubDerivedInsightStore{listErr: errors.New("scan failed")}
+	executions := &stubExecutionStore{beginStarted: true}
+	now := time.Date(2026, 7, 4, 15, 0, 0, 0, time.UTC)
+
+	job := DerivedInsightDerivationJob{
+		Scope:          scope,
+		Store:          store,
+		ExecutionStore: executions,
+		Cadence:        time.Hour,
+		Now:            func() time.Time { return now },
+	}
+
+	if _, err := job.Run(context.Background()); err == nil {
+		t.Fatal("Run() error = nil, want store failure")
+	}
+	if executions.failCalls != 1 {
+		t.Fatalf("fail calls = %d, want durable failure", executions.failCalls)
+	}
+	if len(store.upserted) != 0 {
+		t.Fatalf("upserted = %d, want no partial activation", len(store.upserted))
 	}
 }
 

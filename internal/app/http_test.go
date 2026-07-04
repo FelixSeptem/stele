@@ -334,6 +334,56 @@ func (s *stubGovernanceAdminService) ApplyGovernanceRecovery(ctx context.Context
 	return s.outcome, nil
 }
 
+type stubDerivedInsightAdminService struct {
+	gotListInput      memory.ListDerivedInsightsInput
+	gotReadInput      memory.ReadDerivedInsightInput
+	gotTransition     memory.DerivedInsightLifecycleTransition
+	items             []memory.DerivedInsight
+	detail            memory.DerivedInsightDetail
+	listErr           error
+	readErr           error
+	transitionErr     error
+	validateList      bool
+	validateRead      bool
+	validateLifecycle bool
+}
+
+func (s *stubDerivedInsightAdminService) ListDerivedInsights(ctx context.Context, input memory.ListDerivedInsightsInput) ([]memory.DerivedInsight, error) {
+	s.gotListInput = input
+	if s.validateList {
+		if err := input.Validate(); err != nil {
+			return nil, err
+		}
+	}
+	if s.listErr != nil {
+		return nil, s.listErr
+	}
+	return s.items, nil
+}
+
+func (s *stubDerivedInsightAdminService) ReadDerivedInsight(ctx context.Context, input memory.ReadDerivedInsightInput) (memory.DerivedInsightDetail, error) {
+	s.gotReadInput = input
+	if s.validateRead {
+		if err := input.Validate(); err != nil {
+			return memory.DerivedInsightDetail{}, err
+		}
+	}
+	if s.readErr != nil {
+		return memory.DerivedInsightDetail{}, s.readErr
+	}
+	return s.detail, nil
+}
+
+func (s *stubDerivedInsightAdminService) TransitionDerivedInsightLifecycle(ctx context.Context, transition memory.DerivedInsightLifecycleTransition) error {
+	s.gotTransition = transition
+	if s.validateLifecycle {
+		if err := transition.Validate(); err != nil {
+			return err
+		}
+	}
+	return s.transitionErr
+}
+
 func TestNewHTTPHandlerServesHealthAndReadiness(t *testing.T) {
 	var logBuf bytes.Buffer
 	handler := NewHTTPHandler(HTTPDependencies{
@@ -637,7 +687,7 @@ func TestNewHTTPHandlerAssemblesContext(t *testing.T) {
 		ContextAssembler: assembler,
 	})
 
-	req := httptest.NewRequest(http.MethodPost, "/v1/context/assemble", bytes.NewBufferString(`{"query":"preferences","budget":4}`))
+	req := httptest.NewRequest(http.MethodPost, "/v1/context/assemble", bytes.NewBufferString(`{"query":"preferences","budget":4,"include_experience_insights":true}`))
 	req.Header.Set("Content-Type", "application/json")
 	req.Header.Set("X-API-Key", "test-key")
 	req.Header.Set("X-Stele-Tenant", "tenant-a")
@@ -653,6 +703,10 @@ func TestNewHTTPHandlerAssemblesContext(t *testing.T) {
 
 	if assembler.gotInput.Scope.Namespace != "namespace-a" {
 		t.Fatalf("assemble scope = %+v, want resolved request scope", assembler.gotInput.Scope)
+	}
+
+	if !assembler.gotInput.IncludeExperienceInsights {
+		t.Fatal("IncludeExperienceInsights = false, want true")
 	}
 }
 
@@ -1356,6 +1410,152 @@ func TestNewHTTPHandlerReturnsAdminMemoryHistory(t *testing.T) {
 
 	if len(payload.Versions) != 1 || len(payload.Provenance) != 1 {
 		t.Fatalf("history payload = %+v, want one version and one provenance record", payload)
+	}
+}
+
+func TestNewHTTPHandlerListsAdminDerivedInsights(t *testing.T) {
+	scope := memory.Scope{Tenant: "tenant-a", Project: "project-a", Namespace: "namespace-a"}
+	service := &stubDerivedInsightAdminService{
+		validateList: true,
+		items: []memory.DerivedInsight{
+			{
+				ID:      "insight_123",
+				Scope:   scope,
+				Type:    memory.DerivedInsightTypeFailurePattern,
+				State:   memory.DerivedInsightStateActive,
+				Title:   "Repeated provider failure",
+				Summary: "Provider unavailable repeated twice.",
+				Confidence: memory.DerivedInsightConfidence{
+					Score: 0.75,
+				},
+				Derivation: memory.DerivedInsightDerivation{
+					Source:      "failure_pattern_evaluator",
+					Fingerprint: "failure_pattern:fingerprint",
+					DerivedAt:   time.Date(2026, 7, 4, 12, 0, 0, 0, time.UTC),
+				},
+				Evidence: []memory.DerivedInsightEvidenceRef{
+					{Kind: memory.DerivedInsightEvidenceKindJobExecution, ID: "job_1", Relation: memory.DerivedInsightEvidenceRelationSupports},
+					{Kind: memory.DerivedInsightEvidenceKindJobExecution, ID: "job_2", Relation: memory.DerivedInsightEvidenceRelationSupports},
+				},
+			},
+		},
+	}
+	handler := NewHTTPHandler(HTTPDependencies{
+		AdminAPIKeys:        map[string]struct{}{"admin-key": {}},
+		DerivedInsightAdmin: service,
+	})
+
+	req := httptest.NewRequest(http.MethodGet, "/v1/admin/derived-insights?type=failure_pattern&state=active&min_confidence=0.5&min_evidence_count=2&include_hidden=true&limit=5", nil)
+	req.Header.Set("X-API-Key", "admin-key")
+	req.Header.Set("X-Stele-Tenant", scope.Tenant)
+	req.Header.Set("X-Stele-Project", scope.Project)
+	req.Header.Set("X-Stele-Namespace", scope.Namespace)
+	rec := httptest.NewRecorder()
+
+	handler.ServeHTTP(rec, req)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d, want %d; body=%s", rec.Code, http.StatusOK, rec.Body.String())
+	}
+	if service.gotListInput.Scope != scope || service.gotListInput.Type != memory.DerivedInsightTypeFailurePattern || service.gotListInput.State != memory.DerivedInsightStateActive {
+		t.Fatalf("got list input = %+v, want scoped filters", service.gotListInput)
+	}
+	if service.gotListInput.MinConfidence == nil || *service.gotListInput.MinConfidence != 0.5 || service.gotListInput.MinEvidenceCount != 2 || !service.gotListInput.IncludeHidden || service.gotListInput.Limit != 5 {
+		t.Fatalf("got list input = %+v, want confidence/evidence/hidden/limit filters", service.gotListInput)
+	}
+
+	var payload struct {
+		Items []memory.DerivedInsight `json:"items"`
+	}
+	if err := json.NewDecoder(rec.Body).Decode(&payload); err != nil {
+		t.Fatalf("decode response: %v", err)
+	}
+	if len(payload.Items) != 1 || payload.Items[0].ID != "insight_123" {
+		t.Fatalf("items = %+v, want insight_123", payload.Items)
+	}
+}
+
+func TestNewHTTPHandlerReadsAdminDerivedInsightDetail(t *testing.T) {
+	scope := memory.Scope{Tenant: "tenant-a", Project: "project-a", Namespace: "namespace-a"}
+	service := &stubDerivedInsightAdminService{
+		validateRead: true,
+		detail: memory.DerivedInsightDetail{
+			Insight: memory.DerivedInsight{
+				ID:      "insight_hidden",
+				Scope:   scope,
+				Type:    memory.DerivedInsightTypeFailurePattern,
+				State:   memory.DerivedInsightStateSuppressed,
+				Title:   "Repeated provider failure",
+				Summary: "Suppressed as noisy.",
+				Confidence: memory.DerivedInsightConfidence{
+					Score: 0.7,
+				},
+				Derivation: memory.DerivedInsightDerivation{
+					Source:      "failure_pattern_evaluator",
+					Fingerprint: "failure_pattern:fingerprint",
+					DerivedAt:   time.Date(2026, 7, 4, 12, 0, 0, 0, time.UTC),
+				},
+			},
+			Evidence: []memory.DerivedInsightEvidenceRef{
+				{Kind: memory.DerivedInsightEvidenceKindJobExecution, ID: "job_1", Relation: memory.DerivedInsightEvidenceRelationSupports},
+			},
+			Lifecycle: []memory.DerivedInsightLifecycleRecord{
+				{InsightID: "insight_hidden", ToState: memory.DerivedInsightStateSuppressed, Actor: "operator-a", Reason: "noisy", OccurredAt: time.Date(2026, 7, 4, 13, 0, 0, 0, time.UTC)},
+			},
+		},
+	}
+	handler := NewHTTPHandler(HTTPDependencies{
+		AdminAPIKeys:        map[string]struct{}{"admin-key": {}},
+		DerivedInsightAdmin: service,
+	})
+
+	req := httptest.NewRequest(http.MethodGet, "/v1/admin/derived-insights/insight_hidden?include_hidden=true", nil)
+	req.Header.Set("X-API-Key", "admin-key")
+	req.Header.Set("X-Stele-Tenant", scope.Tenant)
+	req.Header.Set("X-Stele-Project", scope.Project)
+	req.Header.Set("X-Stele-Namespace", scope.Namespace)
+	rec := httptest.NewRecorder()
+
+	handler.ServeHTTP(rec, req)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d, want %d; body=%s", rec.Code, http.StatusOK, rec.Body.String())
+	}
+	if service.gotReadInput.ID != "insight_hidden" || !service.gotReadInput.IncludeHidden || service.gotReadInput.Scope != scope {
+		t.Fatalf("got read input = %+v, want scoped hidden insight read", service.gotReadInput)
+	}
+
+	var payload memory.DerivedInsightDetail
+	if err := json.NewDecoder(rec.Body).Decode(&payload); err != nil {
+		t.Fatalf("decode response: %v", err)
+	}
+	if payload.Insight.ID != "insight_hidden" || len(payload.Evidence) != 1 || len(payload.Lifecycle) != 1 {
+		t.Fatalf("detail = %+v, want insight, evidence, lifecycle", payload)
+	}
+}
+
+func TestNewHTTPHandlerSuppressesAdminDerivedInsight(t *testing.T) {
+	scope := memory.Scope{Tenant: "tenant-a", Project: "project-a", Namespace: "namespace-a"}
+	service := &stubDerivedInsightAdminService{validateLifecycle: true}
+	handler := NewHTTPHandler(HTTPDependencies{
+		AdminAPIKeys:        map[string]struct{}{"admin-key": {}},
+		DerivedInsightAdmin: service,
+	})
+
+	req := httptest.NewRequest(http.MethodPost, "/v1/admin/derived-insights/insight_123:suppress", strings.NewReader(`{"actor":"operator-a","reason":"noisy duplicate"}`))
+	req.Header.Set("X-API-Key", "admin-key")
+	req.Header.Set("X-Stele-Tenant", scope.Tenant)
+	req.Header.Set("X-Stele-Project", scope.Project)
+	req.Header.Set("X-Stele-Namespace", scope.Namespace)
+	rec := httptest.NewRecorder()
+
+	handler.ServeHTTP(rec, req)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d, want %d; body=%s", rec.Code, http.StatusOK, rec.Body.String())
+	}
+	if service.gotTransition.Scope != scope || service.gotTransition.InsightID != "insight_123" || service.gotTransition.ToState != memory.DerivedInsightStateSuppressed {
+		t.Fatalf("transition = %+v, want scoped suppress transition", service.gotTransition)
+	}
+	if service.gotTransition.Actor != "operator-a" || service.gotTransition.Reason != "noisy duplicate" || service.gotTransition.OccurredAt.IsZero() {
+		t.Fatalf("transition = %+v, want actor/reason/occurred_at", service.gotTransition)
 	}
 }
 

@@ -54,18 +54,21 @@ type EmbeddingConfig struct {
 }
 
 type JobConfig struct {
-	MaintenanceInterval        time.Duration
-	WorkerPollInterval         time.Duration
-	WorkerErrorBackoff         time.Duration
-	SchedulerErrorBackoff      time.Duration
-	SummaryCompactionInterval  time.Duration
-	RetentionInterval          time.Duration
-	CleanupInterval            time.Duration
-	JobExecutionRetention      time.Duration
-	GovernanceMaxAttempts      int
-	GovernanceRetryBackoff     time.Duration
-	GovernanceLeaseRenewPeriod time.Duration
-	MaintenanceScopeBatchLimit int
+	MaintenanceInterval              time.Duration
+	WorkerPollInterval               time.Duration
+	WorkerErrorBackoff               time.Duration
+	SchedulerErrorBackoff            time.Duration
+	SummaryCompactionInterval        time.Duration
+	RetentionInterval                time.Duration
+	CleanupInterval                  time.Duration
+	DerivedInsightDerivationInterval time.Duration
+	DerivedInsightBatchSize          int
+	DerivedInsightMinimumEvidence    int
+	JobExecutionRetention            time.Duration
+	GovernanceMaxAttempts            int
+	GovernanceRetryBackoff           time.Duration
+	GovernanceLeaseRenewPeriod       time.Duration
+	MaintenanceScopeBatchLimit       int
 }
 
 func LoadFromEnv() (Config, error) {
@@ -106,6 +109,18 @@ func LoadFromEnv() (Config, error) {
 		return Config{}, err
 	}
 	cleanupInterval, err := loadDurationWithDefault("STELE_JOBS_CLEANUP_INTERVAL", maintenanceInterval)
+	if err != nil {
+		return Config{}, err
+	}
+	derivedInsightDerivationInterval, err := loadDurationWithDefault("STELE_JOBS_DERIVED_INSIGHT_DERIVATION_INTERVAL", maintenanceInterval)
+	if err != nil {
+		return Config{}, err
+	}
+	derivedInsightBatchSize, err := loadIntWithDefault("STELE_JOBS_DERIVED_INSIGHT_BATCH_SIZE", 100)
+	if err != nil {
+		return Config{}, err
+	}
+	derivedInsightMinimumEvidence, err := loadIntWithDefault("STELE_JOBS_DERIVED_INSIGHT_MINIMUM_EVIDENCE", 2)
 	if err != nil {
 		return Config{}, err
 	}
@@ -165,18 +180,21 @@ func LoadFromEnv() (Config, error) {
 			},
 		},
 		Jobs: JobConfig{
-			MaintenanceInterval:        maintenanceInterval,
-			WorkerPollInterval:         workerPollInterval,
-			WorkerErrorBackoff:         workerErrorBackoff,
-			SchedulerErrorBackoff:      schedulerErrorBackoff,
-			SummaryCompactionInterval:  summaryCompactionInterval,
-			RetentionInterval:          retentionInterval,
-			CleanupInterval:            cleanupInterval,
-			JobExecutionRetention:      jobExecutionRetention,
-			GovernanceMaxAttempts:      governanceMaxAttempts,
-			GovernanceRetryBackoff:     governanceRetryBackoff,
-			GovernanceLeaseRenewPeriod: governanceLeaseRenewPeriod,
-			MaintenanceScopeBatchLimit: maintenanceScopeBatchLimit,
+			MaintenanceInterval:              maintenanceInterval,
+			WorkerPollInterval:               workerPollInterval,
+			WorkerErrorBackoff:               workerErrorBackoff,
+			SchedulerErrorBackoff:            schedulerErrorBackoff,
+			SummaryCompactionInterval:        summaryCompactionInterval,
+			RetentionInterval:                retentionInterval,
+			CleanupInterval:                  cleanupInterval,
+			DerivedInsightDerivationInterval: derivedInsightDerivationInterval,
+			DerivedInsightBatchSize:          derivedInsightBatchSize,
+			DerivedInsightMinimumEvidence:    derivedInsightMinimumEvidence,
+			JobExecutionRetention:            jobExecutionRetention,
+			GovernanceMaxAttempts:            governanceMaxAttempts,
+			GovernanceRetryBackoff:           governanceRetryBackoff,
+			GovernanceLeaseRenewPeriod:       governanceLeaseRenewPeriod,
+			MaintenanceScopeBatchLimit:       maintenanceScopeBatchLimit,
 		},
 	}, nil
 }

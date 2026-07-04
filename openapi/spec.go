@@ -490,6 +490,124 @@ paths:
                 $ref: '#/components/schemas/MemoryHistory'
         '401':
           description: Missing or invalid admin API key
+  /v1/admin/derived-insights:
+    get:
+      operationId: listAdminDerivedInsights
+      parameters:
+        - $ref: '#/components/parameters/AdminAPIKey'
+        - $ref: '#/components/parameters/TenantHeader'
+        - $ref: '#/components/parameters/ProjectHeader'
+        - $ref: '#/components/parameters/NamespaceHeader'
+        - in: query
+          name: type
+          required: false
+          schema:
+            $ref: '#/components/schemas/DerivedInsightType'
+        - in: query
+          name: state
+          required: false
+          schema:
+            $ref: '#/components/schemas/DerivedInsightState'
+        - in: query
+          name: min_confidence
+          required: false
+          schema:
+            type: number
+            minimum: 0
+            maximum: 1
+        - in: query
+          name: min_evidence_count
+          required: false
+          schema:
+            type: integer
+            minimum: 0
+        - in: query
+          name: include_hidden
+          required: false
+          schema:
+            type: boolean
+        - in: query
+          name: limit
+          required: false
+          schema:
+            type: integer
+      responses:
+        '200':
+          description: Scoped derived insight summaries for admin inspection
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/DerivedInsightListResponse'
+        '400':
+          description: Invalid request
+        '401':
+          description: Missing or invalid admin API key
+  /v1/admin/derived-insights/{insight_id}:
+    get:
+      operationId: getAdminDerivedInsight
+      parameters:
+        - in: path
+          name: insight_id
+          required: true
+          schema:
+            type: string
+        - $ref: '#/components/parameters/AdminAPIKey'
+        - $ref: '#/components/parameters/TenantHeader'
+        - $ref: '#/components/parameters/ProjectHeader'
+        - $ref: '#/components/parameters/NamespaceHeader'
+        - in: query
+          name: include_hidden
+          required: false
+          schema:
+            type: boolean
+      responses:
+        '200':
+          description: Derived insight detail including evidence and lifecycle history
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/DerivedInsightDetail'
+        '401':
+          description: Missing or invalid admin API key
+        '404':
+          description: Derived insight not found
+  /v1/admin/derived-insights/{insight_id}:suppress:
+    post:
+      operationId: suppressAdminDerivedInsight
+      parameters:
+        - in: path
+          name: insight_id
+          required: true
+          schema:
+            type: string
+        - $ref: '#/components/parameters/AdminAPIKey'
+        - $ref: '#/components/parameters/TenantHeader'
+        - $ref: '#/components/parameters/ProjectHeader'
+        - $ref: '#/components/parameters/NamespaceHeader'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/DerivedInsightSuppressRequest'
+      responses:
+        '200':
+          description: Derived insight suppressed and audited
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  status:
+                    type: string
+                  insight_id:
+                    type: string
+        '400':
+          description: Invalid request
+        '401':
+          description: Missing or invalid admin API key
+        '404':
+          description: Derived insight not found
   /v1/admin/embedding/rebuilds:
     get:
       operationId: listAdminEmbeddingRebuilds
@@ -1189,6 +1307,220 @@ components:
           type: string
         namespace:
           type: string
+    DerivedInsightType:
+      type: string
+      enum:
+        - failure_pattern
+        - lesson
+        - hypothesis
+        - goal
+        - contradiction
+        - causal_link
+    DerivedInsightState:
+      type: string
+      enum:
+        - candidate
+        - active
+        - suppressed
+        - forgotten
+        - deleted
+    DerivedInsightConfidence:
+      type: object
+      required:
+        - score
+      properties:
+        score:
+          type: number
+          minimum: 0
+          maximum: 1
+        method:
+          type: string
+    DerivedInsightDerivation:
+      type: object
+      required:
+        - source
+        - derivation_fingerprint
+        - derived_at
+      properties:
+        source:
+          type: string
+        derivation_fingerprint:
+          type: string
+        fingerprint:
+          type: string
+          deprecated: true
+        evidence_window_start:
+          type: string
+          format: date-time
+        evidence_window_end:
+          type: string
+          format: date-time
+        derived_at:
+          type: string
+          format: date-time
+        metadata:
+          type: object
+          additionalProperties: true
+    DerivedInsightEvidenceRef:
+      type: object
+      required:
+        - kind
+        - id
+        - relation
+      properties:
+        kind:
+          type: string
+          enum:
+            - raw_event
+            - canonical_memory
+            - procedural_memory
+            - summary_memory
+            - relation_memory
+            - job_execution
+            - embedding_rebuild
+            - recovery_record
+        id:
+          type: string
+        relation:
+          type: string
+          enum:
+            - supports
+            - updates
+        observed_at:
+          type: string
+          format: date-time
+        metadata:
+          type: object
+          additionalProperties: true
+    DerivedInsightLesson:
+      type: object
+      required:
+        - source_failure_pattern_id
+        - guidance
+      properties:
+        source_failure_pattern_id:
+          type: string
+        guidance:
+          type: string
+        avoid:
+          type: array
+          items:
+            type: string
+        prefer:
+          type: array
+          items:
+            type: string
+    DerivedInsight:
+      type: object
+      required:
+        - id
+        - scope
+        - type
+        - state
+        - title
+        - summary
+        - confidence
+        - derivation
+      properties:
+        id:
+          type: string
+        scope:
+          $ref: '#/components/schemas/Scope'
+        type:
+          $ref: '#/components/schemas/DerivedInsightType'
+        state:
+          $ref: '#/components/schemas/DerivedInsightState'
+        title:
+          type: string
+        summary:
+          type: string
+        confidence:
+          $ref: '#/components/schemas/DerivedInsightConfidence'
+        payload:
+          type: object
+          additionalProperties: true
+        lesson:
+          $ref: '#/components/schemas/DerivedInsightLesson'
+        derivation:
+          $ref: '#/components/schemas/DerivedInsightDerivation'
+        evidence:
+          type: array
+          items:
+            $ref: '#/components/schemas/DerivedInsightEvidenceRef'
+        created_at:
+          type: string
+          format: date-time
+        updated_at:
+          type: string
+          format: date-time
+        last_observed_at:
+          type: string
+          format: date-time
+    DerivedInsightListResponse:
+      type: object
+      required:
+        - items
+      properties:
+        items:
+          type: array
+          items:
+            $ref: '#/components/schemas/DerivedInsight'
+    DerivedInsightLifecycleRecord:
+      type: object
+      required:
+        - insight_id
+        - to_state
+        - actor
+        - reason
+        - occurred_at
+      properties:
+        id:
+          type: string
+        insight_id:
+          type: string
+        scope:
+          $ref: '#/components/schemas/Scope'
+        from_state:
+          $ref: '#/components/schemas/DerivedInsightState'
+        to_state:
+          $ref: '#/components/schemas/DerivedInsightState'
+        actor:
+          type: string
+        reason:
+          type: string
+        occurred_at:
+          type: string
+          format: date-time
+        metadata:
+          type: object
+          additionalProperties: true
+    DerivedInsightDetail:
+      type: object
+      required:
+        - insight
+        - evidence
+        - lifecycle
+      properties:
+        insight:
+          $ref: '#/components/schemas/DerivedInsight'
+        evidence:
+          type: array
+          items:
+            $ref: '#/components/schemas/DerivedInsightEvidenceRef'
+        lifecycle:
+          type: array
+          items:
+            $ref: '#/components/schemas/DerivedInsightLifecycleRecord'
+    DerivedInsightSuppressRequest:
+      type: object
+      required:
+        - actor
+        - reason
+      properties:
+        actor:
+          type: string
+        reason:
+          type: string
     EventIngestRequest:
       type: object
       required:
@@ -1337,6 +1669,36 @@ components:
           type: integer
         include_relations:
           type: boolean
+        include_experience_insights:
+          type: boolean
+    InsightCitation:
+      type: object
+      required:
+        - insight_id
+        - evidence_kind
+        - evidence_id
+        - relation
+      properties:
+        insight_id:
+          type: string
+        evidence_kind:
+          type: string
+        evidence_id:
+          type: string
+        relation:
+          type: string
+    ExperienceInsightContext:
+      type: object
+      required:
+        - insight
+        - citations
+      properties:
+        insight:
+          $ref: '#/components/schemas/DerivedInsight'
+        citations:
+          type: array
+          items:
+            $ref: '#/components/schemas/InsightCitation'
     ContextAssembleResponse:
       type: object
       required:
@@ -1371,6 +1733,14 @@ components:
           type: array
           items:
             $ref: '#/components/schemas/MemoryCitation'
+        known_failures:
+          type: array
+          items:
+            $ref: '#/components/schemas/ExperienceInsightContext'
+        experience_lessons:
+          type: array
+          items:
+            $ref: '#/components/schemas/ExperienceInsightContext'
     GovernanceStatus:
       type: object
       required:

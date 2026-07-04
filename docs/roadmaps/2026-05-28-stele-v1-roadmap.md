@@ -474,6 +474,88 @@ Done when:
 
 - a new operator can bring up the service from documentation alone
 
+## Reference-Informed Expansion Backlog
+
+This section captures external reference findings that should inform post-v1 planning without changing the current v1 execution order. The immediate reference is `alash3al/stash`, a Go, PostgreSQL, pgvector, and MCP-oriented agent memory project that emphasizes continuous agent experience memory. Treat this section as a research backlog, not as an approved implementation plan.
+
+### Stash Reference Summary
+
+Useful patterns to study:
+
+- MCP-first agent ergonomics: Stash exposes memory actions as direct agent tools such as remember, recall, consolidate, fact, relationship, goal, failure, and hypothesis operations.
+- Experience-to-insight pipeline: Stash frames memory as episodes, facts, relationships, causal links, patterns, contradictions, goals, failures, and hypotheses.
+- Derived cognitive records: Stash explicitly models goals, failures, hypotheses, contradictions, causal links, and patterns as first-class agent memory concepts.
+- Hierarchical namespaces: Stash uses path-like namespaces to organize memory and support broader recall scopes.
+- Self-model conventions: Stash encourages agent-specific spaces for capabilities, limits, preferences, and operational lessons.
+- Fast self-hosting path: Stash documents a short Docker Compose and MCP smoke path that gets an operator from startup to first recall quickly.
+
+Risks and assumptions to validate before implementation:
+
+- Product claims are not Stele requirements. Stash's cognitive stages are useful vocabulary, but each stage needs a Stele-specific data model, provenance rule, lifecycle state, and operator contract before adoption.
+- MCP ergonomics should not drive storage or lifecycle design. Any MCP work must remain an adapter over OpenAPI-backed service behavior.
+- Namespace subtree recall may be useful, but it can also weaken Stele's explicit `tenant/project/namespace` mental model if introduced too early.
+- Autonomous hypothesis or causal inference likely requires a reasoning provider boundary that Stele has not yet defined. Do not tie that work to embedding provider configuration.
+- Failure-pattern extraction is more concrete than hypothesis inference because Stele already has raw events, procedural memory, job execution records, recovery history, and embedding failure state to derive from.
+
+Stele constraints that remain non-negotiable:
+
+- Keep Stele OpenAPI-first. MCP can be added later as an adapter over existing service contracts, not as the primary system boundary.
+- Keep PostgreSQL as the only system of record and preserve append-only versions, provenance, lifecycle state, and audit history.
+- Enforce `tenant`, `project`, and `namespace` boundaries before any namespace-tree or agent-self convention is considered.
+- Do not let LLM-style consolidation overwrite canonical memory in place. New insight records must remain derived, evidence-backed, versioned, and lifecycle-governed.
+- Do not add SDK, UI, hosted-product, or end-user product logic to this repository.
+
+### Candidate Expansion Track: Governed Experience Insights
+
+Goal:
+
+- Add a governed derived-insight layer that helps agents avoid repeated mistakes and surface experience-based context without weakening canonical memory semantics.
+
+Possible insight vocabulary:
+
+- `failure_pattern`: repeated user, agent, runtime, or workflow failures with evidence and remediation notes.
+- `lesson`: a procedural or operational takeaway distilled from repeated evidence.
+- `hypothesis`: an open assumption that can later be supported, contradicted, closed, or made stale by new evidence.
+- `goal`: an inferred or explicit objective that should shape future context assembly.
+- `contradiction`: evidence that two active or historical claims conflict and need scoped interpretation.
+- `causal_link`: a bounded relationship between an action, condition, and observed outcome.
+
+Recommended next proposal boundary:
+
+- Build the derived insight substrate first: insight identity, scope, type, lifecycle, confidence, evidence citations, derivation metadata, provenance, and admin inspection.
+- Implement only `failure_pattern` as an active derived insight in the first slice because it has concrete existing evidence sources.
+- Allow `lesson` as a derived output when it is evidence-backed by a `failure_pattern`, but do not introduce free-form wisdom generation.
+- Keep `hypothesis`, `goal`, `contradiction`, and `causal_link` as reserved vocabulary or design extension points until Stele has a reasoning-provider boundary and clearer evaluation tests.
+- Derive insights asynchronously from existing raw events, canonical memory, procedural memory, summaries, relations, recovery history, job execution records, and embedding failure records.
+- Expose `failure_pattern` and `lesson` through optional context assembly sections such as `known_failures` and `experience_lessons`.
+- Add admin inspection for insight provenance and lifecycle decisions before adding any MCP adapter or agent-facing convenience tool.
+
+Non-goals for the first slice:
+
+- No direct MCP server implementation.
+- No graph database or non-PostgreSQL store.
+- No automatic rewriting of canonical memory based on inferred insight.
+- No autonomous hypothesis, causal, contradiction, or goal inference.
+- No global agent-self namespace that bypasses existing scope isolation.
+- No provider-specific reasoning dependency tied to embedding provider configuration.
+
+### Candidate Follow-up Tracks
+
+1. OpenAPI-backed MCP adapter:
+   Add an optional MCP surface that maps to existing Stele APIs and preserves API key, scope, lifecycle, and audit behavior.
+
+2. Namespace path conventions inside existing scopes:
+   Add an optional `memory_path` or `topic_path` convention inside one `tenant/project/namespace`, with bounded subtree retrieval and no cross-scope expansion.
+
+3. Agent self-model conventions:
+   Standardize scoped memory conventions for capabilities, limits, preferences, and lessons learned while keeping them ordinary governed memories.
+
+4. Self-hosting first-ten-minutes smoke path:
+   Improve operator onboarding with a short path covering startup, ingest, worker processing, retrieval, context assembly, readiness, and metrics.
+
+5. Reasoning-provider boundary:
+   Define a provider-independent interface for optional LLM-assisted derivation before implementing autonomous hypothesis, causal, contradiction, or goal inference.
+
 ## Execution Order
 
 Recommended build order:

@@ -129,6 +129,31 @@ func TestSpecYAMLIncludesEmbeddingAdminInspectionSchemas(t *testing.T) {
 	}
 }
 
+func TestSpecYAMLIncludesDerivedInsightAdminRoutesAndSchemas(t *testing.T) {
+	for _, want := range []string{
+		"/v1/admin/derived-insights",
+		"/v1/admin/derived-insights/{insight_id}",
+		"/v1/admin/derived-insights/{insight_id}:suppress",
+		"DerivedInsight",
+		"DerivedInsightListResponse",
+		"DerivedInsightDetail",
+		"DerivedInsightEvidenceRef",
+		"DerivedInsightLifecycleRecord",
+		"DerivedInsightSuppressRequest",
+		"failure_pattern",
+		"lesson",
+		"min_confidence",
+		"min_evidence_count",
+		"include_hidden",
+		"source_failure_pattern_id",
+		"derivation_fingerprint",
+	} {
+		if !strings.Contains(SpecYAML(), want) {
+			t.Fatalf("SpecYAML() missing %q", want)
+		}
+	}
+}
+
 func TestSpecYAMLIncludesEmbeddingRecoveryRoutesAndSchemas(t *testing.T) {
 	for _, want := range []string{
 		"/v1/admin/embedding/rebuilds/{memory_id}:retry",
@@ -191,6 +216,20 @@ func TestSpecYAMLContainsSearchTimeWindowFields(t *testing.T) {
 	for _, want := range []string{"time_from", "time_to", "query_embedding"} {
 		if !strings.Contains(spec, want) {
 			t.Fatalf("SpecYAML() missing search field %q", want)
+		}
+	}
+}
+
+func TestSpecYAMLIncludesContextExperienceInsightSections(t *testing.T) {
+	for _, want := range []string{
+		"include_experience_insights",
+		"known_failures",
+		"experience_lessons",
+		"ExperienceInsightContext",
+		"InsightCitation",
+	} {
+		if !strings.Contains(SpecYAML(), want) {
+			t.Fatalf("SpecYAML() missing %q", want)
 		}
 	}
 }

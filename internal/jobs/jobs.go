@@ -10,6 +10,7 @@ import (
 
 	"github.com/FelixSeptem/stele/internal/embedding"
 	"github.com/FelixSeptem/stele/internal/governance"
+	"github.com/FelixSeptem/stele/internal/insights"
 	"github.com/FelixSeptem/stele/internal/memory"
 	"github.com/FelixSeptem/stele/internal/telemetry"
 	"github.com/jackc/pgx/v5"
@@ -567,6 +568,11 @@ type embeddingLifecycleStore interface {
 	RecordEmbeddingRebuildFailure(ctx context.Context, record memory.EmbeddingRebuildRecord, failureCause string, failedAt time.Time) error
 }
 
+type derivedInsightStore interface {
+	ListFailureEvidence(ctx context.Context, scope memory.Scope, limit int) ([]insights.FailureEvidence, error)
+	UpsertDerivedInsight(ctx context.Context, insight memory.DerivedInsight) (memory.DerivedInsight, error)
+}
+
 type SummaryCompactionJob struct {
 	Scope          memory.Scope
 	CutoffWindow   time.Duration
@@ -777,6 +783,113 @@ func (j JobExecutionCleanupJob) Run(ctx context.Context) (int, error) {
 }
 
 func (j JobExecutionCleanupJob) triggerSource() string {
+	if j.TriggerSource != "" {
+		return j.TriggerSource
+	}
+
+	return "scheduler"
+}
+
+type DerivedInsightDerivationJob struct {
+	Scope           memory.Scope
+	Store           derivedInsightStore
+	ExecutionStore  ExecutionStore
+	TriggerSource   string
+	Cadence         time.Duration
+	Window          time.Duration
+	MinimumEvidence int
+	Limit           int
+	Now             func() time.Time
+}
+
+func (j DerivedInsightDerivationJob) Name() string {
+	return "derived_insight_derivation"
+}
+
+func (j DerivedInsightDerivationJob) Run(ctx context.Context) (int, error) {
+	if err := j.Scope.Validate(); err != nil {
+		return 0, err
+	}
+	if j.Store == nil {
+		return 0, fmt.Errorf("derived insight store is required")
+	}
+
+	now := time.Now
+	if j.Now != nil {
+		now = j.Now
+	}
+	current := now().UTC()
+	runWindow := scheduledRunWindow(current, j.Cadence)
+
+	started, idempotencyKey, err := beginScheduledExecution(ctx, j.ExecutionStore, j.Name(), j.Scope, j.triggerSource(), runWindow)
+	if err != nil {
+		return 0, err
+	}
+	if !started {
+		return 0, nil
+	}
+
+	limit := j.Limit
+	if limit <= 0 {
+		limit = 100
+	}
+
+	evidence, err := j.Store.ListFailureEvidence(ctx, j.Scope, limit)
+	if err != nil {
+		if failErr := failScheduledExecution(ctx, j.ExecutionStore, idempotencyKey, current, err); failErr != nil {
+			return 0, failErr
+		}
+		return 0, err
+	}
+
+	evaluator := insights.FailurePatternEvaluator{
+		MinimumEvidence: j.MinimumEvidence,
+		Window:          j.Window,
+		Now:             func() time.Time { return current },
+	}
+	patterns, err := evaluator.Evaluate(j.Scope, evidence)
+	if err != nil {
+		if failErr := failScheduledExecution(ctx, j.ExecutionStore, idempotencyKey, current, err); failErr != nil {
+			return 0, failErr
+		}
+		return 0, err
+	}
+
+	processed := 0
+	for _, pattern := range patterns {
+		storedPattern, err := j.Store.UpsertDerivedInsight(ctx, pattern)
+		if err != nil {
+			if failErr := failScheduledExecution(ctx, j.ExecutionStore, idempotencyKey, current, err); failErr != nil {
+				return 0, failErr
+			}
+			return 0, err
+		}
+		processed++
+
+		lesson, err := insights.ProjectLesson(storedPattern)
+		if err != nil {
+			if failErr := failScheduledExecution(ctx, j.ExecutionStore, idempotencyKey, current, err); failErr != nil {
+				return 0, failErr
+			}
+			return 0, err
+		}
+		if _, err := j.Store.UpsertDerivedInsight(ctx, lesson); err != nil {
+			if failErr := failScheduledExecution(ctx, j.ExecutionStore, idempotencyKey, current, err); failErr != nil {
+				return 0, failErr
+			}
+			return 0, err
+		}
+		processed++
+	}
+
+	if err := completeScheduledExecution(ctx, j.ExecutionStore, idempotencyKey, current, processed); err != nil {
+		return 0, err
+	}
+
+	return processed, nil
+}
+
+func (j DerivedInsightDerivationJob) triggerSource() string {
 	if j.TriggerSource != "" {
 		return j.TriggerSource
 	}
