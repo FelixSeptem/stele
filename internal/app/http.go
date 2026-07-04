@@ -18,6 +18,7 @@ import (
 	"github.com/FelixSeptem/stele/internal/memory"
 	"github.com/FelixSeptem/stele/internal/policy"
 	"github.com/FelixSeptem/stele/internal/retrieval"
+	"github.com/FelixSeptem/stele/internal/telemetry"
 	"github.com/jackc/pgx/v5"
 )
 
@@ -40,6 +41,7 @@ type HTTPDependencies struct {
 	GovernanceAdmin       GovernanceAdminService
 	MemoryHistoryRead     MemoryHistoryReader
 	JobExecutionRead      JobExecutionReader
+	Metrics               MetricsRecorder
 	Logger                *log.Logger
 }
 
@@ -85,12 +87,20 @@ type EmbeddingAdminQueryService interface {
 	CreateEmbeddingCutoverPlan(ctx context.Context, input memory.CreateEmbeddingCutoverPlanInput) (memory.EmbeddingCutoverPlan, error)
 	ListEmbeddingCutoverPlans(ctx context.Context, input memory.ListEmbeddingCutoverPlansInput) ([]memory.EmbeddingCutoverPlan, error)
 	ReadEmbeddingCutoverPlan(ctx context.Context, input memory.ReadEmbeddingCutoverPlanInput) (memory.EmbeddingCutoverPlan, error)
+	PreflightEmbeddingCutoverPlan(ctx context.Context, input memory.EmbeddingCutoverPreflightInput) (memory.EmbeddingCutoverPreflightReport, error)
 	ApplyEmbeddingCutoverPlanAction(ctx context.Context, input memory.ApplyEmbeddingCutoverPlanActionInput) (memory.EmbeddingCutoverPlan, error)
 	ListEmbeddingRecoveryHistory(ctx context.Context, input memory.ListEmbeddingRecoveryHistoryInput) ([]memory.EmbeddingRecoveryRecord, error)
 }
 
 type JobExecutionReader interface {
 	ListRecentJobExecutions(ctx context.Context, scope memory.Scope, limit int) ([]jobs.JobExecutionRecord, error)
+}
+
+type MetricsRecorder interface {
+	RenderPrometheus() string
+	RecordAdmission(ctx context.Context, event telemetry.AdmissionEvent)
+	RecordCutoverPlanState(ctx context.Context, event telemetry.CutoverPlanStateEvent)
+	RecordCutoverItemState(ctx context.Context, event telemetry.CutoverItemStateEvent)
 }
 
 type lifecycleActionRequest struct {
@@ -167,6 +177,9 @@ func NewHTTPHandler(deps HTTPDependencies) http.Handler {
 	mux.HandleFunc("GET /health", func(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, http.StatusOK, map[string]string{"status": "ok"})
 	})
+	mux.HandleFunc("GET /livez", func(w http.ResponseWriter, r *http.Request) {
+		writeJSON(w, http.StatusOK, map[string]string{"status": "ok"})
+	})
 	mux.HandleFunc("GET /ready", func(w http.ResponseWriter, r *http.Request) {
 		if deps.Readiness != nil {
 			if err := deps.Readiness.Ready(r.Context()); err != nil {
@@ -176,6 +189,24 @@ func NewHTTPHandler(deps HTTPDependencies) http.Handler {
 		}
 
 		writeJSON(w, http.StatusOK, map[string]string{"status": "ready"})
+	})
+	mux.HandleFunc("GET /readyz", func(w http.ResponseWriter, r *http.Request) {
+		if deps.Readiness != nil {
+			if err := deps.Readiness.Ready(r.Context()); err != nil {
+				writeJSON(w, http.StatusServiceUnavailable, map[string]string{"status": "not_ready"})
+				return
+			}
+		}
+
+		writeJSON(w, http.StatusOK, map[string]string{"status": "ready"})
+	})
+	mux.HandleFunc("GET /metrics", func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "text/plain; version=0.0.4; charset=utf-8")
+		if deps.Metrics != nil {
+			_, _ = w.Write([]byte(deps.Metrics.RenderPrometheus()))
+			return
+		}
+		_, _ = w.Write([]byte("# HELP stele_runtime_info Stele runtime information\n# TYPE stele_runtime_info gauge\nstele_runtime_info 1\n"))
 	})
 
 	protectedEvents := auth.APIKeyMiddleware(deps.APIKeys)(
@@ -323,7 +354,7 @@ func NewHTTPHandler(deps HTTPDependencies) http.Handler {
 	adminEmbeddingCutovers := auth.APIKeyMiddleware(deps.AdminAPIKeys)(
 		auth.ScopeMiddleware()(
 			http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-				handleAdminEmbeddingCutoverList(w, r, deps.EmbeddingAdminRead)
+				handleAdminEmbeddingCutoverList(w, r, deps.EmbeddingAdminRead, deps.Metrics)
 			}),
 		),
 	)
@@ -341,7 +372,7 @@ func NewHTTPHandler(deps HTTPDependencies) http.Handler {
 	adminEmbeddingCutoverDetail := auth.APIKeyMiddleware(deps.AdminAPIKeys)(
 		auth.ScopeMiddleware()(
 			http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-				handleAdminEmbeddingCutoverDetail(w, r, deps.EmbeddingAdminRead)
+				handleAdminEmbeddingCutoverDetail(w, r, deps.EmbeddingAdminRead, deps.Metrics)
 			}),
 		),
 	)
@@ -350,7 +381,7 @@ func NewHTTPHandler(deps HTTPDependencies) http.Handler {
 	adminEmbeddingCutoverAction := auth.APIKeyMiddleware(deps.AdminAPIKeys)(
 		auth.ScopeMiddleware()(
 			http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-				handleAdminEmbeddingCutoverAction(w, r, deps.EmbeddingAdminRead)
+				handleAdminEmbeddingCutoverAction(w, r, deps.EmbeddingAdminRead, deps.Metrics)
 			}),
 		),
 	)
@@ -1118,7 +1149,7 @@ func handleAdminEmbeddingCutoverCreate(w http.ResponseWriter, r *http.Request, s
 	writeJSON(w, http.StatusCreated, plan)
 }
 
-func handleAdminEmbeddingCutoverList(w http.ResponseWriter, r *http.Request, service EmbeddingAdminQueryService) {
+func handleAdminEmbeddingCutoverList(w http.ResponseWriter, r *http.Request, service EmbeddingAdminQueryService, metrics MetricsRecorder) {
 	if service == nil {
 		http.Error(w, "embedding admin service is not configured", http.StatusServiceUnavailable)
 		return
@@ -1153,10 +1184,11 @@ func handleAdminEmbeddingCutoverList(w http.ResponseWriter, r *http.Request, ser
 		return
 	}
 
+	recordEmbeddingCutoverStateMetrics(r.Context(), metrics, plans)
 	writeJSON(w, http.StatusOK, map[string]any{"plans": plans})
 }
 
-func handleAdminEmbeddingCutoverDetail(w http.ResponseWriter, r *http.Request, service EmbeddingAdminQueryService) {
+func handleAdminEmbeddingCutoverDetail(w http.ResponseWriter, r *http.Request, service EmbeddingAdminQueryService, metrics MetricsRecorder) {
 	if service == nil {
 		http.Error(w, "embedding admin service is not configured", http.StatusServiceUnavailable)
 		return
@@ -1177,23 +1209,64 @@ func handleAdminEmbeddingCutoverDetail(w http.ResponseWriter, r *http.Request, s
 		return
 	}
 
+	recordEmbeddingCutoverStateMetrics(r.Context(), metrics, []memory.EmbeddingCutoverPlan{plan})
 	writeJSON(w, http.StatusOK, plan)
 }
 
-func handleAdminEmbeddingCutoverAction(w http.ResponseWriter, r *http.Request, service EmbeddingAdminQueryService) {
+func handleAdminEmbeddingCutoverPreflight(w http.ResponseWriter, r *http.Request, service EmbeddingAdminQueryService) {
 	if service == nil {
 		http.Error(w, "embedding admin service is not configured", http.StatusServiceUnavailable)
-		return
-	}
-
-	var req lifecycleActionRequest
-	if !decodeJSONBody(w, r, &req) {
 		return
 	}
 
 	scope, ok := auth.ScopeFromContext(r.Context())
 	if !ok {
 		http.Error(w, "scope context is missing", http.StatusInternalServerError)
+		return
+	}
+
+	report, err := service.PreflightEmbeddingCutoverPlan(r.Context(), memory.EmbeddingCutoverPreflightInput{
+		Scope:      scope,
+		PlanID:     r.PathValue("cutover_plan_id"),
+		ObservedAt: time.Now().UTC(),
+	})
+	if err != nil {
+		writeAdminEmbeddingCutoverError(w, err, "failed to preflight embedding cutover plan")
+		return
+	}
+
+	writeJSON(w, http.StatusOK, report)
+}
+
+func handleAdminEmbeddingCutoverAction(w http.ResponseWriter, r *http.Request, service EmbeddingAdminQueryService, metrics MetricsRecorder) {
+	if service == nil {
+		http.Error(w, "embedding admin service is not configured", http.StatusServiceUnavailable)
+		return
+	}
+
+	scope, ok := auth.ScopeFromContext(r.Context())
+	if !ok {
+		http.Error(w, "scope context is missing", http.StatusInternalServerError)
+		return
+	}
+
+	if planID, ok := parseEmbeddingCutoverPreflightTarget(r.PathValue("cutover_action")); ok {
+		report, err := service.PreflightEmbeddingCutoverPlan(r.Context(), memory.EmbeddingCutoverPreflightInput{
+			Scope:      scope,
+			PlanID:     planID,
+			ObservedAt: time.Now().UTC(),
+		})
+		if err != nil {
+			writeAdminEmbeddingCutoverError(w, err, "failed to preflight embedding cutover plan")
+			return
+		}
+		recordCutoverAdmissionMetrics(r.Context(), metrics, "preflight", report)
+		writeJSON(w, http.StatusOK, report)
+		return
+	}
+
+	var req lifecycleActionRequest
+	if !decodeJSONBody(w, r, &req) {
 		return
 	}
 
@@ -1212,6 +1285,10 @@ func handleAdminEmbeddingCutoverAction(w http.ResponseWriter, r *http.Request, s
 		AppliedAt: time.Now().UTC(),
 	})
 	if err != nil {
+		var admissionErr memory.EmbeddingCutoverAdmissionError
+		if errors.As(err, &admissionErr) {
+			recordCutoverAdmissionMetrics(r.Context(), metrics, "activate", admissionErr.Report)
+		}
 		writeAdminEmbeddingCutoverError(w, err, "failed to apply embedding cutover action")
 		return
 	}
@@ -1613,6 +1690,11 @@ func writeAdminEmbeddingError(w http.ResponseWriter, err error, fallback string)
 }
 
 func writeAdminEmbeddingCutoverError(w http.ResponseWriter, err error, fallback string) {
+	var admissionErr memory.EmbeddingCutoverAdmissionError
+	if errors.As(err, &admissionErr) {
+		writeJSON(w, http.StatusUnprocessableEntity, admissionErr.Report)
+		return
+	}
 	switch {
 	case errors.Is(err, memory.ErrEmbeddingCutoverConflict):
 		http.Error(w, err.Error(), http.StatusConflict)
@@ -1626,6 +1708,75 @@ func writeAdminEmbeddingCutoverError(w http.ResponseWriter, err error, fallback 
 			return
 		}
 		http.Error(w, fallback, http.StatusInternalServerError)
+	}
+}
+
+func recordCutoverAdmissionMetrics(ctx context.Context, metrics MetricsRecorder, operation string, report memory.EmbeddingCutoverPreflightReport) {
+	if metrics == nil {
+		return
+	}
+	metrics.RecordAdmission(ctx, telemetry.AdmissionEvent{
+		Component: report.Component,
+		Operation: operation,
+		Decision:  string(report.Decision),
+		Blockers:  report.Blockers,
+		Warnings:  report.Warnings,
+	})
+}
+
+func recordEmbeddingCutoverStateMetrics(ctx context.Context, metrics MetricsRecorder, plans []memory.EmbeddingCutoverPlan) {
+	if metrics == nil {
+		return
+	}
+
+	planCounts := make(map[memory.EmbeddingCutoverPlanStatus]int64)
+	for _, status := range []memory.EmbeddingCutoverPlanStatus{
+		memory.EmbeddingCutoverPlanStatusActive,
+		memory.EmbeddingCutoverPlanStatusPaused,
+	} {
+		planCounts[status] = 0
+	}
+	itemCounts := make(map[memory.EmbeddingCutoverItemStatus]int64)
+	for _, status := range []memory.EmbeddingCutoverItemStatus{
+		memory.EmbeddingCutoverItemStatusQueued,
+		memory.EmbeddingCutoverItemStatusRebuilding,
+		memory.EmbeddingCutoverItemStatusCurrent,
+		memory.EmbeddingCutoverItemStatusFailed,
+		memory.EmbeddingCutoverItemStatusSkipped,
+		memory.EmbeddingCutoverItemStatusPaused,
+		memory.EmbeddingCutoverItemStatusCancelled,
+	} {
+		itemCounts[status] = 0
+	}
+	for _, plan := range plans {
+		planCounts[plan.Status]++
+		progress := plan.Progress
+		itemCounts[memory.EmbeddingCutoverItemStatusQueued] += int64(progress.Queued)
+		itemCounts[memory.EmbeddingCutoverItemStatusRebuilding] += int64(progress.Rebuilding)
+		itemCounts[memory.EmbeddingCutoverItemStatusCurrent] += int64(progress.Current)
+		itemCounts[memory.EmbeddingCutoverItemStatusFailed] += int64(progress.Failed)
+		itemCounts[memory.EmbeddingCutoverItemStatusSkipped] += int64(progress.Skipped)
+		itemCounts[memory.EmbeddingCutoverItemStatusPaused] += int64(progress.Paused)
+		itemCounts[memory.EmbeddingCutoverItemStatusCancelled] += int64(progress.Cancelled)
+	}
+
+	for status, count := range planCounts {
+		if status == "" {
+			continue
+		}
+		metrics.RecordCutoverPlanState(ctx, telemetry.CutoverPlanStateEvent{
+			Status: string(status),
+			Count:  count,
+		})
+	}
+	for status, count := range itemCounts {
+		if status == "" {
+			continue
+		}
+		metrics.RecordCutoverItemState(ctx, telemetry.CutoverItemStateEvent{
+			Status: string(status),
+			Count:  count,
+		})
 	}
 }
 
@@ -1719,4 +1870,12 @@ func parseEmbeddingCutoverActionTarget(value string) (string, memory.EmbeddingCu
 	}
 
 	return planID, action, nil
+}
+
+func parseEmbeddingCutoverPreflightTarget(value string) (string, bool) {
+	planID, actionName, ok := strings.Cut(value, ":")
+	if !ok || strings.TrimSpace(planID) == "" || strings.TrimSpace(actionName) != "preflight" {
+		return "", false
+	}
+	return strings.TrimSpace(planID), true
 }

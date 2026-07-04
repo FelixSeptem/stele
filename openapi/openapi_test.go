@@ -10,7 +10,7 @@ import (
 func TestSpecYAMLContainsBaselineEndpoints(t *testing.T) {
 	spec := SpecYAML()
 
-	for _, want := range []string{"/health", "/ready", "/v1/events", "/v1/memories/search", "/v1/context/assemble", "/v1/admin/jobs/governance/status", "/v1/admin/jobs/status", "/v1/admin/memories/{memory_id}/history", "/v1/admin/embedding/rebuilds", "/v1/admin/memories/{memory_id}/embedding"} {
+	for _, want := range []string{"/health", "/ready", "/livez", "/readyz", "/metrics", "/v1/events", "/v1/memories/search", "/v1/context/assemble", "/v1/admin/jobs/governance/status", "/v1/admin/jobs/status", "/v1/admin/memories/{memory_id}/history", "/v1/admin/embedding/rebuilds", "/v1/admin/memories/{memory_id}/embedding"} {
 		if !strings.Contains(spec, want) {
 			t.Fatalf("SpecYAML() missing path %q", want)
 		}
@@ -158,6 +158,7 @@ func TestSpecYAMLIncludesEmbeddingCutoverRoutesAndSchemas(t *testing.T) {
 	for _, want := range []string{
 		"/v1/admin/embedding/cutovers",
 		"/v1/admin/embedding/cutovers/{cutover_plan_id}",
+		"/v1/admin/embedding/cutovers/{cutover_plan_id}:preflight",
 		"/v1/admin/embedding/cutovers/{cutover_plan_id}:activate",
 		"/v1/admin/embedding/cutovers/{cutover_plan_id}:pause",
 		"/v1/admin/embedding/cutovers/{cutover_plan_id}:cancel",
@@ -170,6 +171,11 @@ func TestSpecYAMLIncludesEmbeddingCutoverRoutesAndSchemas(t *testing.T) {
 		"EmbeddingCutoverItem",
 		"EmbeddingCutoverPlan",
 		"EmbeddingCutoverPlanListResponse",
+		"EmbeddingCutoverPreflightReport",
+		"DiagnosticFinding",
+		"eligible_total",
+		"class_breakdown",
+		"conflicting_plan",
 		"wave_size",
 		"classes",
 	} {

@@ -860,12 +860,14 @@ func (j EmbeddingRebuildJob) Run(ctx context.Context) (processed int, err error)
 
 	dispatched, dispatchErr := j.Store.DispatchEmbeddingCutoverWave(ctx, j.Scope, current, limit)
 	if dispatchErr != nil {
+		j.recordCutoverWaveDispatch(ctx, "error", 0)
 		j.recordBacklog(ctx, current, 0, dispatchErr)
 		if failErr := failScheduledExecution(ctx, j.ExecutionStore, idempotencyKey, current, dispatchErr); failErr != nil {
 			return 0, failErr
 		}
 		return 0, dispatchErr
 	}
+	j.recordCutoverWaveDispatch(ctx, "ok", dispatched)
 
 	queued, queueErr := j.queueLifecycleCandidates(ctx, current, limit)
 	if queueErr != nil {
@@ -923,6 +925,19 @@ func (j EmbeddingRebuildJob) recordBacklog(ctx context.Context, observedAt time.
 	}
 
 	j.Observer.RecordBacklog(ctx, event)
+}
+
+func (j EmbeddingRebuildJob) recordCutoverWaveDispatch(ctx context.Context, result string, dispatched int) {
+	observer, ok := j.Observer.(interface {
+		RecordCutoverWaveDispatch(ctx context.Context, event telemetry.CutoverWaveDispatchEvent)
+	})
+	if !ok {
+		return
+	}
+	observer.RecordCutoverWaveDispatch(ctx, telemetry.CutoverWaveDispatchEvent{
+		Result:     result,
+		Dispatched: dispatched,
+	})
 }
 
 func (j EmbeddingRebuildJob) triggerSource() string {

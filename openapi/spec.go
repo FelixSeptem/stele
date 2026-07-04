@@ -20,6 +20,30 @@ paths:
           description: Service is ready
         '503':
           description: Dependencies are not ready
+  /livez:
+    get:
+      operationId: getLivez
+      responses:
+        '200':
+          description: Runtime process is alive
+  /readyz:
+    get:
+      operationId: getReadyz
+      responses:
+        '200':
+          description: Runtime is ready for its configured mode
+        '503':
+          description: Runtime dependencies are not ready
+  /metrics:
+    get:
+      operationId: getMetrics
+      responses:
+        '200':
+          description: Prometheus metrics exposition
+          content:
+            text/plain:
+              schema:
+                type: string
   /v1/events:
     post:
       operationId: createEvent
@@ -700,6 +724,28 @@ paths:
           description: Missing or invalid admin API key
         '404':
           description: Cutover plan not found
+  /v1/admin/embedding/cutovers/{cutover_plan_id}:preflight:
+    post:
+      operationId: preflightAdminEmbeddingCutoverPlan
+      parameters:
+        - $ref: '#/components/parameters/CutoverPlanIDPath'
+        - $ref: '#/components/parameters/AdminAPIKey'
+        - $ref: '#/components/parameters/TenantHeader'
+        - $ref: '#/components/parameters/ProjectHeader'
+        - $ref: '#/components/parameters/NamespaceHeader'
+      responses:
+        '200':
+          description: Immediate embedding cutover admission report
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/EmbeddingCutoverPreflightReport'
+        '400':
+          description: Invalid request
+        '401':
+          description: Missing or invalid admin API key
+        '404':
+          description: Cutover plan not found
   /v1/admin/embedding/cutovers/{cutover_plan_id}:activate:
     post:
       operationId: activateAdminEmbeddingCutoverPlan
@@ -731,6 +777,12 @@ paths:
           description: Cutover plan not found
         '409':
           description: Cutover conflict
+        '422':
+          description: Cutover activation rejected by admission
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/EmbeddingCutoverPreflightReport'
   /v1/admin/embedding/cutovers/{cutover_plan_id}:pause:
     post:
       operationId: pauseAdminEmbeddingCutoverPlan
@@ -1836,6 +1888,92 @@ components:
       properties:
         reason:
           type: string
+    DiagnosticFinding:
+      type: object
+      required:
+        - severity
+        - code
+      properties:
+        severity:
+          type: string
+          enum: [blocker, warning]
+        code:
+          type: string
+        message:
+          type: string
+        component:
+          type: string
+        metadata:
+          type: object
+          additionalProperties:
+            type: string
+    EmbeddingCutoverClassBreakdown:
+      type: object
+      required:
+        - class
+        - eligible
+        - drifted
+        - missing_active_vector
+        - missing_route
+      properties:
+        class:
+          type: string
+        eligible:
+          type: integer
+        drifted:
+          type: integer
+        missing_active_vector:
+          type: integer
+        missing_route:
+          type: integer
+    EmbeddingCutoverPlanSummary:
+      type: object
+      required:
+        - id
+        - status
+      properties:
+        id:
+          type: string
+        status:
+          $ref: '#/components/schemas/EmbeddingCutoverPlanStatus'
+    EmbeddingCutoverPreflightReport:
+      type: object
+      required:
+        - component
+        - decision
+        - target
+        - scope
+        - eligible_total
+        - observed_at
+      properties:
+        component:
+          type: string
+        decision:
+          type: string
+          enum: [allow, deny]
+        blockers:
+          type: array
+          items:
+            $ref: '#/components/schemas/DiagnosticFinding'
+        warnings:
+          type: array
+          items:
+            $ref: '#/components/schemas/DiagnosticFinding'
+        target:
+          $ref: '#/components/schemas/EmbeddingCutoverTarget'
+        scope:
+          $ref: '#/components/schemas/Scope'
+        eligible_total:
+          type: integer
+        class_breakdown:
+          type: array
+          items:
+            $ref: '#/components/schemas/EmbeddingCutoverClassBreakdown'
+        conflicting_plan:
+          $ref: '#/components/schemas/EmbeddingCutoverPlanSummary'
+        observed_at:
+          type: string
+          format: date-time
     EmbeddingCutoverPlan:
       type: object
       required:

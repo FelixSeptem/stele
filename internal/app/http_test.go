@@ -12,11 +12,13 @@ import (
 	"testing"
 	"time"
 
+	"github.com/FelixSeptem/stele/internal/diagnostics"
 	"github.com/FelixSeptem/stele/internal/governance"
 	"github.com/FelixSeptem/stele/internal/jobs"
 	"github.com/FelixSeptem/stele/internal/memory"
 	"github.com/FelixSeptem/stele/internal/policy"
 	"github.com/FelixSeptem/stele/internal/retrieval"
+	"github.com/FelixSeptem/stele/internal/telemetry"
 	"github.com/jackc/pgx/v5"
 )
 
@@ -192,12 +194,14 @@ type stubEmbeddingAdminService struct {
 	gotCreateCutover   memory.CreateEmbeddingCutoverPlanInput
 	gotListCutovers    memory.ListEmbeddingCutoverPlansInput
 	gotReadCutover     memory.ReadEmbeddingCutoverPlanInput
+	gotPreflight       memory.EmbeddingCutoverPreflightInput
 	gotApplyCutover    memory.ApplyEmbeddingCutoverPlanActionInput
 	gotRecoveryHistory memory.ListEmbeddingRecoveryHistoryInput
 	page               memory.EmbeddingRebuildPage
 	inspection         memory.EmbeddingMemoryInspection
 	outcome            memory.EmbeddingRecoveryOutcome
 	cutoverPlan        memory.EmbeddingCutoverPlan
+	preflightReport    memory.EmbeddingCutoverPreflightReport
 	cutoverPlans       []memory.EmbeddingCutoverPlan
 	recoveryHistory    []memory.EmbeddingRecoveryRecord
 	listErr            error
@@ -241,6 +245,11 @@ func (s *stubEmbeddingAdminService) ListEmbeddingCutoverPlans(ctx context.Contex
 func (s *stubEmbeddingAdminService) ReadEmbeddingCutoverPlan(ctx context.Context, input memory.ReadEmbeddingCutoverPlanInput) (memory.EmbeddingCutoverPlan, error) {
 	s.gotReadCutover = input
 	return s.cutoverPlan, s.cutoverErr
+}
+
+func (s *stubEmbeddingAdminService) PreflightEmbeddingCutoverPlan(ctx context.Context, input memory.EmbeddingCutoverPreflightInput) (memory.EmbeddingCutoverPreflightReport, error) {
+	s.gotPreflight = input
+	return s.preflightReport, s.cutoverErr
 }
 
 func (s *stubEmbeddingAdminService) ApplyEmbeddingCutoverPlanAction(ctx context.Context, input memory.ApplyEmbeddingCutoverPlanActionInput) (memory.EmbeddingCutoverPlan, error) {
@@ -366,6 +375,21 @@ func TestNewHTTPHandlerMarksReadinessFailure(t *testing.T) {
 
 	if rec.Code != http.StatusServiceUnavailable {
 		t.Fatalf("status = %d, want %d", rec.Code, http.StatusServiceUnavailable)
+	}
+}
+
+func TestNewHTTPHandlerServesLivenessReadinessAndMetrics(t *testing.T) {
+	handler := NewHTTPHandler(HTTPDependencies{
+		Readiness: stubReadinessChecker{},
+	})
+
+	for _, path := range []string{"/livez", "/readyz", "/metrics"} {
+		req := httptest.NewRequest(http.MethodGet, path, nil)
+		rec := httptest.NewRecorder()
+		handler.ServeHTTP(rec, req)
+		if rec.Code != http.StatusOK {
+			t.Fatalf("%s status = %d, want %d", path, rec.Code, http.StatusOK)
+		}
 	}
 }
 
@@ -1708,6 +1732,62 @@ func TestNewHTTPHandlerListsAdminEmbeddingCutoverPlans(t *testing.T) {
 	}
 }
 
+func TestNewHTTPHandlerRecordsEmbeddingCutoverStateMetrics(t *testing.T) {
+	metrics := telemetry.NewMetricsObserver()
+	service := &stubEmbeddingAdminService{
+		cutoverPlans: []memory.EmbeddingCutoverPlan{
+			{
+				ID:     "plan_active",
+				Scope:  memory.Scope{Tenant: "tenant-a", Project: "project-a", Namespace: "namespace-a"},
+				Status: memory.EmbeddingCutoverPlanStatusActive,
+				Target: memory.EmbeddingCutoverTarget{Provider: "openai", Model: "text-embedding-3-small", Dimensions: 1536},
+				Progress: memory.EmbeddingCutoverProgress{
+					Queued:  4,
+					Current: 2,
+				},
+			},
+			{
+				ID:     "plan_paused",
+				Scope:  memory.Scope{Tenant: "tenant-a", Project: "project-a", Namespace: "namespace-a"},
+				Status: memory.EmbeddingCutoverPlanStatusPaused,
+				Target: memory.EmbeddingCutoverTarget{Provider: "openai", Model: "text-embedding-3-small", Dimensions: 1536},
+				Progress: memory.EmbeddingCutoverProgress{
+					Failed: 1,
+				},
+			},
+		},
+	}
+	handler := NewHTTPHandler(HTTPDependencies{
+		AdminAPIKeys:       map[string]struct{}{"admin-key": {}},
+		EmbeddingAdminRead: service,
+		Metrics:            metrics,
+	})
+
+	req := httptest.NewRequest(http.MethodGet, "/v1/admin/embedding/cutovers?limit=5", nil)
+	setAdminScopeHeaders(req)
+	rec := httptest.NewRecorder()
+	handler.ServeHTTP(rec, req)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d, want %d", rec.Code, http.StatusOK)
+	}
+
+	metricsReq := httptest.NewRequest(http.MethodGet, "/metrics", nil)
+	metricsRec := httptest.NewRecorder()
+	handler.ServeHTTP(metricsRec, metricsReq)
+	body := metricsRec.Body.String()
+	for _, want := range []string{
+		`stele_embedding_cutover_plans{status="active"} 1`,
+		`stele_embedding_cutover_plans{status="paused"} 1`,
+		`stele_embedding_cutover_items{status="queued"} 4`,
+		`stele_embedding_cutover_items{status="current"} 2`,
+		`stele_embedding_cutover_items{status="failed"} 1`,
+	} {
+		if !strings.Contains(body, want) {
+			t.Fatalf("metrics body missing %q:\n%s", want, body)
+		}
+	}
+}
+
 func TestNewHTTPHandlerReturnsAdminEmbeddingCutoverDetail(t *testing.T) {
 	service := &stubEmbeddingAdminService{
 		cutoverPlan: memory.EmbeddingCutoverPlan{
@@ -1733,6 +1813,77 @@ func TestNewHTTPHandlerReturnsAdminEmbeddingCutoverDetail(t *testing.T) {
 	}
 	if service.gotReadCutover.PlanID != "plan_123" {
 		t.Fatalf("plan id = %q, want plan_123", service.gotReadCutover.PlanID)
+	}
+}
+
+func TestNewHTTPHandlerPreflightsAdminEmbeddingCutoverPlan(t *testing.T) {
+	service := &stubEmbeddingAdminService{
+		preflightReport: memory.EmbeddingCutoverPreflightReport{
+			Component:     "embedding_cutover",
+			Decision:      "allow",
+			Target:        memory.EmbeddingCutoverTarget{Provider: "openai", Model: "text-embedding-3-small", Dimensions: 1536},
+			Scope:         memory.Scope{Tenant: "tenant-a", Project: "project-a", Namespace: "namespace-a"},
+			EligibleTotal: 3,
+		},
+	}
+	handler := NewHTTPHandler(HTTPDependencies{
+		AdminAPIKeys:       map[string]struct{}{"admin-key": {}},
+		EmbeddingAdminRead: service,
+	})
+
+	req := httptest.NewRequest(http.MethodPost, "/v1/admin/embedding/cutovers/plan_123:preflight", nil)
+	setAdminScopeHeaders(req)
+	rec := httptest.NewRecorder()
+
+	handler.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d, want %d", rec.Code, http.StatusOK)
+	}
+	if service.gotPreflight.PlanID != "plan_123" {
+		t.Fatalf("preflight plan id = %q, want plan_123", service.gotPreflight.PlanID)
+	}
+	var payload memory.EmbeddingCutoverPreflightReport
+	if err := json.NewDecoder(rec.Body).Decode(&payload); err != nil {
+		t.Fatalf("json.NewDecoder() error = %v", err)
+	}
+	if payload.Decision != "allow" || payload.EligibleTotal != 3 {
+		t.Fatalf("payload = %+v, want allow with eligible_total 3", payload)
+	}
+}
+
+func TestNewHTTPHandlerRecordsCutoverPreflightMetrics(t *testing.T) {
+	metrics := telemetry.NewMetricsObserver()
+	service := &stubEmbeddingAdminService{
+		preflightReport: memory.EmbeddingCutoverPreflightReport{
+			Component: "embedding_cutover",
+			Decision:  "deny",
+			Blockers: []diagnostics.Finding{
+				{Severity: diagnostics.SeverityBlocker, Code: "zero_eligible_memory"},
+			},
+			Target: memory.EmbeddingCutoverTarget{Provider: "openai", Model: "text-embedding-3-small", Dimensions: 1536},
+			Scope:  memory.Scope{Tenant: "tenant-a", Project: "project-a", Namespace: "namespace-a"},
+		},
+	}
+	handler := NewHTTPHandler(HTTPDependencies{
+		AdminAPIKeys:       map[string]struct{}{"admin-key": {}},
+		EmbeddingAdminRead: service,
+		Metrics:            metrics,
+	})
+
+	req := httptest.NewRequest(http.MethodPost, "/v1/admin/embedding/cutovers/plan_123:preflight", nil)
+	setAdminScopeHeaders(req)
+	rec := httptest.NewRecorder()
+	handler.ServeHTTP(rec, req)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("preflight status = %d, want %d", rec.Code, http.StatusOK)
+	}
+
+	metricsReq := httptest.NewRequest(http.MethodGet, "/metrics", nil)
+	metricsRec := httptest.NewRecorder()
+	handler.ServeHTTP(metricsRec, metricsReq)
+	if body := metricsRec.Body.String(); !strings.Contains(body, `stele_admission_decisions_total{component="embedding_cutover",decision="deny",operation="preflight"} 1`) {
+		t.Fatalf("metrics body missing admission decision:\n%s", body)
 	}
 }
 
@@ -1767,6 +1918,42 @@ func TestNewHTTPHandlerAppliesAdminEmbeddingCutoverAction(t *testing.T) {
 	}
 	if service.gotApplyCutover.Scope.Project != "project-a" {
 		t.Fatalf("scope = %+v, want request scope", service.gotApplyCutover.Scope)
+	}
+}
+
+func TestNewHTTPHandlerReturnsAdmissionReportWhenCutoverActivationDenied(t *testing.T) {
+	report := memory.EmbeddingCutoverPreflightReport{
+		Component: "embedding_cutover",
+		Decision:  "deny",
+		Blockers: []diagnostics.Finding{
+			{Severity: diagnostics.SeverityBlocker, Code: "zero_eligible_memory"},
+		},
+		Target: memory.EmbeddingCutoverTarget{Provider: "openai", Model: "text-embedding-3-small", Dimensions: 1536},
+		Scope:  memory.Scope{Tenant: "tenant-a", Project: "project-a", Namespace: "namespace-a"},
+	}
+	service := &stubEmbeddingAdminService{
+		cutoverErr: memory.EmbeddingCutoverAdmissionError{Report: report},
+	}
+	handler := NewHTTPHandler(HTTPDependencies{
+		AdminAPIKeys:       map[string]struct{}{"admin-key": {}},
+		EmbeddingAdminRead: service,
+	})
+
+	req := httptest.NewRequest(http.MethodPost, "/v1/admin/embedding/cutovers/plan_123:activate", strings.NewReader(`{"reason":"roll out now"}`))
+	setAdminActionHeaders(req)
+	rec := httptest.NewRecorder()
+
+	handler.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusUnprocessableEntity {
+		t.Fatalf("status = %d, want %d", rec.Code, http.StatusUnprocessableEntity)
+	}
+	var payload memory.EmbeddingCutoverPreflightReport
+	if err := json.NewDecoder(rec.Body).Decode(&payload); err != nil {
+		t.Fatalf("json.NewDecoder() error = %v", err)
+	}
+	if payload.Decision != "deny" || len(payload.Blockers) != 1 || payload.Blockers[0].Code != "zero_eligible_memory" {
+		t.Fatalf("payload = %+v, want deny report with zero_eligible_memory", payload)
 	}
 }
 

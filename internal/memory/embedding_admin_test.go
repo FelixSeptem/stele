@@ -15,12 +15,14 @@ type stubEmbeddingAdminStore struct {
 	gotCreateCutover   CreateEmbeddingCutoverPlanInput
 	gotListCutovers    ListEmbeddingCutoverPlansInput
 	gotReadCutover     ReadEmbeddingCutoverPlanInput
+	gotPreflight       EmbeddingCutoverPreflightInput
 	gotApplyCutover    ApplyEmbeddingCutoverPlanActionInput
 	gotRecoveryHistory ListEmbeddingRecoveryHistoryInput
 	items              []EmbeddingRebuildView
 	inspection         EmbeddingMemoryInspection
 	outcome            EmbeddingRecoveryOutcome
 	cutoverPlan        EmbeddingCutoverPlan
+	admissionSnapshot  EmbeddingCutoverAdmissionSnapshot
 	cutoverPlans       []EmbeddingCutoverPlan
 	recoveryHistory    []EmbeddingRecoveryRecord
 	err                error
@@ -57,6 +59,15 @@ func (s *stubEmbeddingAdminStore) ListEmbeddingCutoverPlans(ctx context.Context,
 func (s *stubEmbeddingAdminStore) ReadEmbeddingCutoverPlan(ctx context.Context, input ReadEmbeddingCutoverPlanInput) (EmbeddingCutoverPlan, error) {
 	s.gotReadCutover = input
 	return s.cutoverPlan, s.cutoverErr
+}
+
+func (s *stubEmbeddingAdminStore) ReadEmbeddingCutoverAdmission(ctx context.Context, input EmbeddingCutoverPreflightInput) (EmbeddingCutoverAdmissionSnapshot, error) {
+	s.gotPreflight = input
+	if s.admissionSnapshot.Plan.ID == "" {
+		s.admissionSnapshot.Plan = s.cutoverPlan
+		s.admissionSnapshot.EligibleTotal = 1
+	}
+	return s.admissionSnapshot, s.cutoverErr
 }
 
 func (s *stubEmbeddingAdminStore) ApplyEmbeddingCutoverPlanAction(ctx context.Context, input ApplyEmbeddingCutoverPlanActionInput) (EmbeddingCutoverPlan, error) {

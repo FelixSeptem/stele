@@ -54,12 +54,14 @@ type apiRuntime struct {
 type workerRuntime struct {
 	bootstrapper bootstrapper
 	worker       backgroundWorker
+	readiness    ReadinessChecker
 	cleanup      func()
 }
 
 type schedulerRuntime struct {
 	bootstrapper bootstrapper
 	scheduler    backgroundScheduler
+	readiness    ReadinessChecker
 	cleanup      func()
 }
 
@@ -368,7 +370,7 @@ func buildAPIRuntime(ctx context.Context, cfg config.Config, deps apiRuntimeDepe
 		deps.newServer = defaultAPIRuntimeDependencies().newServer
 	}
 	if deps.observer == nil {
-		deps.observer = telemetry.NoopObserver()
+		deps.observer = telemetry.NewMetricsObserver()
 	}
 
 	embeddingRuntime, err := buildEmbeddingRuntime(cfg.Embedding, deps.embeddingProviders)
@@ -405,9 +407,15 @@ func buildAPIRuntime(ctx context.Context, cfg config.Config, deps apiRuntimeDepe
 		Citations: repo,
 	}, deps.observer)
 	httpDeps := httpDependenciesFromConfigWithIngestor(cfg, ingestor)
-	httpDeps.Readiness = readinessFunc(func(ctx context.Context) error {
-		return nil
-	})
+	httpDeps.Readiness = runtimeReadinessChecker(config.ModeAPI, pool, embeddingRuntime, false, deps.observer)
+	if metrics, ok := deps.observer.(interface {
+		RenderPrometheus() string
+		RecordAdmission(ctx context.Context, event telemetry.AdmissionEvent)
+		RecordCutoverPlanState(ctx context.Context, event telemetry.CutoverPlanStateEvent)
+		RecordCutoverItemState(ctx context.Context, event telemetry.CutoverItemStateEvent)
+	}); ok {
+		httpDeps.Metrics = metrics
+	}
 	httpDeps.MemoryQuery = queryService
 	httpDeps.MemoryLifecycleAction = lifecycleService
 	httpDeps.MemoryManualMutation = manualMutationService
@@ -451,7 +459,7 @@ func buildWorkerRuntime(ctx context.Context, cfg config.Config, deps workerRunti
 		deps.now = time.Now
 	}
 	if deps.observer == nil {
-		deps.observer = telemetry.NoopObserver()
+		deps.observer = telemetry.NewMetricsObserver()
 	}
 
 	embeddingRuntime, err := buildEmbeddingRuntime(cfg.Embedding, deps.embeddingProviders)
@@ -523,6 +531,7 @@ func buildWorkerRuntime(ctx context.Context, cfg config.Config, deps workerRunti
 			PollInterval: cfg.Jobs.WorkerPollInterval,
 			ErrorBackoff: cfg.Jobs.WorkerErrorBackoff,
 		},
+		readiness: runtimeReadinessChecker(config.ModeWorker, pool, embeddingRuntime, true, deps.observer),
 		cleanup: func() {
 			pool.Close()
 		},
@@ -540,7 +549,7 @@ func buildSchedulerRuntime(ctx context.Context, cfg config.Config, deps schedule
 		deps.now = time.Now
 	}
 	if deps.observer == nil {
-		deps.observer = telemetry.NoopObserver()
+		deps.observer = telemetry.NewMetricsObserver()
 	}
 
 	embeddingRuntime, err := buildEmbeddingRuntime(cfg.Embedding, deps.embeddingProviders)
@@ -669,6 +678,7 @@ func buildSchedulerRuntime(ctx context.Context, cfg config.Config, deps schedule
 			return deps.bootstrapDatabase(ctx, pool)
 		}),
 		scheduler: scheduler,
+		readiness: runtimeReadinessChecker(config.ModeScheduler, pool, embeddingRuntime, true, deps.observer),
 		cleanup: func() {
 			pool.Close()
 		},
@@ -818,6 +828,63 @@ type readinessFunc func(ctx context.Context) error
 
 func (f readinessFunc) Ready(ctx context.Context) error {
 	return f(ctx)
+}
+
+func runtimeReadinessChecker(mode config.Mode, db queryRower, embeddingRuntime embeddingRuntime, includeEmbeddingProviders bool, observer telemetry.Observer) ReadinessChecker {
+	return readinessFunc(func(ctx context.Context) error {
+		if db != nil {
+			var one int
+			if err := db.QueryRow(ctx, "SELECT 1").Scan(&one); err != nil {
+				return fmt.Errorf("postgres readiness: %w", err)
+			}
+		}
+		if !includeEmbeddingProviders {
+			return nil
+		}
+		if mode != config.ModeWorker && mode != config.ModeScheduler {
+			return nil
+		}
+		if !embeddingRuntime.Status.SemanticRebuildEnabled {
+			return nil
+		}
+		for _, provider := range embeddingRuntime.Status.RegisteredProviders {
+			model := readinessProbeModel(provider, embeddingRuntime.Router)
+			if _, err := embeddingRuntime.Providers.ResolveProvider(provider); err != nil {
+				recordProviderProbe(ctx, observer, mode, provider, model, "failure")
+				return fmt.Errorf("embedding provider readiness: %w", err)
+			}
+			recordProviderProbe(ctx, observer, mode, provider, model, "success")
+		}
+		return nil
+	})
+}
+
+func readinessProbeModel(provider string, router embedding.Router) string {
+	provider = strings.TrimSpace(provider)
+	if strings.EqualFold(strings.TrimSpace(router.Default.Provider), provider) && strings.TrimSpace(router.Default.Model) != "" {
+		return strings.TrimSpace(router.Default.Model)
+	}
+	for _, target := range router.ByClass {
+		if strings.EqualFold(strings.TrimSpace(target.Provider), provider) && strings.TrimSpace(target.Model) != "" {
+			return strings.TrimSpace(target.Model)
+		}
+	}
+	return "unknown"
+}
+
+func recordProviderProbe(ctx context.Context, observer telemetry.Observer, mode config.Mode, provider, model, result string) {
+	recorder, ok := observer.(interface {
+		RecordProviderProbe(ctx context.Context, event telemetry.ProviderProbeEvent)
+	})
+	if !ok {
+		return
+	}
+	recorder.RecordProviderProbe(ctx, telemetry.ProviderProbeEvent{
+		Mode:     string(mode),
+		Provider: provider,
+		Model:    model,
+		Result:   result,
+	})
 }
 
 type governanceStatusReaderFunc func(ctx context.Context) (GovernanceStatus, error)

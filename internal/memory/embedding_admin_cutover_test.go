@@ -41,8 +41,8 @@ func TestEmbeddingAdminQueryServiceAppliesCutoverActionWhenRuntimeSupportsTarget
 		t.Fatalf("ApplyEmbeddingCutoverPlanAction() error = %v", err)
 	}
 
-	if store.gotReadCutover.PlanID != "plan_123" {
-		t.Fatalf("read plan id = %q, want plan_123", store.gotReadCutover.PlanID)
+	if store.gotPreflight.PlanID != "plan_123" {
+		t.Fatalf("preflight plan id = %q, want plan_123", store.gotPreflight.PlanID)
 	}
 	if store.gotApplyCutover.Action != EmbeddingCutoverPlanActionActivate {
 		t.Fatalf("apply action = %q, want activate", store.gotApplyCutover.Action)

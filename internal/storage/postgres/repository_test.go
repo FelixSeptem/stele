@@ -4091,6 +4091,79 @@ func TestRepositoryApplyEmbeddingCutoverPlanActionReactivatesPausedItemsAsQueued
 	}
 }
 
+func TestRepositoryReadEmbeddingCutoverAdmissionReturnsSnapshot(t *testing.T) {
+	mock, err := pgxmock.NewPool()
+	if err != nil {
+		t.Fatalf("pgxmock.NewPool() error = %v", err)
+	}
+	defer mock.Close()
+
+	scope := memory.Scope{Tenant: "tenant-a", Project: "project-a", Namespace: "namespace-a"}
+	createdAt := time.Date(2026, 7, 4, 9, 0, 0, 0, time.UTC)
+
+	mock.ExpectQuery("SELECT[\\s\\S]*FROM embedding_cutover_plans[\\s\\S]*WHERE id = \\$1").
+		WithArgs("plan_123", scope.Tenant, scope.Project, scope.Namespace).
+		WillReturnRows(pgxmock.NewRows([]string{
+			"id", "tenant", "project", "namespace", "status", "target_provider", "target_model", "target_dimensions",
+			"class_filters", "wave_size", "reason", "created_by", "created_at",
+			"last_action_by", "last_action_reason", "last_action_at", "activated_at", "paused_at", "cancelled_at", "completed_at",
+		}).AddRow(
+			"plan_123", scope.Tenant, scope.Project, scope.Namespace, memory.EmbeddingCutoverPlanStatusDraft,
+			"openai", "text-embedding-3-small", 1536, []string{"profile"}, 25, "migrate scope", "operator-a", createdAt,
+			nil, nil, nil, nil, nil, nil, nil,
+		))
+	mock.ExpectQuery("SELECT[\\s\\S]*FROM embedding_cutover_items").
+		WithArgs("plan_123", scope.Tenant, scope.Project, scope.Namespace).
+		WillReturnRows(pgxmock.NewRows([]string{
+			"plan_id", "memory_id", "tenant", "project", "namespace", "class", "status", "failure_reason",
+			"active_vector_revision_id", "active_provider", "active_model", "active_dimensions", "requested_at", "last_attempted_at", "updated_at",
+		}))
+	mock.ExpectQuery("SELECT[\\s\\S]*FROM embedding_cutover_plans[\\s\\S]*status = ANY").
+		WithArgs(scope.Tenant, scope.Project, scope.Namespace, "plan_123", []string{
+			string(memory.EmbeddingCutoverPlanStatusActive),
+			string(memory.EmbeddingCutoverPlanStatusPaused),
+		}).
+		WillReturnRows(pgxmock.NewRows([]string{"id", "status"}).
+			AddRow("plan_active", memory.EmbeddingCutoverPlanStatusActive))
+	mock.ExpectQuery("SELECT[\\s\\S]*FROM canonical_memories cm").
+		WithArgs(
+			scope.Tenant,
+			scope.Project,
+			scope.Namespace,
+			"openai",
+			"text-embedding-3-small",
+			1536,
+			[]string{"profile"},
+		).
+		WillReturnRows(pgxmock.NewRows([]string{
+			"class", "eligible", "drifted", "missing_active_vector", "missing_route",
+		}).AddRow(memory.MemoryClassProfile, 3, 2, 1, 0))
+
+	repo := NewRepository(mock)
+	snapshot, err := repo.ReadEmbeddingCutoverAdmission(context.Background(), memory.EmbeddingCutoverPreflightInput{
+		Scope:  scope,
+		PlanID: "plan_123",
+	})
+	if err != nil {
+		t.Fatalf("ReadEmbeddingCutoverAdmission() error = %v", err)
+	}
+	if snapshot.Plan.ID != "plan_123" {
+		t.Fatalf("Plan.ID = %q, want plan_123", snapshot.Plan.ID)
+	}
+	if snapshot.EligibleTotal != 3 {
+		t.Fatalf("EligibleTotal = %d, want 3", snapshot.EligibleTotal)
+	}
+	if snapshot.ConflictingPlan == nil || snapshot.ConflictingPlan.ID != "plan_active" {
+		t.Fatalf("ConflictingPlan = %+v, want plan_active", snapshot.ConflictingPlan)
+	}
+	if len(snapshot.ClassBreakdown) != 1 || snapshot.ClassBreakdown[0].Drifted != 2 {
+		t.Fatalf("ClassBreakdown = %+v, want profile drifted 2", snapshot.ClassBreakdown)
+	}
+	if err := mock.ExpectationsWereMet(); err != nil {
+		t.Fatalf("ExpectationsWereMet() error = %v", err)
+	}
+}
+
 func TestRepositoryApplyEmbeddingCutoverPlanActionCancelMarksUnscheduledItemsCancelled(t *testing.T) {
 	mock, err := pgxmock.NewPool()
 	if err != nil {

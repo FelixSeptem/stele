@@ -3,6 +3,7 @@ package jobs
 import (
 	"context"
 	"errors"
+	"strings"
 	"testing"
 	"time"
 
@@ -804,6 +805,45 @@ func TestEmbeddingRebuildJobRunDispatchesCutoverWaveBeforeLifecycleDiscovery(t *
 
 	if observer.backlogs[0].Pending != 3 {
 		t.Fatalf("backlog pending = %d, want 3 including cutover dispatch and lifecycle discovery", observer.backlogs[0].Pending)
+	}
+}
+
+func TestEmbeddingRebuildJobRunRecordsCutoverWaveDispatchMetrics(t *testing.T) {
+	scope := memory.Scope{Tenant: "tenant-a", Project: "project-a", Namespace: "namespace-a"}
+	now := time.Date(2026, 7, 4, 10, 30, 0, 0, time.UTC)
+	store := &stubEmbeddingLifecycleStore{
+		dispatchedCutoverWave: 3,
+	}
+	executions := &stubExecutionStore{beginStarted: true}
+	observer := telemetry.NewMetricsObserver()
+	job := EmbeddingRebuildJob{
+		Scope:          scope,
+		Store:          store,
+		ExecutionStore: executions,
+		TriggerSource:  "scheduler",
+		Now:            func() time.Time { return now },
+		Cadence:        time.Hour,
+		Limit:          10,
+		NewRevisionID:  func() string { return "vec_unused" },
+		Observer:       observer,
+	}
+
+	processed, err := job.Run(context.Background())
+	if err != nil {
+		t.Fatalf("Run() error = %v", err)
+	}
+	if processed != 0 {
+		t.Fatalf("processed = %d, want 0", processed)
+	}
+
+	metrics := observer.RenderPrometheus()
+	for _, want := range []string{
+		`stele_embedding_cutover_wave_dispatch_total{result="ok"} 1`,
+		`stele_embedding_cutover_wave_dispatched_total{result="ok"} 3`,
+	} {
+		if !strings.Contains(metrics, want) {
+			t.Fatalf("metrics missing %q:\n%s", want, metrics)
+		}
 	}
 }
 

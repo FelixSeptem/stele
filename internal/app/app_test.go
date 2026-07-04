@@ -15,6 +15,7 @@ import (
 	"github.com/FelixSeptem/stele/internal/config"
 	"github.com/FelixSeptem/stele/internal/embedding"
 	"github.com/FelixSeptem/stele/internal/jobs"
+	"github.com/FelixSeptem/stele/internal/memory"
 	"github.com/FelixSeptem/stele/internal/telemetry"
 	pgxmock "github.com/pashagolub/pgxmock/v4"
 )
@@ -325,6 +326,10 @@ func TestBuildAPIRuntimeUsesConfiguredDependencies(t *testing.T) {
 		t.Fatal("Readiness = nil, want readiness checker")
 	}
 
+	if gotDeps.Metrics == nil {
+		t.Fatal("Metrics = nil, want metrics recorder")
+	}
+
 	if _, ok := gotDeps.APIKeys["key-a"]; !ok {
 		t.Fatal("configured api key not found in runtime dependencies")
 	}
@@ -355,6 +360,40 @@ func TestBuildAPIRuntimeReturnsPoolOpenFailure(t *testing.T) {
 
 	if !strings.Contains(err.Error(), "open postgres pool") {
 		t.Fatalf("error = %q, want wrapped pool open failure", err)
+	}
+}
+
+func TestRuntimeReadinessCheckerUsesModeSpecificEmbeddingProviderChecks(t *testing.T) {
+	mock, err := pgxmock.NewPool()
+	if err != nil {
+		t.Fatalf("pgxmock.NewPool() error = %v", err)
+	}
+	defer mock.Close()
+
+	runtime := embeddingRuntime{
+		Providers: embedding.StaticProviderRegistry{},
+		Status: memory.EmbeddingRuntimeStatus{
+			SemanticRebuildEnabled: true,
+			RegisteredProviders:    []string{"openai"},
+		},
+	}
+
+	mock.ExpectQuery("SELECT 1").WillReturnRows(pgxmock.NewRows([]string{"one"}).AddRow(1))
+	observer := telemetry.NewMetricsObserver()
+	apiReady := runtimeReadinessChecker(config.ModeAPI, mock, runtime, false, observer)
+	if err := apiReady.Ready(context.Background()); err != nil {
+		t.Fatalf("api readiness error = %v, want nil", err)
+	}
+
+	mock.ExpectQuery("SELECT 1").WillReturnRows(pgxmock.NewRows([]string{"one"}).AddRow(1))
+	schedulerReady := runtimeReadinessChecker(config.ModeScheduler, mock, runtime, true, observer)
+	if err := schedulerReady.Ready(context.Background()); err == nil || !strings.Contains(err.Error(), "embedding provider readiness") {
+		t.Fatalf("scheduler readiness error = %v, want embedding provider readiness failure", err)
+	}
+
+	metrics := observer.RenderPrometheus()
+	if !strings.Contains(metrics, `stele_embedding_provider_probe_total{mode="scheduler",model="unknown",provider="openai",result="failure"} 1`) {
+		t.Fatalf("metrics missing provider probe failure:\n%s", metrics)
 	}
 }
 
@@ -391,6 +430,76 @@ func TestBuildWorkerRuntimeAssemblesGovernanceWorker(t *testing.T) {
 
 	if runtime.worker == nil {
 		t.Fatal("runtime worker = nil, want governance worker")
+	}
+}
+
+func TestBuildWorkerAndSchedulerRuntimeWireReadinessChecks(t *testing.T) {
+	workerMock, err := pgxmock.NewPool()
+	if err != nil {
+		t.Fatalf("pgxmock.NewPool() error = %v", err)
+	}
+	defer workerMock.Close()
+	schedulerMock, err := pgxmock.NewPool()
+	if err != nil {
+		t.Fatalf("pgxmock.NewPool() error = %v", err)
+	}
+	defer schedulerMock.Close()
+
+	cfg := config.Config{
+		PostgresDSN: "postgres://runtime",
+		Auth: config.AuthConfig{
+			DefaultTenant:    "tenant-a",
+			DefaultProject:   "project-a",
+			DefaultNamespace: "namespace-a",
+		},
+		Embedding: config.EmbeddingConfig{
+			DefaultProvider:   "openai",
+			DefaultModel:      "text-embedding-3-small",
+			DefaultDimensions: 1536,
+		},
+	}
+	providers := map[string]embedding.Provider{
+		"openai": stubEmbeddingProvider{},
+	}
+
+	workerRuntime, err := buildWorkerRuntime(context.Background(), cfg, workerRuntimeDependencies{
+		openPool: func(ctx context.Context, dsn string) (postgresRuntimeStore, error) {
+			return workerMock, nil
+		},
+		bootstrapDatabase: func(ctx context.Context, db postgresRuntimeStore) error {
+			return nil
+		},
+		embeddingProviders: providers,
+	})
+	if err != nil {
+		t.Fatalf("buildWorkerRuntime() error = %v", err)
+	}
+	if workerRuntime.readiness == nil {
+		t.Fatal("worker readiness = nil, want configured checker")
+	}
+	workerMock.ExpectQuery("SELECT 1").WillReturnRows(pgxmock.NewRows([]string{"one"}).AddRow(1))
+	if err := workerRuntime.readiness.Ready(context.Background()); err != nil {
+		t.Fatalf("worker readiness error = %v, want nil", err)
+	}
+
+	schedulerRuntime, err := buildSchedulerRuntime(context.Background(), cfg, schedulerRuntimeDependencies{
+		openPool: func(ctx context.Context, dsn string) (postgresRuntimeStore, error) {
+			return schedulerMock, nil
+		},
+		bootstrapDatabase: func(ctx context.Context, db postgresRuntimeStore) error {
+			return nil
+		},
+		embeddingProviders: providers,
+	})
+	if err != nil {
+		t.Fatalf("buildSchedulerRuntime() error = %v", err)
+	}
+	if schedulerRuntime.readiness == nil {
+		t.Fatal("scheduler readiness = nil, want configured checker")
+	}
+	schedulerMock.ExpectQuery("SELECT 1").WillReturnRows(pgxmock.NewRows([]string{"one"}).AddRow(1))
+	if err := schedulerRuntime.readiness.Ready(context.Background()); err != nil {
+		t.Fatalf("scheduler readiness error = %v, want nil", err)
 	}
 }
 

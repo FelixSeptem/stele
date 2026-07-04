@@ -3240,6 +3240,41 @@ func (r *Repository) ReadEmbeddingCutoverPlan(ctx context.Context, input memory.
 	return plan, nil
 }
 
+func (r *Repository) ReadEmbeddingCutoverAdmission(ctx context.Context, input memory.EmbeddingCutoverPreflightInput) (memory.EmbeddingCutoverAdmissionSnapshot, error) {
+	if err := input.Validate(); err != nil {
+		return memory.EmbeddingCutoverAdmissionSnapshot{}, err
+	}
+
+	plan, err := readEmbeddingCutoverPlan(ctx, r.db, memory.ReadEmbeddingCutoverPlanInput{
+		Scope:  input.Scope,
+		PlanID: input.PlanID,
+	})
+	if err != nil {
+		return memory.EmbeddingCutoverAdmissionSnapshot{}, fmt.Errorf("read embedding cutover admission plan: %w", err)
+	}
+
+	conflictingPlan, err := readEmbeddingCutoverAdmissionConflict(ctx, r.db, plan)
+	if err != nil {
+		return memory.EmbeddingCutoverAdmissionSnapshot{}, err
+	}
+	breakdown, err := readEmbeddingCutoverAdmissionBreakdown(ctx, r.db, plan)
+	if err != nil {
+		return memory.EmbeddingCutoverAdmissionSnapshot{}, err
+	}
+
+	total := 0
+	for _, item := range breakdown {
+		total += item.Eligible
+	}
+
+	return memory.EmbeddingCutoverAdmissionSnapshot{
+		Plan:            plan,
+		EligibleTotal:   total,
+		ClassBreakdown:  breakdown,
+		ConflictingPlan: conflictingPlan,
+	}, nil
+}
+
 func (r *Repository) ApplyEmbeddingCutoverPlanAction(ctx context.Context, input memory.ApplyEmbeddingCutoverPlanActionInput) (memory.EmbeddingCutoverPlan, error) {
 	if err := input.Validate(); err != nil {
 		return memory.EmbeddingCutoverPlan{}, err
@@ -5035,6 +5070,118 @@ ON CONFLICT (plan_id, memory_id) DO NOTHING
 	}
 
 	return nil
+}
+
+func readEmbeddingCutoverAdmissionConflict(ctx context.Context, db queryRower, plan memory.EmbeddingCutoverPlan) (*memory.EmbeddingCutoverPlanSummary, error) {
+	const query = `
+SELECT id, status
+FROM embedding_cutover_plans
+WHERE tenant = $1
+	AND project = $2
+	AND namespace = $3
+	AND id <> $4
+	AND status = ANY($5)
+ORDER BY created_at ASC
+LIMIT 1
+`
+
+	rows, err := db.Query(
+		ctx,
+		query,
+		plan.Scope.Tenant,
+		plan.Scope.Project,
+		plan.Scope.Namespace,
+		plan.ID,
+		[]string{string(memory.EmbeddingCutoverPlanStatusActive), string(memory.EmbeddingCutoverPlanStatusPaused)},
+	)
+	if err != nil {
+		return nil, fmt.Errorf("read embedding cutover admission conflict: %w", err)
+	}
+	defer rows.Close()
+
+	if !rows.Next() {
+		if err := rows.Err(); err != nil {
+			return nil, fmt.Errorf("iterate embedding cutover admission conflict: %w", err)
+		}
+		return nil, nil
+	}
+
+	var summary memory.EmbeddingCutoverPlanSummary
+	if err := rows.Scan(&summary.ID, &summary.Status); err != nil {
+		return nil, fmt.Errorf("scan embedding cutover admission conflict: %w", err)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("iterate embedding cutover admission conflict: %w", err)
+	}
+	return &summary, nil
+}
+
+func readEmbeddingCutoverAdmissionBreakdown(ctx context.Context, db queryRower, plan memory.EmbeddingCutoverPlan) ([]memory.EmbeddingCutoverClassBreakdown, error) {
+	const query = `
+SELECT
+	cm.class,
+	COUNT(*)::integer AS eligible,
+	COUNT(*) FILTER (
+		WHERE er.active_vector_revision_id IS NOT NULL
+			AND (
+				vr.provider IS DISTINCT FROM $4
+				OR vr.model IS DISTINCT FROM $5
+				OR vr.dimensions IS DISTINCT FROM $6
+			)
+	)::integer AS drifted,
+	COUNT(*) FILTER (
+		WHERE er.active_vector_revision_id IS NULL
+	)::integer AS missing_active_vector,
+	0::integer AS missing_route
+FROM canonical_memories cm
+LEFT JOIN embedding_rebuilds er
+	ON er.memory_id = cm.id
+	AND er.tenant = cm.tenant
+	AND er.project = cm.project
+	AND er.namespace = cm.namespace
+LEFT JOIN vector_revisions vr
+	ON vr.id = er.active_vector_revision_id
+	AND vr.memory_id = cm.id
+	AND vr.tenant = cm.tenant
+	AND vr.project = cm.project
+	AND vr.namespace = cm.namespace
+WHERE cm.tenant = $1
+	AND cm.project = $2
+	AND cm.namespace = $3
+	AND cm.state NOT IN ('suppressed', 'forgotten', 'deleted')
+	AND cm.class = ANY($7)
+GROUP BY cm.class
+ORDER BY cm.class ASC
+`
+
+	rows, err := db.Query(
+		ctx,
+		query,
+		plan.Scope.Tenant,
+		plan.Scope.Project,
+		plan.Scope.Namespace,
+		plan.Target.Provider,
+		plan.Target.Model,
+		plan.Target.Dimensions,
+		embeddingCutoverEligibleClassStrings(plan.Classes),
+	)
+	if err != nil {
+		return nil, fmt.Errorf("read embedding cutover admission breakdown: %w", err)
+	}
+	defer rows.Close()
+
+	breakdown := make([]memory.EmbeddingCutoverClassBreakdown, 0)
+	for rows.Next() {
+		var item memory.EmbeddingCutoverClassBreakdown
+		if err := rows.Scan(&item.Class, &item.Eligible, &item.Drifted, &item.MissingActiveVector, &item.MissingRoute); err != nil {
+			return nil, fmt.Errorf("scan embedding cutover admission breakdown: %w", err)
+		}
+		breakdown = append(breakdown, item)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("iterate embedding cutover admission breakdown: %w", err)
+	}
+	return breakdown, nil
 }
 
 type embeddingCutoverDispatchCandidate struct {

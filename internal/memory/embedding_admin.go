@@ -6,6 +6,8 @@ import (
 	"fmt"
 	"strings"
 	"time"
+
+	"github.com/FelixSeptem/stele/internal/diagnostics"
 )
 
 var ErrEmbeddingRecoveryConflict = errors.New("embedding recovery conflict")
@@ -206,6 +208,7 @@ type EmbeddingAdminStore interface {
 	CreateEmbeddingCutoverPlan(ctx context.Context, input CreateEmbeddingCutoverPlanInput) (EmbeddingCutoverPlan, error)
 	ListEmbeddingCutoverPlans(ctx context.Context, input ListEmbeddingCutoverPlansInput) ([]EmbeddingCutoverPlan, error)
 	ReadEmbeddingCutoverPlan(ctx context.Context, input ReadEmbeddingCutoverPlanInput) (EmbeddingCutoverPlan, error)
+	ReadEmbeddingCutoverAdmission(ctx context.Context, input EmbeddingCutoverPreflightInput) (EmbeddingCutoverAdmissionSnapshot, error)
 	ApplyEmbeddingCutoverPlanAction(ctx context.Context, input ApplyEmbeddingCutoverPlanActionInput) (EmbeddingCutoverPlan, error)
 	ListEmbeddingRecoveryHistory(ctx context.Context, input ListEmbeddingRecoveryHistoryInput) ([]EmbeddingRecoveryRecord, error)
 }
@@ -313,15 +316,17 @@ func (s *EmbeddingAdminQueryService) ApplyEmbeddingCutoverPlanAction(ctx context
 	}
 
 	if input.Action == EmbeddingCutoverPlanActionActivate {
-		plan, err := s.store.ReadEmbeddingCutoverPlan(ctx, ReadEmbeddingCutoverPlanInput{
-			Scope:  input.Scope,
-			PlanID: input.PlanID,
+		snapshot, err := s.store.ReadEmbeddingCutoverAdmission(ctx, EmbeddingCutoverPreflightInput{
+			Scope:      input.Scope,
+			PlanID:     input.PlanID,
+			ObservedAt: input.AppliedAt,
 		})
 		if err != nil {
 			return EmbeddingCutoverPlan{}, err
 		}
-		if err := validateEmbeddingCutoverRuntimeSupport(s.runtime, plan.Target); err != nil {
-			return EmbeddingCutoverPlan{}, err
+		report := EvaluateEmbeddingCutoverAdmission(s.runtime, snapshot, input.AppliedAt)
+		if report.Decision == diagnostics.AdmissionDecisionDeny {
+			return EmbeddingCutoverPlan{}, EmbeddingCutoverAdmissionError{Report: report}
 		}
 	}
 
