@@ -251,6 +251,37 @@ func TestSpecYAMLIncludesScopeProofAndMemorySessionRoutesAndSchemas(t *testing.T
 	}
 }
 
+func TestSpecYAMLIncludesUsefulnessFeedbackSessionAndDiagnosticsContracts(t *testing.T) {
+	for _, want := range []string{
+		"/v1/usefulness-feedback",
+		"/v1/admin/usefulness-feedback",
+		"/v1/admin/usefulness-feedback/summary",
+		"/v1/admin/usefulness-feedback/{feedback_id}",
+		"/v1/admin/usefulness-feedback/{feedback_id}:supersede",
+		"UsefulnessFeedback",
+		"UsefulnessFeedbackCreateRequest",
+		"UsefulnessFeedbackSupersedeRequest",
+		"UsefulnessFeedbackSummary",
+		"UsefulnessFeedbackSubject",
+		"ExpectedRecallTarget",
+		"missing_expected",
+		"unsafe_or_hidden",
+		"opaque_token",
+		"feedback_summaries",
+		"quality_finding_ids",
+		"quality_finding_codes",
+		"verifications",
+		"event_payloads",
+		"include_feedback_diagnostics",
+		"feedback_aware_ranking",
+		"feedback_ranking_policy",
+	} {
+		if !strings.Contains(SpecYAML(), want) {
+			t.Fatalf("SpecYAML() missing %q", want)
+		}
+	}
+}
+
 func TestSpecYAMLIncludesEmbeddingRecoveryRoutesAndSchemas(t *testing.T) {
 	for _, want := range []string{
 		"/v1/admin/embedding/rebuilds/{memory_id}:retry",

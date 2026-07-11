@@ -326,6 +326,10 @@ func TestBuildAPIRuntimeUsesConfiguredDependencies(t *testing.T) {
 		t.Fatal("DerivedInsightAdmin = nil, want configured derived insight admin service")
 	}
 
+	if gotDeps.UsefulnessFeedback == nil {
+		t.Fatal("UsefulnessFeedback = nil, want configured usefulness feedback service")
+	}
+
 	if gotDeps.Readiness == nil {
 		t.Fatal("Readiness = nil, want readiness checker")
 	}

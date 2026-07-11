@@ -389,6 +389,176 @@ paths:
           description: Invalid request
         '401':
           description: Missing or invalid API key
+  /v1/usefulness-feedback:
+    post:
+      operationId: createUsefulnessFeedback
+      parameters:
+        - $ref: '#/components/parameters/PublicAPIKey'
+        - $ref: '#/components/parameters/TenantHeader'
+        - $ref: '#/components/parameters/ProjectHeader'
+        - $ref: '#/components/parameters/NamespaceHeader'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/UsefulnessFeedbackCreateRequest'
+      responses:
+        '201':
+          description: Usefulness feedback recorded as scoped append-only evidence
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/UsefulnessFeedback'
+        '400':
+          description: Invalid request
+        '401':
+          description: Missing or invalid API key
+  /v1/admin/usefulness-feedback:
+    get:
+      operationId: listAdminUsefulnessFeedback
+      parameters:
+        - $ref: '#/components/parameters/AdminAPIKey'
+        - $ref: '#/components/parameters/TenantHeader'
+        - $ref: '#/components/parameters/ProjectHeader'
+        - $ref: '#/components/parameters/NamespaceHeader'
+        - in: query
+          name: type
+          required: false
+          schema:
+            $ref: '#/components/schemas/UsefulnessFeedbackType'
+        - in: query
+          name: subject_kind
+          required: false
+          schema:
+            $ref: '#/components/schemas/UsefulnessFeedbackSubjectKind'
+        - in: query
+          name: subject_id
+          required: false
+          schema:
+            type: string
+        - in: query
+          name: expected_recall_kind
+          required: false
+          schema:
+            $ref: '#/components/schemas/ExpectedRecallTargetKind'
+        - in: query
+          name: expected_recall_id
+          required: false
+          schema:
+            type: string
+        - in: query
+          name: opaque_token
+          required: false
+          schema:
+            type: string
+        - in: query
+          name: include_superseded
+          required: false
+          schema:
+            type: boolean
+        - in: query
+          name: limit
+          required: false
+          schema:
+            type: integer
+      responses:
+        '200':
+          description: Scoped usefulness feedback records
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/UsefulnessFeedbackListResponse'
+        '401':
+          description: Missing or invalid admin API key
+  /v1/admin/usefulness-feedback/summary:
+    get:
+      operationId: summarizeAdminUsefulnessFeedback
+      parameters:
+        - $ref: '#/components/parameters/AdminAPIKey'
+        - $ref: '#/components/parameters/TenantHeader'
+        - $ref: '#/components/parameters/ProjectHeader'
+        - $ref: '#/components/parameters/NamespaceHeader'
+        - in: query
+          name: subject_kind
+          required: true
+          schema:
+            $ref: '#/components/schemas/UsefulnessFeedbackSubjectKind'
+        - in: query
+          name: subject_id
+          required: false
+          schema:
+            type: string
+        - in: query
+          name: expected_recall_kind
+          required: false
+          schema:
+            $ref: '#/components/schemas/ExpectedRecallTargetKind'
+        - in: query
+          name: expected_recall_id
+          required: false
+          schema:
+            type: string
+        - in: query
+          name: opaque_token
+          required: false
+          schema:
+            type: string
+      responses:
+        '200':
+          description: Active-only usefulness summary for an authorized subject
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/UsefulnessFeedbackSummary'
+        '401':
+          description: Missing or invalid admin API key
+  /v1/admin/usefulness-feedback/{feedback_id}:
+    get:
+      operationId: getAdminUsefulnessFeedback
+      parameters:
+        - $ref: '#/components/parameters/AdminAPIKey'
+        - $ref: '#/components/parameters/TenantHeader'
+        - $ref: '#/components/parameters/ProjectHeader'
+        - $ref: '#/components/parameters/NamespaceHeader'
+        - in: path
+          name: feedback_id
+          required: true
+          schema:
+            type: string
+      responses:
+        '200':
+          description: Scoped usefulness feedback detail
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/UsefulnessFeedback'
+        '404':
+          description: Feedback not found or not visible
+  /v1/admin/usefulness-feedback/{feedback_id}:supersede:
+    post:
+      operationId: supersedeAdminUsefulnessFeedback
+      parameters:
+        - $ref: '#/components/parameters/AdminAPIKey'
+        - $ref: '#/components/parameters/TenantHeader'
+        - $ref: '#/components/parameters/ProjectHeader'
+        - $ref: '#/components/parameters/NamespaceHeader'
+        - in: path
+          name: feedback_id
+          required: true
+          schema:
+            type: string
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/UsefulnessFeedbackSupersedeRequest'
+      responses:
+        '202':
+          description: Feedback superseded while preserving audit history
+        '404':
+          description: Feedback not found or not visible
   /v1/admin/jobs/governance/status:
     get:
       operationId: getAdminGovernanceStatus
@@ -2152,6 +2322,14 @@ components:
           type: array
           items:
             type: string
+        quality_finding_ids:
+          type: array
+          items:
+            type: string
+        quality_finding_codes:
+          type: array
+          items:
+            type: string
         replay_run_ids:
           type: array
           items:
@@ -2198,6 +2376,8 @@ components:
       required:
         - query
       properties:
+        idempotency_key:
+          type: string
         turn_id:
           type: string
         query:
@@ -2210,17 +2390,43 @@ components:
           type: boolean
         include_diagnostics:
           type: boolean
+        include_feedback_diagnostics:
+          type: boolean
+        feedback_aware_ranking:
+          type: boolean
     RecordMemorySessionOutcomeRequest:
       type: object
       properties:
+        idempotency_key:
+          type: string
         outcome_event_ids:
           type: array
           items:
             type: string
+        event_payloads:
+          type: array
+          items:
+            $ref: '#/components/schemas/MemorySessionOutcomeEventPayload'
         expected_recall:
           type: array
           items:
             type: string
+    MemorySessionOutcomeEventPayload:
+      type: object
+      required:
+        - event_type
+        - content
+      properties:
+        event_type:
+          type: string
+        content:
+          type: string
+        metadata:
+          type: object
+          additionalProperties: true
+        source_timestamp:
+          type: string
+          format: date-time
     RequestMemorySessionVerificationRequest:
       type: object
       properties:
@@ -2303,6 +2509,10 @@ components:
           type: array
           items:
             $ref: '#/components/schemas/MemorySessionTurn'
+        verifications:
+          type: array
+          items:
+            $ref: '#/components/schemas/MemorySessionVerification'
     MemorySessionListResponse:
       type: object
       required:
@@ -2356,10 +2566,201 @@ components:
           $ref: '#/components/schemas/MemorySessionRun'
         evidence:
           $ref: '#/components/schemas/LoopReportEvidence'
+        feedback_summaries:
+          type: array
+          items:
+            $ref: '#/components/schemas/UsefulnessFeedbackSummary'
         next_actions:
           type: array
           items:
             type: string
+    UsefulnessFeedbackType:
+      type: string
+      enum:
+        - useful
+        - irrelevant
+        - noisy
+        - stale
+        - missing_expected
+        - unsafe_or_hidden
+        - needs_review
+    UsefulnessFeedbackSourceSurface:
+      type: string
+      enum:
+        - search
+        - context
+        - session
+        - verification
+        - admin
+    UsefulnessFeedbackSubjectKind:
+      type: string
+      enum:
+        - memory
+        - raw_event
+        - citation
+        - derived_insight
+        - session
+        - turn
+        - verification
+        - expected_recall
+    ExpectedRecallTargetKind:
+      type: string
+      enum:
+        - event
+        - memory
+        - citation
+        - insight
+        - session
+        - turn
+        - verification
+        - opaque
+    ExpectedRecallTarget:
+      type: object
+      required:
+        - kind
+      properties:
+        kind:
+          $ref: '#/components/schemas/ExpectedRecallTargetKind'
+        id:
+          type: string
+          description: Required for known evidence targets and forbidden for opaque targets.
+        opaque_token:
+          type: string
+          description: Required for opaque expected recall targets and not treated as an internal identifier.
+    UsefulnessFeedbackSubject:
+      type: object
+      required:
+        - kind
+      properties:
+        kind:
+          $ref: '#/components/schemas/UsefulnessFeedbackSubjectKind'
+        id:
+          type: string
+        expected_recall_target:
+          $ref: '#/components/schemas/ExpectedRecallTarget'
+    UsefulnessQuality:
+      type: string
+      enum:
+        - unknown
+        - positive
+        - negative
+        - needs_review
+        - mixed
+    UsefulnessFeedback:
+      type: object
+      required:
+        - id
+        - scope
+        - type
+        - source_surface
+        - subjects
+        - actor
+        - reason
+        - created_at
+      properties:
+        id:
+          type: string
+        scope:
+          $ref: '#/components/schemas/Scope'
+        type:
+          $ref: '#/components/schemas/UsefulnessFeedbackType'
+        source_surface:
+          $ref: '#/components/schemas/UsefulnessFeedbackSourceSurface'
+        subjects:
+          type: array
+          items:
+            $ref: '#/components/schemas/UsefulnessFeedbackSubject'
+        actor:
+          type: string
+        reason:
+          type: string
+        idempotency_key:
+          type: string
+        metadata:
+          type: object
+          additionalProperties: true
+        created_at:
+          type: string
+          format: date-time
+        superseded_at:
+          type: string
+          format: date-time
+        superseded_by_actor:
+          type: string
+        superseded_by_reason:
+          type: string
+    UsefulnessFeedbackCreateRequest:
+      type: object
+      required:
+        - type
+        - source_surface
+        - subjects
+        - actor
+        - reason
+      properties:
+        type:
+          $ref: '#/components/schemas/UsefulnessFeedbackType'
+        source_surface:
+          $ref: '#/components/schemas/UsefulnessFeedbackSourceSurface'
+        subjects:
+          type: array
+          items:
+            $ref: '#/components/schemas/UsefulnessFeedbackSubject'
+        actor:
+          type: string
+        reason:
+          type: string
+        idempotency_key:
+          type: string
+        metadata:
+          type: object
+          additionalProperties: true
+    UsefulnessFeedbackListResponse:
+      type: object
+      required:
+        - feedback
+      properties:
+        feedback:
+          type: array
+          items:
+            $ref: '#/components/schemas/UsefulnessFeedback'
+    UsefulnessFeedbackSupersedeRequest:
+      type: object
+      required:
+        - actor
+        - reason
+      properties:
+        actor:
+          type: string
+        reason:
+          type: string
+    UsefulnessFeedbackSummary:
+      type: object
+      required:
+        - subject
+        - counts
+        - total_active
+        - effective_quality
+      properties:
+        subject:
+          $ref: '#/components/schemas/UsefulnessFeedbackSubject'
+        counts:
+          type: object
+          additionalProperties:
+            type: integer
+        total_active:
+          type: integer
+        positive_count:
+          type: integer
+        negative_count:
+          type: integer
+        needs_review_count:
+          type: integer
+        effective_quality:
+          $ref: '#/components/schemas/UsefulnessQuality'
+        last_feedback_at:
+          type: string
+          format: date-time
     DerivedInsightType:
       type: string
       enum:
@@ -3120,6 +3521,13 @@ components:
           type: boolean
         include_relations:
           type: boolean
+        include_feedback_diagnostics:
+          type: boolean
+        feedback_aware_ranking:
+          type: boolean
+        feedback_ranking_policy:
+          type: string
+          description: Scope-wide feedback ranking policies are rejected in this change; use per-request feedback_aware_ranking.
         classes:
           type: array
           items:
@@ -3176,6 +3584,10 @@ components:
           type: array
           items:
             $ref: '#/components/schemas/MemorySearchHit'
+        diagnostics:
+          type: array
+          items:
+            $ref: '#/components/schemas/ContextDiagnostic'
     ContextAssembleRequest:
       type: object
       required:
@@ -3192,6 +3604,13 @@ components:
           type: boolean
         include_diagnostics:
           type: boolean
+        include_feedback_diagnostics:
+          type: boolean
+        feedback_aware_ranking:
+          type: boolean
+        feedback_ranking_policy:
+          type: string
+          description: Scope-wide feedback ranking policies are rejected in this change; use per-request feedback_aware_ranking.
     InsightCitation:
       type: object
       required:

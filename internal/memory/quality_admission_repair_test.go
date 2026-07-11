@@ -177,6 +177,144 @@ func TestQualityServiceRejectsCanonicalRewriteRepair(t *testing.T) {
 	}
 }
 
+func TestQualityServiceCreatesFeedbackDerivedFindingsAndRepairRecommendations(t *testing.T) {
+	now := time.Date(2026, 7, 11, 11, 30, 0, 0, time.UTC)
+	scope := Scope{Tenant: "tenant-a", Project: "project-a", Namespace: "namespace-a"}
+	store := &stubQualityStore{
+		createdEvaluation: QualityEvaluationRun{
+			ID:        "eval_1",
+			Scope:     scope,
+			Status:    QualityEvaluationStatusCompleted,
+			Checks:    []QualityEvaluationCheck{QualityEvaluationCheckRetrieval},
+			CreatedAt: now,
+			UpdatedAt: now,
+		},
+	}
+	feedback := &stubQualityFeedbackLister{items: []UsefulnessFeedback{
+		{
+			ID:            "feedback_noisy_1",
+			Scope:         scope,
+			Type:          UsefulnessFeedbackTypeNoisy,
+			SourceSurface: UsefulnessFeedbackSourceSearch,
+			Subjects:      []UsefulnessFeedbackSubject{{Kind: UsefulnessFeedbackSubjectMemory, ID: "mem_1"}},
+			Actor:         "agent-a",
+			Reason:        "too broad",
+			CreatedAt:     now,
+		},
+		{
+			ID:            "feedback_noisy_2",
+			Scope:         scope,
+			Type:          UsefulnessFeedbackTypeNoisy,
+			SourceSurface: UsefulnessFeedbackSourceSearch,
+			Subjects:      []UsefulnessFeedbackSubject{{Kind: UsefulnessFeedbackSubjectMemory, ID: "mem_1"}},
+			Actor:         "agent-b",
+			Reason:        "stale retrieval",
+			CreatedAt:     now.Add(time.Minute),
+		},
+		{
+			ID:            "feedback_missing_1",
+			Scope:         scope,
+			Type:          UsefulnessFeedbackTypeMissingExpected,
+			SourceSurface: UsefulnessFeedbackSourceVerification,
+			Subjects: []UsefulnessFeedbackSubject{{Kind: UsefulnessFeedbackSubjectExpectedRecall, ExpectedRecallTarget: ExpectedRecallTarget{
+				Kind: ExpectedRecallTargetMemory,
+				ID:   "mem_expected",
+			}}},
+			Actor:     "agent-a",
+			Reason:    "expected memory absent",
+			CreatedAt: now,
+		},
+		{
+			ID:            "feedback_missing_2",
+			Scope:         scope,
+			Type:          UsefulnessFeedbackTypeMissingExpected,
+			SourceSurface: UsefulnessFeedbackSourceVerification,
+			Subjects: []UsefulnessFeedbackSubject{{Kind: UsefulnessFeedbackSubjectExpectedRecall, ExpectedRecallTarget: ExpectedRecallTarget{
+				Kind: ExpectedRecallTargetMemory,
+				ID:   "mem_expected",
+			}}},
+			Actor:     "agent-b",
+			Reason:    "still absent",
+			CreatedAt: now.Add(time.Minute),
+		},
+		{
+			ID:           "feedback_stale_superseded_1",
+			Scope:        scope,
+			Type:         UsefulnessFeedbackTypeStale,
+			Subjects:     []UsefulnessFeedbackSubject{{Kind: UsefulnessFeedbackSubjectMemory, ID: "mem_old"}},
+			Actor:        "agent-a",
+			Reason:       "old signal",
+			CreatedAt:    now,
+			SupersededAt: now.Add(2 * time.Minute),
+		},
+		{
+			ID:           "feedback_stale_superseded_2",
+			Scope:        scope,
+			Type:         UsefulnessFeedbackTypeStale,
+			Subjects:     []UsefulnessFeedbackSubject{{Kind: UsefulnessFeedbackSubjectMemory, ID: "mem_old"}},
+			Actor:        "agent-b",
+			Reason:       "also superseded",
+			CreatedAt:    now.Add(time.Minute),
+			SupersededAt: now.Add(2 * time.Minute),
+		},
+	}}
+	service := NewQualityService(QualityServiceOptions{
+		Store:              store,
+		UsefulnessFeedback: feedback,
+		Now:                func() time.Time { return now },
+		NewID:              func(prefix string) string { return prefix + "_1" },
+		MaxPlanItems:       10,
+	})
+
+	run, err := service.CreateEvaluation(context.Background(), CreateQualityEvaluationInput{
+		Scope:  scope,
+		Checks: []QualityEvaluationCheck{QualityEvaluationCheckRetrieval},
+		Actor:  "operator-a",
+		Reason: "inspect active feedback",
+	})
+	if err != nil {
+		t.Fatalf("CreateEvaluation() error = %v", err)
+	}
+	if run.ID != "eval_1" {
+		t.Fatalf("run id = %q, want eval_1", run.ID)
+	}
+	if feedback.gotInput.Scope != scope || feedback.gotInput.IncludeSuperseded {
+		t.Fatalf("feedback input = %+v, want scoped active-only feedback list", feedback.gotInput)
+	}
+	if !hasEvaluationFindingCode(store.findings, QualityFindingFeedbackNoisyRepeated) || !hasEvaluationFindingCode(store.findings, QualityFindingFeedbackMissingExpectedRepeated) {
+		t.Fatalf("findings = %+v, want noisy and missing expected feedback-derived findings", store.findings)
+	}
+	if hasEvaluationFindingCode(store.findings, QualityFindingFeedbackStaleRepeated) {
+		t.Fatalf("findings = %+v, superseded stale feedback must not generate active finding", store.findings)
+	}
+
+	plan, err := service.CreateRepairPlan(context.Background(), CreateRepairPlanInput{
+		Scope:           scope,
+		EvaluationRunID: "eval_1",
+		Actor:           "operator-a",
+		Reason:          "review feedback-derived findings",
+	})
+	if err != nil {
+		t.Fatalf("CreateRepairPlan() error = %v", err)
+	}
+	if plan.Status != RepairPlanStatusDraft || len(plan.Actions) != 2 {
+		t.Fatalf("plan = %+v, want draft plan with two recommendations", plan)
+	}
+	suppressionReview, ok := findRepairAction(plan.Actions, RepairActionCategorySuppressionReview, QualityFindingFeedbackNoisyRepeated)
+	if !ok || suppressionReview.Status != RepairActionStatusManualReview {
+		t.Fatalf("actions = %+v, want approval-gated suppression review", plan.Actions)
+	}
+	embeddingRetry, ok := findRepairAction(plan.Actions, RepairActionCategoryEmbeddingRetry, QualityFindingFeedbackMissingExpectedRepeated)
+	if !ok || embeddingRetry.Status != RepairActionStatusPending {
+		t.Fatalf("actions = %+v, want pending embedding retry recommendation", plan.Actions)
+	}
+	for _, action := range plan.Actions {
+		if action.Status == RepairActionStatusRunning || action.Status == RepairActionStatusCompleted {
+			t.Fatalf("action = %+v, feedback-derived repair must not execute inline", action)
+		}
+	}
+}
+
 func hasQualityFindingCode(findings []QualityFinding, code QualityFindingCode) bool {
 	for _, finding := range findings {
 		if finding.Code == code {
@@ -186,11 +324,39 @@ func hasQualityFindingCode(findings []QualityFinding, code QualityFindingCode) b
 	return false
 }
 
+func hasEvaluationFindingCode(findings []QualityEvaluationFinding, code QualityFindingCode) bool {
+	for _, finding := range findings {
+		if finding.Code == code {
+			return true
+		}
+	}
+	return false
+}
+
+func findRepairAction(actions []RepairAction, category RepairActionCategory, reasonCode QualityFindingCode) (RepairAction, bool) {
+	for _, action := range actions {
+		if action.Category == category && action.ReasonCode == reasonCode {
+			return action, true
+		}
+	}
+	return RepairAction{}, false
+}
+
 type stubQualityStore struct {
 	createdEvaluation QualityEvaluationRun
 	findings          []QualityEvaluationFinding
 	plans             []RepairPlan
 	actions           []RepairAction
+}
+
+type stubQualityFeedbackLister struct {
+	gotInput ListUsefulnessFeedbackInput
+	items    []UsefulnessFeedback
+}
+
+func (s *stubQualityFeedbackLister) ListUsefulnessFeedback(ctx context.Context, input ListUsefulnessFeedbackInput) ([]UsefulnessFeedback, error) {
+	s.gotInput = input
+	return append([]UsefulnessFeedback(nil), s.items...), nil
 }
 
 func (s *stubQualityStore) CreateQualityEvaluationRun(ctx context.Context, run QualityEvaluationRun) (QualityEvaluationRun, error) {

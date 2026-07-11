@@ -416,12 +416,15 @@ func (r *Repository) CreateMemorySessionTurn(ctx context.Context, turn memory.Me
 	}
 	const query = `
 INSERT INTO memory_session_turns (
-	id, session_id, tenant, project, namespace, status, query, context_evidence,
+	id, session_id, tenant, project, namespace, idempotency_key, status, query, context_evidence,
 	outcome_event_ids, expected_recall, verification_status, failure_category,
 	created_at, updated_at, verified_at
 )
-VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15)
-RETURNING id, session_id, tenant, project, namespace, status, query, context_evidence,
+VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16)
+ON CONFLICT (tenant, project, namespace, session_id, idempotency_key)
+WHERE idempotency_key IS NOT NULL
+DO UPDATE SET idempotency_key = EXCLUDED.idempotency_key
+RETURNING id, session_id, tenant, project, namespace, idempotency_key, outcome_idempotency_key, status, query, context_evidence,
 	outcome_event_ids, expected_recall, verification_status, failure_category,
 	created_at, updated_at, verified_at
 `
@@ -433,6 +436,7 @@ RETURNING id, session_id, tenant, project, namespace, status, query, context_evi
 		turn.Scope.Tenant,
 		turn.Scope.Project,
 		turn.Scope.Namespace,
+		nullableString(turn.IdempotencyKey),
 		turn.Status,
 		turn.Query,
 		contextEvidence,
@@ -464,7 +468,12 @@ WHERE tenant = $1 AND project = $2 AND namespace = $3 AND id = $4
 	if err != nil {
 		return memory.MemorySessionRun{}, err
 	}
+	verifications, err := r.listMemorySessionVerifications(ctx, input.Scope, input.SessionID)
+	if err != nil {
+		return memory.MemorySessionRun{}, err
+	}
 	session.Turns = turns
+	session.Verifications = verifications
 	return session, nil
 }
 
@@ -541,15 +550,17 @@ func (r *Repository) UpdateMemorySessionTurnOutcome(ctx context.Context, input m
 	}
 	const query = `
 UPDATE memory_session_turns
-SET status = $6,
-	outcome_event_ids = COALESCE($7, outcome_event_ids),
-	expected_recall = COALESCE($8, expected_recall),
-	verification_status = $9,
-	failure_category = $10,
-	updated_at = $11,
-	verified_at = $12
+SET status = CASE WHEN outcome_idempotency_key = $6 THEN status ELSE $7 END,
+	outcome_idempotency_key = COALESCE(outcome_idempotency_key, $6),
+	outcome_event_ids = CASE WHEN outcome_idempotency_key = $6 THEN outcome_event_ids ELSE COALESCE($8, outcome_event_ids) END,
+	expected_recall = CASE WHEN outcome_idempotency_key = $6 THEN expected_recall ELSE COALESCE($9, expected_recall) END,
+	verification_status = CASE WHEN outcome_idempotency_key = $6 THEN verification_status ELSE $10 END,
+	failure_category = CASE WHEN outcome_idempotency_key = $6 THEN failure_category ELSE $11 END,
+	updated_at = CASE WHEN outcome_idempotency_key = $6 THEN updated_at ELSE $12 END,
+	verified_at = CASE WHEN outcome_idempotency_key = $6 THEN verified_at ELSE $13 END
 WHERE tenant = $1 AND project = $2 AND namespace = $3 AND session_id = $4 AND id = $5
-RETURNING id, session_id, tenant, project, namespace, status, query, context_evidence,
+	AND (outcome_idempotency_key IS NULL OR outcome_idempotency_key = $6 OR $6 IS NULL)
+RETURNING id, session_id, tenant, project, namespace, idempotency_key, outcome_idempotency_key, status, query, context_evidence,
 	outcome_event_ids, expected_recall, verification_status, failure_category,
 	created_at, updated_at, verified_at
 `
@@ -561,6 +572,7 @@ RETURNING id, session_id, tenant, project, namespace, status, query, context_evi
 		input.Scope.Namespace,
 		input.SessionID,
 		input.TurnID,
+		nullableString(input.OutcomeIdempotencyKey),
 		input.Status,
 		input.OutcomeEventIDs,
 		input.ExpectedRecall,
@@ -573,7 +585,7 @@ RETURNING id, session_id, tenant, project, namespace, status, query, context_evi
 
 func (r *Repository) listMemorySessionTurns(ctx context.Context, scope memory.Scope, sessionID string) ([]memory.MemorySessionTurn, error) {
 	const query = `
-SELECT id, session_id, tenant, project, namespace, status, query, context_evidence,
+SELECT id, session_id, tenant, project, namespace, idempotency_key, outcome_idempotency_key, status, query, context_evidence,
 	outcome_event_ids, expected_recall, verification_status, failure_category,
 	created_at, updated_at, verified_at
 FROM memory_session_turns
@@ -597,6 +609,34 @@ ORDER BY created_at ASC, id ASC
 		return nil, fmt.Errorf("iterate memory session turns: %w", err)
 	}
 	return turns, nil
+}
+
+func (r *Repository) listMemorySessionVerifications(ctx context.Context, scope memory.Scope, sessionID string) ([]memory.MemorySessionVerification, error) {
+	const query = `
+SELECT id, session_id, turn_id, tenant, project, namespace, status, verdict, expected_recall, evidence,
+	failure_category, attempt, worker_id, lease_until, last_error, next_attempt_at,
+	created_at, updated_at, completed_at
+FROM memory_session_verifications
+WHERE tenant = $1 AND project = $2 AND namespace = $3 AND session_id = $4
+ORDER BY created_at ASC, id ASC
+`
+	rows, err := r.db.Query(ctx, query, scope.Tenant, scope.Project, scope.Namespace, sessionID)
+	if err != nil {
+		return nil, fmt.Errorf("list memory session verifications: %w", err)
+	}
+	defer rows.Close()
+	verifications := make([]memory.MemorySessionVerification, 0)
+	for rows.Next() {
+		verification, err := scanMemorySessionVerification(rows)
+		if err != nil {
+			return nil, err
+		}
+		verifications = append(verifications, verification)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("iterate memory session verifications: %w", err)
+	}
+	return verifications, nil
 }
 
 func (r *Repository) CreateMemoryLoopEvidenceLink(ctx context.Context, link memory.MemoryLoopEvidenceLink) (memory.MemoryLoopEvidenceLink, error) {
@@ -1001,6 +1041,8 @@ func scanMemorySessionRun(scanner provenanceScanner) (memory.MemorySessionRun, e
 func scanMemorySessionTurn(scanner provenanceScanner) (memory.MemorySessionTurn, error) {
 	var turn memory.MemorySessionTurn
 	var contextEvidence []byte
+	var idempotencyKey sql.NullString
+	var outcomeIdempotencyKey sql.NullString
 	var verificationStatus sql.NullString
 	var failureCategory sql.NullString
 	var verifiedAt sql.NullTime
@@ -1010,6 +1052,8 @@ func scanMemorySessionTurn(scanner provenanceScanner) (memory.MemorySessionTurn,
 		&turn.Scope.Tenant,
 		&turn.Scope.Project,
 		&turn.Scope.Namespace,
+		&idempotencyKey,
+		&outcomeIdempotencyKey,
 		&turn.Status,
 		&turn.Query,
 		&contextEvidence,
@@ -1028,6 +1072,12 @@ func scanMemorySessionTurn(scanner provenanceScanner) (memory.MemorySessionTurn,
 		if err := json.Unmarshal(contextEvidence, &turn.ContextEvidence); err != nil {
 			return memory.MemorySessionTurn{}, fmt.Errorf("unmarshal memory session turn context evidence: %w", err)
 		}
+	}
+	if idempotencyKey.Valid {
+		turn.IdempotencyKey = idempotencyKey.String
+	}
+	if outcomeIdempotencyKey.Valid {
+		turn.OutcomeIdempotencyKey = outcomeIdempotencyKey.String
 	}
 	if verificationStatus.Valid {
 		turn.VerificationStatus = memory.ScopeProofVerdict(verificationStatus.String)

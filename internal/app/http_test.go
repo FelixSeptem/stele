@@ -397,6 +397,21 @@ type stubMemorySessionService struct {
 	validate             bool
 }
 
+type stubUsefulnessFeedbackService struct {
+	gotCreateInput    memory.UsefulnessFeedback
+	gotListInput      memory.ListUsefulnessFeedbackInput
+	gotReadInput      memory.ReadUsefulnessFeedbackInput
+	gotSummaryInput   memory.SummarizeUsefulnessFeedbackInput
+	gotSupersedeInput memory.SupersedeUsefulnessFeedbackInput
+	createCalls       int
+	created           memory.UsefulnessFeedback
+	items             []memory.UsefulnessFeedback
+	read              memory.UsefulnessFeedback
+	summary           memory.UsefulnessFeedbackSummary
+	err               error
+	validate          bool
+}
+
 func (s *stubScopeProofAdminService) CreateProofRun(ctx context.Context, input memory.CreateScopeProofRunInput) (memory.ScopeProofRun, error) {
 	s.gotCreateInput = input
 	if s.validate {
@@ -515,6 +530,60 @@ func (s *stubMemorySessionService) ReadSessionReport(ctx context.Context, input 
 		}
 	}
 	return s.report, s.err
+}
+
+func (s *stubUsefulnessFeedbackService) CreateUsefulnessFeedback(ctx context.Context, input memory.UsefulnessFeedback) (memory.UsefulnessFeedback, error) {
+	s.createCalls++
+	s.gotCreateInput = input
+	if s.validate {
+		if err := input.Validate(); err != nil {
+			return memory.UsefulnessFeedback{}, err
+		}
+	}
+	if s.created.ID == "" {
+		s.created = input
+	}
+	return s.created, s.err
+}
+
+func (s *stubUsefulnessFeedbackService) ListUsefulnessFeedback(ctx context.Context, input memory.ListUsefulnessFeedbackInput) ([]memory.UsefulnessFeedback, error) {
+	s.gotListInput = input
+	if s.validate {
+		if err := input.Validate(); err != nil {
+			return nil, err
+		}
+	}
+	return s.items, s.err
+}
+
+func (s *stubUsefulnessFeedbackService) ReadUsefulnessFeedback(ctx context.Context, input memory.ReadUsefulnessFeedbackInput) (memory.UsefulnessFeedback, error) {
+	s.gotReadInput = input
+	if s.validate {
+		if err := input.Validate(); err != nil {
+			return memory.UsefulnessFeedback{}, err
+		}
+	}
+	return s.read, s.err
+}
+
+func (s *stubUsefulnessFeedbackService) SummarizeUsefulnessFeedback(ctx context.Context, input memory.SummarizeUsefulnessFeedbackInput) (memory.UsefulnessFeedbackSummary, error) {
+	s.gotSummaryInput = input
+	if s.validate {
+		if err := input.Validate(); err != nil {
+			return memory.UsefulnessFeedbackSummary{}, err
+		}
+	}
+	return s.summary, s.err
+}
+
+func (s *stubUsefulnessFeedbackService) SupersedeUsefulnessFeedback(ctx context.Context, input memory.SupersedeUsefulnessFeedbackInput) error {
+	s.gotSupersedeInput = input
+	if s.validate {
+		if err := input.Validate(); err != nil {
+			return err
+		}
+	}
+	return s.err
 }
 
 func (s *stubDerivedInsightReplayAdminService) PlanDerivedInsightReplay(ctx context.Context, input memory.DerivedInsightReplayRequest) (memory.DerivedInsightReplayReport, error) {
@@ -913,7 +982,7 @@ func TestNewHTTPHandlerSearchesMemories(t *testing.T) {
 		MemorySearcher: searcher,
 	})
 
-	req := httptest.NewRequest(http.MethodPost, "/v1/memories/search", bytes.NewBufferString(`{"query":"concise","query_embedding":[0.1,0.2,0.3],"top_k":3,"include_summaries":true,"time_from":"2026-06-06T09:00:00Z","time_to":"2026-06-06T12:00:00Z"}`))
+	req := httptest.NewRequest(http.MethodPost, "/v1/memories/search", bytes.NewBufferString(`{"query":"concise","query_embedding":[0.1,0.2,0.3],"top_k":3,"include_summaries":true,"include_feedback_diagnostics":true,"feedback_aware_ranking":true,"time_from":"2026-06-06T09:00:00Z","time_to":"2026-06-06T12:00:00Z"}`))
 	req.Header.Set("Content-Type", "application/json")
 	req.Header.Set("X-API-Key", "test-key")
 	req.Header.Set("X-Stele-Tenant", "tenant-a")
@@ -937,6 +1006,9 @@ func TestNewHTTPHandlerSearchesMemories(t *testing.T) {
 
 	if len(searcher.gotInput.QueryEmbedding) != 3 {
 		t.Fatalf("query embedding = %v, want parsed embedding", searcher.gotInput.QueryEmbedding)
+	}
+	if !searcher.gotInput.IncludeFeedbackDiagnostics || !searcher.gotInput.FeedbackAwareRanking {
+		t.Fatalf("feedback flags = %v/%v, want per-request diagnostics and ranking", searcher.gotInput.IncludeFeedbackDiagnostics, searcher.gotInput.FeedbackAwareRanking)
 	}
 
 	var payload map[string]any
@@ -979,7 +1051,7 @@ func TestNewHTTPHandlerAssemblesContext(t *testing.T) {
 		ContextAssembler: assembler,
 	})
 
-	req := httptest.NewRequest(http.MethodPost, "/v1/context/assemble", bytes.NewBufferString(`{"query":"preferences","budget":4,"include_experience_insights":true,"include_diagnostics":true}`))
+	req := httptest.NewRequest(http.MethodPost, "/v1/context/assemble", bytes.NewBufferString(`{"query":"preferences","budget":4,"include_experience_insights":true,"include_diagnostics":true,"include_feedback_diagnostics":true,"feedback_aware_ranking":true}`))
 	req.Header.Set("Content-Type", "application/json")
 	req.Header.Set("X-API-Key", "test-key")
 	req.Header.Set("X-Stele-Tenant", "tenant-a")
@@ -1002,6 +1074,44 @@ func TestNewHTTPHandlerAssemblesContext(t *testing.T) {
 	}
 	if !assembler.gotInput.IncludeDiagnostics {
 		t.Fatal("IncludeDiagnostics = false, want true")
+	}
+	if !assembler.gotInput.IncludeFeedbackDiagnostics || !assembler.gotInput.FeedbackAwareRanking {
+		t.Fatalf("feedback flags = %v/%v, want per-request diagnostics and ranking", assembler.gotInput.IncludeFeedbackDiagnostics, assembler.gotInput.FeedbackAwareRanking)
+	}
+}
+
+func TestNewHTTPHandlerRejectsScopeWideFeedbackRankingPolicy(t *testing.T) {
+	searcher := &stubMemorySearcher{}
+	assembler := &stubContextAssembler{}
+	handler := NewHTTPHandler(HTTPDependencies{
+		Readiness:        stubReadinessChecker{},
+		APIKeys:          map[string]struct{}{"test-key": {}},
+		MemorySearcher:   searcher,
+		ContextAssembler: assembler,
+	})
+
+	searchReq := httptest.NewRequest(http.MethodPost, "/v1/memories/search", bytes.NewBufferString(`{"query":"concise","feedback_ranking_policy":"scope_default"}`))
+	searchReq.Header.Set("Content-Type", "application/json")
+	setAPIScopeHeaders(searchReq)
+	searchResp := httptest.NewRecorder()
+	handler.ServeHTTP(searchResp, searchReq)
+	if searchResp.Code != http.StatusBadRequest {
+		t.Fatalf("search status = %d body=%s, want 400", searchResp.Code, searchResp.Body.String())
+	}
+	if searcher.gotInput.Query != "" {
+		t.Fatalf("search input = %+v, want rejected before searcher", searcher.gotInput)
+	}
+
+	contextReq := httptest.NewRequest(http.MethodPost, "/v1/context/assemble", bytes.NewBufferString(`{"query":"preferences","budget":4,"feedback_ranking_policy":"scope_default"}`))
+	contextReq.Header.Set("Content-Type", "application/json")
+	setAPIScopeHeaders(contextReq)
+	contextResp := httptest.NewRecorder()
+	handler.ServeHTTP(contextResp, contextReq)
+	if contextResp.Code != http.StatusBadRequest {
+		t.Fatalf("context status = %d body=%s, want 400", contextResp.Code, contextResp.Body.String())
+	}
+	if assembler.gotInput.Query != "" {
+		t.Fatalf("context input = %+v, want rejected before assembler", assembler.gotInput)
 	}
 }
 
@@ -3312,6 +3422,12 @@ func TestNewHTTPHandlerServesMemorySessionLoop(t *testing.T) {
 		report: memory.MemorySessionReport{
 			Session:     memory.MemorySessionRun{ID: "session_1", Scope: scope, Status: memory.MemorySessionStatusActive, Verdict: memory.ScopeProofVerdictPending},
 			NextActions: []string{"wait_for_session_verification"},
+			FeedbackSummaries: []memory.UsefulnessFeedbackSummary{{
+				Subject:          memory.UsefulnessFeedbackSubject{Kind: memory.UsefulnessFeedbackSubjectSession, ID: "session_1"},
+				TotalActive:      1,
+				PositiveCount:    1,
+				EffectiveQuality: memory.UsefulnessQualityPositive,
+			}},
 		},
 		validate: true,
 	}
@@ -3343,26 +3459,29 @@ func TestNewHTTPHandlerServesMemorySessionLoop(t *testing.T) {
 		t.Fatalf("list input = %+v, want scoped limit 10", service.gotListInput)
 	}
 
-	turnReq := httptest.NewRequest(http.MethodPost, "/v1/memory-sessions/session_1/turns", strings.NewReader(`{"query":"remember deployment preference","context_budget":1200,"include_relations":true,"include_experience_insights":true}`))
+	turnReq := httptest.NewRequest(http.MethodPost, "/v1/memory-sessions/session_1/turns", strings.NewReader(`{"idempotency_key":"turn-key-1","query":"remember deployment preference","context_budget":1200,"include_relations":true,"include_experience_insights":true}`))
 	setAPIScopeHeaders(turnReq)
 	turnResp := httptest.NewRecorder()
 	handler.ServeHTTP(turnResp, turnReq)
 	if turnResp.Code != http.StatusCreated {
 		t.Fatalf("turn status = %d body=%s, want 201", turnResp.Code, turnResp.Body.String())
 	}
-	if service.gotCreateTurnInput.SessionID != "session_1" || service.gotCreateTurnInput.ContextBudget != 1200 {
+	if service.gotCreateTurnInput.SessionID != "session_1" || service.gotCreateTurnInput.ContextBudget != 1200 || service.gotCreateTurnInput.IdempotencyKey != "turn-key-1" {
 		t.Fatalf("turn input = %+v, want session_1 budget 1200", service.gotCreateTurnInput)
 	}
 
-	outcomeReq := httptest.NewRequest(http.MethodPost, "/v1/memory-sessions/session_1/turns/turn_1:outcome", strings.NewReader(`{"outcome_event_ids":["evt_2"],"expected_recall":["evt_2"]}`))
+	outcomeReq := httptest.NewRequest(http.MethodPost, "/v1/memory-sessions/session_1/turns/turn_1:outcome", strings.NewReader(`{"idempotency_key":"outcome-key-1","outcome_event_ids":["evt_2"],"event_payloads":[{"event_type":"agent_observation","content":"User prefers staged rollout","metadata":{"source":"test-agent"}}],"expected_recall":["evt_2"]}`))
 	setAPIScopeHeaders(outcomeReq)
 	outcomeResp := httptest.NewRecorder()
 	handler.ServeHTTP(outcomeResp, outcomeReq)
 	if outcomeResp.Code != http.StatusOK {
 		t.Fatalf("outcome status = %d body=%s, want 200", outcomeResp.Code, outcomeResp.Body.String())
 	}
-	if service.gotOutcomeInput.TurnID != "turn_1" || service.gotOutcomeInput.OutcomeEventIDs[0] != "evt_2" {
+	if service.gotOutcomeInput.TurnID != "turn_1" || service.gotOutcomeInput.IdempotencyKey != "outcome-key-1" || service.gotOutcomeInput.OutcomeEventIDs[0] != "evt_2" || len(service.gotOutcomeInput.OutcomeEventPayloads) != 1 {
 		t.Fatalf("outcome input = %+v, want turn_1 evt_2", service.gotOutcomeInput)
+	}
+	if service.gotOutcomeInput.OutcomeEventPayloads[0].Metadata["source"] != "test-agent" {
+		t.Fatalf("outcome payload metadata = %+v, want source preserved", service.gotOutcomeInput.OutcomeEventPayloads[0].Metadata)
 	}
 
 	verifyReq := httptest.NewRequest(http.MethodPost, "/v1/memory-sessions/session_1:verify", strings.NewReader(`{"turn_id":"turn_1","expected_recall":["evt_2"]}`))
@@ -3385,6 +3504,9 @@ func TestNewHTTPHandlerServesMemorySessionLoop(t *testing.T) {
 	}
 	if service.gotReadInput.SessionID != "session_1" || service.gotReadInput.Scope != scope {
 		t.Fatalf("report input = %+v, want scoped session_1", service.gotReadInput)
+	}
+	if !strings.Contains(reportResp.Body.String(), `"feedback_summaries"`) || !strings.Contains(reportResp.Body.String(), `"effective_quality":"positive"`) {
+		t.Fatalf("report body = %s, want bounded feedback summaries", reportResp.Body.String())
 	}
 }
 
@@ -3425,6 +3547,287 @@ func TestNewHTTPHandlerRejectsOutOfScopeMemorySessionReport(t *testing.T) {
 	}
 	if service.gotReadInput.SessionID != "session_other" {
 		t.Fatalf("read input = %+v, want session_other scoped", service.gotReadInput)
+	}
+}
+
+func TestNewHTTPHandlerServesUsefulnessFeedbackAPI(t *testing.T) {
+	scope := memory.Scope{Tenant: "tenant-a", Project: "project-a", Namespace: "namespace-a"}
+	now := time.Date(2026, 7, 11, 12, 30, 0, 0, time.UTC)
+	service := &stubUsefulnessFeedbackService{
+		created: memory.UsefulnessFeedback{
+			ID:            "feedback_1",
+			Scope:         scope,
+			Type:          memory.UsefulnessFeedbackTypeUseful,
+			SourceSurface: memory.UsefulnessFeedbackSourceSession,
+			Subjects: []memory.UsefulnessFeedbackSubject{{
+				Kind: memory.UsefulnessFeedbackSubjectMemory,
+				ID:   "mem_1",
+			}},
+			Actor:     "agent-a",
+			Reason:    "helped answer",
+			CreatedAt: now,
+		},
+		items: []memory.UsefulnessFeedback{{
+			ID:            "feedback_1",
+			Scope:         scope,
+			Type:          memory.UsefulnessFeedbackTypeUseful,
+			SourceSurface: memory.UsefulnessFeedbackSourceSession,
+			Actor:         "agent-a",
+			Reason:        "helped answer",
+			CreatedAt:     now,
+		}},
+		read: memory.UsefulnessFeedback{
+			ID:            "feedback_1",
+			Scope:         scope,
+			Type:          memory.UsefulnessFeedbackTypeUseful,
+			SourceSurface: memory.UsefulnessFeedbackSourceSession,
+			Actor:         "agent-a",
+			Reason:        "helped answer",
+			CreatedAt:     now,
+		},
+		summary: memory.UsefulnessFeedbackSummary{
+			Subject:          memory.UsefulnessFeedbackSubject{Kind: memory.UsefulnessFeedbackSubjectMemory, ID: "mem_1"},
+			Counts:           map[memory.UsefulnessFeedbackType]int{memory.UsefulnessFeedbackTypeUseful: 1},
+			TotalActive:      1,
+			PositiveCount:    1,
+			EffectiveQuality: memory.UsefulnessQualityPositive,
+			LastFeedbackAt:   now,
+		},
+		validate: true,
+	}
+	handler := NewHTTPHandler(HTTPDependencies{
+		Readiness:          stubReadinessChecker{},
+		APIKeys:            map[string]struct{}{"test-key": {}},
+		AdminAPIKeys:       map[string]struct{}{"admin-key": {}},
+		UsefulnessFeedback: service,
+	})
+
+	createReq := httptest.NewRequest(http.MethodPost, "/v1/usefulness-feedback", strings.NewReader(`{"type":"useful","source_surface":"session","subjects":[{"kind":"memory","id":"mem_1"}],"actor":"agent-a","reason":"helped answer","idempotency_key":"idem-1","metadata":{"session_id":"session_1"}}`))
+	setAPIScopeHeaders(createReq)
+	createResp := httptest.NewRecorder()
+	handler.ServeHTTP(createResp, createReq)
+	if createResp.Code != http.StatusCreated {
+		t.Fatalf("create status = %d body=%s, want 201", createResp.Code, createResp.Body.String())
+	}
+	if service.gotCreateInput.Scope != scope || service.gotCreateInput.Type != memory.UsefulnessFeedbackTypeUseful || service.gotCreateInput.Subjects[0].ID != "mem_1" || service.gotCreateInput.IdempotencyKey != "idem-1" {
+		t.Fatalf("create input = %+v, want scoped memory feedback", service.gotCreateInput)
+	}
+
+	listReq := httptest.NewRequest(http.MethodGet, "/v1/admin/usefulness-feedback?type=useful&include_superseded=true&limit=25", nil)
+	setAdminScopeHeaders(listReq)
+	listResp := httptest.NewRecorder()
+	handler.ServeHTTP(listResp, listReq)
+	if listResp.Code != http.StatusOK {
+		t.Fatalf("list status = %d body=%s, want 200", listResp.Code, listResp.Body.String())
+	}
+	if service.gotListInput.Scope != scope || service.gotListInput.Type != memory.UsefulnessFeedbackTypeUseful || !service.gotListInput.IncludeSuperseded || service.gotListInput.Limit != 25 {
+		t.Fatalf("list input = %+v, want scoped admin list filters", service.gotListInput)
+	}
+
+	readReq := httptest.NewRequest(http.MethodGet, "/v1/admin/usefulness-feedback/feedback_1", nil)
+	setAdminScopeHeaders(readReq)
+	readResp := httptest.NewRecorder()
+	handler.ServeHTTP(readResp, readReq)
+	if readResp.Code != http.StatusOK {
+		t.Fatalf("read status = %d body=%s, want 200", readResp.Code, readResp.Body.String())
+	}
+	if service.gotReadInput.FeedbackID != "feedback_1" || service.gotReadInput.Scope != scope {
+		t.Fatalf("read input = %+v, want scoped feedback_1", service.gotReadInput)
+	}
+
+	summaryReq := httptest.NewRequest(http.MethodGet, "/v1/admin/usefulness-feedback/summary?subject_kind=memory&subject_id=mem_1", nil)
+	setAdminScopeHeaders(summaryReq)
+	summaryResp := httptest.NewRecorder()
+	handler.ServeHTTP(summaryResp, summaryReq)
+	if summaryResp.Code != http.StatusOK {
+		t.Fatalf("summary status = %d body=%s, want 200", summaryResp.Code, summaryResp.Body.String())
+	}
+	if service.gotSummaryInput.Subject.Kind != memory.UsefulnessFeedbackSubjectMemory || service.gotSummaryInput.Subject.ID != "mem_1" {
+		t.Fatalf("summary input = %+v, want memory subject", service.gotSummaryInput)
+	}
+
+	supersedeReq := httptest.NewRequest(http.MethodPost, "/v1/admin/usefulness-feedback/feedback_1:supersede", strings.NewReader(`{"actor":"operator-a","reason":"incorrect signal"}`))
+	setAdminScopeHeaders(supersedeReq)
+	supersedeResp := httptest.NewRecorder()
+	handler.ServeHTTP(supersedeResp, supersedeReq)
+	if supersedeResp.Code != http.StatusAccepted {
+		t.Fatalf("supersede status = %d body=%s, want 202", supersedeResp.Code, supersedeResp.Body.String())
+	}
+	if service.gotSupersedeInput.FeedbackID != "feedback_1" || service.gotSupersedeInput.Actor != "operator-a" || service.gotSupersedeInput.Scope != scope {
+		t.Fatalf("supersede input = %+v, want scoped supersession", service.gotSupersedeInput)
+	}
+}
+
+func TestNewHTTPHandlerValidatesUsefulnessFeedbackCreate(t *testing.T) {
+	service := &stubUsefulnessFeedbackService{validate: true}
+	handler := NewHTTPHandler(HTTPDependencies{
+		Readiness:          stubReadinessChecker{},
+		APIKeys:            map[string]struct{}{"test-key": {}},
+		UsefulnessFeedback: service,
+	})
+
+	invalidTypeReq := httptest.NewRequest(http.MethodPost, "/v1/usefulness-feedback", strings.NewReader(`{"type":"free_form","source_surface":"session","subjects":[{"kind":"memory","id":"mem_1"}],"actor":"agent-a","reason":"helped answer"}`))
+	setAPIScopeHeaders(invalidTypeReq)
+	invalidTypeResp := httptest.NewRecorder()
+	handler.ServeHTTP(invalidTypeResp, invalidTypeReq)
+	if invalidTypeResp.Code != http.StatusBadRequest {
+		t.Fatalf("invalid type status = %d body=%s, want 400", invalidTypeResp.Code, invalidTypeResp.Body.String())
+	}
+
+	knownExpectedReq := httptest.NewRequest(http.MethodPost, "/v1/usefulness-feedback", strings.NewReader(`{"type":"missing_expected","source_surface":"verification","subjects":[{"kind":"expected_recall","expected_recall_target":{"kind":"memory","id":"mem_1"}}],"actor":"agent-a","reason":"expected memory was absent","idempotency_key":"expected-1"}`))
+	setAPIScopeHeaders(knownExpectedReq)
+	knownExpectedResp := httptest.NewRecorder()
+	handler.ServeHTTP(knownExpectedResp, knownExpectedReq)
+	if knownExpectedResp.Code != http.StatusCreated {
+		t.Fatalf("known expected status = %d body=%s, want 201", knownExpectedResp.Code, knownExpectedResp.Body.String())
+	}
+	if service.gotCreateInput.Subjects[0].ExpectedRecallTarget.Kind != memory.ExpectedRecallTargetMemory || service.gotCreateInput.Subjects[0].ExpectedRecallTarget.ID != "mem_1" {
+		t.Fatalf("expected recall subject = %+v, want known memory target", service.gotCreateInput.Subjects[0])
+	}
+
+	opaqueExpectedReq := httptest.NewRequest(http.MethodPost, "/v1/usefulness-feedback", strings.NewReader(`{"type":"missing_expected","source_surface":"verification","subjects":[{"kind":"expected_recall","expected_recall_target":{"kind":"opaque","opaque_token":"caller-expected-fact"}}],"actor":"agent-a","reason":"opaque expectation absent","idempotency_key":"expected-opaque-1"}`))
+	setAPIScopeHeaders(opaqueExpectedReq)
+	opaqueExpectedResp := httptest.NewRecorder()
+	handler.ServeHTTP(opaqueExpectedResp, opaqueExpectedReq)
+	if opaqueExpectedResp.Code != http.StatusCreated {
+		t.Fatalf("opaque expected status = %d body=%s, want 201", opaqueExpectedResp.Code, opaqueExpectedResp.Body.String())
+	}
+	if service.gotCreateInput.Subjects[0].ExpectedRecallTarget.Kind != memory.ExpectedRecallTargetOpaque || service.gotCreateInput.Subjects[0].ExpectedRecallTarget.OpaqueToken != "caller-expected-fact" || service.gotCreateInput.Subjects[0].ExpectedRecallTarget.ID != "" {
+		t.Fatalf("expected recall subject = %+v, want opaque token only", service.gotCreateInput.Subjects[0])
+	}
+
+	invalidExpectedReq := httptest.NewRequest(http.MethodPost, "/v1/usefulness-feedback", strings.NewReader(`{"type":"missing_expected","source_surface":"verification","subjects":[{"kind":"expected_recall","expected_recall_target":{"kind":"opaque","id":"mem_1","opaque_token":"caller-expected-fact"}}],"actor":"agent-a","reason":"invalid target"}`))
+	setAPIScopeHeaders(invalidExpectedReq)
+	invalidExpectedResp := httptest.NewRecorder()
+	handler.ServeHTTP(invalidExpectedResp, invalidExpectedReq)
+	if invalidExpectedResp.Code != http.StatusBadRequest {
+		t.Fatalf("invalid expected status = %d body=%s, want 400", invalidExpectedResp.Code, invalidExpectedResp.Body.String())
+	}
+}
+
+func TestNewHTTPHandlerPassesUsefulnessFeedbackIdempotency(t *testing.T) {
+	service := &stubUsefulnessFeedbackService{validate: true}
+	handler := NewHTTPHandler(HTTPDependencies{
+		Readiness:          stubReadinessChecker{},
+		APIKeys:            map[string]struct{}{"test-key": {}},
+		UsefulnessFeedback: service,
+	})
+	body := `{"type":"useful","source_surface":"session","subjects":[{"kind":"memory","id":"mem_1"}],"actor":"agent-a","reason":"helped answer","idempotency_key":"idem-1"}`
+
+	firstReq := httptest.NewRequest(http.MethodPost, "/v1/usefulness-feedback", strings.NewReader(body))
+	setAPIScopeHeaders(firstReq)
+	firstResp := httptest.NewRecorder()
+	handler.ServeHTTP(firstResp, firstReq)
+	if firstResp.Code != http.StatusCreated {
+		t.Fatalf("first status = %d body=%s, want 201", firstResp.Code, firstResp.Body.String())
+	}
+
+	secondReq := httptest.NewRequest(http.MethodPost, "/v1/usefulness-feedback", strings.NewReader(body))
+	setAPIScopeHeaders(secondReq)
+	secondResp := httptest.NewRecorder()
+	handler.ServeHTTP(secondResp, secondReq)
+	if secondResp.Code != http.StatusCreated {
+		t.Fatalf("second status = %d body=%s, want 201", secondResp.Code, secondResp.Body.String())
+	}
+	if service.createCalls != 2 || service.gotCreateInput.IdempotencyKey != "idem-1" {
+		t.Fatalf("create calls/idempotency = %d/%q, want duplicate-safe idempotency passed through", service.createCalls, service.gotCreateInput.IdempotencyKey)
+	}
+}
+
+func TestNewHTTPHandlerFiltersUsefulnessFeedbackAdminListBySubject(t *testing.T) {
+	service := &stubUsefulnessFeedbackService{validate: true}
+	handler := NewHTTPHandler(HTTPDependencies{
+		Readiness:          stubReadinessChecker{},
+		AdminAPIKeys:       map[string]struct{}{"admin-key": {}},
+		UsefulnessFeedback: service,
+	})
+
+	listReq := httptest.NewRequest(http.MethodGet, "/v1/admin/usefulness-feedback?subject_kind=expected_recall&expected_recall_kind=memory&expected_recall_id=mem_1&include_superseded=false", nil)
+	setAdminScopeHeaders(listReq)
+	listResp := httptest.NewRecorder()
+	handler.ServeHTTP(listResp, listReq)
+	if listResp.Code != http.StatusOK {
+		t.Fatalf("list status = %d body=%s, want 200", listResp.Code, listResp.Body.String())
+	}
+	if service.gotListInput.Subject.Kind != memory.UsefulnessFeedbackSubjectExpectedRecall || service.gotListInput.Subject.ExpectedRecallTarget.Kind != memory.ExpectedRecallTargetMemory || service.gotListInput.Subject.ExpectedRecallTarget.ID != "mem_1" {
+		t.Fatalf("list subject = %+v, want expected recall memory target", service.gotListInput.Subject)
+	}
+
+	invalidBoolReq := httptest.NewRequest(http.MethodGet, "/v1/admin/usefulness-feedback?include_superseded=definitely", nil)
+	setAdminScopeHeaders(invalidBoolReq)
+	invalidBoolResp := httptest.NewRecorder()
+	handler.ServeHTTP(invalidBoolResp, invalidBoolReq)
+	if invalidBoolResp.Code != http.StatusBadRequest {
+		t.Fatalf("invalid bool status = %d body=%s, want 400", invalidBoolResp.Code, invalidBoolResp.Body.String())
+	}
+}
+
+func TestNewHTTPHandlerKeepsUsefulnessFeedbackSummaryAdminOnly(t *testing.T) {
+	service := &stubUsefulnessFeedbackService{validate: true}
+	handler := NewHTTPHandler(HTTPDependencies{
+		Readiness:          stubReadinessChecker{},
+		APIKeys:            map[string]struct{}{"test-key": {}},
+		AdminAPIKeys:       map[string]struct{}{"admin-key": {}},
+		UsefulnessFeedback: service,
+	})
+
+	req := httptest.NewRequest(http.MethodGet, "/v1/admin/usefulness-feedback/summary?subject_kind=memory&subject_id=mem_1", nil)
+	setAPIScopeHeaders(req)
+	resp := httptest.NewRecorder()
+	handler.ServeHTTP(resp, req)
+	if resp.Code != http.StatusUnauthorized {
+		t.Fatalf("status = %d body=%s, want 401", resp.Code, resp.Body.String())
+	}
+	if service.gotSummaryInput.Subject.Kind != "" {
+		t.Fatalf("summary input = %+v, want public caller blocked before service call", service.gotSummaryInput)
+	}
+}
+
+func TestNewHTTPHandlerHidesOutOfScopeUsefulnessFeedbackDetails(t *testing.T) {
+	service := &stubUsefulnessFeedbackService{err: pgx.ErrNoRows, validate: true}
+	handler := NewHTTPHandler(HTTPDependencies{
+		Readiness:          stubReadinessChecker{},
+		AdminAPIKeys:       map[string]struct{}{"admin-key": {}},
+		UsefulnessFeedback: service,
+	})
+
+	req := httptest.NewRequest(http.MethodGet, "/v1/admin/usefulness-feedback/secret_feedback_1", nil)
+	setAdminScopeHeaders(req)
+	resp := httptest.NewRecorder()
+	handler.ServeHTTP(resp, req)
+	if resp.Code != http.StatusNotFound {
+		t.Fatalf("status = %d body=%s, want 404", resp.Code, resp.Body.String())
+	}
+	if strings.Contains(resp.Body.String(), "secret_feedback_1") {
+		t.Fatalf("body leaks target id: %s", resp.Body.String())
+	}
+}
+
+func TestUsefulnessFeedbackLifecycleLogUsesBoundedFields(t *testing.T) {
+	var out strings.Builder
+	logger := log.New(&out, "", 0)
+
+	recordUsefulnessFeedbackLog(logger, "create", "ok", memory.UsefulnessFeedbackTypeNoisy, memory.UsefulnessFeedbackSubjectMemory, memory.UsefulnessFeedbackSourceSearch, "active")
+
+	line := out.String()
+	for _, want := range []string{
+		"component=usefulness_feedback",
+		"event=lifecycle",
+		"operation=create",
+		"result=ok",
+		"feedback_type=noisy",
+		"subject_kind=memory",
+		"source_surface=search",
+		"decision=active",
+	} {
+		if !strings.Contains(line, want) {
+			t.Fatalf("log = %q, missing %q", line, want)
+		}
+	}
+	for _, forbidden := range []string{"feedback_id", "memory_id", "session_id", "actor", "reason"} {
+		if strings.Contains(line, forbidden) {
+			t.Fatalf("log = %q, contains high-cardinality field %q", line, forbidden)
+		}
 	}
 }
 

@@ -213,35 +213,38 @@ func (s MemorySessionTurnStatus) Valid() bool {
 }
 
 type MemorySessionRun struct {
-	ID              string               `json:"id"`
-	Scope           Scope                `json:"scope"`
-	Status          MemorySessionStatus  `json:"status"`
-	Verdict         ScopeProofVerdict    `json:"verdict"`
-	Actor           string               `json:"actor,omitempty"`
-	Reason          string               `json:"reason,omitempty"`
-	Metadata        map[string]any       `json:"metadata,omitempty"`
-	FailureCategory ProofFailureCategory `json:"failure_category,omitempty"`
-	CreatedAt       time.Time            `json:"created_at"`
-	UpdatedAt       time.Time            `json:"updated_at"`
-	StartedAt       time.Time            `json:"started_at,omitempty"`
-	FinishedAt      time.Time            `json:"finished_at,omitempty"`
-	Turns           []MemorySessionTurn  `json:"turns,omitempty"`
+	ID              string                      `json:"id"`
+	Scope           Scope                       `json:"scope"`
+	Status          MemorySessionStatus         `json:"status"`
+	Verdict         ScopeProofVerdict           `json:"verdict"`
+	Actor           string                      `json:"actor,omitempty"`
+	Reason          string                      `json:"reason,omitempty"`
+	Metadata        map[string]any              `json:"metadata,omitempty"`
+	FailureCategory ProofFailureCategory        `json:"failure_category,omitempty"`
+	CreatedAt       time.Time                   `json:"created_at"`
+	UpdatedAt       time.Time                   `json:"updated_at"`
+	StartedAt       time.Time                   `json:"started_at,omitempty"`
+	FinishedAt      time.Time                   `json:"finished_at,omitempty"`
+	Turns           []MemorySessionTurn         `json:"turns,omitempty"`
+	Verifications   []MemorySessionVerification `json:"verifications,omitempty"`
 }
 
 type MemorySessionTurn struct {
-	ID                 string                  `json:"id"`
-	SessionID          string                  `json:"session_id"`
-	Scope              Scope                   `json:"scope"`
-	Status             MemorySessionTurnStatus `json:"status"`
-	Query              string                  `json:"query"`
-	ContextEvidence    map[string]any          `json:"context_evidence,omitempty"`
-	OutcomeEventIDs    []string                `json:"outcome_event_ids,omitempty"`
-	ExpectedRecall     []string                `json:"expected_recall,omitempty"`
-	VerificationStatus ScopeProofVerdict       `json:"verification_status,omitempty"`
-	FailureCategory    ProofFailureCategory    `json:"failure_category,omitempty"`
-	CreatedAt          time.Time               `json:"created_at"`
-	UpdatedAt          time.Time               `json:"updated_at"`
-	VerifiedAt         time.Time               `json:"verified_at,omitempty"`
+	ID                    string                  `json:"id"`
+	SessionID             string                  `json:"session_id"`
+	Scope                 Scope                   `json:"scope"`
+	IdempotencyKey        string                  `json:"idempotency_key,omitempty"`
+	OutcomeIdempotencyKey string                  `json:"outcome_idempotency_key,omitempty"`
+	Status                MemorySessionTurnStatus `json:"status"`
+	Query                 string                  `json:"query"`
+	ContextEvidence       map[string]any          `json:"context_evidence,omitempty"`
+	OutcomeEventIDs       []string                `json:"outcome_event_ids,omitempty"`
+	ExpectedRecall        []string                `json:"expected_recall,omitempty"`
+	VerificationStatus    ScopeProofVerdict       `json:"verification_status,omitempty"`
+	FailureCategory       ProofFailureCategory    `json:"failure_category,omitempty"`
+	CreatedAt             time.Time               `json:"created_at"`
+	UpdatedAt             time.Time               `json:"updated_at"`
+	VerifiedAt            time.Time               `json:"verified_at,omitempty"`
 }
 
 type MemorySessionVerification struct {
@@ -595,6 +598,7 @@ type CreateMemorySessionTurnInput struct {
 	Scope                     Scope
 	SessionID                 string
 	TurnID                    string
+	IdempotencyKey            string
 	Query                     string
 	ContextBudget             int
 	IncludeRelations          bool
@@ -619,11 +623,13 @@ func (i CreateMemorySessionTurnInput) Validate() error {
 }
 
 type RecordMemorySessionTurnOutcomeInput struct {
-	Scope           Scope
-	SessionID       string
-	TurnID          string
-	OutcomeEventIDs []string
-	ExpectedRecall  []string
+	Scope                Scope
+	SessionID            string
+	TurnID               string
+	IdempotencyKey       string
+	OutcomeEventIDs      []string
+	OutcomeEventPayloads []MemorySessionOutcomeEventPayload
+	ExpectedRecall       []string
 }
 
 func (i RecordMemorySessionTurnOutcomeInput) Validate() error {
@@ -636,20 +642,46 @@ func (i RecordMemorySessionTurnOutcomeInput) Validate() error {
 	if strings.TrimSpace(i.TurnID) == "" {
 		return fmt.Errorf("turn id is required")
 	}
+	if len(i.OutcomeEventPayloads) > 20 {
+		return fmt.Errorf("outcome event payload count must be less than or equal to 20")
+	}
+	for _, payload := range i.OutcomeEventPayloads {
+		if err := payload.Validate(); err != nil {
+			return err
+		}
+	}
 	return nil
 }
 
+type MemorySessionOutcomeEventPayload struct {
+	EventType       string         `json:"event_type"`
+	Content         string         `json:"content"`
+	Metadata        map[string]any `json:"metadata,omitempty"`
+	SourceTimestamp time.Time      `json:"source_timestamp,omitempty"`
+}
+
+func (p MemorySessionOutcomeEventPayload) Validate() error {
+	return IngestEventInput{
+		Scope:           Scope{Tenant: "placeholder", Project: "placeholder", Namespace: "placeholder"},
+		EventType:       p.EventType,
+		Content:         p.Content,
+		Metadata:        p.Metadata,
+		SourceTimestamp: p.SourceTimestamp,
+	}.Validate()
+}
+
 type UpdateMemorySessionTurnOutcomeInput struct {
-	Scope              Scope
-	SessionID          string
-	TurnID             string
-	Status             MemorySessionTurnStatus
-	OutcomeEventIDs    []string
-	ExpectedRecall     []string
-	VerificationStatus ScopeProofVerdict
-	FailureCategory    ProofFailureCategory
-	UpdatedAt          time.Time
-	VerifiedAt         time.Time
+	Scope                 Scope
+	SessionID             string
+	TurnID                string
+	OutcomeIdempotencyKey string
+	Status                MemorySessionTurnStatus
+	OutcomeEventIDs       []string
+	ExpectedRecall        []string
+	VerificationStatus    ScopeProofVerdict
+	FailureCategory       ProofFailureCategory
+	UpdatedAt             time.Time
+	VerifiedAt            time.Time
 }
 
 func (i UpdateMemorySessionTurnOutcomeInput) Validate() error {

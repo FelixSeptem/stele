@@ -85,14 +85,20 @@ const (
 type QualityFindingCode string
 
 const (
-	QualityFindingIntentNotWritable          QualityFindingCode = "intent_not_writable"
-	QualityFindingGovernanceBacklogHigh      QualityFindingCode = "governance_backlog_high"
-	QualityFindingWorkerLeasePressureHigh    QualityFindingCode = "worker_lease_pressure_high"
-	QualityFindingSemanticProjectionDegraded QualityFindingCode = "semantic_projection_degraded"
-	QualityFindingLifecycleHiddenReturned    QualityFindingCode = "lifecycle_hidden_returned"
-	QualityFindingExpectedRecallMissing      QualityFindingCode = "expected_recall_missing"
-	QualityFindingUnsupportedAutomaticRepair QualityFindingCode = "unsupported_automatic_repair"
-	QualityFindingCanonicalRewriteRequired   QualityFindingCode = "canonical_rewrite_required"
+	QualityFindingIntentNotWritable               QualityFindingCode = "intent_not_writable"
+	QualityFindingGovernanceBacklogHigh           QualityFindingCode = "governance_backlog_high"
+	QualityFindingWorkerLeasePressureHigh         QualityFindingCode = "worker_lease_pressure_high"
+	QualityFindingSemanticProjectionDegraded      QualityFindingCode = "semantic_projection_degraded"
+	QualityFindingLifecycleHiddenReturned         QualityFindingCode = "lifecycle_hidden_returned"
+	QualityFindingExpectedRecallMissing           QualityFindingCode = "expected_recall_missing"
+	QualityFindingUnsupportedAutomaticRepair      QualityFindingCode = "unsupported_automatic_repair"
+	QualityFindingCanonicalRewriteRequired        QualityFindingCode = "canonical_rewrite_required"
+	QualityFindingFeedbackNoisyRepeated           QualityFindingCode = "feedback_noisy_repeated"
+	QualityFindingFeedbackStaleRepeated           QualityFindingCode = "feedback_stale_repeated"
+	QualityFindingFeedbackIrrelevantRepeated      QualityFindingCode = "feedback_irrelevant_repeated"
+	QualityFindingFeedbackMissingExpectedRepeated QualityFindingCode = "feedback_missing_expected_repeated"
+	QualityFindingFeedbackUnsafeOrHidden          QualityFindingCode = "feedback_unsafe_or_hidden"
+	QualityFindingFeedbackNeedsReview             QualityFindingCode = "feedback_needs_review"
 )
 
 type QualityFinding struct {
@@ -289,11 +295,13 @@ type QualityEvaluationFinding struct {
 type RepairActionCategory string
 
 const (
-	RepairActionCategoryEmbeddingRetry    RepairActionCategory = "embedding_retry"
-	RepairActionCategoryGovernanceRequeue RepairActionCategory = "governance_requeue"
-	RepairActionCategoryInsightReplay     RepairActionCategory = "derived_insight_replay"
-	RepairActionCategoryManualReview      RepairActionCategory = "manual_review"
-	RepairActionCategoryCanonicalRewrite  RepairActionCategory = "canonical_rewrite"
+	RepairActionCategoryEmbeddingRetry       RepairActionCategory = "embedding_retry"
+	RepairActionCategoryGovernanceRequeue    RepairActionCategory = "governance_requeue"
+	RepairActionCategoryInsightReplay        RepairActionCategory = "derived_insight_replay"
+	RepairActionCategoryManualReview         RepairActionCategory = "manual_review"
+	RepairActionCategoryCanonicalRewrite     RepairActionCategory = "canonical_rewrite"
+	RepairActionCategorySuppressionReview    RepairActionCategory = "suppression_review"
+	RepairActionCategoryGovernanceInspection RepairActionCategory = "governance_inspection"
 )
 
 func (c RepairActionCategory) Valid() bool {
@@ -302,7 +310,9 @@ func (c RepairActionCategory) Valid() bool {
 		RepairActionCategoryGovernanceRequeue,
 		RepairActionCategoryInsightReplay,
 		RepairActionCategoryManualReview,
-		RepairActionCategoryCanonicalRewrite:
+		RepairActionCategoryCanonicalRewrite,
+		RepairActionCategorySuppressionReview,
+		RepairActionCategoryGovernanceInspection:
 		return true
 	default:
 		return false
@@ -476,20 +486,26 @@ type QualityDiagnosticsReader interface {
 	ReadQualityDiagnostics(ctx context.Context, input ReadQualityDiagnosticsInput) (QualityDiagnostics, error)
 }
 
+type UsefulnessFeedbackLister interface {
+	ListUsefulnessFeedback(ctx context.Context, input ListUsefulnessFeedbackInput) ([]UsefulnessFeedback, error)
+}
+
 type QualityServiceOptions struct {
-	Store        QualityStore
-	Probe        QualityProbe
-	Now          func() time.Time
-	NewID        func(prefix string) string
-	MaxPlanItems int
+	Store              QualityStore
+	Probe              QualityProbe
+	UsefulnessFeedback UsefulnessFeedbackLister
+	Now                func() time.Time
+	NewID              func(prefix string) string
+	MaxPlanItems       int
 }
 
 type QualityService struct {
-	store        QualityStore
-	probe        QualityProbe
-	now          func() time.Time
-	newID        func(prefix string) string
-	maxPlanItems int
+	store              QualityStore
+	probe              QualityProbe
+	usefulnessFeedback UsefulnessFeedbackLister
+	now                func() time.Time
+	newID              func(prefix string) string
+	maxPlanItems       int
 }
 
 func NewQualityService(options QualityServiceOptions) *QualityService {
@@ -507,7 +523,7 @@ func NewQualityService(options QualityServiceOptions) *QualityService {
 	if maxPlanItems <= 0 {
 		maxPlanItems = 100
 	}
-	return &QualityService{store: options.Store, probe: options.Probe, now: now, newID: newID, maxPlanItems: maxPlanItems}
+	return &QualityService{store: options.Store, probe: options.Probe, usefulnessFeedback: options.UsefulnessFeedback, now: now, newID: newID, maxPlanItems: maxPlanItems}
 }
 
 type CreateQualityEvaluationInput struct {
@@ -721,7 +737,127 @@ func (s *QualityService) CreateEvaluation(ctx context.Context, input CreateQuali
 			}
 		}
 	}
+	if s.usefulnessFeedback != nil && hasRetrievalQualityCheck(input.Checks) {
+		findings, err := s.feedbackDerivedFindings(ctx, input.Scope.Normalized(), run.ID, now)
+		if err != nil {
+			return QualityEvaluationRun{}, err
+		}
+		for _, finding := range findings {
+			if _, err := s.store.CreateQualityEvaluationFinding(ctx, finding); err != nil {
+				return QualityEvaluationRun{}, err
+			}
+		}
+	}
 	return run, nil
+}
+
+func (s *QualityService) feedbackDerivedFindings(ctx context.Context, scope Scope, evaluationRunID string, observedAt time.Time) ([]QualityEvaluationFinding, error) {
+	records, err := s.usefulnessFeedback.ListUsefulnessFeedback(ctx, ListUsefulnessFeedbackInput{
+		Scope: scope,
+		Limit: s.maxPlanItems * 10,
+	})
+	if err != nil {
+		return nil, err
+	}
+	type aggregate struct {
+		feedbackType UsefulnessFeedbackType
+		subject      UsefulnessFeedbackSubject
+		count        int
+	}
+	aggregates := map[string]aggregate{}
+	for _, record := range records {
+		if !record.SupersededAt.IsZero() {
+			continue
+		}
+		for _, subject := range record.Subjects {
+			key := string(record.Type) + ":" + usefulnessFeedbackSubjectKey(subject)
+			item := aggregates[key]
+			item.feedbackType = record.Type
+			item.subject = subject
+			item.count++
+			aggregates[key] = item
+		}
+	}
+	findings := make([]QualityEvaluationFinding, 0)
+	for _, item := range aggregates {
+		if item.count < 2 && item.feedbackType != UsefulnessFeedbackTypeUnsafeOrHidden && item.feedbackType != UsefulnessFeedbackTypeNeedsReview {
+			continue
+		}
+		code, action, ok := feedbackFindingMapping(item.feedbackType)
+		if !ok {
+			continue
+		}
+		evidence := feedbackFindingEvidence(item.subject, item.count)
+		findings = append(findings, QualityEvaluationFinding{
+			ID:                      s.newID("finding"),
+			EvaluationRunID:         evaluationRunID,
+			Scope:                   scope,
+			Code:                    code,
+			Severity:                feedbackFindingSeverity(item.feedbackType),
+			Component:               QualityFindingComponentRetrieval,
+			Category:                QualityFindingCategorySemanticProjection,
+			Message:                 "active usefulness feedback indicates a memory quality issue",
+			SuggestedActionCategory: action,
+			Metadata: map[string]string{
+				"source":        "usefulness_feedback",
+				"feedback_type": string(item.feedbackType),
+				"active_count":  fmt.Sprintf("%d", item.count),
+			},
+			Evidence:  evidence,
+			CreatedAt: observedAt,
+		})
+	}
+	return findings, nil
+}
+
+func feedbackFindingMapping(feedbackType UsefulnessFeedbackType) (QualityFindingCode, RepairActionCategory, bool) {
+	switch feedbackType {
+	case UsefulnessFeedbackTypeNoisy:
+		return QualityFindingFeedbackNoisyRepeated, RepairActionCategorySuppressionReview, true
+	case UsefulnessFeedbackTypeStale:
+		return QualityFindingFeedbackStaleRepeated, RepairActionCategorySuppressionReview, true
+	case UsefulnessFeedbackTypeIrrelevant:
+		return QualityFindingFeedbackIrrelevantRepeated, RepairActionCategorySuppressionReview, true
+	case UsefulnessFeedbackTypeMissingExpected:
+		return QualityFindingFeedbackMissingExpectedRepeated, RepairActionCategoryEmbeddingRetry, true
+	case UsefulnessFeedbackTypeUnsafeOrHidden:
+		return QualityFindingFeedbackUnsafeOrHidden, RepairActionCategoryGovernanceInspection, true
+	case UsefulnessFeedbackTypeNeedsReview:
+		return QualityFindingFeedbackNeedsReview, RepairActionCategoryManualReview, true
+	default:
+		return "", "", false
+	}
+}
+
+func feedbackFindingSeverity(feedbackType UsefulnessFeedbackType) QualityFindingSeverity {
+	if feedbackType == UsefulnessFeedbackTypeUnsafeOrHidden {
+		return QualityFindingSeverityBlocker
+	}
+	return QualityFindingSeverityWarning
+}
+
+func feedbackFindingEvidence(subject UsefulnessFeedbackSubject, count int) map[string]any {
+	evidence := map[string]any{
+		"subject_kind": string(subject.Kind),
+		"active_count": count,
+	}
+	if subject.Kind == UsefulnessFeedbackSubjectExpectedRecall {
+		evidence["expected_recall_kind"] = string(subject.ExpectedRecallTarget.Kind)
+		if subject.ExpectedRecallTarget.Kind != ExpectedRecallTargetOpaque {
+			evidence["memory_id"] = subject.ExpectedRecallTarget.ID
+		} else {
+			evidence["opaque_expected_recall"] = true
+		}
+		return evidence
+	}
+	evidence["subject_id"] = subject.ID
+	if subject.Kind == UsefulnessFeedbackSubjectMemory {
+		evidence["memory_id"] = subject.ID
+	}
+	if subject.Kind == UsefulnessFeedbackSubjectRawEvent {
+		evidence["raw_event_id"] = subject.ID
+	}
+	return evidence
 }
 
 func hasRetrievalQualityCheck(checks []QualityEvaluationCheck) bool {
@@ -840,7 +976,7 @@ func (s *QualityService) CreateRepairPlan(ctx context.Context, input CreateRepai
 			CreatedAt:       now,
 			UpdatedAt:       now,
 		}
-		if category == RepairActionCategoryManualReview {
+		if category == RepairActionCategoryManualReview || category == RepairActionCategorySuppressionReview || category == RepairActionCategoryGovernanceInspection {
 			action.Status = RepairActionStatusManualReview
 		}
 		createdAction, err := s.store.CreateRepairAction(ctx, action)
@@ -858,6 +994,10 @@ func repairTargetKind(category RepairActionCategory) string {
 		return "memory"
 	case RepairActionCategoryGovernanceRequeue:
 		return "raw_event"
+	case RepairActionCategorySuppressionReview:
+		return "memory"
+	case RepairActionCategoryGovernanceInspection:
+		return "raw_event"
 	default:
 		return ""
 	}
@@ -871,6 +1011,10 @@ func repairTargetID(category RepairActionCategory, evidence map[string]any) stri
 	case RepairActionCategoryEmbeddingRetry:
 		return evidenceString(evidence, "memory_id")
 	case RepairActionCategoryGovernanceRequeue:
+		return evidenceString(evidence, "raw_event_id")
+	case RepairActionCategorySuppressionReview:
+		return evidenceString(evidence, "memory_id")
+	case RepairActionCategoryGovernanceInspection:
 		return evidenceString(evidence, "raw_event_id")
 	default:
 		return ""

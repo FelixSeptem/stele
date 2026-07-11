@@ -99,6 +99,8 @@ type ScopeProofReport struct {
 
 type LoopReportEvidence struct {
 	QualityEvaluationIDs []string               `json:"quality_evaluation_ids,omitempty"`
+	QualityFindingIDs    []string               `json:"quality_finding_ids,omitempty"`
+	QualityFindingCodes  []QualityFindingCode   `json:"quality_finding_codes,omitempty"`
 	ReplayRunIDs         []string               `json:"replay_run_ids,omitempty"`
 	RepairPlanIDs        []string               `json:"repair_plan_ids,omitempty"`
 	FailureCategories    []ProofFailureCategory `json:"failure_categories,omitempty"`
@@ -211,6 +213,8 @@ func loopReportEvidenceFromProof(run ScopeProofRun) LoopReportEvidence {
 		if id := strings.TrimSpace(stringEvidenceValue(step.Evidence, "evaluation_run_id")); id != "" {
 			evidence.QualityEvaluationIDs = append(evidence.QualityEvaluationIDs, id)
 		}
+		evidence.QualityFindingIDs = append(evidence.QualityFindingIDs, stringSliceEvidenceValue(step.Evidence, "quality_finding_ids")...)
+		evidence.QualityFindingCodes = append(evidence.QualityFindingCodes, qualityFindingCodesFromEvidence(step.Evidence, "quality_finding_codes")...)
 		if id := strings.TrimSpace(stringEvidenceValue(step.Evidence, "replay_run_id")); id != "" {
 			evidence.ReplayRunIDs = append(evidence.ReplayRunIDs, id)
 		}
@@ -219,6 +223,8 @@ func loopReportEvidenceFromProof(run ScopeProofRun) LoopReportEvidence {
 		}
 	}
 	evidence.QualityEvaluationIDs = uniqueStrings(evidence.QualityEvaluationIDs)
+	evidence.QualityFindingIDs = uniqueStrings(evidence.QualityFindingIDs)
+	evidence.QualityFindingCodes = uniqueQualityFindingCodes(evidence.QualityFindingCodes)
 	evidence.ReplayRunIDs = uniqueStrings(evidence.ReplayRunIDs)
 	evidence.RepairPlanIDs = uniqueStrings(evidence.RepairPlanIDs)
 	evidence.FailureCategories = uniqueFailureCategories(evidence.FailureCategories)

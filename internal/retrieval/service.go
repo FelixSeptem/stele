@@ -12,15 +12,17 @@ import (
 )
 
 type SearchInput struct {
-	Scope            memory.Scope
-	Query            string
-	QueryEmbedding   []float32
-	Classes          []memory.MemoryClass
-	TimeFrom         time.Time
-	TimeTo           time.Time
-	TopK             int
-	IncludeSummaries bool
-	IncludeRelations bool
+	Scope                      memory.Scope
+	Query                      string
+	QueryEmbedding             []float32
+	Classes                    []memory.MemoryClass
+	TimeFrom                   time.Time
+	TimeTo                     time.Time
+	TopK                       int
+	IncludeSummaries           bool
+	IncludeRelations           bool
+	IncludeFeedbackDiagnostics bool
+	FeedbackAwareRanking       bool
 }
 
 func (i SearchInput) Validate() error {
@@ -40,12 +42,14 @@ func (i SearchInput) Validate() error {
 }
 
 type AssembleContextInput struct {
-	Scope                     memory.Scope
-	Query                     string
-	Budget                    int
-	IncludeRelations          bool
-	IncludeExperienceInsights bool
-	IncludeDiagnostics        bool
+	Scope                      memory.Scope
+	Query                      string
+	Budget                     int
+	IncludeRelations           bool
+	IncludeExperienceInsights  bool
+	IncludeDiagnostics         bool
+	IncludeFeedbackDiagnostics bool
+	FeedbackAwareRanking       bool
 }
 
 func (i AssembleContextInput) Validate() error {
@@ -81,7 +85,8 @@ type SearchHit struct {
 }
 
 type SearchResult struct {
-	Hits []SearchHit `json:"hits"`
+	Hits        []SearchHit         `json:"hits"`
+	Diagnostics []ContextDiagnostic `json:"diagnostics,omitempty"`
 }
 
 type InsightCitation struct {
@@ -146,6 +151,10 @@ type DerivedInsightLister interface {
 	ListDerivedInsights(ctx context.Context, input memory.ListDerivedInsightsInput) ([]memory.DerivedInsight, error)
 }
 
+type UsefulnessSummarizer interface {
+	SummarizeUsefulnessFeedback(ctx context.Context, input memory.SummarizeUsefulnessFeedbackInput) (memory.UsefulnessFeedbackSummary, error)
+}
+
 type MemorySearcher interface {
 	Search(ctx context.Context, input SearchInput) (SearchResult, error)
 }
@@ -155,20 +164,22 @@ type ContextAssembler interface {
 }
 
 type ServiceDependencies struct {
-	Lexical   LexicalSearcher
-	Semantic  SemanticSearcher
-	Relations RelationSearcher
-	Citations CitationLister
-	Insights  DerivedInsightLister
+	Lexical              LexicalSearcher
+	Semantic             SemanticSearcher
+	Relations            RelationSearcher
+	Citations            CitationLister
+	Insights             DerivedInsightLister
+	UsefulnessSummarizer UsefulnessSummarizer
 }
 
 type Service struct {
-	lexical   LexicalSearcher
-	semantic  SemanticSearcher
-	relations RelationSearcher
-	citations CitationLister
-	insights  DerivedInsightLister
-	observer  telemetry.Observer
+	lexical              LexicalSearcher
+	semantic             SemanticSearcher
+	relations            RelationSearcher
+	citations            CitationLister
+	insights             DerivedInsightLister
+	usefulnessSummarizer UsefulnessSummarizer
+	observer             telemetry.Observer
 }
 
 func NewService(deps ServiceDependencies, observers ...telemetry.Observer) *Service {
@@ -181,12 +192,13 @@ func NewService(deps ServiceDependencies, observers ...telemetry.Observer) *Serv
 	}
 
 	return &Service{
-		lexical:   deps.Lexical,
-		semantic:  deps.Semantic,
-		relations: deps.Relations,
-		citations: deps.Citations,
-		insights:  deps.Insights,
-		observer:  observer,
+		lexical:              deps.Lexical,
+		semantic:             deps.Semantic,
+		relations:            deps.Relations,
+		citations:            deps.Citations,
+		insights:             deps.Insights,
+		usefulnessSummarizer: deps.UsefulnessSummarizer,
+		observer:             observer,
 	}
 }
 
@@ -301,6 +313,19 @@ func (s *Service) Search(ctx context.Context, input SearchInput) (result SearchR
 		return scored[i].Score.Overall > scored[j].Score.Overall
 	})
 
+	diagnostics, err := s.applyUsefulnessFeedbackSignals(ctx, input, scored)
+	if err != nil {
+		return SearchResult{}, err
+	}
+	if input.FeedbackAwareRanking {
+		sort.Slice(scored, func(i, j int) bool {
+			if scored[i].Score.Overall == scored[j].Score.Overall {
+				return scored[i].Memory.ModifiedAt.After(scored[j].Memory.ModifiedAt)
+			}
+			return scored[i].Score.Overall > scored[j].Score.Overall
+		})
+	}
+
 	if input.TopK > 0 && len(scored) > input.TopK {
 		scored = scored[:input.TopK]
 	}
@@ -319,8 +344,74 @@ func (s *Service) Search(ctx context.Context, input SearchInput) (result SearchR
 		}
 	}
 
-	result = SearchResult{Hits: scored}
+	result = SearchResult{Hits: scored, Diagnostics: diagnostics}
 	return result, nil
+}
+
+func (s *Service) applyUsefulnessFeedbackSignals(ctx context.Context, input SearchInput, scored []SearchHit) ([]ContextDiagnostic, error) {
+	if s.usefulnessSummarizer == nil || (!input.IncludeFeedbackDiagnostics && !input.FeedbackAwareRanking) {
+		return nil, nil
+	}
+	var positive, negative, needsReview, unsafe int
+	for i := range scored {
+		summary, err := s.usefulnessSummarizer.SummarizeUsefulnessFeedback(ctx, memory.SummarizeUsefulnessFeedbackInput{
+			Scope: input.Scope,
+			Subject: memory.UsefulnessFeedbackSubject{
+				Kind: memory.UsefulnessFeedbackSubjectMemory,
+				ID:   scored[i].Memory.ID,
+			},
+		})
+		if err != nil {
+			return nil, err
+		}
+		if summary.TotalActive == 0 {
+			continue
+		}
+		switch summary.EffectiveQuality {
+		case memory.UsefulnessQualityPositive:
+			positive++
+		case memory.UsefulnessQualityNegative, memory.UsefulnessQualityMixed:
+			negative++
+		case memory.UsefulnessQualityNeedsReview:
+			needsReview++
+		}
+		if summary.Counts[memory.UsefulnessFeedbackTypeUnsafeOrHidden] > 0 {
+			unsafe++
+		}
+		if input.FeedbackAwareRanking {
+			scored[i].Score.Overall += feedbackRankingAdjustment(summary)
+		}
+	}
+	diagnostics := make([]ContextDiagnostic, 0, 4)
+	if positive > 0 {
+		diagnostics = append(diagnostics, ContextDiagnostic{Section: "search_feedback", Status: "positive_signal", Reason: "active usefulness feedback indicates useful returned memory", Included: positive})
+	}
+	if negative > 0 {
+		diagnostics = append(diagnostics, ContextDiagnostic{Section: "search_feedback", Status: "negative_signal", Reason: "active usefulness feedback indicates noisy stale irrelevant or missing expected memory", Omitted: negative})
+	}
+	if needsReview > 0 {
+		diagnostics = append(diagnostics, ContextDiagnostic{Section: "search_feedback", Status: "needs_review_signal", Reason: "active usefulness feedback requires review", Omitted: needsReview})
+	}
+	if unsafe > 0 {
+		diagnostics = append(diagnostics, ContextDiagnostic{Section: "search_feedback", Status: "safety_signal", Reason: "unsafe or hidden feedback exists without exposing hidden content", Hidden: unsafe})
+	}
+	if input.FeedbackAwareRanking && len(diagnostics) > 0 {
+		diagnostics = append(diagnostics, ContextDiagnostic{Section: "search_feedback", Status: "ranking_hint_applied", Reason: "explicit per-request feedback-aware ranking hint applied"})
+	}
+	return diagnostics, nil
+}
+
+func feedbackRankingAdjustment(summary memory.UsefulnessFeedbackSummary) float64 {
+	switch summary.EffectiveQuality {
+	case memory.UsefulnessQualityPositive:
+		return 0.05
+	case memory.UsefulnessQualityNegative, memory.UsefulnessQualityMixed:
+		return -0.25
+	case memory.UsefulnessQualityNeedsReview:
+		return -0.35
+	default:
+		return 0
+	}
 }
 
 func (s *Service) AssembleContext(ctx context.Context, input AssembleContextInput) (output AssembledContext, err error) {
@@ -356,11 +447,13 @@ func (s *Service) AssembleContext(ctx context.Context, input AssembleContextInpu
 	}
 
 	result, err := s.Search(ctx, SearchInput{
-		Scope:            input.Scope,
-		Query:            input.Query,
-		TopK:             maxInt(input.Budget*3, input.Budget),
-		IncludeSummaries: true,
-		IncludeRelations: input.IncludeRelations,
+		Scope:                      input.Scope,
+		Query:                      input.Query,
+		TopK:                       maxInt(input.Budget*3, input.Budget),
+		IncludeSummaries:           true,
+		IncludeRelations:           input.IncludeRelations,
+		IncludeFeedbackDiagnostics: input.IncludeDiagnostics && input.IncludeFeedbackDiagnostics,
+		FeedbackAwareRanking:       input.FeedbackAwareRanking,
 	})
 	if err != nil {
 		return AssembledContext{}, err
@@ -375,6 +468,9 @@ func (s *Service) AssembleContext(ctx context.Context, input AssembleContextInpu
 		Citations:         make([]Citation, 0),
 		KnownFailures:     make([]ExperienceInsightContext, 0),
 		ExperienceLessons: make([]ExperienceInsightContext, 0),
+	}
+	if input.IncludeDiagnostics {
+		output.Diagnostics = append(output.Diagnostics, result.Diagnostics...)
 	}
 
 	profiles := make([]SearchHit, 0)

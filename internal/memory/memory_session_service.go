@@ -54,18 +54,26 @@ type MemorySessionContextAssembler interface {
 	AssembleSessionContext(ctx context.Context, request MemorySessionContextRequest) (MemorySessionContextEvidence, error)
 }
 
+type UsefulnessFeedbackSummarizer interface {
+	SummarizeUsefulnessFeedback(ctx context.Context, input SummarizeUsefulnessFeedbackInput) (UsefulnessFeedbackSummary, error)
+}
+
 type MemorySessionServiceOptions struct {
-	Store            MemorySessionStore
-	ContextAssembler MemorySessionContextAssembler
-	Now              func() time.Time
-	NewID            func(prefix string) string
+	Store                MemorySessionStore
+	ContextAssembler     MemorySessionContextAssembler
+	EventIngestor        EventIngestor
+	UsefulnessSummarizer UsefulnessFeedbackSummarizer
+	Now                  func() time.Time
+	NewID                func(prefix string) string
 }
 
 type MemorySessionService struct {
-	store            MemorySessionStore
-	contextAssembler MemorySessionContextAssembler
-	now              func() time.Time
-	newID            func(prefix string) string
+	store                MemorySessionStore
+	contextAssembler     MemorySessionContextAssembler
+	eventIngestor        EventIngestor
+	usefulnessSummarizer UsefulnessFeedbackSummarizer
+	now                  func() time.Time
+	newID                func(prefix string) string
 }
 
 func NewMemorySessionService(options MemorySessionServiceOptions) *MemorySessionService {
@@ -80,10 +88,12 @@ func NewMemorySessionService(options MemorySessionServiceOptions) *MemorySession
 		}
 	}
 	return &MemorySessionService{
-		store:            options.Store,
-		contextAssembler: options.ContextAssembler,
-		now:              now,
-		newID:            newID,
+		store:                options.Store,
+		contextAssembler:     options.ContextAssembler,
+		eventIngestor:        options.EventIngestor,
+		usefulnessSummarizer: options.UsefulnessSummarizer,
+		now:                  now,
+		newID:                newID,
 	}
 }
 
@@ -168,6 +178,7 @@ func (s *MemorySessionService) CreateTurn(ctx context.Context, input CreateMemor
 		ID:                 turnID,
 		SessionID:          session.ID,
 		Scope:              input.Scope.Normalized(),
+		IdempotencyKey:     strings.TrimSpace(input.IdempotencyKey),
 		Status:             MemorySessionTurnStatusContextAssembled,
 		Query:              strings.TrimSpace(input.Query),
 		ContextEvidence:    evidence.Map(),
@@ -187,16 +198,47 @@ func (s *MemorySessionService) RecordTurnOutcome(ctx context.Context, input Reco
 	if _, err := s.store.ReadMemorySessionRun(ctx, ReadMemorySessionRunInput{Scope: input.Scope, SessionID: input.SessionID}); err != nil {
 		return MemorySessionTurn{}, err
 	}
+	outcomeEventIDs := append([]string(nil), input.OutcomeEventIDs...)
+	if len(input.OutcomeEventPayloads) > 0 {
+		if s.eventIngestor == nil {
+			return MemorySessionTurn{}, fmt.Errorf("memory session outcome ingestor is not configured")
+		}
+		for _, payload := range input.OutcomeEventPayloads {
+			event, err := s.eventIngestor.Ingest(ctx, IngestEventInput{
+				Scope:           input.Scope.Normalized(),
+				EventType:       strings.TrimSpace(payload.EventType),
+				Content:         strings.TrimSpace(payload.Content),
+				Metadata:        memorySessionOutcomeMetadata(payload.Metadata, input),
+				SourceTimestamp: payload.SourceTimestamp,
+			})
+			if err != nil {
+				return MemorySessionTurn{}, err
+			}
+			outcomeEventIDs = append(outcomeEventIDs, event.ID)
+		}
+	}
 	return s.store.UpdateMemorySessionTurnOutcome(ctx, UpdateMemorySessionTurnOutcomeInput{
-		Scope:              input.Scope.Normalized(),
-		SessionID:          strings.TrimSpace(input.SessionID),
-		TurnID:             strings.TrimSpace(input.TurnID),
-		Status:             MemorySessionTurnStatusOutcomeRecorded,
-		OutcomeEventIDs:    append([]string(nil), input.OutcomeEventIDs...),
-		ExpectedRecall:     append([]string(nil), input.ExpectedRecall...),
-		VerificationStatus: ScopeProofVerdictPending,
-		UpdatedAt:          s.now().UTC(),
+		Scope:                 input.Scope.Normalized(),
+		SessionID:             strings.TrimSpace(input.SessionID),
+		TurnID:                strings.TrimSpace(input.TurnID),
+		OutcomeIdempotencyKey: strings.TrimSpace(input.IdempotencyKey),
+		Status:                MemorySessionTurnStatusOutcomeRecorded,
+		OutcomeEventIDs:       outcomeEventIDs,
+		ExpectedRecall:        append([]string(nil), input.ExpectedRecall...),
+		VerificationStatus:    ScopeProofVerdictPending,
+		UpdatedAt:             s.now().UTC(),
 	})
+}
+
+func memorySessionOutcomeMetadata(metadata map[string]any, input RecordMemorySessionTurnOutcomeInput) map[string]any {
+	out := normalizeMap(metadata)
+	out["memory_session_id"] = strings.TrimSpace(input.SessionID)
+	out["memory_session_turn_id"] = strings.TrimSpace(input.TurnID)
+	out["memory_session_source"] = "outcome"
+	if key := strings.TrimSpace(input.IdempotencyKey); key != "" {
+		out["outcome_idempotency_key"] = key
+	}
+	return out
 }
 
 func (s *MemorySessionService) RequestVerification(ctx context.Context, input RequestMemorySessionVerificationInput) (MemorySessionVerification, error) {
@@ -225,9 +267,10 @@ func (s *MemorySessionService) RequestVerification(ctx context.Context, input Re
 }
 
 type MemorySessionReport struct {
-	Session     MemorySessionRun `json:"session"`
-	Evidence    LoopReportEvidence `json:"evidence,omitempty"`
-	NextActions []string           `json:"next_actions,omitempty"`
+	Session           MemorySessionRun            `json:"session"`
+	Evidence          LoopReportEvidence          `json:"evidence,omitempty"`
+	FeedbackSummaries []UsefulnessFeedbackSummary `json:"feedback_summaries,omitempty"`
+	NextActions       []string                    `json:"next_actions,omitempty"`
 }
 
 func (s *MemorySessionService) ReadSessionReport(ctx context.Context, input ReadMemorySessionRunInput) (MemorySessionReport, error) {
@@ -236,11 +279,149 @@ func (s *MemorySessionService) ReadSessionReport(ctx context.Context, input Read
 		return MemorySessionReport{}, err
 	}
 	evidence := loopReportEvidenceFromSession(session)
+	feedbackSummaries, err := s.memorySessionFeedbackSummaries(ctx, session)
+	if err != nil {
+		return MemorySessionReport{}, err
+	}
 	return MemorySessionReport{
-		Session:     session,
-		Evidence:    evidence,
-		NextActions: memorySessionNextActions(session, evidence),
+		Session:           session,
+		Evidence:          evidence,
+		FeedbackSummaries: feedbackSummaries,
+		NextActions:       memorySessionNextActions(session, evidence),
 	}, nil
+}
+
+func (s *MemorySessionService) memorySessionFeedbackSummaries(ctx context.Context, session MemorySessionRun) ([]UsefulnessFeedbackSummary, error) {
+	if s.usefulnessSummarizer == nil {
+		return nil, nil
+	}
+	subjects := memorySessionFeedbackSubjects(session)
+	summaries := make([]UsefulnessFeedbackSummary, 0, len(subjects))
+	for _, subject := range subjects {
+		summary, err := s.usefulnessSummarizer.SummarizeUsefulnessFeedback(ctx, SummarizeUsefulnessFeedbackInput{
+			Scope:   session.Scope,
+			Subject: subject,
+		})
+		if err != nil {
+			return nil, err
+		}
+		if summary.TotalActive == 0 {
+			continue
+		}
+		summaries = append(summaries, summary)
+	}
+	return summaries, nil
+}
+
+func memorySessionFeedbackSubjects(session MemorySessionRun) []UsefulnessFeedbackSubject {
+	subjects := []UsefulnessFeedbackSubject{{Kind: UsefulnessFeedbackSubjectSession, ID: session.ID}}
+	for _, turn := range session.Turns {
+		subjects = append(subjects, UsefulnessFeedbackSubject{Kind: UsefulnessFeedbackSubjectTurn, ID: turn.ID})
+		for _, memoryID := range stringSliceEvidenceValue(turn.ContextEvidence, "memory_ids") {
+			subjects = append(subjects, UsefulnessFeedbackSubject{Kind: UsefulnessFeedbackSubjectMemory, ID: memoryID})
+		}
+		for _, citationID := range stringSliceEvidenceValue(turn.ContextEvidence, "citations") {
+			subjects = append(subjects, UsefulnessFeedbackSubject{Kind: UsefulnessFeedbackSubjectCitation, ID: citationID})
+		}
+		for _, eventID := range turn.OutcomeEventIDs {
+			subjects = append(subjects, UsefulnessFeedbackSubject{Kind: UsefulnessFeedbackSubjectRawEvent, ID: eventID})
+		}
+		for _, expectedID := range turn.ExpectedRecall {
+			subjects = append(subjects, expectedRecallEventSubject(expectedID))
+		}
+	}
+	for _, verification := range session.Verifications {
+		subjects = append(subjects, UsefulnessFeedbackSubject{Kind: UsefulnessFeedbackSubjectVerification, ID: verification.ID})
+		for _, expectedID := range verification.ExpectedRecall {
+			subjects = append(subjects, expectedRecallEventSubject(expectedID))
+		}
+	}
+	return uniqueUsefulnessFeedbackSubjects(subjects)
+}
+
+func expectedRecallEventSubject(id string) UsefulnessFeedbackSubject {
+	return UsefulnessFeedbackSubject{
+		Kind: UsefulnessFeedbackSubjectExpectedRecall,
+		ExpectedRecallTarget: ExpectedRecallTarget{
+			Kind: ExpectedRecallTargetEvent,
+			ID:   strings.TrimSpace(id),
+		},
+	}
+}
+
+func uniqueUsefulnessFeedbackSubjects(subjects []UsefulnessFeedbackSubject) []UsefulnessFeedbackSubject {
+	seen := make(map[string]struct{}, len(subjects))
+	unique := make([]UsefulnessFeedbackSubject, 0, len(subjects))
+	for _, subject := range subjects {
+		if err := subject.Validate(); err != nil {
+			continue
+		}
+		key := usefulnessFeedbackSubjectKey(subject)
+		if _, ok := seen[key]; ok {
+			continue
+		}
+		seen[key] = struct{}{}
+		unique = append(unique, subject)
+	}
+	return unique
+}
+
+func usefulnessFeedbackSubjectKey(subject UsefulnessFeedbackSubject) string {
+	if subject.Kind == UsefulnessFeedbackSubjectExpectedRecall {
+		return string(subject.Kind) + ":" + string(subject.ExpectedRecallTarget.Kind) + ":" + subject.ExpectedRecallTarget.ID + ":" + subject.ExpectedRecallTarget.OpaqueToken
+	}
+	return string(subject.Kind) + ":" + subject.ID
+}
+
+func stringSliceEvidenceValue(evidence map[string]any, key string) []string {
+	value, ok := evidence[key]
+	if !ok {
+		return nil
+	}
+	switch typed := value.(type) {
+	case []string:
+		return uniqueStrings(typed)
+	case []any:
+		items := make([]string, 0, len(typed))
+		for _, item := range typed {
+			if text, ok := item.(string); ok {
+				items = append(items, text)
+			}
+		}
+		return uniqueStrings(items)
+	default:
+		return nil
+	}
+}
+
+func qualityFindingCodesFromEvidence(evidence map[string]any, key string) []QualityFindingCode {
+	values := stringSliceEvidenceValue(evidence, key)
+	if len(values) == 0 {
+		return nil
+	}
+	codes := make([]QualityFindingCode, 0, len(values))
+	for _, value := range values {
+		if trimmed := strings.TrimSpace(value); trimmed != "" {
+			codes = append(codes, QualityFindingCode(trimmed))
+		}
+	}
+	return uniqueQualityFindingCodes(codes)
+}
+
+func uniqueQualityFindingCodes(codes []QualityFindingCode) []QualityFindingCode {
+	seen := make(map[QualityFindingCode]struct{}, len(codes))
+	unique := make([]QualityFindingCode, 0, len(codes))
+	for _, code := range codes {
+		if code == "" {
+			continue
+		}
+		if _, ok := seen[code]; ok {
+			continue
+		}
+		seen[code] = struct{}{}
+		unique = append(unique, code)
+	}
+	return unique
 }
 
 func memorySessionNextActions(session MemorySessionRun, evidence LoopReportEvidence) []string {
@@ -285,6 +466,8 @@ func loopReportEvidenceFromSession(session MemorySessionRun) LoopReportEvidence 
 		if id := strings.TrimSpace(stringEvidenceValue(turn.ContextEvidence, "evaluation_run_id")); id != "" {
 			evidence.QualityEvaluationIDs = append(evidence.QualityEvaluationIDs, id)
 		}
+		evidence.QualityFindingIDs = append(evidence.QualityFindingIDs, stringSliceEvidenceValue(turn.ContextEvidence, "quality_finding_ids")...)
+		evidence.QualityFindingCodes = append(evidence.QualityFindingCodes, qualityFindingCodesFromEvidence(turn.ContextEvidence, "quality_finding_codes")...)
 		if id := strings.TrimSpace(stringEvidenceValue(turn.ContextEvidence, "replay_run_id")); id != "" {
 			evidence.ReplayRunIDs = append(evidence.ReplayRunIDs, id)
 		}
@@ -293,6 +476,8 @@ func loopReportEvidenceFromSession(session MemorySessionRun) LoopReportEvidence 
 		}
 	}
 	evidence.QualityEvaluationIDs = uniqueStrings(evidence.QualityEvaluationIDs)
+	evidence.QualityFindingIDs = uniqueStrings(evidence.QualityFindingIDs)
+	evidence.QualityFindingCodes = uniqueQualityFindingCodes(evidence.QualityFindingCodes)
 	evidence.ReplayRunIDs = uniqueStrings(evidence.ReplayRunIDs)
 	evidence.RepairPlanIDs = uniqueStrings(evidence.RepairPlanIDs)
 	evidence.FailureCategories = uniqueFailureCategories(evidence.FailureCategories)

@@ -114,6 +114,7 @@ func TestRepositoryCreatesAndReadsMemorySessionWithTurn(t *testing.T) {
 		ID:              "turn_1",
 		SessionID:       session.ID,
 		Scope:           scope,
+		IdempotencyKey:  "turn-key-1",
 		Status:          memory.MemorySessionTurnStatusContextAssembled,
 		Query:           "remember deployment preference",
 		ContextEvidence: map[string]any{"memory_ids": []any{"mem_1"}},
@@ -127,14 +128,17 @@ func TestRepositoryCreatesAndReadsMemorySessionWithTurn(t *testing.T) {
 		WithArgs(session.ID, scope.Tenant, scope.Project, scope.Namespace, session.Status, session.Verdict, session.Actor, session.Reason, []byte(`{"integration":"test-agent"}`), nil, now, now, nil, nil).
 		WillReturnRows(memorySessionRunRows().AddRow(session.ID, scope.Tenant, scope.Project, scope.Namespace, session.Status, session.Verdict, session.Actor, session.Reason, []byte(`{"integration":"test-agent"}`), nil, now, now, nil, nil))
 	mock.ExpectQuery("INSERT INTO memory_session_turns").
-		WithArgs(turn.ID, turn.SessionID, scope.Tenant, scope.Project, scope.Namespace, turn.Status, turn.Query, []byte(`{"memory_ids":["mem_1"]}`), []string{"evt_1"}, []string{"evt_1"}, nil, nil, now, now, nil).
-		WillReturnRows(memorySessionTurnRows().AddRow(turn.ID, turn.SessionID, scope.Tenant, scope.Project, scope.Namespace, turn.Status, turn.Query, []byte(`{"memory_ids":["mem_1"]}`), []string{"evt_1"}, []string{"evt_1"}, nil, nil, now, now, nil))
+		WithArgs(turn.ID, turn.SessionID, scope.Tenant, scope.Project, scope.Namespace, turn.IdempotencyKey, turn.Status, turn.Query, []byte(`{"memory_ids":["mem_1"]}`), []string{"evt_1"}, []string{"evt_1"}, nil, nil, now, now, nil).
+		WillReturnRows(memorySessionTurnRows().AddRow(turn.ID, turn.SessionID, scope.Tenant, scope.Project, scope.Namespace, turn.IdempotencyKey, nil, turn.Status, turn.Query, []byte(`{"memory_ids":["mem_1"]}`), []string{"evt_1"}, []string{"evt_1"}, nil, nil, now, now, nil))
 	mock.ExpectQuery("SELECT[\\s\\S]*FROM memory_session_runs").
 		WithArgs(scope.Tenant, scope.Project, scope.Namespace, session.ID).
 		WillReturnRows(memorySessionRunRows().AddRow(session.ID, scope.Tenant, scope.Project, scope.Namespace, session.Status, session.Verdict, session.Actor, session.Reason, []byte(`{"integration":"test-agent"}`), nil, now, now, nil, nil))
 	mock.ExpectQuery("SELECT[\\s\\S]*FROM memory_session_turns").
 		WithArgs(scope.Tenant, scope.Project, scope.Namespace, session.ID).
-		WillReturnRows(memorySessionTurnRows().AddRow(turn.ID, turn.SessionID, scope.Tenant, scope.Project, scope.Namespace, turn.Status, turn.Query, []byte(`{"memory_ids":["mem_1"]}`), []string{"evt_1"}, []string{"evt_1"}, nil, nil, now, now, nil))
+		WillReturnRows(memorySessionTurnRows().AddRow(turn.ID, turn.SessionID, scope.Tenant, scope.Project, scope.Namespace, turn.IdempotencyKey, nil, turn.Status, turn.Query, []byte(`{"memory_ids":["mem_1"]}`), []string{"evt_1"}, []string{"evt_1"}, nil, nil, now, now, nil))
+	mock.ExpectQuery("SELECT[\\s\\S]*FROM memory_session_verifications").
+		WithArgs(scope.Tenant, scope.Project, scope.Namespace, session.ID).
+		WillReturnRows(memorySessionVerificationRows().AddRow("verification_1", session.ID, turn.ID, scope.Tenant, scope.Project, scope.Namespace, memory.ScopeProofStepStatusCompleted, memory.ScopeProofVerdictPassed, []string{"evt_1"}, []byte(`{"recalled":true}`), nil, 1, nil, nil, nil, nil, now, now, now))
 
 	repo := NewRepository(mock)
 	if _, err := repo.CreateMemorySessionRun(context.Background(), session); err != nil {
@@ -147,7 +151,7 @@ func TestRepositoryCreatesAndReadsMemorySessionWithTurn(t *testing.T) {
 	if err != nil {
 		t.Fatalf("ReadMemorySessionRun() error = %v", err)
 	}
-	if read.Scope != scope || len(read.Turns) != 1 || read.Turns[0].OutcomeEventIDs[0] != "evt_1" {
+	if read.Scope != scope || len(read.Turns) != 1 || read.Turns[0].OutcomeEventIDs[0] != "evt_1" || read.Turns[0].IdempotencyKey != "turn-key-1" || len(read.Verifications) != 1 {
 		t.Fatalf("read = %+v, want scoped session with turn evidence", read)
 	}
 
@@ -300,8 +304,8 @@ func TestRepositoryUpdatesMemorySessionTurnOutcomeWithScope(t *testing.T) {
 	now := time.Date(2026, 7, 11, 20, 30, 0, 0, time.UTC)
 
 	mock.ExpectQuery("UPDATE memory_session_turns").
-		WithArgs(scope.Tenant, scope.Project, scope.Namespace, "session_1", "turn_1", memory.MemorySessionTurnStatusOutcomeRecorded, []string{"evt_2"}, []string{"evt_2"}, string(memory.ScopeProofVerdictPending), nil, now, nil).
-		WillReturnRows(memorySessionTurnRows().AddRow("turn_1", "session_1", scope.Tenant, scope.Project, scope.Namespace, memory.MemorySessionTurnStatusOutcomeRecorded, "remember deployment preference", []byte(`{"summary":"profile"}`), []string{"evt_2"}, []string{"evt_2"}, string(memory.ScopeProofVerdictPending), nil, now, now, nil))
+		WithArgs(scope.Tenant, scope.Project, scope.Namespace, "session_1", "turn_1", nil, memory.MemorySessionTurnStatusOutcomeRecorded, []string{"evt_2"}, []string{"evt_2"}, string(memory.ScopeProofVerdictPending), nil, now, nil).
+		WillReturnRows(memorySessionTurnRows().AddRow("turn_1", "session_1", scope.Tenant, scope.Project, scope.Namespace, nil, nil, memory.MemorySessionTurnStatusOutcomeRecorded, "remember deployment preference", []byte(`{"summary":"profile"}`), []string{"evt_2"}, []string{"evt_2"}, string(memory.ScopeProofVerdictPending), nil, now, now, nil))
 
 	repo := NewRepository(mock)
 	turn, err := repo.UpdateMemorySessionTurnOutcome(context.Background(), memory.UpdateMemorySessionTurnOutcomeInput{
@@ -351,7 +355,7 @@ func memorySessionRunRows() *pgxmock.Rows {
 
 func memorySessionTurnRows() *pgxmock.Rows {
 	return pgxmock.NewRows([]string{
-		"id", "session_id", "tenant", "project", "namespace", "status", "query", "context_evidence",
+		"id", "session_id", "tenant", "project", "namespace", "idempotency_key", "outcome_idempotency_key", "status", "query", "context_evidence",
 		"outcome_event_ids", "expected_recall", "verification_status", "failure_category",
 		"created_at", "updated_at", "verified_at",
 	})

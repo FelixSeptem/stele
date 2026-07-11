@@ -126,6 +126,43 @@ func TestMetricsObserverExportsInsightFeedbackSignalsWithoutHighCardinalityLabel
 	}
 }
 
+func TestMetricsObserverExportsUsefulnessFeedbackSignalsWithoutHighCardinalityLabels(t *testing.T) {
+	observer := NewMetricsObserver()
+	ctx := context.Background()
+
+	observer.RecordUsefulnessFeedback(ctx, UsefulnessFeedbackEvent{
+		Operation:     "create",
+		Result:        "ok",
+		FeedbackType:  "noisy",
+		SubjectKind:   "memory",
+		SourceSurface: "search",
+		Decision:      "active",
+	})
+	observer.RecordUsefulnessFeedback(ctx, UsefulnessFeedbackEvent{
+		Operation:     "supersede",
+		Result:        "ok",
+		FeedbackType:  "unknown",
+		SubjectKind:   "unknown",
+		SourceSurface: "admin",
+		Decision:      "superseded",
+	})
+
+	metrics := observer.RenderPrometheus()
+	for _, want := range []string{
+		`stele_usefulness_feedback_total{decision="active",feedback_type="noisy",operation="create",result="ok",source_surface="search",subject_kind="memory"} 1`,
+		`stele_usefulness_feedback_total{decision="superseded",feedback_type="unknown",operation="supersede",result="ok",source_surface="admin",subject_kind="unknown"} 1`,
+	} {
+		if !strings.Contains(metrics, want) {
+			t.Fatalf("metrics missing %q\n%s", want, metrics)
+		}
+	}
+	for _, forbidden := range []string{"tenant", "project", "namespace", "memory_id", "event_id", "session_id", "feedback_id", "actor", "reason_text"} {
+		if strings.Contains(metrics, forbidden) {
+			t.Fatalf("metrics contain high-cardinality label %q\n%s", forbidden, metrics)
+		}
+	}
+}
+
 func TestMetricsObserverExportsDerivedInsightReplaySignalsWithoutHighCardinalityLabels(t *testing.T) {
 	observer := NewMetricsObserver()
 	ctx := context.Background()

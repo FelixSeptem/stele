@@ -727,6 +727,159 @@ curl -X POST http://localhost:8080/v1/admin/memory-quality/repair-plans/<repair-
 
 Repair plans never rewrite canonical memory content, provenance, or version history in place. Unsupported findings become `manual_review` actions, and executable actions are constrained to existing governed paths such as embedding retry, governance requeue, and derived insight replay.
 
+### External-agent memory feedback loop
+
+Use this loop when Stele is integrated with an external agent runtime and you need to close the product feedback loop from recalled memory to quality remediation. Stele remains the memory service only: it does not invoke models, build prompts, run the external agent, or generate final answers.
+
+1. Create a scoped memory session before the external agent turn:
+
+```bash
+curl -X POST http://localhost:8080/v1/memory-sessions \
+  -H 'Content-Type: application/json' \
+  -H 'X-API-Key: dev-public-key' \
+  -H 'X-Stele-Tenant: tenant-a' \
+  -H 'X-Stele-Project: project-a' \
+  -H 'X-Stele-Namespace: namespace-a' \
+  -d '{"actor":"agent-a","reason":"serve external turn","metadata":{"integration":"external-agent"}}'
+```
+
+2. Create an idempotent turn to assemble memory context:
+
+```bash
+curl -X POST http://localhost:8080/v1/memory-sessions/<session-id>/turns \
+  -H 'Content-Type: application/json' \
+  -H 'X-API-Key: dev-public-key' \
+  -H 'X-Stele-Tenant: tenant-a' \
+  -H 'X-Stele-Project: project-a' \
+  -H 'X-Stele-Namespace: namespace-a' \
+  -d '{"idempotency_key":"turn-1","query":"deployment preference","context_budget":1200,"include_relations":true,"include_experience_insights":true,"include_diagnostics":true,"include_feedback_diagnostics":true}'
+```
+
+3. After the external agent finishes its own turn, record outcome references or bounded outcome payloads through the existing ingestion path:
+
+```bash
+curl -X POST http://localhost:8080/v1/memory-sessions/<session-id>/turns/<turn-id>:outcome \
+  -H 'Content-Type: application/json' \
+  -H 'X-API-Key: dev-public-key' \
+  -H 'X-Stele-Tenant: tenant-a' \
+  -H 'X-Stele-Project: project-a' \
+  -H 'X-Stele-Namespace: namespace-a' \
+  -d '{"idempotency_key":"outcome-1","outcome_event_ids":["evt_existing"],"event_payloads":[{"event_type":"agent_observation","content":"User prefers staged rollout","metadata":{"source":"external-agent"}}],"expected_recall":["evt_existing"]}'
+```
+
+4. Request recall verification. Multiple attempts are preserved as session verification history:
+
+```bash
+curl -X POST http://localhost:8080/v1/memory-sessions/<session-id>:verify \
+  -H 'Content-Type: application/json' \
+  -H 'X-API-Key: dev-public-key' \
+  -H 'X-Stele-Tenant: tenant-a' \
+  -H 'X-Stele-Project: project-a' \
+  -H 'X-Stele-Namespace: namespace-a' \
+  -d '{"turn_id":"<turn-id>","expected_recall":["evt_existing"]}'
+```
+
+5. Record usefulness feedback for returned memory, citations, the session, turn, verification, or missing expected recall. Known expected-recall targets use a typed `kind` plus `id`; opaque caller expectations use `kind:"opaque"` and `opaque_token` and are not treated as internal identifiers.
+
+```bash
+curl -X POST http://localhost:8080/v1/usefulness-feedback \
+  -H 'Content-Type: application/json' \
+  -H 'X-API-Key: dev-public-key' \
+  -H 'X-Stele-Tenant: tenant-a' \
+  -H 'X-Stele-Project: project-a' \
+  -H 'X-Stele-Namespace: namespace-a' \
+  -d '{"type":"missing_expected","source_surface":"verification","subjects":[{"kind":"expected_recall","expected_recall_target":{"kind":"memory","id":"mem_expected"}}],"actor":"agent-a","reason":"expected memory was absent","idempotency_key":"feedback-expected-1"}'
+
+curl -X POST http://localhost:8080/v1/usefulness-feedback \
+  -H 'Content-Type: application/json' \
+  -H 'X-API-Key: dev-public-key' \
+  -H 'X-Stele-Tenant: tenant-a' \
+  -H 'X-Stele-Project: project-a' \
+  -H 'X-Stele-Namespace: namespace-a' \
+  -d '{"type":"noisy","source_surface":"context","subjects":[{"kind":"memory","id":"mem_noisy"}],"actor":"agent-a","reason":"retrieved but not useful","idempotency_key":"feedback-noisy-1"}'
+```
+
+6. Inspect active summaries and feedback history through admin routes. Public callers only see bounded summaries through their own authorized session reports.
+
+```bash
+curl 'http://localhost:8080/v1/admin/usefulness-feedback?subject_kind=memory&subject_id=mem_noisy&include_superseded=true' \
+  -H 'X-API-Key: dev-admin-key' \
+  -H 'X-Stele-Tenant: tenant-a' \
+  -H 'X-Stele-Project: project-a' \
+  -H 'X-Stele-Namespace: namespace-a'
+
+curl 'http://localhost:8080/v1/admin/usefulness-feedback/summary?subject_kind=memory&subject_id=mem_noisy' \
+  -H 'X-API-Key: dev-admin-key' \
+  -H 'X-Stele-Tenant: tenant-a' \
+  -H 'X-Stele-Project: project-a' \
+  -H 'X-Stele-Namespace: namespace-a'
+```
+
+7. Correct bad feedback without deleting audit history:
+
+```bash
+curl -X POST http://localhost:8080/v1/admin/usefulness-feedback/<feedback-id>:supersede \
+  -H 'Content-Type: application/json' \
+  -H 'X-API-Key: dev-admin-key' \
+  -H 'X-Stele-Tenant: tenant-a' \
+  -H 'X-Stele-Project: project-a' \
+  -H 'X-Stele-Namespace: namespace-a' \
+  -d '{"actor":"operator-a","reason":"feedback was attached to the wrong subject"}'
+```
+
+8. Convert repeated active feedback into quality findings, then create an approval-gated repair recommendation:
+
+```bash
+curl -X POST http://localhost:8080/v1/admin/memory-quality/evaluations \
+  -H 'Content-Type: application/json' \
+  -H 'X-API-Key: dev-admin-key' \
+  -H 'X-Stele-Tenant: tenant-a' \
+  -H 'X-Stele-Project: project-a' \
+  -H 'X-Stele-Namespace: namespace-a' \
+  -d '{"checks":["retrieval","context"],"actor":"operator-a","reason":"inspect active usefulness feedback"}'
+
+curl -X POST http://localhost:8080/v1/admin/memory-quality/repair-plans \
+  -H 'Content-Type: application/json' \
+  -H 'X-API-Key: dev-admin-key' \
+  -H 'X-Stele-Tenant: tenant-a' \
+  -H 'X-Stele-Project: project-a' \
+  -H 'X-Stele-Namespace: namespace-a' \
+  -d '{"evaluation_run_id":"<evaluation-run-id>","actor":"operator-a","reason":"review feedback-derived findings","dry_run":true}'
+```
+
+Feedback-derived repair actions remain admin-gated. No public feedback request can approve a plan, suppress memory, retry embeddings, inspect governance, replay insights, or execute repair inline.
+
+9. Rerun verification after operator remediation:
+
+```bash
+curl -X POST http://localhost:8080/v1/admin/memory-quality/repair-plans/<repair-plan-id>:verify \
+  -H 'Content-Type: application/json' \
+  -H 'X-API-Key: dev-admin-key' \
+  -H 'X-Stele-Tenant: tenant-a' \
+  -H 'X-Stele-Project: project-a' \
+  -H 'X-Stele-Namespace: namespace-a' \
+  -d '{"checks":["retrieval","context"],"actor":"operator-a","reason":"verify feedback remediation"}'
+
+curl http://localhost:8080/v1/memory-sessions/<session-id>/report \
+  -H 'X-API-Key: dev-public-key' \
+  -H 'X-Stele-Tenant: tenant-a' \
+  -H 'X-Stele-Project: project-a' \
+  -H 'X-Stele-Namespace: namespace-a'
+```
+
+The session report exposes bounded feedback summaries, verification attempts, quality evaluation ids, quality finding ids and codes, repair plan ids, and next actions. It does not expose hidden memory content or out-of-scope evidence through public report fields.
+
+### Remaining feedback-loop product gaps
+
+This repository now closes the service-side feedback loop, but several product surfaces remain intentionally outside this proposal:
+
+- SDK and UI collection surfaces for callers to attach feedback subjects without hand-building JSON.
+- External agent runtime integration that decides when to call session, outcome, verification, and feedback routes.
+- Default feedback-aware ranking rollout. Current behavior is diagnostics-first and per-request opt-in through `feedback_aware_ranking`.
+- Task-success evaluation harnesses that compare agent outcomes against task-level success criteria beyond memory recall usefulness.
+- Alert routing for repeated negative feedback, unsafe feedback, or repair verification failures.
+- End-user prompt orchestration and model invocation, which remain outside Stele's service boundary.
+
 ## Memory Management Surface
 
 `Stele` now exposes two distinct memory management boundaries:

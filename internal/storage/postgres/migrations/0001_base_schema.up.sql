@@ -22,7 +22,11 @@ ALTER TABLE raw_events
     ADD COLUMN IF NOT EXISTS governance_last_failed_at timestamptz,
     ADD COLUMN IF NOT EXISTS governance_last_error text,
     ADD COLUMN IF NOT EXISTS governance_next_attempt_at timestamptz,
-    ADD COLUMN IF NOT EXISTS governance_exhausted_at timestamptz;
+    ADD COLUMN IF NOT EXISTS governance_exhausted_at timestamptz,
+    ADD COLUMN IF NOT EXISTS memory_session_id text,
+    ADD COLUMN IF NOT EXISTS memory_session_turn_id text,
+    ADD COLUMN IF NOT EXISTS memory_session_outcome_id text,
+    ADD COLUMN IF NOT EXISTS memory_session_source text;
 
 CREATE TABLE IF NOT EXISTS candidate_memories (
     id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
@@ -485,6 +489,8 @@ CREATE TABLE IF NOT EXISTS memory_session_turns (
     tenant text NOT NULL,
     project text NOT NULL,
     namespace text NOT NULL,
+    idempotency_key text,
+    outcome_idempotency_key text,
     status text NOT NULL,
     query text NOT NULL,
     context_evidence jsonb NOT NULL DEFAULT '{}'::jsonb,
@@ -532,8 +538,73 @@ CREATE TABLE IF NOT EXISTS memory_loop_evidence_links (
     created_at timestamptz NOT NULL DEFAULT now()
 );
 
+CREATE TABLE IF NOT EXISTS usefulness_feedback (
+    id text PRIMARY KEY,
+    tenant text NOT NULL,
+    project text NOT NULL,
+    namespace text NOT NULL,
+    feedback_type text NOT NULL,
+    source_surface text NOT NULL,
+    actor text NOT NULL,
+    reason text NOT NULL,
+    idempotency_key text,
+    metadata jsonb NOT NULL DEFAULT '{}'::jsonb,
+    superseded_at timestamptz,
+    superseded_by_actor text,
+    superseded_by_reason text,
+    created_at timestamptz NOT NULL DEFAULT now()
+);
+
+CREATE TABLE IF NOT EXISTS usefulness_feedback_subjects (
+    id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+    feedback_id text NOT NULL REFERENCES usefulness_feedback(id) ON DELETE CASCADE,
+    tenant text NOT NULL,
+    project text NOT NULL,
+    namespace text NOT NULL,
+    subject_kind text NOT NULL,
+    subject_id text,
+    expected_recall_kind text,
+    expected_recall_id text,
+    opaque_token text,
+    created_at timestamptz NOT NULL DEFAULT now()
+);
+
+CREATE TABLE IF NOT EXISTS usefulness_feedback_supersessions (
+    id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+    tenant text NOT NULL,
+    project text NOT NULL,
+    namespace text NOT NULL,
+    feedback_id text NOT NULL REFERENCES usefulness_feedback(id) ON DELETE CASCADE,
+    actor text NOT NULL,
+    reason text NOT NULL,
+    superseded_at timestamptz NOT NULL,
+    created_at timestamptz NOT NULL DEFAULT now()
+);
+
+CREATE TABLE IF NOT EXISTS usefulness_feedback_summaries (
+    id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+    tenant text NOT NULL,
+    project text NOT NULL,
+    namespace text NOT NULL,
+    subject_kind text NOT NULL,
+    subject_id text,
+    expected_recall_kind text,
+    expected_recall_id text,
+    opaque_token text,
+    total_active integer NOT NULL DEFAULT 0,
+    counts jsonb NOT NULL DEFAULT '{}'::jsonb,
+    effective_quality text NOT NULL DEFAULT 'unknown',
+    dominant_categories text[] NOT NULL DEFAULT '{}'::text[],
+    last_feedback_at timestamptz,
+    rebuilt_at timestamptz NOT NULL DEFAULT now()
+);
+
 CREATE INDEX IF NOT EXISTS raw_events_scope_created_at_idx
     ON raw_events (tenant, project, namespace, created_at DESC);
+
+CREATE INDEX IF NOT EXISTS raw_events_session_outcome_idx
+    ON raw_events (tenant, project, namespace, memory_session_id, memory_session_turn_id, created_at DESC)
+    WHERE memory_session_id IS NOT NULL;
 
 CREATE INDEX IF NOT EXISTS raw_events_governance_claim_idx
     ON raw_events (
@@ -680,8 +751,32 @@ CREATE INDEX IF NOT EXISTS memory_session_runs_scope_status_updated_at_idx
 CREATE INDEX IF NOT EXISTS memory_session_turns_session_created_at_idx
     ON memory_session_turns (session_id, created_at ASC);
 
+CREATE UNIQUE INDEX IF NOT EXISTS memory_session_turns_scope_idempotency_idx
+    ON memory_session_turns (tenant, project, namespace, session_id, idempotency_key)
+    WHERE idempotency_key IS NOT NULL;
+
+CREATE UNIQUE INDEX IF NOT EXISTS memory_session_turns_scope_outcome_idempotency_idx
+    ON memory_session_turns (tenant, project, namespace, session_id, id, outcome_idempotency_key)
+    WHERE outcome_idempotency_key IS NOT NULL;
+
 CREATE INDEX IF NOT EXISTS memory_session_verifications_scope_status_next_attempt_idx
     ON memory_session_verifications (tenant, project, namespace, status, next_attempt_at, updated_at ASC);
 
 CREATE INDEX IF NOT EXISTS memory_loop_evidence_links_owner_idx
     ON memory_loop_evidence_links (tenant, project, namespace, owner_kind, owner_id, created_at DESC);
+
+CREATE UNIQUE INDEX IF NOT EXISTS usefulness_feedback_scope_idempotency_idx
+    ON usefulness_feedback (tenant, project, namespace, idempotency_key)
+    WHERE idempotency_key IS NOT NULL;
+
+CREATE INDEX IF NOT EXISTS usefulness_feedback_scope_type_created_at_idx
+    ON usefulness_feedback (tenant, project, namespace, feedback_type, created_at DESC);
+
+CREATE INDEX IF NOT EXISTS usefulness_feedback_subjects_subject_idx
+    ON usefulness_feedback_subjects (tenant, project, namespace, subject_kind, subject_id, expected_recall_kind, expected_recall_id, opaque_token);
+
+CREATE INDEX IF NOT EXISTS usefulness_feedback_supersessions_feedback_idx
+    ON usefulness_feedback_supersessions (tenant, project, namespace, feedback_id, superseded_at DESC);
+
+CREATE INDEX IF NOT EXISTS usefulness_feedback_active_subject_idx
+    ON usefulness_feedback_subjects (tenant, project, namespace, subject_kind, subject_id, expected_recall_kind, expected_recall_id, opaque_token, feedback_id);

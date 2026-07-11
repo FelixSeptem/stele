@@ -83,6 +83,17 @@ func (s *stubDerivedInsightSource) ListDerivedInsights(ctx context.Context, inpu
 	return filtered, nil
 }
 
+type stubRetrievalUsefulnessSummarizer struct {
+	summaries map[string]memory.UsefulnessFeedbackSummary
+}
+
+func (s stubRetrievalUsefulnessSummarizer) SummarizeUsefulnessFeedback(ctx context.Context, input memory.SummarizeUsefulnessFeedbackInput) (memory.UsefulnessFeedbackSummary, error) {
+	if summary, ok := s.summaries[input.Subject.ID]; ok {
+		return summary, nil
+	}
+	return memory.UsefulnessFeedbackSummary{Subject: input.Subject, EffectiveQuality: memory.UsefulnessQualityUnknown}, nil
+}
+
 type stubRetrievalObserver struct {
 	operations []telemetry.OperationEvent
 }
@@ -205,6 +216,136 @@ func TestServiceSearchMergesRankedHitsAcrossSources(t *testing.T) {
 
 	if len(citations.gotMemoryIDs) != 3 {
 		t.Fatalf("citation memory ids = %v, want three memory ids", citations.gotMemoryIDs)
+	}
+}
+
+func TestServiceSearchAddsFeedbackDiagnosticsWithoutChangingDefaultRanking(t *testing.T) {
+	now := time.Date(2026, 7, 11, 22, 0, 0, 0, time.UTC)
+	scope := memory.Scope{Tenant: "tenant-a", Project: "project-a", Namespace: "namespace-a"}
+	lexical := &stubLexicalSource{hits: []ScoredMemory{
+		{
+			Memory:       memory.CanonicalMemory{ID: "mem_noisy", Scope: scope, Class: memory.MemoryClassProfile, State: memory.MemoryStateActive, ModifiedAt: now},
+			LexicalScore: 0.9,
+		},
+		{
+			Memory:       memory.CanonicalMemory{ID: "mem_useful", Scope: scope, Class: memory.MemoryClassProfile, State: memory.MemoryStateActive, ModifiedAt: now.Add(-time.Minute)},
+			LexicalScore: 0.8,
+		},
+	}}
+	service := NewService(ServiceDependencies{
+		Lexical: lexical,
+		UsefulnessSummarizer: stubRetrievalUsefulnessSummarizer{summaries: map[string]memory.UsefulnessFeedbackSummary{
+			"mem_noisy": {
+				Subject:          memory.UsefulnessFeedbackSubject{Kind: memory.UsefulnessFeedbackSubjectMemory, ID: "mem_noisy"},
+				TotalActive:      2,
+				NegativeCount:    2,
+				EffectiveQuality: memory.UsefulnessQualityNegative,
+				Counts:           map[memory.UsefulnessFeedbackType]int{memory.UsefulnessFeedbackTypeNoisy: 2},
+			},
+			"mem_useful": {
+				Subject:          memory.UsefulnessFeedbackSubject{Kind: memory.UsefulnessFeedbackSubjectMemory, ID: "mem_useful"},
+				TotalActive:      1,
+				PositiveCount:    1,
+				EffectiveQuality: memory.UsefulnessQualityPositive,
+				Counts:           map[memory.UsefulnessFeedbackType]int{memory.UsefulnessFeedbackTypeUseful: 1},
+			},
+		}},
+	})
+
+	defaultResult, err := service.Search(context.Background(), SearchInput{Scope: scope, Query: "preference", TopK: 2})
+	if err != nil {
+		t.Fatalf("Search() default error = %v", err)
+	}
+	if defaultResult.Hits[0].Memory.ID != "mem_noisy" {
+		t.Fatalf("default hits = %+v, want score ranking unchanged", defaultResult.Hits)
+	}
+	if len(defaultResult.Diagnostics) != 0 {
+		t.Fatalf("default diagnostics = %+v, want no feedback diagnostics unless requested", defaultResult.Diagnostics)
+	}
+
+	diagnosticResult, err := service.Search(context.Background(), SearchInput{Scope: scope, Query: "preference", TopK: 2, IncludeFeedbackDiagnostics: true})
+	if err != nil {
+		t.Fatalf("Search() diagnostics error = %v", err)
+	}
+	if diagnosticResult.Hits[0].Memory.ID != "mem_noisy" {
+		t.Fatalf("diagnostic hits = %+v, want diagnostics without ranking change", diagnosticResult.Hits)
+	}
+	if !hasContextDiagnostic(diagnosticResult.Diagnostics, "search_feedback", "negative_signal") {
+		t.Fatalf("diagnostics = %+v, want negative feedback signal", diagnosticResult.Diagnostics)
+	}
+
+	reranked, err := service.Search(context.Background(), SearchInput{Scope: scope, Query: "preference", TopK: 2, IncludeFeedbackDiagnostics: true, FeedbackAwareRanking: true})
+	if err != nil {
+		t.Fatalf("Search() feedback ranking error = %v", err)
+	}
+	if reranked.Hits[0].Memory.ID != "mem_useful" {
+		t.Fatalf("reranked hits = %+v, want explicit feedback-aware ranking hint", reranked.Hits)
+	}
+	if !hasContextDiagnostic(reranked.Diagnostics, "search_feedback", "ranking_hint_applied") {
+		t.Fatalf("diagnostics = %+v, want ranking hint diagnostic", reranked.Diagnostics)
+	}
+}
+
+func TestServiceAssembleContextUsesFeedbackDiagnosticsOnlyWhenRequested(t *testing.T) {
+	now := time.Date(2026, 7, 11, 22, 30, 0, 0, time.UTC)
+	scope := memory.Scope{Tenant: "tenant-a", Project: "project-a", Namespace: "namespace-a"}
+	lexical := &stubLexicalSource{hits: []ScoredMemory{
+		{
+			Memory:       memory.CanonicalMemory{ID: "mem_noisy", Scope: scope, Class: memory.MemoryClassProfile, State: memory.MemoryStateActive, ModifiedAt: now},
+			LexicalScore: 0.9,
+		},
+		{
+			Memory:       memory.CanonicalMemory{ID: "mem_useful", Scope: scope, Class: memory.MemoryClassProfile, State: memory.MemoryStateActive, ModifiedAt: now.Add(-time.Minute)},
+			LexicalScore: 0.8,
+		},
+	}}
+	service := NewService(ServiceDependencies{
+		Lexical: lexical,
+		UsefulnessSummarizer: stubRetrievalUsefulnessSummarizer{summaries: map[string]memory.UsefulnessFeedbackSummary{
+			"mem_noisy": {
+				Subject:          memory.UsefulnessFeedbackSubject{Kind: memory.UsefulnessFeedbackSubjectMemory, ID: "mem_noisy"},
+				TotalActive:      2,
+				NegativeCount:    2,
+				EffectiveQuality: memory.UsefulnessQualityNegative,
+				Counts:           map[memory.UsefulnessFeedbackType]int{memory.UsefulnessFeedbackTypeStale: 2},
+			},
+			"mem_useful": {
+				Subject:          memory.UsefulnessFeedbackSubject{Kind: memory.UsefulnessFeedbackSubjectMemory, ID: "mem_useful"},
+				TotalActive:      1,
+				PositiveCount:    1,
+				EffectiveQuality: memory.UsefulnessQualityPositive,
+				Counts:           map[memory.UsefulnessFeedbackType]int{memory.UsefulnessFeedbackTypeUseful: 1},
+			},
+		}},
+	})
+
+	defaultContext, err := service.AssembleContext(context.Background(), AssembleContextInput{Scope: scope, Query: "preference", Budget: 1, IncludeDiagnostics: true})
+	if err != nil {
+		t.Fatalf("AssembleContext() default error = %v", err)
+	}
+	if len(defaultContext.Profile) != 1 || defaultContext.Profile[0].Memory.ID != "mem_noisy" {
+		t.Fatalf("default profile = %+v, want score ranking unchanged", defaultContext.Profile)
+	}
+	if hasContextDiagnostic(defaultContext.Diagnostics, "search_feedback", "negative_signal") {
+		t.Fatalf("default diagnostics = %+v, want no feedback diagnostics by default", defaultContext.Diagnostics)
+	}
+
+	feedbackContext, err := service.AssembleContext(context.Background(), AssembleContextInput{
+		Scope:                      scope,
+		Query:                      "preference",
+		Budget:                     1,
+		IncludeDiagnostics:         true,
+		IncludeFeedbackDiagnostics: true,
+		FeedbackAwareRanking:       true,
+	})
+	if err != nil {
+		t.Fatalf("AssembleContext() feedback error = %v", err)
+	}
+	if len(feedbackContext.Profile) != 1 || feedbackContext.Profile[0].Memory.ID != "mem_useful" {
+		t.Fatalf("feedback profile = %+v, want explicit feedback-aware ranking hint", feedbackContext.Profile)
+	}
+	if !hasContextDiagnostic(feedbackContext.Diagnostics, "search_feedback", "negative_signal") || !hasContextDiagnostic(feedbackContext.Diagnostics, "search_feedback", "ranking_hint_applied") {
+		t.Fatalf("feedback diagnostics = %+v, want feedback diagnostics and ranking hint", feedbackContext.Diagnostics)
 	}
 }
 

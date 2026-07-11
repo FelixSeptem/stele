@@ -48,6 +48,15 @@ type InsightFeedbackEvent struct {
 	Decision     string
 }
 
+type UsefulnessFeedbackEvent struct {
+	Operation     string
+	Result        string
+	FeedbackType  string
+	SubjectKind   string
+	SourceSurface string
+	Decision      string
+}
+
 type DerivedInsightReplayEvent struct {
 	Mode        string
 	Result      string
@@ -236,6 +245,20 @@ func (o *MetricsObserver) RecordInsightFeedback(ctx context.Context, event Insig
 	}, 1)
 }
 
+func (o *MetricsObserver) RecordUsefulnessFeedback(ctx context.Context, event UsefulnessFeedbackEvent) {
+	if o == nil {
+		return
+	}
+	o.addCounter("stele_usefulness_feedback_total", map[string]string{
+		"operation":      labelOrUnknown(event.Operation),
+		"result":         labelOrUnknown(event.Result),
+		"feedback_type":  labelOrUnknown(event.FeedbackType),
+		"subject_kind":   labelOrUnknown(event.SubjectKind),
+		"source_surface": labelOrUnknown(event.SourceSurface),
+		"decision":       labelOrUnknown(event.Decision),
+	}, 1)
+}
+
 func (o *MetricsObserver) RecordDerivedInsightReplay(ctx context.Context, event DerivedInsightReplayEvent) {
 	if o == nil {
 		return
@@ -365,6 +388,7 @@ func (o *MetricsObserver) RenderPrometheus() string {
 	writeMetricFamilyHeader(&builder, "stele_embedding_cutover_wave_dispatch_total", "counter", "Embedding cutover wave dispatch attempts.")
 	writeMetricFamilyHeader(&builder, "stele_embedding_cutover_wave_dispatched_total", "counter", "Embedding cutover items dispatched by scheduler waves.")
 	writeMetricFamilyHeader(&builder, "stele_insight_feedback_total", "counter", "Derived insight feedback operations and policy decisions.")
+	writeMetricFamilyHeader(&builder, "stele_usefulness_feedback_total", "counter", "Usefulness feedback lifecycle operations by bounded categories.")
 	writeMetricFamilyHeader(&builder, "stele_derived_insight_replay_total", "counter", "Derived insight replay outcomes by low-cardinality categories.")
 	writeMetricFamilyHeader(&builder, "stele_quality_evaluation_total", "counter", "Memory quality evaluation outcomes.")
 	writeMetricFamilyHeader(&builder, "stele_quality_repair_actions_total", "counter", "Memory quality repair action outcomes.")

@@ -44,6 +44,7 @@ type HTTPDependencies struct {
 	QualityAdmin              QualityAdminService
 	ScopeProofAdmin           ScopeProofAdminService
 	MemorySession             MemorySessionService
+	UsefulnessFeedback        UsefulnessFeedbackService
 	MemoryHistoryRead         MemoryHistoryReader
 	JobExecutionRead          JobExecutionReader
 	Metrics                   MetricsRecorder
@@ -126,6 +127,14 @@ type MemorySessionService interface {
 	ReadSessionReport(ctx context.Context, input memory.ReadMemorySessionRunInput) (memory.MemorySessionReport, error)
 }
 
+type UsefulnessFeedbackService interface {
+	CreateUsefulnessFeedback(ctx context.Context, input memory.UsefulnessFeedback) (memory.UsefulnessFeedback, error)
+	ListUsefulnessFeedback(ctx context.Context, input memory.ListUsefulnessFeedbackInput) ([]memory.UsefulnessFeedback, error)
+	ReadUsefulnessFeedback(ctx context.Context, input memory.ReadUsefulnessFeedbackInput) (memory.UsefulnessFeedback, error)
+	SummarizeUsefulnessFeedback(ctx context.Context, input memory.SummarizeUsefulnessFeedbackInput) (memory.UsefulnessFeedbackSummary, error)
+	SupersedeUsefulnessFeedback(ctx context.Context, input memory.SupersedeUsefulnessFeedbackInput) error
+}
+
 type ManualMemoryMutationService interface {
 	CreateMemory(ctx context.Context, input memory.ManualCreateMemoryInput) (memory.MemoryResource, error)
 	UpdateMemory(ctx context.Context, input memory.ManualUpdateMemoryInput) (memory.MemoryResource, error)
@@ -155,6 +164,7 @@ type MetricsRecorder interface {
 	RecordCutoverPlanState(ctx context.Context, event telemetry.CutoverPlanStateEvent)
 	RecordCutoverItemState(ctx context.Context, event telemetry.CutoverItemStateEvent)
 	RecordInsightFeedback(ctx context.Context, event telemetry.InsightFeedbackEvent)
+	RecordUsefulnessFeedback(ctx context.Context, event telemetry.UsefulnessFeedbackEvent)
 }
 
 type lifecycleActionRequest struct {
@@ -218,6 +228,7 @@ type memorySessionCreateRequest struct {
 }
 
 type memorySessionTurnCreateRequest struct {
+	IdempotencyKey            string `json:"idempotency_key"`
 	Query                     string `json:"query"`
 	ContextBudget             int    `json:"context_budget"`
 	IncludeRelations          bool   `json:"include_relations"`
@@ -226,8 +237,25 @@ type memorySessionTurnCreateRequest struct {
 }
 
 type memorySessionTurnOutcomeRequest struct {
-	OutcomeEventIDs []string `json:"outcome_event_ids"`
-	ExpectedRecall  []string `json:"expected_recall"`
+	IdempotencyKey       string                                    `json:"idempotency_key"`
+	OutcomeEventIDs      []string                                  `json:"outcome_event_ids"`
+	OutcomeEventPayloads []memory.MemorySessionOutcomeEventPayload `json:"event_payloads"`
+	ExpectedRecall       []string                                  `json:"expected_recall"`
+}
+
+type usefulnessFeedbackCreateRequest struct {
+	Type           memory.UsefulnessFeedbackType          `json:"type"`
+	SourceSurface  memory.UsefulnessFeedbackSourceSurface `json:"source_surface"`
+	Subjects       []memory.UsefulnessFeedbackSubject     `json:"subjects"`
+	Actor          string                                 `json:"actor"`
+	Reason         string                                 `json:"reason"`
+	IdempotencyKey string                                 `json:"idempotency_key"`
+	Metadata       map[string]any                         `json:"metadata,omitempty"`
+}
+
+type usefulnessFeedbackSupersedeRequest struct {
+	Actor  string `json:"actor"`
+	Reason string `json:"reason"`
 }
 
 type memorySessionVerificationRequest struct {
@@ -303,22 +331,28 @@ type eventIngestResponse struct {
 }
 
 type memorySearchRequest struct {
-	Query            string               `json:"query"`
-	QueryEmbedding   []float32            `json:"query_embedding"`
-	Classes          []memory.MemoryClass `json:"classes"`
-	TimeFrom         string               `json:"time_from"`
-	TimeTo           string               `json:"time_to"`
-	TopK             int                  `json:"top_k"`
-	IncludeSummaries bool                 `json:"include_summaries"`
-	IncludeRelations bool                 `json:"include_relations"`
+	Query                      string               `json:"query"`
+	QueryEmbedding             []float32            `json:"query_embedding"`
+	Classes                    []memory.MemoryClass `json:"classes"`
+	TimeFrom                   string               `json:"time_from"`
+	TimeTo                     string               `json:"time_to"`
+	TopK                       int                  `json:"top_k"`
+	IncludeSummaries           bool                 `json:"include_summaries"`
+	IncludeRelations           bool                 `json:"include_relations"`
+	IncludeFeedbackDiagnostics bool                 `json:"include_feedback_diagnostics"`
+	FeedbackAwareRanking       bool                 `json:"feedback_aware_ranking"`
+	FeedbackRankingPolicy      string               `json:"feedback_ranking_policy"`
 }
 
 type contextAssembleRequest struct {
-	Query                     string `json:"query"`
-	Budget                    int    `json:"budget"`
-	IncludeRelations          bool   `json:"include_relations"`
-	IncludeExperienceInsights bool   `json:"include_experience_insights"`
-	IncludeDiagnostics        bool   `json:"include_diagnostics"`
+	Query                      string `json:"query"`
+	Budget                     int    `json:"budget"`
+	IncludeRelations           bool   `json:"include_relations"`
+	IncludeExperienceInsights  bool   `json:"include_experience_insights"`
+	IncludeDiagnostics         bool   `json:"include_diagnostics"`
+	IncludeFeedbackDiagnostics bool   `json:"include_feedback_diagnostics"`
+	FeedbackAwareRanking       bool   `json:"feedback_aware_ranking"`
+	FeedbackRankingPolicy      string `json:"feedback_ranking_policy"`
 }
 
 func NewHTTPHandler(deps HTTPDependencies) http.Handler {
@@ -476,6 +510,15 @@ func NewHTTPHandler(deps HTTPDependencies) http.Handler {
 	)
 	mux.Handle("POST /v1/memory-sessions/{session_action}", protectedMemorySessionAction)
 
+	protectedUsefulnessFeedback := auth.APIKeyMiddleware(deps.APIKeys)(
+		auth.ScopeMiddleware()(
+			http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				handleUsefulnessFeedbackCreate(w, r, deps.UsefulnessFeedback, deps.Metrics, deps.Logger)
+			}),
+		),
+	)
+	mux.Handle("POST /v1/usefulness-feedback", protectedUsefulnessFeedback)
+
 	adminGovernance := auth.APIKeyMiddleware(deps.AdminAPIKeys)(
 		http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 			handleGovernanceStatus(w, r, deps.GovernanceStatusRead)
@@ -573,6 +616,42 @@ func NewHTTPHandler(deps HTTPDependencies) http.Handler {
 		),
 	)
 	mux.Handle("POST /v1/admin/derived-insight-feedback/{feedback_action}", adminDerivedInsightFeedbackAction)
+
+	adminUsefulnessFeedbackList := auth.APIKeyMiddleware(deps.AdminAPIKeys)(
+		auth.ScopeMiddleware()(
+			http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				handleAdminUsefulnessFeedbackList(w, r, deps.UsefulnessFeedback)
+			}),
+		),
+	)
+	mux.Handle("GET /v1/admin/usefulness-feedback", adminUsefulnessFeedbackList)
+
+	adminUsefulnessFeedbackSummary := auth.APIKeyMiddleware(deps.AdminAPIKeys)(
+		auth.ScopeMiddleware()(
+			http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				handleAdminUsefulnessFeedbackSummary(w, r, deps.UsefulnessFeedback, deps.Metrics, deps.Logger)
+			}),
+		),
+	)
+	mux.Handle("GET /v1/admin/usefulness-feedback/summary", adminUsefulnessFeedbackSummary)
+
+	adminUsefulnessFeedbackDetail := auth.APIKeyMiddleware(deps.AdminAPIKeys)(
+		auth.ScopeMiddleware()(
+			http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				handleAdminUsefulnessFeedbackDetail(w, r, deps.UsefulnessFeedback)
+			}),
+		),
+	)
+	mux.Handle("GET /v1/admin/usefulness-feedback/{feedback_id}", adminUsefulnessFeedbackDetail)
+
+	adminUsefulnessFeedbackAction := auth.APIKeyMiddleware(deps.AdminAPIKeys)(
+		auth.ScopeMiddleware()(
+			http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				handleAdminUsefulnessFeedbackAction(w, r, deps.UsefulnessFeedback, deps.Metrics, deps.Logger)
+			}),
+		),
+	)
+	mux.Handle("POST /v1/admin/usefulness-feedback/{feedback_action}", adminUsefulnessFeedbackAction)
 
 	adminDerivedInsightAction := auth.APIKeyMiddleware(deps.AdminAPIKeys)(
 		auth.ScopeMiddleware()(
@@ -1027,15 +1106,21 @@ func handleMemorySearch(w http.ResponseWriter, r *http.Request, searcher retriev
 		http.Error(w, "scope context is missing", http.StatusInternalServerError)
 		return
 	}
+	if strings.TrimSpace(req.FeedbackRankingPolicy) != "" {
+		http.Error(w, "feedback_ranking_policy is not supported; use per-request feedback_aware_ranking only", http.StatusBadRequest)
+		return
+	}
 
 	input := retrieval.SearchInput{
-		Scope:            scope,
-		Query:            req.Query,
-		QueryEmbedding:   req.QueryEmbedding,
-		Classes:          req.Classes,
-		TopK:             req.TopK,
-		IncludeSummaries: req.IncludeSummaries,
-		IncludeRelations: req.IncludeRelations,
+		Scope:                      scope,
+		Query:                      req.Query,
+		QueryEmbedding:             req.QueryEmbedding,
+		Classes:                    req.Classes,
+		TopK:                       req.TopK,
+		IncludeSummaries:           req.IncludeSummaries,
+		IncludeRelations:           req.IncludeRelations,
+		IncludeFeedbackDiagnostics: req.IncludeFeedbackDiagnostics,
+		FeedbackAwareRanking:       req.FeedbackAwareRanking,
 	}
 	if req.TimeFrom != "" {
 		timeFrom, err := time.Parse(time.RFC3339, req.TimeFrom)
@@ -1136,14 +1221,20 @@ func handleContextAssembly(w http.ResponseWriter, r *http.Request, assembler ret
 		http.Error(w, "scope context is missing", http.StatusInternalServerError)
 		return
 	}
+	if strings.TrimSpace(req.FeedbackRankingPolicy) != "" {
+		http.Error(w, "feedback_ranking_policy is not supported; use per-request feedback_aware_ranking only", http.StatusBadRequest)
+		return
+	}
 
 	result, err := assembler.AssembleContext(r.Context(), retrieval.AssembleContextInput{
-		Scope:                     scope,
-		Query:                     req.Query,
-		Budget:                    req.Budget,
-		IncludeRelations:          req.IncludeRelations,
-		IncludeExperienceInsights: req.IncludeExperienceInsights,
-		IncludeDiagnostics:        req.IncludeDiagnostics,
+		Scope:                      scope,
+		Query:                      req.Query,
+		Budget:                     req.Budget,
+		IncludeRelations:           req.IncludeRelations,
+		IncludeExperienceInsights:  req.IncludeExperienceInsights,
+		IncludeDiagnostics:         req.IncludeDiagnostics,
+		IncludeFeedbackDiagnostics: req.IncludeFeedbackDiagnostics,
+		FeedbackAwareRanking:       req.FeedbackAwareRanking,
 	})
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusBadRequest)
@@ -1260,6 +1351,7 @@ func handleMemorySessionTurns(w http.ResponseWriter, r *http.Request, service Me
 	turn, err := service.CreateTurn(r.Context(), memory.CreateMemorySessionTurnInput{
 		Scope:                     scope,
 		SessionID:                 strings.TrimSpace(r.PathValue("session_id")),
+		IdempotencyKey:            strings.TrimSpace(req.IdempotencyKey),
 		Query:                     strings.TrimSpace(req.Query),
 		ContextBudget:             req.ContextBudget,
 		IncludeRelations:          req.IncludeRelations,
@@ -1293,11 +1385,13 @@ func handleMemorySessionTurnAction(w http.ResponseWriter, r *http.Request, servi
 		return
 	}
 	turn, err := service.RecordTurnOutcome(r.Context(), memory.RecordMemorySessionTurnOutcomeInput{
-		Scope:           scope,
-		SessionID:       strings.TrimSpace(r.PathValue("session_id")),
-		TurnID:          strings.TrimSpace(turnID),
-		OutcomeEventIDs: append([]string(nil), req.OutcomeEventIDs...),
-		ExpectedRecall:  append([]string(nil), req.ExpectedRecall...),
+		Scope:                scope,
+		SessionID:            strings.TrimSpace(r.PathValue("session_id")),
+		TurnID:               strings.TrimSpace(turnID),
+		IdempotencyKey:       strings.TrimSpace(req.IdempotencyKey),
+		OutcomeEventIDs:      append([]string(nil), req.OutcomeEventIDs...),
+		OutcomeEventPayloads: append([]memory.MemorySessionOutcomeEventPayload(nil), req.OutcomeEventPayloads...),
+		ExpectedRecall:       append([]string(nil), req.ExpectedRecall...),
 	})
 	if err != nil {
 		writeMemorySessionError(w, err, "failed to record memory session turn outcome")
@@ -1336,6 +1430,177 @@ func handleMemorySessionAction(w http.ResponseWriter, r *http.Request, service M
 		return
 	}
 	writeJSON(w, http.StatusAccepted, verification)
+}
+
+func handleUsefulnessFeedbackCreate(w http.ResponseWriter, r *http.Request, service UsefulnessFeedbackService, metrics MetricsRecorder, logger *log.Logger) {
+	if service == nil {
+		http.Error(w, "usefulness feedback service is not configured", http.StatusServiceUnavailable)
+		return
+	}
+	scope, ok := auth.ScopeFromContext(r.Context())
+	if !ok {
+		http.Error(w, "scope context is missing", http.StatusInternalServerError)
+		return
+	}
+	var req usefulnessFeedbackCreateRequest
+	if !decodeJSONBody(w, r, &req) {
+		return
+	}
+	feedback := memory.UsefulnessFeedback{
+		ID:             newFeedbackID(),
+		Scope:          scope,
+		Type:           req.Type,
+		SourceSurface:  req.SourceSurface,
+		Subjects:       append([]memory.UsefulnessFeedbackSubject(nil), req.Subjects...),
+		Actor:          strings.TrimSpace(req.Actor),
+		Reason:         strings.TrimSpace(req.Reason),
+		IdempotencyKey: strings.TrimSpace(req.IdempotencyKey),
+		Metadata:       req.Metadata,
+		CreatedAt:      time.Now().UTC(),
+	}
+	created, err := service.CreateUsefulnessFeedback(r.Context(), feedback)
+	if err != nil {
+		recordUsefulnessFeedbackMetric(r.Context(), metrics, "create", "rejected", req.Type, firstUsefulnessSubjectKind(req.Subjects), req.SourceSurface, "active")
+		recordUsefulnessFeedbackLog(logger, "create", "rejected", req.Type, firstUsefulnessSubjectKind(req.Subjects), req.SourceSurface, "active")
+		writeUsefulnessFeedbackError(w, err, "failed to create usefulness feedback")
+		return
+	}
+	recordUsefulnessFeedbackMetric(r.Context(), metrics, "create", "ok", created.Type, firstUsefulnessSubjectKind(created.Subjects), created.SourceSurface, "active")
+	recordUsefulnessFeedbackLog(logger, "create", "ok", created.Type, firstUsefulnessSubjectKind(created.Subjects), created.SourceSurface, "active")
+	writeJSON(w, http.StatusCreated, created)
+}
+
+func handleAdminUsefulnessFeedbackList(w http.ResponseWriter, r *http.Request, service UsefulnessFeedbackService) {
+	if service == nil {
+		http.Error(w, "usefulness feedback service is not configured", http.StatusServiceUnavailable)
+		return
+	}
+	scope, ok := auth.ScopeFromContext(r.Context())
+	if !ok {
+		http.Error(w, "scope context is missing", http.StatusInternalServerError)
+		return
+	}
+	limit := 50
+	if raw := strings.TrimSpace(r.URL.Query().Get("limit")); raw != "" {
+		parsed, err := strconv.Atoi(raw)
+		if err != nil || parsed < 0 {
+			http.Error(w, "invalid limit", http.StatusBadRequest)
+			return
+		}
+		limit = parsed
+	}
+	includeSuperseded, err := parseOptionalBoolQuery(r.URL.Query().Get("include_superseded"))
+	if err != nil {
+		http.Error(w, "invalid include_superseded", http.StatusBadRequest)
+		return
+	}
+	var subject memory.UsefulnessFeedbackSubject
+	if strings.TrimSpace(r.URL.Query().Get("subject_kind")) != "" {
+		subject, err = usefulnessFeedbackSubjectFromQuery(r)
+		if err != nil {
+			http.Error(w, err.Error(), http.StatusBadRequest)
+			return
+		}
+	}
+	items, err := service.ListUsefulnessFeedback(r.Context(), memory.ListUsefulnessFeedbackInput{
+		Scope:             scope,
+		Subject:           subject,
+		Type:              memory.UsefulnessFeedbackType(strings.TrimSpace(r.URL.Query().Get("type"))),
+		IncludeSuperseded: includeSuperseded,
+		Limit:             limit,
+	})
+	if err != nil {
+		writeUsefulnessFeedbackError(w, err, "failed to list usefulness feedback")
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"feedback": items})
+}
+
+func handleAdminUsefulnessFeedbackDetail(w http.ResponseWriter, r *http.Request, service UsefulnessFeedbackService) {
+	if service == nil {
+		http.Error(w, "usefulness feedback service is not configured", http.StatusServiceUnavailable)
+		return
+	}
+	scope, ok := auth.ScopeFromContext(r.Context())
+	if !ok {
+		http.Error(w, "scope context is missing", http.StatusInternalServerError)
+		return
+	}
+	feedback, err := service.ReadUsefulnessFeedback(r.Context(), memory.ReadUsefulnessFeedbackInput{
+		Scope:      scope,
+		FeedbackID: strings.TrimSpace(r.PathValue("feedback_id")),
+	})
+	if err != nil {
+		writeUsefulnessFeedbackError(w, err, "failed to read usefulness feedback")
+		return
+	}
+	writeJSON(w, http.StatusOK, feedback)
+}
+
+func handleAdminUsefulnessFeedbackSummary(w http.ResponseWriter, r *http.Request, service UsefulnessFeedbackService, metrics MetricsRecorder, logger *log.Logger) {
+	if service == nil {
+		http.Error(w, "usefulness feedback service is not configured", http.StatusServiceUnavailable)
+		return
+	}
+	scope, ok := auth.ScopeFromContext(r.Context())
+	if !ok {
+		http.Error(w, "scope context is missing", http.StatusInternalServerError)
+		return
+	}
+	subject, err := usefulnessFeedbackSubjectFromQuery(r)
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusBadRequest)
+		return
+	}
+	summary, err := service.SummarizeUsefulnessFeedback(r.Context(), memory.SummarizeUsefulnessFeedbackInput{
+		Scope:   scope,
+		Subject: subject,
+	})
+	if err != nil {
+		recordUsefulnessFeedbackMetric(r.Context(), metrics, "summary", "error", "", subject.Kind, memory.UsefulnessFeedbackSourceAdmin, "active")
+		recordUsefulnessFeedbackLog(logger, "summary", "error", "", subject.Kind, memory.UsefulnessFeedbackSourceAdmin, "active")
+		writeUsefulnessFeedbackError(w, err, "failed to summarize usefulness feedback")
+		return
+	}
+	recordUsefulnessFeedbackMetric(r.Context(), metrics, "summary", "ok", "", subject.Kind, memory.UsefulnessFeedbackSourceAdmin, string(summary.EffectiveQuality))
+	recordUsefulnessFeedbackLog(logger, "summary", "ok", "", subject.Kind, memory.UsefulnessFeedbackSourceAdmin, string(summary.EffectiveQuality))
+	writeJSON(w, http.StatusOK, summary)
+}
+
+func handleAdminUsefulnessFeedbackAction(w http.ResponseWriter, r *http.Request, service UsefulnessFeedbackService, metrics MetricsRecorder, logger *log.Logger) {
+	if service == nil {
+		http.Error(w, "usefulness feedback service is not configured", http.StatusServiceUnavailable)
+		return
+	}
+	scope, ok := auth.ScopeFromContext(r.Context())
+	if !ok {
+		http.Error(w, "scope context is missing", http.StatusInternalServerError)
+		return
+	}
+	feedbackID, action, err := parseUsefulnessFeedbackActionTarget(r.PathValue("feedback_action"))
+	if err != nil || action != "supersede" {
+		http.Error(w, "invalid usefulness feedback action target", http.StatusBadRequest)
+		return
+	}
+	var req usefulnessFeedbackSupersedeRequest
+	if !decodeJSONBody(w, r, &req) {
+		return
+	}
+	if err := service.SupersedeUsefulnessFeedback(r.Context(), memory.SupersedeUsefulnessFeedbackInput{
+		Scope:        scope,
+		FeedbackID:   feedbackID,
+		Actor:        strings.TrimSpace(req.Actor),
+		Reason:       strings.TrimSpace(req.Reason),
+		SupersededAt: time.Now().UTC(),
+	}); err != nil {
+		recordUsefulnessFeedbackMetric(r.Context(), metrics, "supersede", "rejected", "", "", memory.UsefulnessFeedbackSourceAdmin, "superseded")
+		recordUsefulnessFeedbackLog(logger, "supersede", "rejected", "", "", memory.UsefulnessFeedbackSourceAdmin, "superseded")
+		writeUsefulnessFeedbackError(w, err, "failed to supersede usefulness feedback")
+		return
+	}
+	recordUsefulnessFeedbackMetric(r.Context(), metrics, "supersede", "ok", "", "", memory.UsefulnessFeedbackSourceAdmin, "superseded")
+	recordUsefulnessFeedbackLog(logger, "supersede", "ok", "", "", memory.UsefulnessFeedbackSourceAdmin, "superseded")
+	writeJSON(w, http.StatusAccepted, map[string]string{"status": "accepted"})
 }
 
 func handleGovernanceStatus(w http.ResponseWriter, r *http.Request, reader GovernanceStatusReader) {
@@ -3074,7 +3339,7 @@ func writeAdminGovernanceError(w http.ResponseWriter, err error, fallback string
 	case errors.Is(err, pgx.ErrNoRows):
 		http.Error(w, "raw event not found", http.StatusNotFound)
 	default:
-		if strings.Contains(err.Error(), "required") || strings.Contains(err.Error(), "invalid") || strings.Contains(err.Error(), "must be") {
+		if strings.Contains(err.Error(), "required") || strings.Contains(err.Error(), "invalid") || strings.Contains(err.Error(), "must be") || strings.Contains(err.Error(), "must not") {
 			http.Error(w, err.Error(), http.StatusBadRequest)
 			return
 		}
@@ -3089,7 +3354,7 @@ func writeAdminEmbeddingError(w http.ResponseWriter, err error, fallback string)
 	case errors.Is(err, pgx.ErrNoRows):
 		http.Error(w, "memory not found", http.StatusNotFound)
 	default:
-		if strings.Contains(err.Error(), "required") || strings.Contains(err.Error(), "invalid") || strings.Contains(err.Error(), "must be") {
+		if strings.Contains(err.Error(), "required") || strings.Contains(err.Error(), "invalid") || strings.Contains(err.Error(), "must be") || strings.Contains(err.Error(), "must not") {
 			http.Error(w, err.Error(), http.StatusBadRequest)
 			return
 		}
@@ -3146,6 +3411,21 @@ func writeMemorySessionError(w http.ResponseWriter, err error, fallback string) 
 		http.Error(w, err.Error(), http.StatusServiceUnavailable)
 	default:
 		if strings.Contains(err.Error(), "required") || strings.Contains(err.Error(), "invalid") || strings.Contains(err.Error(), "must be") {
+			http.Error(w, err.Error(), http.StatusBadRequest)
+			return
+		}
+		http.Error(w, fallback, http.StatusInternalServerError)
+	}
+}
+
+func writeUsefulnessFeedbackError(w http.ResponseWriter, err error, fallback string) {
+	switch {
+	case errors.Is(err, pgx.ErrNoRows):
+		http.Error(w, "usefulness feedback resource not found", http.StatusNotFound)
+	case strings.Contains(err.Error(), "not configured"):
+		http.Error(w, err.Error(), http.StatusServiceUnavailable)
+	default:
+		if strings.Contains(err.Error(), "required") || strings.Contains(err.Error(), "invalid") || strings.Contains(err.Error(), "must be") || strings.Contains(err.Error(), "must not") {
 			http.Error(w, err.Error(), http.StatusBadRequest)
 			return
 		}
@@ -3257,6 +3537,49 @@ func recordInsightFeedbackMetric(ctx context.Context, metrics MetricsRecorder, o
 	})
 }
 
+func recordUsefulnessFeedbackMetric(ctx context.Context, metrics MetricsRecorder, operation, result string, feedbackType memory.UsefulnessFeedbackType, subjectKind memory.UsefulnessFeedbackSubjectKind, source memory.UsefulnessFeedbackSourceSurface, decision string) {
+	if metrics == nil {
+		return
+	}
+	metrics.RecordUsefulnessFeedback(ctx, telemetry.UsefulnessFeedbackEvent{
+		Operation:     operation,
+		Result:        result,
+		FeedbackType:  string(feedbackType),
+		SubjectKind:   string(subjectKind),
+		SourceSurface: string(source),
+		Decision:      decision,
+	})
+}
+
+func recordUsefulnessFeedbackLog(logger *log.Logger, operation, result string, feedbackType memory.UsefulnessFeedbackType, subjectKind memory.UsefulnessFeedbackSubjectKind, source memory.UsefulnessFeedbackSourceSurface, decision string) {
+	if logger == nil {
+		return
+	}
+	logger.Printf(
+		"mode=api component=usefulness_feedback event=lifecycle operation=%s result=%s feedback_type=%s subject_kind=%s source_surface=%s decision=%s",
+		boundedLogLabel(operation),
+		boundedLogLabel(result),
+		boundedLogLabel(string(feedbackType)),
+		boundedLogLabel(string(subjectKind)),
+		boundedLogLabel(string(source)),
+		boundedLogLabel(decision),
+	)
+}
+
+func boundedLogLabel(value string) string {
+	if strings.TrimSpace(value) == "" {
+		return "unknown"
+	}
+	return strings.TrimSpace(value)
+}
+
+func firstUsefulnessSubjectKind(subjects []memory.UsefulnessFeedbackSubject) memory.UsefulnessFeedbackSubjectKind {
+	if len(subjects) == 0 {
+		return ""
+	}
+	return subjects[0].Kind
+}
+
 func parseMemoryClasses(values []string) []memory.MemoryClass {
 	if len(values) == 0 {
 		return nil
@@ -3323,6 +3646,41 @@ func parseDerivedInsightFeedbackActionTarget(value string) (string, string, erro
 	}
 
 	return strings.TrimSpace(feedbackID), strings.TrimSpace(actionName), nil
+}
+
+func parseUsefulnessFeedbackActionTarget(value string) (string, string, error) {
+	feedbackID, actionName, ok := strings.Cut(value, ":")
+	if !ok || strings.TrimSpace(feedbackID) == "" || strings.TrimSpace(actionName) == "" {
+		return "", "", fmt.Errorf("invalid usefulness feedback action target")
+	}
+
+	return strings.TrimSpace(feedbackID), strings.TrimSpace(actionName), nil
+}
+
+func usefulnessFeedbackSubjectFromQuery(r *http.Request) (memory.UsefulnessFeedbackSubject, error) {
+	subject := memory.UsefulnessFeedbackSubject{
+		Kind: memory.UsefulnessFeedbackSubjectKind(strings.TrimSpace(r.URL.Query().Get("subject_kind"))),
+		ID:   strings.TrimSpace(r.URL.Query().Get("subject_id")),
+	}
+	if subject.Kind == memory.UsefulnessFeedbackSubjectExpectedRecall {
+		subject.ID = ""
+		subject.ExpectedRecallTarget = memory.ExpectedRecallTarget{
+			Kind:        memory.ExpectedRecallTargetKind(strings.TrimSpace(r.URL.Query().Get("expected_recall_kind"))),
+			ID:          strings.TrimSpace(r.URL.Query().Get("expected_recall_id")),
+			OpaqueToken: strings.TrimSpace(r.URL.Query().Get("opaque_token")),
+		}
+	}
+	if err := subject.Validate(); err != nil {
+		return memory.UsefulnessFeedbackSubject{}, err
+	}
+	return subject, nil
+}
+
+func parseOptionalBoolQuery(value string) (bool, error) {
+	if strings.TrimSpace(value) == "" {
+		return false, nil
+	}
+	return strconv.ParseBool(strings.TrimSpace(value))
 }
 
 func parseGovernanceRawEventActionTarget(value string) (string, governance.GovernanceRecoveryAction, error) {

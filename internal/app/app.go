@@ -402,11 +402,12 @@ func buildAPIRuntime(ctx context.Context, cfg config.Config, deps apiRuntimeDepe
 		NewVersionID: newID,
 	}
 	retrievalService := retrieval.NewService(retrieval.ServiceDependencies{
-		Lexical:   repo,
-		Semantic:  repo,
-		Relations: repo,
-		Citations: repo,
-		Insights:  repo,
+		Lexical:              repo,
+		Semantic:             repo,
+		Relations:            repo,
+		Citations:            repo,
+		Insights:             repo,
+		UsefulnessSummarizer: repo,
 	}, deps.observer)
 	httpDeps := httpDependenciesFromConfigWithIngestor(cfg, ingestor)
 	httpDeps.Readiness = runtimeReadinessChecker(config.ModeAPI, pool, embeddingRuntime, false, deps.observer)
@@ -416,6 +417,7 @@ func buildAPIRuntime(ctx context.Context, cfg config.Config, deps apiRuntimeDepe
 		RecordCutoverPlanState(ctx context.Context, event telemetry.CutoverPlanStateEvent)
 		RecordCutoverItemState(ctx context.Context, event telemetry.CutoverItemStateEvent)
 		RecordInsightFeedback(ctx context.Context, event telemetry.InsightFeedbackEvent)
+		RecordUsefulnessFeedback(ctx context.Context, event telemetry.UsefulnessFeedbackEvent)
 	}); ok {
 		httpDeps.Metrics = metrics
 	}
@@ -434,6 +436,7 @@ func buildAPIRuntime(ctx context.Context, cfg config.Config, deps apiRuntimeDepe
 	}
 	httpDeps.GovernanceAdmin = repo
 	httpDeps.DerivedInsightAdmin = repo
+	httpDeps.UsefulnessFeedback = repo
 	replayService := insights.ReplayService{
 		Store:           repo,
 		MinimumEvidence: cfg.Jobs.DerivedInsightMinimumEvidence,
@@ -447,11 +450,12 @@ func buildAPIRuntime(ctx context.Context, cfg config.Config, deps apiRuntimeDepe
 	}
 	httpDeps.DerivedInsightReplayAdmin = replayService
 	qualityService := memory.NewQualityService(memory.QualityServiceOptions{
-		Store:        repo,
-		Probe:        retrievalQualityProbe{Searcher: retrievalService, Assembler: retrievalService},
-		Now:          time.Now,
-		NewID:        newQualityID,
-		MaxPlanItems: 100,
+		Store:              repo,
+		Probe:              retrievalQualityProbe{Searcher: retrievalService, Assembler: retrievalService},
+		UsefulnessFeedback: repo,
+		Now:                time.Now,
+		NewID:              newQualityID,
+		MaxPlanItems:       100,
 	})
 	httpDeps.QualityAdmin = qualityService
 	httpDeps.ScopeProofAdmin = memory.NewScopeProofService(memory.ScopeProofServiceOptions{
@@ -460,10 +464,12 @@ func buildAPIRuntime(ctx context.Context, cfg config.Config, deps apiRuntimeDepe
 		NewID: newQualityID,
 	})
 	httpDeps.MemorySession = memory.NewMemorySessionService(memory.MemorySessionServiceOptions{
-		Store:            repo,
-		ContextAssembler: memorySessionContextAdapter{assembler: retrievalService},
-		Now:              time.Now,
-		NewID:            newQualityID,
+		Store:                repo,
+		ContextAssembler:     memorySessionContextAdapter{assembler: retrievalService},
+		EventIngestor:        ingestor,
+		UsefulnessSummarizer: repo,
+		Now:                  time.Now,
+		NewID:                newQualityID,
 	})
 	httpDeps.MemoryHistoryRead = memoryHistoryReaderFunc(func(ctx context.Context, scope memory.Scope, memoryID string) (memory.MemoryHistory, error) {
 		return repo.ReadMemoryHistory(ctx, scope, memoryID, true)
@@ -548,11 +554,12 @@ func buildWorkerRuntime(ctx context.Context, cfg config.Config, deps workerRunti
 	}
 	ingestor := memory.NewService(repo, now, deps.observer)
 	retrievalService := retrieval.NewService(retrieval.ServiceDependencies{
-		Lexical:   repo,
-		Semantic:  repo,
-		Relations: repo,
-		Citations: repo,
-		Insights:  repo,
+		Lexical:              repo,
+		Semantic:             repo,
+		Relations:            repo,
+		Citations:            repo,
+		Insights:             repo,
+		UsefulnessSummarizer: repo,
 	}, deps.observer)
 
 	worker := jobs.GovernanceWorker{
@@ -581,11 +588,12 @@ func buildWorkerRuntime(ctx context.Context, cfg config.Config, deps workerRunti
 		replayService.Observer = observer
 	}
 	qualityService := memory.NewQualityService(memory.QualityServiceOptions{
-		Store:        repo,
-		Probe:        retrievalQualityProbe{Searcher: retrievalService, Assembler: retrievalService},
-		Now:          now,
-		NewID:        newQualityID,
-		MaxPlanItems: 100,
+		Store:              repo,
+		Probe:              retrievalQualityProbe{Searcher: retrievalService, Assembler: retrievalService},
+		UsefulnessFeedback: repo,
+		Now:                now,
+		NewID:              newQualityID,
+		MaxPlanItems:       100,
 	})
 	repairWorker := jobs.RepairActionWorker{
 		Store:         repo,
