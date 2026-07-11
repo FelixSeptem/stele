@@ -290,6 +290,49 @@ CREATE TABLE IF NOT EXISTS derived_insight_lifecycle_ledger (
     occurred_at timestamptz NOT NULL DEFAULT now()
 );
 
+CREATE TABLE IF NOT EXISTS derived_insight_feedback (
+    id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+    insight_id uuid NOT NULL REFERENCES derived_insights(id) ON DELETE CASCADE,
+    tenant text NOT NULL,
+    project text NOT NULL,
+    namespace text NOT NULL,
+    feedback_type text NOT NULL,
+    actor text NOT NULL,
+    reason text NOT NULL,
+    quality_score double precision,
+    metadata jsonb NOT NULL DEFAULT '{}'::jsonb,
+    request_id text,
+    superseded_at timestamptz,
+    superseded_by_actor text,
+    superseded_by_reason text,
+    created_at timestamptz NOT NULL DEFAULT now()
+);
+
+CREATE TABLE IF NOT EXISTS derived_insight_replay_runs (
+    id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+    tenant text NOT NULL,
+    project text NOT NULL,
+    namespace text NOT NULL,
+    mode text NOT NULL,
+    status text NOT NULL,
+    insight_types text[] NOT NULL DEFAULT '{}'::text[],
+    evidence_window_start timestamptz NOT NULL,
+    evidence_window_end timestamptz NOT NULL,
+    evidence_limit integer NOT NULL,
+    actor text NOT NULL,
+    reason text NOT NULL,
+    idempotency_key text,
+    request_metadata jsonb NOT NULL DEFAULT '{}'::jsonb,
+    report_counters jsonb,
+    report_decisions jsonb,
+    failure text,
+    report_generated_at timestamptz,
+    started_at timestamptz,
+    finished_at timestamptz,
+    created_at timestamptz NOT NULL DEFAULT now(),
+    updated_at timestamptz NOT NULL DEFAULT now()
+);
+
 CREATE INDEX IF NOT EXISTS raw_events_scope_created_at_idx
     ON raw_events (tenant, project, namespace, created_at DESC);
 
@@ -387,3 +430,17 @@ CREATE INDEX IF NOT EXISTS derived_insight_evidence_insight_idx
 
 CREATE INDEX IF NOT EXISTS derived_insight_lifecycle_ledger_insight_idx
     ON derived_insight_lifecycle_ledger (insight_id, occurred_at DESC);
+
+CREATE INDEX IF NOT EXISTS derived_insight_feedback_insight_created_at_idx
+    ON derived_insight_feedback (insight_id, created_at DESC);
+
+CREATE INDEX IF NOT EXISTS derived_insight_feedback_scope_type_active_idx
+    ON derived_insight_feedback (tenant, project, namespace, feedback_type, created_at DESC)
+    WHERE superseded_at IS NULL;
+
+CREATE INDEX IF NOT EXISTS derived_insight_replay_runs_scope_status_updated_at_idx
+    ON derived_insight_replay_runs (tenant, project, namespace, status, updated_at DESC);
+
+CREATE UNIQUE INDEX IF NOT EXISTS derived_insight_replay_runs_scope_idempotency_idx
+    ON derived_insight_replay_runs (tenant, project, namespace, idempotency_key)
+    WHERE idempotency_key IS NOT NULL;

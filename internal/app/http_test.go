@@ -338,14 +338,84 @@ type stubDerivedInsightAdminService struct {
 	gotListInput      memory.ListDerivedInsightsInput
 	gotReadInput      memory.ReadDerivedInsightInput
 	gotTransition     memory.DerivedInsightLifecycleTransition
+	gotCreateFeedback memory.CreateDerivedInsightFeedbackInput
+	gotListFeedback   memory.ListDerivedInsightFeedbackInput
+	gotSupersede      memory.SupersedeDerivedInsightFeedbackInput
 	items             []memory.DerivedInsight
 	detail            memory.DerivedInsightDetail
+	feedback          memory.DerivedInsightFeedback
+	feedbackItems     []memory.DerivedInsightFeedback
 	listErr           error
 	readErr           error
 	transitionErr     error
+	feedbackErr       error
 	validateList      bool
 	validateRead      bool
 	validateLifecycle bool
+	validateFeedback  bool
+}
+
+type stubDerivedInsightReplayAdminService struct {
+	gotPlanInput  memory.DerivedInsightReplayRequest
+	gotApplyInput memory.DerivedInsightReplayRequest
+	gotListInput  memory.ListDerivedInsightReplayRunsInput
+	gotReadInput  memory.ReadDerivedInsightReplayRunInput
+	plan          memory.DerivedInsightReplayReport
+	run           memory.DerivedInsightReplayRun
+	runs          []memory.DerivedInsightReplayRun
+	report        memory.DerivedInsightReplayReport
+	err           error
+	validate      bool
+}
+
+func (s *stubDerivedInsightReplayAdminService) PlanDerivedInsightReplay(ctx context.Context, input memory.DerivedInsightReplayRequest) (memory.DerivedInsightReplayReport, error) {
+	s.gotPlanInput = input
+	if s.validate {
+		if err := input.Validate(); err != nil {
+			return memory.DerivedInsightReplayReport{}, err
+		}
+	}
+	return s.plan, s.err
+}
+
+func (s *stubDerivedInsightReplayAdminService) ApplyDerivedInsightReplay(ctx context.Context, input memory.DerivedInsightReplayRequest) (memory.DerivedInsightReplayRun, error) {
+	s.gotApplyInput = input
+	if s.validate {
+		if err := input.Validate(); err != nil {
+			return memory.DerivedInsightReplayRun{}, err
+		}
+	}
+	return s.run, s.err
+}
+
+func (s *stubDerivedInsightReplayAdminService) ListDerivedInsightReplayRuns(ctx context.Context, input memory.ListDerivedInsightReplayRunsInput) ([]memory.DerivedInsightReplayRun, error) {
+	s.gotListInput = input
+	if s.validate {
+		if err := input.Validate(); err != nil {
+			return nil, err
+		}
+	}
+	return s.runs, s.err
+}
+
+func (s *stubDerivedInsightReplayAdminService) ReadDerivedInsightReplayRun(ctx context.Context, input memory.ReadDerivedInsightReplayRunInput) (memory.DerivedInsightReplayRun, error) {
+	s.gotReadInput = input
+	if s.validate {
+		if err := input.Validate(); err != nil {
+			return memory.DerivedInsightReplayRun{}, err
+		}
+	}
+	return s.run, s.err
+}
+
+func (s *stubDerivedInsightReplayAdminService) ReadDerivedInsightReplayReport(ctx context.Context, input memory.ReadDerivedInsightReplayRunInput) (memory.DerivedInsightReplayReport, error) {
+	s.gotReadInput = input
+	if s.validate {
+		if err := input.Validate(); err != nil {
+			return memory.DerivedInsightReplayReport{}, err
+		}
+	}
+	return s.report, s.err
 }
 
 func (s *stubDerivedInsightAdminService) ListDerivedInsights(ctx context.Context, input memory.ListDerivedInsightsInput) ([]memory.DerivedInsight, error) {
@@ -382,6 +452,36 @@ func (s *stubDerivedInsightAdminService) TransitionDerivedInsightLifecycle(ctx c
 		}
 	}
 	return s.transitionErr
+}
+
+func (s *stubDerivedInsightAdminService) CreateDerivedInsightFeedback(ctx context.Context, input memory.CreateDerivedInsightFeedbackInput) (memory.DerivedInsightFeedback, error) {
+	s.gotCreateFeedback = input
+	if s.validateFeedback {
+		if err := input.Validate(); err != nil {
+			return memory.DerivedInsightFeedback{}, err
+		}
+	}
+	return s.feedback, s.feedbackErr
+}
+
+func (s *stubDerivedInsightAdminService) ListDerivedInsightFeedback(ctx context.Context, input memory.ListDerivedInsightFeedbackInput) ([]memory.DerivedInsightFeedback, error) {
+	s.gotListFeedback = input
+	if s.validateFeedback {
+		if err := input.Validate(); err != nil {
+			return nil, err
+		}
+	}
+	return s.feedbackItems, s.feedbackErr
+}
+
+func (s *stubDerivedInsightAdminService) SupersedeDerivedInsightFeedback(ctx context.Context, input memory.SupersedeDerivedInsightFeedbackInput) error {
+	s.gotSupersede = input
+	if s.validateFeedback {
+		if err := input.Validate(); err != nil {
+			return err
+		}
+	}
+	return s.feedbackErr
 }
 
 func TestNewHTTPHandlerServesHealthAndReadiness(t *testing.T) {
@@ -687,7 +787,7 @@ func TestNewHTTPHandlerAssemblesContext(t *testing.T) {
 		ContextAssembler: assembler,
 	})
 
-	req := httptest.NewRequest(http.MethodPost, "/v1/context/assemble", bytes.NewBufferString(`{"query":"preferences","budget":4,"include_experience_insights":true}`))
+	req := httptest.NewRequest(http.MethodPost, "/v1/context/assemble", bytes.NewBufferString(`{"query":"preferences","budget":4,"include_experience_insights":true,"include_diagnostics":true}`))
 	req.Header.Set("Content-Type", "application/json")
 	req.Header.Set("X-API-Key", "test-key")
 	req.Header.Set("X-Stele-Tenant", "tenant-a")
@@ -707,6 +807,9 @@ func TestNewHTTPHandlerAssemblesContext(t *testing.T) {
 
 	if !assembler.gotInput.IncludeExperienceInsights {
 		t.Fatal("IncludeExperienceInsights = false, want true")
+	}
+	if !assembler.gotInput.IncludeDiagnostics {
+		t.Fatal("IncludeDiagnostics = false, want true")
 	}
 }
 
@@ -1532,6 +1635,129 @@ func TestNewHTTPHandlerReadsAdminDerivedInsightDetail(t *testing.T) {
 	}
 }
 
+func TestNewHTTPHandlerCreatesAdminDerivedInsightFeedback(t *testing.T) {
+	scope := memory.Scope{Tenant: "tenant-a", Project: "project-a", Namespace: "namespace-a"}
+	service := &stubDerivedInsightAdminService{
+		validateFeedback: true,
+		feedback: memory.DerivedInsightFeedback{
+			ID:        "feedback_123",
+			InsightID: "insight_123",
+			Scope:     scope,
+			Type:      memory.InsightFeedbackTypeNoisy,
+			Actor:     "operator-a",
+			Reason:    "too broad",
+			CreatedAt: time.Date(2026, 7, 4, 14, 0, 0, 0, time.UTC),
+		},
+	}
+	handler := NewHTTPHandler(HTTPDependencies{
+		AdminAPIKeys:        map[string]struct{}{"admin-key": {}},
+		DerivedInsightAdmin: service,
+	})
+
+	req := httptest.NewRequest(http.MethodPost, "/v1/admin/derived-insights/insight_123/feedback", strings.NewReader(`{"type":"noisy","actor":"operator-a","reason":"too broad","quality_score":0.2}`))
+	req.Header.Set("X-API-Key", "admin-key")
+	req.Header.Set("X-Stele-Tenant", scope.Tenant)
+	req.Header.Set("X-Stele-Project", scope.Project)
+	req.Header.Set("X-Stele-Namespace", scope.Namespace)
+	rec := httptest.NewRecorder()
+
+	handler.ServeHTTP(rec, req)
+	if rec.Code != http.StatusCreated {
+		t.Fatalf("status = %d, want %d; body=%s", rec.Code, http.StatusCreated, rec.Body.String())
+	}
+	if service.gotCreateFeedback.Scope != scope || service.gotCreateFeedback.InsightID != "insight_123" || service.gotCreateFeedback.Type != memory.InsightFeedbackTypeNoisy {
+		t.Fatalf("feedback input = %+v, want scoped noisy feedback", service.gotCreateFeedback)
+	}
+	if service.gotCreateFeedback.Actor != "operator-a" || service.gotCreateFeedback.Reason != "too broad" || service.gotCreateFeedback.CreatedAt.IsZero() || service.gotCreateFeedback.ID == "" {
+		t.Fatalf("feedback input = %+v, want actor/reason/id/created_at", service.gotCreateFeedback)
+	}
+
+	var payload memory.DerivedInsightFeedback
+	if err := json.NewDecoder(rec.Body).Decode(&payload); err != nil {
+		t.Fatalf("decode response: %v", err)
+	}
+	if payload.ID != "feedback_123" {
+		t.Fatalf("payload = %+v, want feedback_123", payload)
+	}
+}
+
+func TestNewHTTPHandlerListsAdminDerivedInsightFeedback(t *testing.T) {
+	scope := memory.Scope{Tenant: "tenant-a", Project: "project-a", Namespace: "namespace-a"}
+	service := &stubDerivedInsightAdminService{
+		validateFeedback: true,
+		feedbackItems: []memory.DerivedInsightFeedback{
+			{
+				ID:        "feedback_123",
+				InsightID: "insight_123",
+				Scope:     scope,
+				Type:      memory.InsightFeedbackTypeUseful,
+				Actor:     "operator-a",
+				Reason:    "accurate",
+				CreatedAt: time.Date(2026, 7, 4, 14, 0, 0, 0, time.UTC),
+			},
+		},
+	}
+	handler := NewHTTPHandler(HTTPDependencies{
+		AdminAPIKeys:        map[string]struct{}{"admin-key": {}},
+		DerivedInsightAdmin: service,
+	})
+
+	req := httptest.NewRequest(http.MethodGet, "/v1/admin/derived-insights/insight_123/feedback?type=useful&include_superseded=true&limit=5", nil)
+	req.Header.Set("X-API-Key", "admin-key")
+	req.Header.Set("X-Stele-Tenant", scope.Tenant)
+	req.Header.Set("X-Stele-Project", scope.Project)
+	req.Header.Set("X-Stele-Namespace", scope.Namespace)
+	rec := httptest.NewRecorder()
+
+	handler.ServeHTTP(rec, req)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d, want %d; body=%s", rec.Code, http.StatusOK, rec.Body.String())
+	}
+	if service.gotListFeedback.Scope != scope || service.gotListFeedback.InsightID != "insight_123" || service.gotListFeedback.Type != memory.InsightFeedbackTypeUseful {
+		t.Fatalf("feedback list input = %+v, want scoped useful filter", service.gotListFeedback)
+	}
+	if !service.gotListFeedback.IncludeSuperseded || service.gotListFeedback.Limit != 5 {
+		t.Fatalf("feedback list input = %+v, want include_superseded and limit", service.gotListFeedback)
+	}
+
+	var payload struct {
+		Items []memory.DerivedInsightFeedback `json:"items"`
+	}
+	if err := json.NewDecoder(rec.Body).Decode(&payload); err != nil {
+		t.Fatalf("decode response: %v", err)
+	}
+	if len(payload.Items) != 1 || payload.Items[0].ID != "feedback_123" {
+		t.Fatalf("payload = %+v, want feedback_123", payload)
+	}
+}
+
+func TestNewHTTPHandlerSupersedesAdminDerivedInsightFeedback(t *testing.T) {
+	scope := memory.Scope{Tenant: "tenant-a", Project: "project-a", Namespace: "namespace-a"}
+	service := &stubDerivedInsightAdminService{validateFeedback: true}
+	handler := NewHTTPHandler(HTTPDependencies{
+		AdminAPIKeys:        map[string]struct{}{"admin-key": {}},
+		DerivedInsightAdmin: service,
+	})
+
+	req := httptest.NewRequest(http.MethodPost, "/v1/admin/derived-insight-feedback/feedback_123:supersede", strings.NewReader(`{"actor":"operator-b","reason":"replaced by more accurate feedback"}`))
+	req.Header.Set("X-API-Key", "admin-key")
+	req.Header.Set("X-Stele-Tenant", scope.Tenant)
+	req.Header.Set("X-Stele-Project", scope.Project)
+	req.Header.Set("X-Stele-Namespace", scope.Namespace)
+	rec := httptest.NewRecorder()
+
+	handler.ServeHTTP(rec, req)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d, want %d; body=%s", rec.Code, http.StatusOK, rec.Body.String())
+	}
+	if service.gotSupersede.Scope != scope || service.gotSupersede.FeedbackID != "feedback_123" || service.gotSupersede.Actor != "operator-b" {
+		t.Fatalf("supersede input = %+v, want scoped feedback supersede", service.gotSupersede)
+	}
+	if service.gotSupersede.Reason == "" || service.gotSupersede.SupersededAt.IsZero() {
+		t.Fatalf("supersede input = %+v, want reason and superseded_at", service.gotSupersede)
+	}
+}
+
 func TestNewHTTPHandlerSuppressesAdminDerivedInsight(t *testing.T) {
 	scope := memory.Scope{Tenant: "tenant-a", Project: "project-a", Namespace: "namespace-a"}
 	service := &stubDerivedInsightAdminService{validateLifecycle: true}
@@ -1556,6 +1782,222 @@ func TestNewHTTPHandlerSuppressesAdminDerivedInsight(t *testing.T) {
 	}
 	if service.gotTransition.Actor != "operator-a" || service.gotTransition.Reason != "noisy duplicate" || service.gotTransition.OccurredAt.IsZero() {
 		t.Fatalf("transition = %+v, want actor/reason/occurred_at", service.gotTransition)
+	}
+}
+
+func TestNewHTTPHandlerPlansAdminDerivedInsightReplayDryRun(t *testing.T) {
+	scope := memory.Scope{Tenant: "tenant-a", Project: "project-a", Namespace: "namespace-a"}
+	service := &stubDerivedInsightReplayAdminService{
+		validate: true,
+		plan: memory.DerivedInsightReplayReport{
+			RunID: "dry_run",
+			Scope: scope,
+			Counters: memory.DerivedInsightReplayCounters{
+				EvidenceEvaluated: 2,
+				Created:           1,
+			},
+			Decisions: []memory.DerivedInsightReplayDecision{
+				{
+					InsightType:   memory.DerivedInsightTypeFailurePattern,
+					Fingerprint:   "failure_pattern:provider_unavailable",
+					Decision:      memory.DerivedInsightReplayDecisionCreate,
+					Reason:        memory.DerivedInsightReplayReasonRepeatedEvidence,
+					EvidenceCount: 2,
+				},
+			},
+			GeneratedAt: time.Date(2026, 7, 11, 10, 30, 0, 0, time.UTC),
+		},
+	}
+	handler := NewHTTPHandler(HTTPDependencies{
+		AdminAPIKeys:              map[string]struct{}{"admin-key": {}},
+		DerivedInsightReplayAdmin: service,
+	})
+
+	req := httptest.NewRequest(http.MethodPost, "/v1/admin/derived-insight-replays:dry-run", strings.NewReader(`{"insight_types":["failure_pattern"],"evidence_window_start":"2026-07-01T00:00:00Z","evidence_window_end":"2026-07-02T00:00:00Z","evidence_limit":100,"actor":"operator-a","reason":"preview replay","idempotency_key":"dry-run-1"}`))
+	req.Header.Set("X-API-Key", "admin-key")
+	req.Header.Set("X-Stele-Tenant", scope.Tenant)
+	req.Header.Set("X-Stele-Project", scope.Project)
+	req.Header.Set("X-Stele-Namespace", scope.Namespace)
+	rec := httptest.NewRecorder()
+
+	handler.ServeHTTP(rec, req)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d, want %d; body=%s", rec.Code, http.StatusOK, rec.Body.String())
+	}
+	if service.gotPlanInput.Scope != scope || service.gotPlanInput.Mode != memory.DerivedInsightReplayModeDryRun || service.gotPlanInput.EvidenceLimit != 100 {
+		t.Fatalf("plan input = %+v, want scoped bounded dry-run", service.gotPlanInput)
+	}
+	if len(service.gotPlanInput.InsightTypes) != 1 || service.gotPlanInput.InsightTypes[0] != memory.DerivedInsightTypeFailurePattern {
+		t.Fatalf("plan insight types = %+v, want failure_pattern", service.gotPlanInput.InsightTypes)
+	}
+
+	var payload memory.DerivedInsightReplayReport
+	if err := json.NewDecoder(rec.Body).Decode(&payload); err != nil {
+		t.Fatalf("decode response: %v", err)
+	}
+	if payload.Counters.Created != 1 || len(payload.Decisions) != 1 {
+		t.Fatalf("payload = %+v, want replay plan", payload)
+	}
+}
+
+func TestNewHTTPHandlerAppliesAdminDerivedInsightReplay(t *testing.T) {
+	scope := memory.Scope{Tenant: "tenant-a", Project: "project-a", Namespace: "namespace-a"}
+	run := testHTTPDerivedInsightReplayRun(scope)
+	service := &stubDerivedInsightReplayAdminService{
+		validate: true,
+		run:      run,
+	}
+	handler := NewHTTPHandler(HTTPDependencies{
+		AdminAPIKeys:              map[string]struct{}{"admin-key": {}},
+		DerivedInsightReplayAdmin: service,
+	})
+
+	req := httptest.NewRequest(http.MethodPost, "/v1/admin/derived-insight-replays", strings.NewReader(`{"insight_types":["failure_pattern","lesson"],"evidence_window_start":"2026-07-01T00:00:00Z","evidence_window_end":"2026-07-02T00:00:00Z","evidence_limit":100,"actor":"operator-a","reason":"apply replay","idempotency_key":"apply-1"}`))
+	req.Header.Set("X-API-Key", "admin-key")
+	req.Header.Set("X-Stele-Tenant", scope.Tenant)
+	req.Header.Set("X-Stele-Project", scope.Project)
+	req.Header.Set("X-Stele-Namespace", scope.Namespace)
+	rec := httptest.NewRecorder()
+
+	handler.ServeHTTP(rec, req)
+	if rec.Code != http.StatusAccepted {
+		t.Fatalf("status = %d, want %d; body=%s", rec.Code, http.StatusAccepted, rec.Body.String())
+	}
+	if service.gotApplyInput.Scope != scope || service.gotApplyInput.Mode != memory.DerivedInsightReplayModeApply || service.gotApplyInput.Actor != "operator-a" {
+		t.Fatalf("apply input = %+v, want scoped apply", service.gotApplyInput)
+	}
+
+	var payload memory.DerivedInsightReplayRun
+	if err := json.NewDecoder(rec.Body).Decode(&payload); err != nil {
+		t.Fatalf("decode response: %v", err)
+	}
+	if payload.ID != run.ID || payload.Status != memory.DerivedInsightReplayStatusPending {
+		t.Fatalf("payload = %+v, want pending replay run", payload)
+	}
+}
+
+func TestNewHTTPHandlerListsAdminDerivedInsightReplays(t *testing.T) {
+	scope := memory.Scope{Tenant: "tenant-a", Project: "project-a", Namespace: "namespace-a"}
+	run := testHTTPDerivedInsightReplayRun(scope)
+	service := &stubDerivedInsightReplayAdminService{
+		validate: true,
+		runs:     []memory.DerivedInsightReplayRun{run},
+	}
+	handler := NewHTTPHandler(HTTPDependencies{
+		AdminAPIKeys:              map[string]struct{}{"admin-key": {}},
+		DerivedInsightReplayAdmin: service,
+	})
+
+	req := httptest.NewRequest(http.MethodGet, "/v1/admin/derived-insight-replays?status=pending&mode=apply&limit=5", nil)
+	req.Header.Set("X-API-Key", "admin-key")
+	req.Header.Set("X-Stele-Tenant", scope.Tenant)
+	req.Header.Set("X-Stele-Project", scope.Project)
+	req.Header.Set("X-Stele-Namespace", scope.Namespace)
+	rec := httptest.NewRecorder()
+
+	handler.ServeHTTP(rec, req)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d, want %d; body=%s", rec.Code, http.StatusOK, rec.Body.String())
+	}
+	if service.gotListInput.Scope != scope || service.gotListInput.Status != memory.DerivedInsightReplayStatusPending || service.gotListInput.Mode != memory.DerivedInsightReplayModeApply || service.gotListInput.Limit != 5 {
+		t.Fatalf("list input = %+v, want scoped replay filters", service.gotListInput)
+	}
+
+	var payload struct {
+		Items []memory.DerivedInsightReplayRun `json:"items"`
+	}
+	if err := json.NewDecoder(rec.Body).Decode(&payload); err != nil {
+		t.Fatalf("decode response: %v", err)
+	}
+	if len(payload.Items) != 1 || payload.Items[0].ID != run.ID {
+		t.Fatalf("payload = %+v, want replay run", payload)
+	}
+}
+
+func TestNewHTTPHandlerReadsAdminDerivedInsightReplayReport(t *testing.T) {
+	scope := memory.Scope{Tenant: "tenant-a", Project: "project-a", Namespace: "namespace-a"}
+	service := &stubDerivedInsightReplayAdminService{
+		validate: true,
+		report: memory.DerivedInsightReplayReport{
+			RunID:       "replay_123",
+			Scope:       scope,
+			Counters:    memory.DerivedInsightReplayCounters{EvidenceEvaluated: 2, Created: 1},
+			GeneratedAt: time.Date(2026, 7, 11, 10, 30, 0, 0, time.UTC),
+		},
+	}
+	handler := NewHTTPHandler(HTTPDependencies{
+		AdminAPIKeys:              map[string]struct{}{"admin-key": {}},
+		DerivedInsightReplayAdmin: service,
+	})
+
+	req := httptest.NewRequest(http.MethodGet, "/v1/admin/derived-insight-replays/replay_123/report", nil)
+	req.Header.Set("X-API-Key", "admin-key")
+	req.Header.Set("X-Stele-Tenant", scope.Tenant)
+	req.Header.Set("X-Stele-Project", scope.Project)
+	req.Header.Set("X-Stele-Namespace", scope.Namespace)
+	rec := httptest.NewRecorder()
+
+	handler.ServeHTTP(rec, req)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d, want %d; body=%s", rec.Code, http.StatusOK, rec.Body.String())
+	}
+	if service.gotReadInput.Scope != scope || service.gotReadInput.RunID != "replay_123" {
+		t.Fatalf("read input = %+v, want scoped report read", service.gotReadInput)
+	}
+
+	var payload memory.DerivedInsightReplayReport
+	if err := json.NewDecoder(rec.Body).Decode(&payload); err != nil {
+		t.Fatalf("decode response: %v", err)
+	}
+	if payload.RunID != "replay_123" || payload.Counters.Created != 1 {
+		t.Fatalf("payload = %+v, want replay report", payload)
+	}
+}
+
+func TestNewHTTPHandlerRejectsAdminDerivedInsightReplayWithoutAdminKey(t *testing.T) {
+	scope := memory.Scope{Tenant: "tenant-a", Project: "project-a", Namespace: "namespace-a"}
+	service := &stubDerivedInsightReplayAdminService{}
+	handler := NewHTTPHandler(HTTPDependencies{
+		AdminAPIKeys:              map[string]struct{}{"admin-key": {}},
+		DerivedInsightReplayAdmin: service,
+	})
+
+	req := httptest.NewRequest(http.MethodPost, "/v1/admin/derived-insight-replays:dry-run", strings.NewReader(`{"insight_types":["failure_pattern"],"evidence_window_start":"2026-07-01T00:00:00Z","evidence_window_end":"2026-07-02T00:00:00Z","evidence_limit":100,"actor":"operator-a","reason":"preview replay"}`))
+	req.Header.Set("X-Stele-Tenant", scope.Tenant)
+	req.Header.Set("X-Stele-Project", scope.Project)
+	req.Header.Set("X-Stele-Namespace", scope.Namespace)
+	rec := httptest.NewRecorder()
+
+	handler.ServeHTTP(rec, req)
+	if rec.Code != http.StatusUnauthorized {
+		t.Fatalf("status = %d, want %d", rec.Code, http.StatusUnauthorized)
+	}
+	if service.gotPlanInput.Actor != "" {
+		t.Fatalf("service was called with %+v, want auth rejection before service call", service.gotPlanInput)
+	}
+}
+
+func TestNewHTTPHandlerRejectsAdminDerivedInsightReplayMissingBounds(t *testing.T) {
+	scope := memory.Scope{Tenant: "tenant-a", Project: "project-a", Namespace: "namespace-a"}
+	service := &stubDerivedInsightReplayAdminService{}
+	handler := NewHTTPHandler(HTTPDependencies{
+		AdminAPIKeys:              map[string]struct{}{"admin-key": {}},
+		DerivedInsightReplayAdmin: service,
+	})
+
+	req := httptest.NewRequest(http.MethodPost, "/v1/admin/derived-insight-replays:dry-run", strings.NewReader(`{"insight_types":["failure_pattern"],"evidence_window_start":"2026-07-01T00:00:00Z","evidence_limit":100,"actor":"operator-a","reason":"preview replay"}`))
+	req.Header.Set("X-API-Key", "admin-key")
+	req.Header.Set("X-Stele-Tenant", scope.Tenant)
+	req.Header.Set("X-Stele-Project", scope.Project)
+	req.Header.Set("X-Stele-Namespace", scope.Namespace)
+	rec := httptest.NewRecorder()
+
+	handler.ServeHTTP(rec, req)
+	if rec.Code != http.StatusBadRequest {
+		t.Fatalf("status = %d, want %d; body=%s", rec.Code, http.StatusBadRequest, rec.Body.String())
+	}
+	if service.gotPlanInput.Actor != "" {
+		t.Fatalf("service was called with %+v, want validation rejection before service call", service.gotPlanInput)
 	}
 }
 
@@ -2539,4 +2981,31 @@ func setAdminActionHeaders(req *http.Request) {
 	setAdminScopeHeaders(req)
 	req.Header.Set("Content-Type", "application/json")
 	req.Header.Set("X-Stele-Actor", "operator-a")
+}
+
+func testHTTPDerivedInsightReplayRun(scope memory.Scope) memory.DerivedInsightReplayRun {
+	requestedAt := time.Date(2026, 7, 11, 10, 0, 0, 0, time.UTC)
+	request := memory.DerivedInsightReplayRequest{
+		Scope:               scope,
+		Mode:                memory.DerivedInsightReplayModeApply,
+		InsightTypes:        []memory.DerivedInsightType{memory.DerivedInsightTypeFailurePattern, memory.DerivedInsightTypeLesson},
+		EvidenceWindowStart: time.Date(2026, 7, 1, 0, 0, 0, 0, time.UTC),
+		EvidenceWindowEnd:   time.Date(2026, 7, 2, 0, 0, 0, 0, time.UTC),
+		EvidenceLimit:       100,
+		Actor:               "operator-a",
+		Reason:              "apply replay",
+		IdempotencyKey:      "apply-1",
+		RequestedAt:         requestedAt,
+	}
+	return memory.DerivedInsightReplayRun{
+		ID:        "replay_123",
+		Scope:     scope,
+		Mode:      memory.DerivedInsightReplayModeApply,
+		Status:    memory.DerivedInsightReplayStatusPending,
+		Request:   request,
+		Actor:     request.Actor,
+		Reason:    request.Reason,
+		CreatedAt: requestedAt,
+		UpdatedAt: requestedAt,
+	}
 }

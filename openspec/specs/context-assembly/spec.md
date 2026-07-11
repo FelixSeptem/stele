@@ -43,3 +43,44 @@ The service SHALL support optional context assembly sections for active, evidenc
 - **WHEN** a matching derived insight is suppressed, forgotten, deleted, or out of scope
 - **THEN** context assembly excludes that insight from `known_failures` and `experience_lessons`
 
+### Requirement: Insight context assembly respects quality feedback
+The service SHALL account for effective quality feedback when assembling optional derived insight context sections.
+
+#### Scenario: Useful insight competes under budget
+- **WHEN** multiple active derived insights match an optional insight section and the context budget is constrained
+- **THEN** context assembly can prioritize insights with active `useful` feedback when evidence relevance is otherwise comparable
+
+#### Scenario: Noisy insight competes under budget
+- **WHEN** a matching insight has active `noisy`, `incorrect`, `stale`, or `needs_review` feedback
+- **THEN** context assembly deprioritizes or omits that insight according to policy and budget without exposing raw admin feedback by default
+
+#### Scenario: Feedback summary is requested for diagnostics
+- **WHEN** an authorized admin or debug assembly path requests quality diagnostics for insight sections
+- **THEN** the response can include summarized quality state without exposing feedback history through ordinary public context assembly
+
+### Requirement: Feedback does not bypass lifecycle visibility rules
+The service MUST keep lifecycle state and scope isolation as the primary visibility controls for insight context sections.
+
+#### Scenario: Useful feedback exists on hidden insight
+- **WHEN** an insight is suppressed, forgotten, deleted, or out of scope but has active `useful` feedback
+- **THEN** context assembly excludes that insight from ordinary `known_failures` and `experience_lessons` sections
+
+#### Scenario: Negative feedback exists on active insight
+- **WHEN** an active insight has negative feedback but has not been suppressed by governed policy
+- **THEN** context assembly treats the feedback as a ranking or omission signal rather than rewriting the insight lifecycle inline
+
+### Requirement: Context assembly can verify replayed insight visibility
+The service SHALL allow the operator smoke loop and authorized diagnostics to verify whether replayed active insights participate in optional context assembly sections according to scope, lifecycle, quality, and budget rules.
+
+#### Scenario: Replayed insight is active and requested
+- **WHEN** replay produces or updates an active insight that matches a scoped context assembly request with insight sections enabled
+- **THEN** context assembly can include that insight in `known_failures` or `experience_lessons` with citations when budget and quality policy allow it
+
+#### Scenario: Replayed insight is hidden or out of scope
+- **WHEN** replay preserves, suppresses, skips, or creates an insight outside the request scope or visible lifecycle states
+- **THEN** ordinary context assembly excludes that insight even if the replay report references it
+
+#### Scenario: Operator requests context diagnostics
+- **WHEN** an authorized admin or debug path requests diagnostics for replayed insight context
+- **THEN** the response can identify whether replay output was included, omitted by budget, omitted by quality policy, or hidden by lifecycle and scope rules
+

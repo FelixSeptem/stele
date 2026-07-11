@@ -12,6 +12,7 @@ import (
 	"github.com/FelixSeptem/stele/internal/config"
 	"github.com/FelixSeptem/stele/internal/embedding"
 	"github.com/FelixSeptem/stele/internal/governance"
+	"github.com/FelixSeptem/stele/internal/insights"
 	"github.com/FelixSeptem/stele/internal/jobs"
 	"github.com/FelixSeptem/stele/internal/memory"
 	"github.com/FelixSeptem/stele/internal/policy"
@@ -414,6 +415,7 @@ func buildAPIRuntime(ctx context.Context, cfg config.Config, deps apiRuntimeDepe
 		RecordAdmission(ctx context.Context, event telemetry.AdmissionEvent)
 		RecordCutoverPlanState(ctx context.Context, event telemetry.CutoverPlanStateEvent)
 		RecordCutoverItemState(ctx context.Context, event telemetry.CutoverItemStateEvent)
+		RecordInsightFeedback(ctx context.Context, event telemetry.InsightFeedbackEvent)
 	}); ok {
 		httpDeps.Metrics = metrics
 	}
@@ -432,6 +434,18 @@ func buildAPIRuntime(ctx context.Context, cfg config.Config, deps apiRuntimeDepe
 	}
 	httpDeps.GovernanceAdmin = repo
 	httpDeps.DerivedInsightAdmin = repo
+	replayService := insights.ReplayService{
+		Store:           repo,
+		MinimumEvidence: cfg.Jobs.DerivedInsightMinimumEvidence,
+		Now:             time.Now,
+		NewRunID:        newReplayID,
+	}
+	if observer, ok := deps.observer.(interface {
+		RecordDerivedInsightReplay(context.Context, telemetry.DerivedInsightReplayEvent)
+	}); ok {
+		replayService.Observer = observer
+	}
+	httpDeps.DerivedInsightReplayAdmin = replayService
 	httpDeps.MemoryHistoryRead = memoryHistoryReaderFunc(func(ctx context.Context, scope memory.Scope, memoryID string) (memory.MemoryHistory, error) {
 		return repo.ReadMemoryHistory(ctx, scope, memoryID, true)
 	})
@@ -576,6 +590,17 @@ func buildSchedulerRuntime(ctx context.Context, cfg config.Config, deps schedule
 
 	repo := postgres.NewRepositoryWithEmbeddingRouter(pool, embeddingRuntime.Router)
 	now := deps.now
+	replayService := insights.ReplayService{
+		Store:           repo,
+		MinimumEvidence: cfg.Jobs.DerivedInsightMinimumEvidence,
+		Now:             now,
+		NewRunID:        newReplayID,
+	}
+	if observer, ok := deps.observer.(interface {
+		RecordDerivedInsightReplay(context.Context, telemetry.DerivedInsightReplayEvent)
+	}); ok {
+		replayService.Observer = observer
+	}
 	summary := governance.SummaryProcessor{
 		Source:         repo,
 		Repository:     repo,
@@ -677,6 +702,24 @@ func buildSchedulerRuntime(ctx context.Context, cfg config.Config, deps schedule
 						MinimumEvidence: cfg.Jobs.DerivedInsightMinimumEvidence,
 						Limit:           cfg.Jobs.DerivedInsightBatchSize,
 						Now:             now,
+						Observer:        deps.observer,
+					}
+				},
+			},
+			jobs.ScopeDispatchJob{
+				NameValue:       "derived_insight_replay_execution_dispatch",
+				ScopeSource:     repo,
+				ScopeBatchLimit: cfg.Jobs.MaintenanceScopeBatchLimit,
+				FallbackScope:   scope,
+				Dispatch: func(scope memory.Scope) jobs.MaintenanceJob {
+					return jobs.DerivedInsightReplayExecutionJob{
+						Scope:          scope,
+						Service:        replayService,
+						ExecutionStore: repo,
+						TriggerSource:  "scheduler",
+						Cadence:        derivedInsightInterval,
+						Now:            now,
+						Limit:          cfg.Jobs.DerivedInsightBatchSize,
 					}
 				},
 			},
@@ -837,6 +880,10 @@ func registeredEmbeddingProviders(registry embedding.StaticProviderRegistry) []s
 
 func newID() string {
 	return fmt.Sprintf("id_%d", time.Now().UnixNano())
+}
+
+func newReplayID() string {
+	return "replay_" + strings.TrimPrefix(newID(), "id_")
 }
 
 type bootstrapperFunc func(ctx context.Context) error

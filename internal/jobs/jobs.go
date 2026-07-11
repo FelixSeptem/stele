@@ -571,6 +571,8 @@ type embeddingLifecycleStore interface {
 type derivedInsightStore interface {
 	ListFailureEvidence(ctx context.Context, scope memory.Scope, limit int) ([]insights.FailureEvidence, error)
 	UpsertDerivedInsight(ctx context.Context, insight memory.DerivedInsight) (memory.DerivedInsight, error)
+	SummarizeDerivedInsightFeedback(ctx context.Context, input memory.SummarizeDerivedInsightFeedbackInput) (memory.DerivedInsightFeedbackSummary, error)
+	TransitionDerivedInsightLifecycle(ctx context.Context, transition memory.DerivedInsightLifecycleTransition) error
 }
 
 type SummaryCompactionJob struct {
@@ -800,6 +802,93 @@ type DerivedInsightDerivationJob struct {
 	MinimumEvidence int
 	Limit           int
 	Now             func() time.Time
+	Observer        telemetry.Observer
+}
+
+type derivedInsightReplayExecutionService interface {
+	ListDerivedInsightReplayRuns(ctx context.Context, input memory.ListDerivedInsightReplayRunsInput) ([]memory.DerivedInsightReplayRun, error)
+	ExecuteDerivedInsightReplay(ctx context.Context, run memory.DerivedInsightReplayRun) (memory.DerivedInsightReplayReport, error)
+}
+
+type DerivedInsightReplayExecutionJob struct {
+	Scope          memory.Scope
+	Service        derivedInsightReplayExecutionService
+	ExecutionStore ExecutionStore
+	TriggerSource  string
+	Cadence        time.Duration
+	Now            func() time.Time
+	Limit          int
+}
+
+func (j DerivedInsightReplayExecutionJob) Name() string {
+	return "derived_insight_replay_execution"
+}
+
+func (j DerivedInsightReplayExecutionJob) Run(ctx context.Context) (int, error) {
+	if err := j.Scope.Validate(); err != nil {
+		return 0, err
+	}
+	if j.Service == nil {
+		return 0, fmt.Errorf("derived insight replay execution service is required")
+	}
+
+	now := time.Now
+	if j.Now != nil {
+		now = j.Now
+	}
+	current := now().UTC()
+	runWindow := scheduledRunWindow(current, j.Cadence)
+
+	started, idempotencyKey, err := beginScheduledExecution(ctx, j.ExecutionStore, j.Name(), j.Scope, j.triggerSource(), runWindow)
+	if err != nil {
+		return 0, err
+	}
+	if !started {
+		return 0, nil
+	}
+
+	limit := j.Limit
+	if limit <= 0 {
+		limit = 20
+	}
+
+	runs, err := j.Service.ListDerivedInsightReplayRuns(ctx, memory.ListDerivedInsightReplayRunsInput{
+		Scope:  j.Scope,
+		Status: memory.DerivedInsightReplayStatusPending,
+		Mode:   memory.DerivedInsightReplayModeApply,
+		Limit:  limit,
+	})
+	if err != nil {
+		if failErr := failScheduledExecution(ctx, j.ExecutionStore, idempotencyKey, current, err); failErr != nil {
+			return 0, failErr
+		}
+		return 0, err
+	}
+
+	processed := 0
+	for _, run := range runs {
+		if _, err := j.Service.ExecuteDerivedInsightReplay(ctx, run); err != nil {
+			if failErr := failScheduledExecution(ctx, j.ExecutionStore, idempotencyKey, current, err); failErr != nil {
+				return processed, failErr
+			}
+			return processed, err
+		}
+		processed++
+	}
+
+	if err := completeScheduledExecution(ctx, j.ExecutionStore, idempotencyKey, current, processed); err != nil {
+		return processed, err
+	}
+
+	return processed, nil
+}
+
+func (j DerivedInsightReplayExecutionJob) triggerSource() string {
+	if j.TriggerSource != "" {
+		return j.TriggerSource
+	}
+
+	return "scheduler"
 }
 
 func (j DerivedInsightDerivationJob) Name() string {
@@ -857,7 +946,24 @@ func (j DerivedInsightDerivationJob) Run(ctx context.Context) (int, error) {
 
 	processed := 0
 	for _, pattern := range patterns {
-		storedPattern, err := j.Store.UpsertDerivedInsight(ctx, pattern)
+		feedback, err := j.Store.SummarizeDerivedInsightFeedback(ctx, memory.SummarizeDerivedInsightFeedbackInput{
+			Scope:     pattern.Scope,
+			InsightID: pattern.ID,
+		})
+		if err != nil {
+			if failErr := failScheduledExecution(ctx, j.ExecutionStore, idempotencyKey, current, err); failErr != nil {
+				return 0, failErr
+			}
+			return 0, err
+		}
+		originalPattern := pattern
+		var decision insights.FeedbackPolicyDecision
+		pattern, decision = insights.ApplyFeedbackPolicy(pattern, feedback)
+		upsertTarget := pattern
+		if decision == insights.FeedbackPolicyDecisionSuppress {
+			upsertTarget = originalPattern
+		}
+		storedPattern, err := j.Store.UpsertDerivedInsight(ctx, upsertTarget)
 		if err != nil {
 			if failErr := failScheduledExecution(ctx, j.ExecutionStore, idempotencyKey, current, err); failErr != nil {
 				return 0, failErr
@@ -865,6 +971,34 @@ func (j DerivedInsightDerivationJob) Run(ctx context.Context) (int, error) {
 			return 0, err
 		}
 		processed++
+		if decision == insights.FeedbackPolicyDecisionSuppress {
+			j.recordInsightFeedbackPolicy(ctx, storedPattern, feedback, decision, "ok")
+			if err := j.Store.TransitionDerivedInsightLifecycle(ctx, memory.DerivedInsightLifecycleTransition{
+				Scope:      storedPattern.Scope,
+				InsightID:  storedPattern.ID,
+				FromState:  originalPattern.State,
+				ToState:    memory.DerivedInsightStateSuppressed,
+				Actor:      "feedback_policy",
+				Reason:     "suppressed by derived insight feedback policy",
+				OccurredAt: current,
+				Metadata: map[string]any{
+					"feedback_positive_count": float64(feedback.PositiveCount),
+					"feedback_negative_count": float64(feedback.NegativeCount),
+					"feedback_needs_review":   feedback.NeedsReview,
+				},
+			}); err != nil {
+				if failErr := failScheduledExecution(ctx, j.ExecutionStore, idempotencyKey, current, err); failErr != nil {
+					return 0, failErr
+				}
+				return 0, err
+			}
+			storedPattern.State = memory.DerivedInsightStateSuppressed
+		} else if decision != insights.FeedbackPolicyDecisionNone {
+			j.recordInsightFeedbackPolicy(ctx, storedPattern, feedback, decision, "ok")
+		}
+		if storedPattern.State != memory.DerivedInsightStateActive {
+			continue
+		}
 
 		lesson, err := insights.ProjectLesson(storedPattern)
 		if err != nil {
@@ -887,6 +1021,37 @@ func (j DerivedInsightDerivationJob) Run(ctx context.Context) (int, error) {
 	}
 
 	return processed, nil
+}
+
+func (j DerivedInsightDerivationJob) recordInsightFeedbackPolicy(ctx context.Context, insight memory.DerivedInsight, summary memory.DerivedInsightFeedbackSummary, decision insights.FeedbackPolicyDecision, result string) {
+	observer, ok := j.Observer.(interface {
+		RecordInsightFeedback(ctx context.Context, event telemetry.InsightFeedbackEvent)
+	})
+	if !ok {
+		return
+	}
+	feedbackType := "mixed"
+	switch {
+	case summary.Counts[memory.InsightFeedbackTypeIncorrect] > 0:
+		feedbackType = string(memory.InsightFeedbackTypeIncorrect)
+	case summary.Counts[memory.InsightFeedbackTypeNoisy] > 0:
+		feedbackType = string(memory.InsightFeedbackTypeNoisy)
+	case summary.Counts[memory.InsightFeedbackTypeStale] > 0:
+		feedbackType = string(memory.InsightFeedbackTypeStale)
+	case summary.Counts[memory.InsightFeedbackTypeRedundant] > 0:
+		feedbackType = string(memory.InsightFeedbackTypeRedundant)
+	case summary.Counts[memory.InsightFeedbackTypeNeedsReview] > 0:
+		feedbackType = string(memory.InsightFeedbackTypeNeedsReview)
+	case summary.Counts[memory.InsightFeedbackTypeUseful] > 0:
+		feedbackType = string(memory.InsightFeedbackTypeUseful)
+	}
+	observer.RecordInsightFeedback(ctx, telemetry.InsightFeedbackEvent{
+		Operation:    "policy",
+		Result:       result,
+		FeedbackType: feedbackType,
+		InsightType:  string(insight.Type),
+		Decision:     string(decision),
+	})
 }
 
 func (j DerivedInsightDerivationJob) triggerSource() string {

@@ -45,6 +45,7 @@ type AssembleContextInput struct {
 	Budget                    int
 	IncludeRelations          bool
 	IncludeExperienceInsights bool
+	IncludeDiagnostics        bool
 }
 
 func (i AssembleContextInput) Validate() error {
@@ -95,6 +96,17 @@ type ExperienceInsightContext struct {
 	Citations []InsightCitation     `json:"citations"`
 }
 
+type ContextDiagnostic struct {
+	Section     string                    `json:"section"`
+	InsightType memory.DerivedInsightType `json:"insight_type,omitempty"`
+	Status      string                    `json:"status"`
+	Reason      string                    `json:"reason,omitempty"`
+	Available   int                       `json:"available,omitempty"`
+	Included    int                       `json:"included,omitempty"`
+	Omitted     int                       `json:"omitted,omitempty"`
+	Hidden      int                       `json:"hidden,omitempty"`
+}
+
 type AssembledContext struct {
 	Profile           []SearchHit                `json:"profile"`
 	RecentSession     []SearchHit                `json:"recent_session"`
@@ -104,6 +116,7 @@ type AssembledContext struct {
 	Citations         []Citation                 `json:"citations"`
 	KnownFailures     []ExperienceInsightContext `json:"known_failures,omitempty"`
 	ExperienceLessons []ExperienceInsightContext `json:"experience_lessons,omitempty"`
+	Diagnostics       []ContextDiagnostic        `json:"diagnostics,omitempty"`
 }
 
 type ScoredMemory struct {
@@ -431,59 +444,201 @@ func (s *Service) AssembleContext(ctx context.Context, input AssembleContextInpu
 	}
 
 	if input.IncludeExperienceInsights && remaining > 0 && s.insights != nil {
-		if err := s.appendExperienceInsights(ctx, input.Scope, &output, &remaining); err != nil {
+		if err := s.appendExperienceInsights(ctx, input.Scope, input.IncludeDiagnostics, &output, &remaining); err != nil {
 			return AssembledContext{}, err
 		}
+	} else if input.IncludeDiagnostics {
+		output.Diagnostics = append(output.Diagnostics, skippedExperienceDiagnostics(input.IncludeExperienceInsights, s.insights != nil, remaining)...)
 	}
 
 	return output, nil
 }
 
-func (s *Service) appendExperienceInsights(ctx context.Context, scope memory.Scope, output *AssembledContext, remaining *int) error {
+func (s *Service) appendExperienceInsights(ctx context.Context, scope memory.Scope, includeDiagnostics bool, output *AssembledContext, remaining *int) error {
 	if remaining == nil || *remaining <= 0 {
 		return nil
 	}
 
-	failures, err := s.insights.ListDerivedInsights(ctx, memory.ListDerivedInsightsInput{
-		Scope:            scope,
-		Type:             memory.DerivedInsightTypeFailurePattern,
-		State:            memory.DerivedInsightStateActive,
-		MinEvidenceCount: 1,
-		IncludeHidden:    false,
-		Limit:            *remaining,
-	})
-	if err != nil {
+	if err := s.appendExperienceInsightSection(ctx, scope, experienceInsightSection{
+		Name:        "known_failures",
+		InsightType: memory.DerivedInsightTypeFailurePattern,
+	}, includeDiagnostics, output, remaining); err != nil {
 		return err
 	}
-
-	take := minInt(len(failures), *remaining)
-	for _, insight := range failures[:take] {
-		output.KnownFailures = append(output.KnownFailures, experienceInsightContext(insight))
-	}
-	*remaining -= take
-	if *remaining <= 0 {
+	if remaining == nil || *remaining <= 0 {
+		if includeDiagnostics {
+			output.Diagnostics = append(output.Diagnostics, ContextDiagnostic{
+				Section:     "experience_lessons",
+				InsightType: memory.DerivedInsightTypeLesson,
+				Status:      "omitted_by_budget",
+				Reason:      "context budget exhausted before section evaluation",
+			})
+		}
 		return nil
 	}
 
-	lessons, err := s.insights.ListDerivedInsights(ctx, memory.ListDerivedInsightsInput{
+	return s.appendExperienceInsightSection(ctx, scope, experienceInsightSection{
+		Name:        "experience_lessons",
+		InsightType: memory.DerivedInsightTypeLesson,
+	}, includeDiagnostics, output, remaining)
+}
+
+type experienceInsightSection struct {
+	Name        string
+	InsightType memory.DerivedInsightType
+}
+
+func (s *Service) appendExperienceInsightSection(ctx context.Context, scope memory.Scope, section experienceInsightSection, includeDiagnostics bool, output *AssembledContext, remaining *int) error {
+	limit := maxInt(*remaining+10, 10)
+	visible, err := s.insights.ListDerivedInsights(ctx, memory.ListDerivedInsightsInput{
 		Scope:            scope,
-		Type:             memory.DerivedInsightTypeLesson,
+		Type:             section.InsightType,
 		State:            memory.DerivedInsightStateActive,
 		MinEvidenceCount: 1,
 		IncludeHidden:    false,
-		Limit:            *remaining,
+		Limit:            limit,
 	})
 	if err != nil {
 		return err
 	}
+	sortExperienceInsights(visible)
 
-	take = minInt(len(lessons), *remaining)
-	for _, insight := range lessons[:take] {
-		output.ExperienceLessons = append(output.ExperienceLessons, experienceInsightContext(insight))
+	take := minInt(len(visible), *remaining)
+	for _, insight := range visible[:take] {
+		context := experienceInsightContext(insight)
+		switch section.Name {
+		case "known_failures":
+			output.KnownFailures = append(output.KnownFailures, context)
+		case "experience_lessons":
+			output.ExperienceLessons = append(output.ExperienceLessons, context)
+		}
 	}
 	*remaining -= take
 
+	if includeDiagnostics {
+		output.Diagnostics = append(output.Diagnostics, experienceVisibilityDiagnostics(ctx, s.insights, scope, section, visible, take, limit)...)
+	}
+
 	return nil
+}
+
+func experienceVisibilityDiagnostics(ctx context.Context, insights DerivedInsightLister, scope memory.Scope, section experienceInsightSection, visible []memory.DerivedInsight, included int, limit int) []ContextDiagnostic {
+	items := make([]ContextDiagnostic, 0)
+	status := "no_visible_insights"
+	if included > 0 {
+		status = "included"
+	}
+	items = append(items, ContextDiagnostic{
+		Section:     section.Name,
+		InsightType: section.InsightType,
+		Status:      status,
+		Available:   len(visible),
+		Included:    included,
+		Omitted:     maxInt(len(visible)-included, 0),
+	})
+
+	omittedQuality := 0
+	omittedBudget := 0
+	for _, insight := range visible[included:] {
+		if experienceInsightQualityScore(insight) < 0 {
+			omittedQuality++
+			continue
+		}
+		omittedBudget++
+	}
+	if omittedQuality > 0 {
+		items = append(items, ContextDiagnostic{
+			Section:     section.Name,
+			InsightType: section.InsightType,
+			Status:      "omitted_by_quality",
+			Reason:      "lower ranked by feedback quality policy within available context budget",
+			Omitted:     omittedQuality,
+		})
+	}
+	if omittedBudget > 0 {
+		items = append(items, ContextDiagnostic{
+			Section:     section.Name,
+			InsightType: section.InsightType,
+			Status:      "omitted_by_budget",
+			Reason:      "context budget exhausted before all visible insights were included",
+			Omitted:     omittedBudget,
+		})
+	}
+
+	hidden, err := insights.ListDerivedInsights(ctx, memory.ListDerivedInsightsInput{
+		Scope:            scope,
+		Type:             section.InsightType,
+		MinEvidenceCount: 1,
+		IncludeHidden:    true,
+		Limit:            limit,
+	})
+	if err == nil {
+		hiddenCount := 0
+		for _, insight := range hidden {
+			if insight.State != memory.DerivedInsightStateActive || isHiddenDerivedInsightState(insight.State) {
+				hiddenCount++
+			}
+		}
+		if hiddenCount > 0 {
+			items = append(items, ContextDiagnostic{
+				Section:     section.Name,
+				InsightType: section.InsightType,
+				Status:      "hidden_by_lifecycle_or_scope",
+				Reason:      "non-active or hidden lifecycle state is excluded from ordinary context assembly",
+				Hidden:      hiddenCount,
+			})
+		}
+	}
+
+	return items
+}
+
+func skippedExperienceDiagnostics(includeExperienceInsights bool, insightsConfigured bool, remaining int) []ContextDiagnostic {
+	status := "not_requested"
+	reason := "experience insight sections were not requested"
+	if includeExperienceInsights && !insightsConfigured {
+		status = "unavailable"
+		reason = "derived insight source is not configured"
+	} else if includeExperienceInsights && remaining <= 0 {
+		status = "omitted_by_budget"
+		reason = "context budget exhausted before experience insight sections"
+	}
+	return []ContextDiagnostic{
+		{Section: "known_failures", InsightType: memory.DerivedInsightTypeFailurePattern, Status: status, Reason: reason},
+		{Section: "experience_lessons", InsightType: memory.DerivedInsightTypeLesson, Status: status, Reason: reason},
+	}
+}
+
+func isHiddenDerivedInsightState(state memory.DerivedInsightState) bool {
+	switch state {
+	case memory.DerivedInsightStateSuppressed, memory.DerivedInsightStateForgotten, memory.DerivedInsightStateDeleted:
+		return true
+	default:
+		return false
+	}
+}
+
+func sortExperienceInsights(items []memory.DerivedInsight) {
+	sort.SliceStable(items, func(i, j int) bool {
+		left := experienceInsightQualityScore(items[i])
+		right := experienceInsightQualityScore(items[j])
+		if left == right {
+			return items[i].UpdatedAt.After(items[j].UpdatedAt)
+		}
+		return left > right
+	})
+}
+
+func experienceInsightQualityScore(insight memory.DerivedInsight) int {
+	summary := insight.FeedbackSummary
+	score := summary.PositiveCount * 10
+	score -= summary.NegativeCount * 10
+	if summary.NeedsReview {
+		score -= 20
+	}
+	score -= summary.Counts[memory.InsightFeedbackTypeStale] * 5
+	score -= summary.Counts[memory.InsightFeedbackTypeRedundant] * 5
+	return score
 }
 
 func experienceInsightContext(insight memory.DerivedInsight) ExperienceInsightContext {

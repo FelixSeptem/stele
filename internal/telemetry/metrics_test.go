@@ -90,3 +90,75 @@ func TestMetricsObserverExportsEmbeddingCutoverAndProviderReadinessSignals(t *te
 		}
 	}
 }
+
+func TestMetricsObserverExportsInsightFeedbackSignalsWithoutHighCardinalityLabels(t *testing.T) {
+	observer := NewMetricsObserver()
+	ctx := context.Background()
+
+	observer.RecordInsightFeedback(ctx, InsightFeedbackEvent{
+		Operation:    "create",
+		Result:       "ok",
+		FeedbackType: "noisy",
+		InsightType:  "failure_pattern",
+		Decision:     "none",
+	})
+	observer.RecordInsightFeedback(ctx, InsightFeedbackEvent{
+		Operation:    "policy",
+		Result:       "ok",
+		FeedbackType: "noisy",
+		InsightType:  "failure_pattern",
+		Decision:     "suppress",
+	})
+
+	metrics := observer.RenderPrometheus()
+	for _, want := range []string{
+		`stele_insight_feedback_total{decision="none",feedback_type="noisy",insight_type="failure_pattern",operation="create",result="ok"} 1`,
+		`stele_insight_feedback_total{decision="suppress",feedback_type="noisy",insight_type="failure_pattern",operation="policy",result="ok"} 1`,
+	} {
+		if !strings.Contains(metrics, want) {
+			t.Fatalf("metrics missing %q\n%s", want, metrics)
+		}
+	}
+	for _, forbidden := range []string{"tenant", "project", "namespace", "actor", "reason", "insight_id"} {
+		if strings.Contains(metrics, forbidden) {
+			t.Fatalf("metrics contain high-cardinality label %q\n%s", forbidden, metrics)
+		}
+	}
+}
+
+func TestMetricsObserverExportsDerivedInsightReplaySignalsWithoutHighCardinalityLabels(t *testing.T) {
+	observer := NewMetricsObserver()
+	ctx := context.Background()
+
+	observer.RecordDerivedInsightReplay(ctx, DerivedInsightReplayEvent{
+		Mode:        "dry_run",
+		Result:      "completed",
+		InsightType: "failure_pattern",
+		Decision:    "create",
+		Reason:      "repeated_evidence",
+		Count:       2,
+	})
+	observer.RecordDerivedInsightReplay(ctx, DerivedInsightReplayEvent{
+		Mode:        "apply",
+		Result:      "continuation_required",
+		InsightType: "lesson",
+		Decision:    "skip",
+		Reason:      "insufficient_evidence",
+		Count:       1,
+	})
+
+	metrics := observer.RenderPrometheus()
+	for _, want := range []string{
+		`stele_derived_insight_replay_total{decision="create",insight_type="failure_pattern",mode="dry_run",reason="repeated_evidence",result="completed"} 2`,
+		`stele_derived_insight_replay_total{decision="skip",insight_type="lesson",mode="apply",reason="insufficient_evidence",result="continuation_required"} 1`,
+	} {
+		if !strings.Contains(metrics, want) {
+			t.Fatalf("metrics missing %q\n%s", want, metrics)
+		}
+	}
+	for _, forbidden := range []string{"tenant", "project", "namespace", "replay_run_id", "insight_id", "actor", "reason_text"} {
+		if strings.Contains(metrics, forbidden) {
+			t.Fatalf("metrics contain high-cardinality label %q\n%s", forbidden, metrics)
+		}
+	}
+}

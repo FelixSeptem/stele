@@ -135,3 +135,55 @@ The service SHALL support narrowly scoped admin lifecycle actions for derived in
 - **WHEN** an operator changes a derived insight lifecycle state
 - **THEN** the service preserves the linked evidence and records the action in audit history
 
+### Requirement: Derived insight feedback is manageable through the admin surface
+The service SHALL expose admin-only operations for recording, listing, reading, and superseding quality feedback for derived insights.
+
+#### Scenario: Operator records insight feedback
+- **WHEN** an authorized operator submits feedback for a derived insight with actor and reason attribution
+- **THEN** the admin surface creates a scoped feedback record and returns its durable identity
+
+#### Scenario: Operator lists feedback for an insight
+- **WHEN** an authorized operator requests feedback for a derived insight within an authorized scope
+- **THEN** the admin surface returns the matching feedback records, including supersession state and audit attribution
+
+#### Scenario: Operator supersedes feedback
+- **WHEN** an authorized operator supersedes a prior feedback record with a reason
+- **THEN** the admin surface records the supersession and excludes that record from active quality summaries
+
+### Requirement: Admin insight inspection includes quality state
+The service MUST include effective quality feedback state in admin derived insight inspection without weakening public visibility rules.
+
+#### Scenario: Operator reads one derived insight with feedback
+- **WHEN** an authorized operator reads a derived insight that has quality feedback
+- **THEN** the admin surface returns the insight detail together with feedback summary, active review signals, and links or identifiers for feedback history
+
+#### Scenario: Hidden insight has feedback history
+- **WHEN** an operator inspects a suppressed or hidden insight with feedback
+- **THEN** the admin surface can show feedback and lifecycle context without making the insight visible to public retrieval or context assembly
+
+### Requirement: Derived insight replay is controllable from the admin surface
+The service SHALL expose admin-only operations for replay dry-run planning, replay apply enqueueing, replay run inspection, and replay report reads.
+
+#### Scenario: Operator requests replay dry-run
+- **WHEN** an authorized operator submits a bounded replay dry-run request
+- **THEN** the admin surface returns a replay plan and does not schedule mutation work
+
+#### Scenario: Operator requests replay apply
+- **WHEN** an authorized operator submits a bounded replay apply request with actor and reason attribution
+- **THEN** the admin surface creates or returns a durable replay run identity and exposes where to inspect its status
+
+#### Scenario: Operator reads replay report
+- **WHEN** an authorized operator requests a replay run or report within the authorized scope
+- **THEN** the admin surface returns status, request bounds, counters, failures, skip reasons, actor attribution, and linked insight identifiers when permitted
+
+### Requirement: Replay admin controls preserve lifecycle and scope safety
+The service MUST reject replay admin requests that bypass scope isolation, lifecycle governance, or durable background ownership.
+
+#### Scenario: Replay targets unauthorized scope
+- **WHEN** a caller requests replay for a tenant, project, or namespace outside its admin authorization
+- **THEN** the admin surface rejects the request without exposing evidence or insight counts from that scope
+
+#### Scenario: Replay tries to mutate hidden content directly
+- **WHEN** a replay request attempts to make suppressed, forgotten, deleted, or out-of-scope insight content visible without governed lifecycle evaluation
+- **THEN** the admin surface rejects the request or records a skipped decision rather than bypassing lifecycle controls
+

@@ -129,3 +129,47 @@ The service MUST keep repeated insight derivation safe across retries, restarts,
 - **WHEN** derived insight processing fails before completion
 - **THEN** the service records job failure through the existing durable job execution path without partially activating unsupported insights
 
+### Requirement: Insight derivation consumes feedback idempotently
+The service SHALL allow background insight derivation and maintenance jobs to consume quality feedback summaries in an idempotent, retry-safe manner.
+
+#### Scenario: Derivation consumes same feedback twice
+- **WHEN** a derivation job is retried for the same scope, evidence window, and feedback state
+- **THEN** the service applies the same effective insight update or lifecycle decision without creating duplicate feedback-driven transitions
+
+#### Scenario: Feedback changes between derivation runs
+- **WHEN** new feedback is recorded after a prior derivation run
+- **THEN** a later derivation or maintenance run can evaluate the updated quality summary and record any resulting insight change with fresh audit attribution
+
+### Requirement: Feedback-driven suppression is scheduler-safe
+The service MUST perform feedback-driven suppression or review marking through durable background execution semantics rather than foreground feedback write shortcuts.
+
+#### Scenario: Operator records negative feedback
+- **WHEN** an operator records negative feedback for an active insight
+- **THEN** the feedback write path does not synchronously execute broad insight derivation or maintenance work
+
+#### Scenario: Scheduler processes feedback-driven lifecycle work
+- **WHEN** scheduled insight maintenance evaluates feedback that meets a suppression or review policy
+- **THEN** it records the lifecycle or review decision through the same durable, auditable job path used for derived insight maintenance
+
+### Requirement: Replay apply uses durable worker execution
+The service SHALL execute derived insight replay apply and backfill work through the durable worker or scheduler model with leases, retry state, idempotency, and failure summaries.
+
+#### Scenario: Worker claims replay work
+- **WHEN** a replay apply run is pending and eligible
+- **THEN** a worker can claim it with durable ownership and process it without requiring the admin request to remain open
+
+#### Scenario: Replay worker fails
+- **WHEN** replay execution fails before completion
+- **THEN** the service records attempt count, failure summary, next eligibility, and partial report state so the run can be retried or inspected
+
+### Requirement: Replay scheduling remains scope-bound and bounded
+The service MUST keep scheduled or operator-triggered replay execution limited to the requested scope, evidence window, insight types, and configured execution limits.
+
+#### Scenario: Replay backfill is scheduled
+- **WHEN** a bounded replay backfill is queued for one authorized scope
+- **THEN** the scheduler or worker processes only that scope and window rather than enumerating unrelated scopes
+
+#### Scenario: Replay reaches execution limit
+- **WHEN** replay processing reaches the configured evidence or decision limit before the window is exhausted
+- **THEN** the service records a bounded completion or continuation-required status instead of silently scanning beyond the limit
+

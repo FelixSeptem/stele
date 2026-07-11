@@ -571,6 +571,113 @@ paths:
           description: Missing or invalid admin API key
         '404':
           description: Derived insight not found
+  /v1/admin/derived-insights/{insight_id}/feedback:
+    get:
+      operationId: listAdminDerivedInsightFeedback
+      parameters:
+        - in: path
+          name: insight_id
+          required: true
+          schema:
+            type: string
+        - $ref: '#/components/parameters/AdminAPIKey'
+        - $ref: '#/components/parameters/TenantHeader'
+        - $ref: '#/components/parameters/ProjectHeader'
+        - $ref: '#/components/parameters/NamespaceHeader'
+        - in: query
+          name: type
+          required: false
+          schema:
+            $ref: '#/components/schemas/InsightFeedbackType'
+        - in: query
+          name: include_superseded
+          required: false
+          schema:
+            type: boolean
+        - in: query
+          name: limit
+          required: false
+          schema:
+            type: integer
+      responses:
+        '200':
+          description: Scoped derived insight feedback records
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/DerivedInsightFeedbackListResponse'
+        '400':
+          description: Invalid request
+        '401':
+          description: Missing or invalid admin API key
+    post:
+      operationId: createAdminDerivedInsightFeedback
+      parameters:
+        - in: path
+          name: insight_id
+          required: true
+          schema:
+            type: string
+        - $ref: '#/components/parameters/AdminAPIKey'
+        - $ref: '#/components/parameters/TenantHeader'
+        - $ref: '#/components/parameters/ProjectHeader'
+        - $ref: '#/components/parameters/NamespaceHeader'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/DerivedInsightFeedbackCreateRequest'
+      responses:
+        '201':
+          description: Feedback recorded and audited
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/DerivedInsightFeedback'
+        '400':
+          description: Invalid request
+        '401':
+          description: Missing or invalid admin API key
+        '404':
+          description: Derived insight not found
+  /v1/admin/derived-insight-feedback/{feedback_id}:supersede:
+    post:
+      operationId: supersedeAdminDerivedInsightFeedback
+      parameters:
+        - in: path
+          name: feedback_id
+          required: true
+          schema:
+            type: string
+        - $ref: '#/components/parameters/AdminAPIKey'
+        - $ref: '#/components/parameters/TenantHeader'
+        - $ref: '#/components/parameters/ProjectHeader'
+        - $ref: '#/components/parameters/NamespaceHeader'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/DerivedInsightFeedbackSupersedeRequest'
+      responses:
+        '200':
+          description: Feedback superseded and removed from active summaries
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  status:
+                    type: string
+                  feedback_id:
+                    type: string
+        '400':
+          description: Invalid request
+        '401':
+          description: Missing or invalid admin API key
+        '404':
+          description: Derived insight feedback not found
   /v1/admin/derived-insights/{insight_id}:suppress:
     post:
       operationId: suppressAdminDerivedInsight
@@ -608,6 +715,137 @@ paths:
           description: Missing or invalid admin API key
         '404':
           description: Derived insight not found
+  /v1/admin/derived-insight-replays:dry-run:
+    post:
+      operationId: planAdminDerivedInsightReplay
+      parameters:
+        - $ref: '#/components/parameters/AdminAPIKey'
+        - $ref: '#/components/parameters/TenantHeader'
+        - $ref: '#/components/parameters/ProjectHeader'
+        - $ref: '#/components/parameters/NamespaceHeader'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/DerivedInsightReplayRequest'
+      responses:
+        '200':
+          description: Replay dry-run plan without mutations
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/DerivedInsightReplayReport'
+        '400':
+          description: Invalid request
+        '401':
+          description: Missing or invalid admin API key
+  /v1/admin/derived-insight-replays:
+    get:
+      operationId: listAdminDerivedInsightReplays
+      parameters:
+        - $ref: '#/components/parameters/AdminAPIKey'
+        - $ref: '#/components/parameters/TenantHeader'
+        - $ref: '#/components/parameters/ProjectHeader'
+        - $ref: '#/components/parameters/NamespaceHeader'
+        - in: query
+          name: status
+          required: false
+          schema:
+            $ref: '#/components/schemas/DerivedInsightReplayStatus'
+        - in: query
+          name: mode
+          required: false
+          schema:
+            $ref: '#/components/schemas/DerivedInsightReplayMode'
+        - in: query
+          name: limit
+          required: false
+          schema:
+            type: integer
+      responses:
+        '200':
+          description: Scoped derived insight replay runs
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/DerivedInsightReplayListResponse'
+        '400':
+          description: Invalid request
+        '401':
+          description: Missing or invalid admin API key
+    post:
+      operationId: applyAdminDerivedInsightReplay
+      parameters:
+        - $ref: '#/components/parameters/AdminAPIKey'
+        - $ref: '#/components/parameters/TenantHeader'
+        - $ref: '#/components/parameters/ProjectHeader'
+        - $ref: '#/components/parameters/NamespaceHeader'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/DerivedInsightReplayRequest'
+      responses:
+        '202':
+          description: Replay apply was accepted as durable background work
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/DerivedInsightReplayRun'
+        '400':
+          description: Invalid request
+        '401':
+          description: Missing or invalid admin API key
+  /v1/admin/derived-insight-replays/{replay_run_id}:
+    get:
+      operationId: getAdminDerivedInsightReplay
+      parameters:
+        - in: path
+          name: replay_run_id
+          required: true
+          schema:
+            type: string
+        - $ref: '#/components/parameters/AdminAPIKey'
+        - $ref: '#/components/parameters/TenantHeader'
+        - $ref: '#/components/parameters/ProjectHeader'
+        - $ref: '#/components/parameters/NamespaceHeader'
+      responses:
+        '200':
+          description: Derived insight replay run detail
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/DerivedInsightReplayRun'
+        '401':
+          description: Missing or invalid admin API key
+        '404':
+          description: Replay run not found
+  /v1/admin/derived-insight-replays/{replay_run_id}/report:
+    get:
+      operationId: getAdminDerivedInsightReplayReport
+      parameters:
+        - in: path
+          name: replay_run_id
+          required: true
+          schema:
+            type: string
+        - $ref: '#/components/parameters/AdminAPIKey'
+        - $ref: '#/components/parameters/TenantHeader'
+        - $ref: '#/components/parameters/ProjectHeader'
+        - $ref: '#/components/parameters/NamespaceHeader'
+      responses:
+        '200':
+          description: Derived insight replay report
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/DerivedInsightReplayReport'
+        '401':
+          description: Missing or invalid admin API key
+        '404':
+          description: Replay report not found
   /v1/admin/embedding/rebuilds:
     get:
       operationId: listAdminEmbeddingRebuilds
@@ -1324,6 +1562,15 @@ components:
         - suppressed
         - forgotten
         - deleted
+    InsightFeedbackType:
+      type: string
+      enum:
+        - useful
+        - noisy
+        - incorrect
+        - stale
+        - redundant
+        - needs_review
     DerivedInsightConfidence:
       type: object
       required:
@@ -1511,6 +1758,8 @@ components:
           type: array
           items:
             $ref: '#/components/schemas/DerivedInsightLifecycleRecord'
+        feedback_summary:
+          $ref: '#/components/schemas/DerivedInsightFeedbackSummary'
     DerivedInsightSuppressRequest:
       type: object
       required:
@@ -1521,6 +1770,290 @@ components:
           type: string
         reason:
           type: string
+    DerivedInsightFeedback:
+      type: object
+      required:
+        - id
+        - insight_id
+        - scope
+        - type
+        - actor
+        - reason
+        - created_at
+      properties:
+        id:
+          type: string
+        insight_id:
+          type: string
+        scope:
+          $ref: '#/components/schemas/Scope'
+        type:
+          $ref: '#/components/schemas/InsightFeedbackType'
+        actor:
+          type: string
+        reason:
+          type: string
+        quality_score:
+          type: number
+          minimum: 0
+          maximum: 1
+        created_at:
+          type: string
+          format: date-time
+        superseded_at:
+          type: string
+          format: date-time
+        superseded_by_actor:
+          type: string
+        superseded_by_reason:
+          type: string
+        request_id:
+          type: string
+        metadata:
+          type: object
+          additionalProperties: true
+    DerivedInsightFeedbackCreateRequest:
+      type: object
+      required:
+        - type
+        - actor
+        - reason
+      properties:
+        type:
+          $ref: '#/components/schemas/InsightFeedbackType'
+        actor:
+          type: string
+        reason:
+          type: string
+        quality_score:
+          type: number
+          minimum: 0
+          maximum: 1
+        metadata:
+          type: object
+          additionalProperties: true
+    DerivedInsightFeedbackListResponse:
+      type: object
+      required:
+        - items
+      properties:
+        items:
+          type: array
+          items:
+            $ref: '#/components/schemas/DerivedInsightFeedback'
+    DerivedInsightFeedbackSupersedeRequest:
+      type: object
+      required:
+        - actor
+        - reason
+      properties:
+        actor:
+          type: string
+        reason:
+          type: string
+    DerivedInsightFeedbackSummary:
+      type: object
+      required:
+        - counts
+        - total_active
+        - positive_count
+        - negative_count
+        - needs_review
+      properties:
+        insight_id:
+          type: string
+        counts:
+          type: object
+          additionalProperties:
+            type: integer
+        total_active:
+          type: integer
+        positive_count:
+          type: integer
+        negative_count:
+          type: integer
+        needs_review:
+          type: boolean
+        last_feedback_at:
+          type: string
+          format: date-time
+    DerivedInsightReplayMode:
+      type: string
+      enum:
+        - dry_run
+        - apply
+    DerivedInsightReplayStatus:
+      type: string
+      enum:
+        - pending
+        - running
+        - completed
+        - failed
+        - continuation_required
+    DerivedInsightReplayDecisionKind:
+      type: string
+      enum:
+        - create
+        - update
+        - suppress
+        - preserve
+        - skip
+    DerivedInsightReplayReason:
+      type: string
+      enum:
+        - repeated_evidence
+        - insufficient_evidence
+        - unsupported_type
+        - feedback_policy
+        - lifecycle_hidden
+        - out_of_scope
+        - idempotent_duplicate
+        - execution_failed
+    DerivedInsightReplayRequest:
+      type: object
+      required:
+        - evidence_window_start
+        - evidence_window_end
+        - evidence_limit
+        - actor
+        - reason
+      properties:
+        insight_types:
+          type: array
+          items:
+            $ref: '#/components/schemas/DerivedInsightType'
+        evidence_window_start:
+          type: string
+          format: date-time
+        evidence_window_end:
+          type: string
+          format: date-time
+        evidence_limit:
+          type: integer
+          minimum: 1
+        actor:
+          type: string
+        reason:
+          type: string
+        idempotency_key:
+          type: string
+        metadata:
+          type: object
+          additionalProperties: true
+    DerivedInsightReplayCounters:
+      type: object
+      properties:
+        evidence_evaluated:
+          type: integer
+        created:
+          type: integer
+        updated:
+          type: integer
+        suppressed:
+          type: integer
+        preserved:
+          type: integer
+        skipped:
+          type: integer
+        failed:
+          type: integer
+    DerivedInsightReplayDecision:
+      type: object
+      required:
+        - insight_type
+        - fingerprint
+        - decision
+        - reason
+      properties:
+        insight_id:
+          type: string
+        insight_type:
+          $ref: '#/components/schemas/DerivedInsightType'
+        fingerprint:
+          type: string
+        decision:
+          $ref: '#/components/schemas/DerivedInsightReplayDecisionKind'
+        reason:
+          $ref: '#/components/schemas/DerivedInsightReplayReason'
+        evidence_count:
+          type: integer
+        message:
+          type: string
+    DerivedInsightReplayReport:
+      type: object
+      required:
+        - run_id
+        - scope
+        - counters
+        - generated_at
+      properties:
+        run_id:
+          type: string
+        scope:
+          $ref: '#/components/schemas/Scope'
+        counters:
+          $ref: '#/components/schemas/DerivedInsightReplayCounters'
+        decisions:
+          type: array
+          items:
+            $ref: '#/components/schemas/DerivedInsightReplayDecision'
+        failure:
+          type: string
+        generated_at:
+          type: string
+          format: date-time
+    DerivedInsightReplayRun:
+      type: object
+      required:
+        - id
+        - scope
+        - mode
+        - status
+        - request
+        - actor
+        - reason
+        - created_at
+        - updated_at
+      properties:
+        id:
+          type: string
+        scope:
+          $ref: '#/components/schemas/Scope'
+        mode:
+          $ref: '#/components/schemas/DerivedInsightReplayMode'
+        status:
+          $ref: '#/components/schemas/DerivedInsightReplayStatus'
+        request:
+          $ref: '#/components/schemas/DerivedInsightReplayRequest'
+        report:
+          $ref: '#/components/schemas/DerivedInsightReplayReport'
+        actor:
+          type: string
+        reason:
+          type: string
+        failure:
+          type: string
+        created_at:
+          type: string
+          format: date-time
+        updated_at:
+          type: string
+          format: date-time
+        started_at:
+          type: string
+          format: date-time
+        finished_at:
+          type: string
+          format: date-time
+    DerivedInsightReplayListResponse:
+      type: object
+      required:
+        - items
+      properties:
+        items:
+          type: array
+          items:
+            $ref: '#/components/schemas/DerivedInsightReplayRun'
     EventIngestRequest:
       type: object
       required:
@@ -1671,6 +2204,8 @@ components:
           type: boolean
         include_experience_insights:
           type: boolean
+        include_diagnostics:
+          type: boolean
     InsightCitation:
       type: object
       required:
@@ -1699,6 +2234,28 @@ components:
           type: array
           items:
             $ref: '#/components/schemas/InsightCitation'
+    ContextDiagnostic:
+      type: object
+      required:
+        - section
+        - status
+      properties:
+        section:
+          type: string
+        insight_type:
+          type: string
+        status:
+          type: string
+        reason:
+          type: string
+        available:
+          type: integer
+        included:
+          type: integer
+        omitted:
+          type: integer
+        hidden:
+          type: integer
     ContextAssembleResponse:
       type: object
       required:
@@ -1741,6 +2298,10 @@ components:
           type: array
           items:
             $ref: '#/components/schemas/ExperienceInsightContext'
+        diagnostics:
+          type: array
+          items:
+            $ref: '#/components/schemas/ContextDiagnostic'
     GovernanceStatus:
       type: object
       required:

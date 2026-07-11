@@ -135,6 +135,92 @@ func TestListDerivedInsightsInputValidateRejectsUnsupportedFilters(t *testing.T)
 	}
 }
 
+func TestDerivedInsightFeedbackValidateAcceptsBoundedSignals(t *testing.T) {
+	feedback := DerivedInsightFeedback{
+		ID:        "feedback_123",
+		InsightID: "insight_123",
+		Scope:     Scope{Tenant: "tenant-a", Project: "project-a", Namespace: "namespace-a"},
+		Type:      InsightFeedbackTypeUseful,
+		Actor:     "operator-a",
+		Reason:    "prevented repeated retry storm",
+		CreatedAt: time.Date(2026, 7, 4, 14, 0, 0, 0, time.UTC),
+	}
+
+	if err := feedback.Validate(); err != nil {
+		t.Fatalf("Validate() error = %v", err)
+	}
+}
+
+func TestDerivedInsightFeedbackValidateRejectsUnsupportedSignal(t *testing.T) {
+	feedback := DerivedInsightFeedback{
+		ID:        "feedback_123",
+		InsightID: "insight_123",
+		Scope:     Scope{Tenant: "tenant-a", Project: "project-a", Namespace: "namespace-a"},
+		Type:      "interesting",
+		Actor:     "operator-a",
+		Reason:    "not a governed signal",
+		CreatedAt: time.Date(2026, 7, 4, 14, 0, 0, 0, time.UTC),
+	}
+
+	err := feedback.Validate()
+	if err == nil {
+		t.Fatal("Validate() error = nil, want unsupported feedback type validation")
+	}
+	if !strings.Contains(err.Error(), "insight feedback type") {
+		t.Fatalf("Validate() error = %v, want feedback type validation", err)
+	}
+}
+
+func TestSupersedeDerivedInsightFeedbackInputValidateRequiresActorReasonAndTarget(t *testing.T) {
+	input := SupersedeDerivedInsightFeedbackInput{
+		Scope:      Scope{Tenant: "tenant-a", Project: "project-a", Namespace: "namespace-a"},
+		FeedbackID: "feedback_123",
+		Actor:      "operator-a",
+		Reason:     "replaced by more accurate review",
+		SupersededAt: time.Date(2026, 7, 4, 15, 0, 0, 0, time.UTC),
+	}
+
+	if err := input.Validate(); err != nil {
+		t.Fatalf("Validate() error = %v", err)
+	}
+
+	input.Actor = ""
+	if err := input.Validate(); err == nil {
+		t.Fatal("Validate() error = nil, want actor validation")
+	}
+}
+
+func TestDerivedInsightFeedbackSummaryIgnoresSupersededRecords(t *testing.T) {
+	summary := SummarizeDerivedInsightFeedback([]DerivedInsightFeedback{
+		{
+			ID:        "feedback_useful",
+			InsightID: "insight_123",
+			Scope:     Scope{Tenant: "tenant-a", Project: "project-a", Namespace: "namespace-a"},
+			Type:      InsightFeedbackTypeUseful,
+			Actor:     "operator-a",
+			Reason:    "accurate",
+			CreatedAt: time.Date(2026, 7, 4, 14, 0, 0, 0, time.UTC),
+		},
+		{
+			ID:           "feedback_noisy",
+			InsightID:    "insight_123",
+			Scope:        Scope{Tenant: "tenant-a", Project: "project-a", Namespace: "namespace-a"},
+			Type:         InsightFeedbackTypeNoisy,
+			Actor:        "operator-b",
+			Reason:       "too broad",
+			CreatedAt:    time.Date(2026, 7, 4, 14, 30, 0, 0, time.UTC),
+			SupersededAt: time.Date(2026, 7, 4, 15, 0, 0, 0, time.UTC),
+		},
+	})
+
+	if summary.TotalActive != 1 || summary.Counts[InsightFeedbackTypeUseful] != 1 || summary.Counts[InsightFeedbackTypeNoisy] != 0 {
+		t.Fatalf("summary = %+v, want only active useful feedback counted", summary)
+	}
+	if summary.PositiveCount != 1 || summary.NegativeCount != 0 || summary.NeedsReview {
+		t.Fatalf("summary quality = %+v, want positive only", summary)
+	}
+}
+
 func validFailurePatternInsight() DerivedInsight {
 	return DerivedInsight{
 		ID:      "insight_123",

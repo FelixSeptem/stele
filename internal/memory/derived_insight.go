@@ -196,6 +196,7 @@ type DerivedInsight struct {
 	Lesson         *DerivedInsightLesson       `json:"lesson,omitempty"`
 	Derivation     DerivedInsightDerivation    `json:"derivation"`
 	Evidence       []DerivedInsightEvidenceRef `json:"evidence"`
+	FeedbackSummary DerivedInsightFeedbackSummary `json:"feedback_summary,omitempty"`
 	CreatedAt      time.Time                   `json:"created_at,omitempty"`
 	UpdatedAt      time.Time                   `json:"updated_at,omitempty"`
 	LastObservedAt time.Time                   `json:"last_observed_at,omitempty"`
@@ -346,7 +347,8 @@ type DerivedInsightLifecycleRecord struct {
 }
 
 type DerivedInsightDetail struct {
-	Insight   DerivedInsight                  `json:"insight"`
-	Evidence  []DerivedInsightEvidenceRef     `json:"evidence"`
-	Lifecycle []DerivedInsightLifecycleRecord `json:"lifecycle"`
+	Insight         DerivedInsight                  `json:"insight"`
+	Evidence        []DerivedInsightEvidenceRef     `json:"evidence"`
+	Lifecycle       []DerivedInsightLifecycleRecord `json:"lifecycle"`
+	FeedbackSummary DerivedInsightFeedbackSummary   `json:"feedback_summary,omitempty"`
 }

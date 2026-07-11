@@ -50,3 +50,43 @@ The service MUST expose concrete metrics for embedding cutover admission and emb
 - **WHEN** embedding rebuild, provider probe, or cutover wave dispatch activity is observed
 - **THEN** the metrics surface records backlog, result, and dispatch signals needed to diagnose rollout progress and execution failure
 
+### Requirement: Insight feedback metrics are exported
+The service MUST expose operational metrics for derived insight quality feedback using low-cardinality labels.
+
+#### Scenario: Feedback is recorded
+- **WHEN** an insight feedback record is created or superseded
+- **THEN** the metrics surface records the operation result by feedback type, insight type, and outcome without embedding tenant, project, namespace, insight id, actor, or reason text as metric labels
+
+#### Scenario: Feedback-driven lifecycle decision occurs
+- **WHEN** a background job suppresses, reviews, preserves, or prioritizes an insight based on feedback
+- **THEN** the metrics surface records the decision category and result without high-cardinality identifiers
+
+### Requirement: Insight feedback diagnostics are operator-visible
+The service SHALL expose diagnostics that help operators understand derived insight quality trends.
+
+#### Scenario: Operator inspects insight quality health
+- **WHEN** an operator requests operational diagnostics for derived insights
+- **THEN** the service can report feedback coverage, noisy insight rate, needs-review count, and feedback-driven suppression counts for an authorized scope
+
+#### Scenario: Diagnostics include hidden insights
+- **WHEN** suppressed or hidden insights contribute to quality diagnostics
+- **THEN** the service includes aggregate counts without exposing hidden insight content through public metrics or non-admin diagnostics
+
+### Requirement: Replay execution metrics are exported
+The service MUST expose low-cardinality metrics for derived insight replay planning and execution.
+
+#### Scenario: Replay dry-run completes
+- **WHEN** a replay dry-run finishes
+- **THEN** the metrics surface records the result, mode, insight type category, and decision categories without tenant, project, namespace, replay id, insight id, actor, or reason text labels
+
+#### Scenario: Replay apply completes or fails
+- **WHEN** replay apply work creates, updates, suppresses, preserves, skips, or fails insight decisions
+- **THEN** the metrics surface records counters by outcome and reason category using low-cardinality labels
+
+### Requirement: Smoke loop diagnostics are operator-visible
+The service SHALL expose diagnostics that help operators determine which stage of the self-hosting smoke loop failed.
+
+#### Scenario: Smoke loop detects degraded service
+- **WHEN** a smoke check reports failure or degradation
+- **THEN** operators can inspect readiness, job backlog, replay status, retrieval/context diagnostics, or metrics to identify the failed stage without direct PostgreSQL access
+

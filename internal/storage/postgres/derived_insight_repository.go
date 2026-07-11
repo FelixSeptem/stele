@@ -236,6 +236,13 @@ LIMIT $%d
 		if err != nil {
 			return nil, err
 		}
+		insight.FeedbackSummary, err = r.SummarizeDerivedInsightFeedback(ctx, memory.SummarizeDerivedInsightFeedbackInput{
+			Scope:     insight.Scope,
+			InsightID: insight.ID,
+		})
+		if err != nil {
+			return nil, err
+		}
 		items = append(items, insight)
 	}
 	if err := rows.Err(); err != nil {
@@ -294,12 +301,20 @@ WHERE id = $1
 	if err != nil {
 		return memory.DerivedInsightDetail{}, err
 	}
+	feedbackSummary, err := r.SummarizeDerivedInsightFeedback(ctx, memory.SummarizeDerivedInsightFeedbackInput{
+		Scope:     input.Scope,
+		InsightID: input.ID,
+	})
+	if err != nil {
+		return memory.DerivedInsightDetail{}, err
+	}
 	insight.Evidence = evidence
 
 	return memory.DerivedInsightDetail{
-		Insight:   insight,
-		Evidence:  evidence,
-		Lifecycle: lifecycle,
+		Insight:         insight,
+		Evidence:        evidence,
+		Lifecycle:       lifecycle,
+		FeedbackSummary: feedbackSummary,
 	}, nil
 }
 
@@ -446,6 +461,225 @@ WHERE id = $3
 	}
 
 	return nil
+}
+
+func (r *Repository) CreateDerivedInsightFeedback(ctx context.Context, input memory.CreateDerivedInsightFeedbackInput) (memory.DerivedInsightFeedback, error) {
+	if err := input.Validate(); err != nil {
+		return memory.DerivedInsightFeedback{}, err
+	}
+
+	metadata, err := marshalDerivedInsightJSON(input.Metadata)
+	if err != nil {
+		return memory.DerivedInsightFeedback{}, fmt.Errorf("marshal derived insight feedback metadata: %w", err)
+	}
+
+	const query = `
+INSERT INTO derived_insight_feedback (
+	id,
+	insight_id,
+	tenant,
+	project,
+	namespace,
+	feedback_type,
+	actor,
+	reason,
+	quality_score,
+	created_at,
+	request_id,
+	metadata
+)
+SELECT
+	$1, di.id, di.tenant, di.project, di.namespace, $6, $7, $8, $9, $10, $11, $12
+FROM derived_insights di
+WHERE di.id = $2
+	AND di.tenant = $3
+	AND di.project = $4
+	AND di.namespace = $5
+RETURNING
+	id,
+	insight_id,
+	tenant,
+	project,
+	namespace,
+	feedback_type,
+	actor,
+	reason,
+	quality_score,
+	created_at,
+	superseded_at,
+	superseded_by_actor,
+	superseded_by_reason,
+	request_id,
+	metadata
+`
+
+	feedback, err := scanDerivedInsightFeedback(r.db.QueryRow(
+		ctx,
+		query,
+		input.ID,
+		input.InsightID,
+		input.Scope.Tenant,
+		input.Scope.Project,
+		input.Scope.Namespace,
+		input.Type,
+		input.Actor,
+		input.Reason,
+		input.QualityScore,
+		input.CreatedAt,
+		input.RequestID,
+		metadata,
+	))
+	if err != nil {
+		return memory.DerivedInsightFeedback{}, fmt.Errorf("create derived insight feedback: %w", err)
+	}
+
+	return feedback, nil
+}
+
+func (r *Repository) ListDerivedInsightFeedback(ctx context.Context, input memory.ListDerivedInsightFeedbackInput) ([]memory.DerivedInsightFeedback, error) {
+	if err := input.Validate(); err != nil {
+		return nil, err
+	}
+
+	args := []any{input.InsightID, input.Scope.Tenant, input.Scope.Project, input.Scope.Namespace}
+	conditions := []string{
+		"insight_id = $1",
+		"tenant = $2",
+		"project = $3",
+		"namespace = $4",
+	}
+	nextArg := 5
+	if input.Type != "" {
+		conditions = append(conditions, fmt.Sprintf("feedback_type = $%d", nextArg))
+		args = append(args, input.Type)
+		nextArg++
+	}
+	if !input.IncludeSuperseded {
+		conditions = append(conditions, "superseded_at IS NULL")
+	}
+
+	args = append(args, input.Limit)
+	query := fmt.Sprintf(`
+SELECT
+	id,
+	insight_id,
+	tenant,
+	project,
+	namespace,
+	feedback_type,
+	actor,
+	reason,
+	quality_score,
+	created_at,
+	superseded_at,
+	superseded_by_actor,
+	superseded_by_reason,
+	request_id,
+	metadata
+FROM derived_insight_feedback
+WHERE %s
+ORDER BY created_at DESC
+LIMIT $%d
+`, strings.Join(conditions, "\n\tAND "), nextArg)
+
+	rows, err := r.db.Query(ctx, query, args...)
+	if err != nil {
+		return nil, fmt.Errorf("list derived insight feedback: %w", err)
+	}
+	defer rows.Close()
+
+	items := make([]memory.DerivedInsightFeedback, 0)
+	for rows.Next() {
+		item, err := scanDerivedInsightFeedback(rows)
+		if err != nil {
+			return nil, err
+		}
+		items = append(items, item)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("iterate derived insight feedback: %w", err)
+	}
+
+	return items, nil
+}
+
+func (r *Repository) ReadDerivedInsightFeedback(ctx context.Context, input memory.ReadDerivedInsightFeedbackInput) (memory.DerivedInsightFeedback, error) {
+	if err := input.Validate(); err != nil {
+		return memory.DerivedInsightFeedback{}, err
+	}
+
+	const query = `
+SELECT
+	id,
+	insight_id,
+	tenant,
+	project,
+	namespace,
+	feedback_type,
+	actor,
+	reason,
+	quality_score,
+	created_at,
+	superseded_at,
+	superseded_by_actor,
+	superseded_by_reason,
+	request_id,
+	metadata
+FROM derived_insight_feedback
+WHERE id = $1
+	AND tenant = $2
+	AND project = $3
+	AND namespace = $4
+`
+
+	feedback, err := scanDerivedInsightFeedback(r.db.QueryRow(ctx, query, input.FeedbackID, input.Scope.Tenant, input.Scope.Project, input.Scope.Namespace))
+	if err != nil {
+		return memory.DerivedInsightFeedback{}, fmt.Errorf("read derived insight feedback: %w", err)
+	}
+	return feedback, nil
+}
+
+func (r *Repository) SupersedeDerivedInsightFeedback(ctx context.Context, input memory.SupersedeDerivedInsightFeedbackInput) error {
+	if err := input.Validate(); err != nil {
+		return err
+	}
+
+	const query = `
+UPDATE derived_insight_feedback
+SET superseded_at = $1,
+	superseded_by_actor = $2,
+	superseded_by_reason = $3
+WHERE id = $4
+	AND tenant = $5
+	AND project = $6
+	AND namespace = $7
+	AND superseded_at IS NULL
+`
+
+	tag, err := r.db.Exec(ctx, query, input.SupersededAt, input.Actor, input.Reason, input.FeedbackID, input.Scope.Tenant, input.Scope.Project, input.Scope.Namespace)
+	if err != nil {
+		return fmt.Errorf("supersede derived insight feedback: %w", err)
+	}
+	if tag.RowsAffected() == 0 {
+		return fmt.Errorf("derived insight feedback not found or already superseded")
+	}
+	return nil
+}
+
+func (r *Repository) SummarizeDerivedInsightFeedback(ctx context.Context, input memory.SummarizeDerivedInsightFeedbackInput) (memory.DerivedInsightFeedbackSummary, error) {
+	if err := input.Validate(); err != nil {
+		return memory.DerivedInsightFeedbackSummary{}, err
+	}
+
+	items, err := r.ListDerivedInsightFeedback(ctx, memory.ListDerivedInsightFeedbackInput{
+		Scope:     input.Scope,
+		InsightID: input.InsightID,
+		Limit:     100,
+	})
+	if err != nil {
+		return memory.DerivedInsightFeedbackSummary{}, err
+	}
+	return memory.SummarizeDerivedInsightFeedback(items), nil
 }
 
 func (r *Repository) ListFailureEvidence(ctx context.Context, scope memory.Scope, limit int) ([]insights.FailureEvidence, error) {
@@ -844,6 +1078,51 @@ func scanDerivedInsightLifecycleRecord(scanner derivedInsightScanner) (memory.De
 		}
 	}
 	return record, nil
+}
+
+func scanDerivedInsightFeedback(scanner derivedInsightScanner) (memory.DerivedInsightFeedback, error) {
+	var feedback memory.DerivedInsightFeedback
+	var qualityScore sql.NullFloat64
+	var supersededAt sql.NullTime
+	var supersededByActor sql.NullString
+	var supersededByReason sql.NullString
+	var requestID sql.NullString
+	var metadata []byte
+
+	if err := scanner.Scan(
+		&feedback.ID,
+		&feedback.InsightID,
+		&feedback.Scope.Tenant,
+		&feedback.Scope.Project,
+		&feedback.Scope.Namespace,
+		&feedback.Type,
+		&feedback.Actor,
+		&feedback.Reason,
+		&qualityScore,
+		&feedback.CreatedAt,
+		&supersededAt,
+		&supersededByActor,
+		&supersededByReason,
+		&requestID,
+		&metadata,
+	); err != nil {
+		return memory.DerivedInsightFeedback{}, err
+	}
+	if qualityScore.Valid {
+		feedback.QualityScore = &qualityScore.Float64
+	}
+	if supersededAt.Valid {
+		feedback.SupersededAt = supersededAt.Time
+	}
+	feedback.SupersededByActor = supersededByActor.String
+	feedback.SupersededByReason = supersededByReason.String
+	feedback.RequestID = requestID.String
+	if len(metadata) > 0 {
+		if err := json.Unmarshal(metadata, &feedback.Metadata); err != nil {
+			return memory.DerivedInsightFeedback{}, fmt.Errorf("unmarshal derived insight feedback metadata: %w", err)
+		}
+	}
+	return feedback, nil
 }
 
 func scanFailureEvidence(scanner derivedInsightScanner) (insights.FailureEvidence, error) {

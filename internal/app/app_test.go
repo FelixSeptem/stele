@@ -621,8 +621,8 @@ func TestBuildSchedulerRuntimeAssemblesMaintenanceScheduler(t *testing.T) {
 		t.Fatalf("runtime scheduler type = %T, want jobs.MaintenanceScheduler", runtime.scheduler)
 	}
 
-	if len(scheduler.Jobs) != 5 {
-		t.Fatalf("len(scheduler.Jobs) = %d, want 5", len(scheduler.Jobs))
+	if len(scheduler.Jobs) != 6 {
+		t.Fatalf("len(scheduler.Jobs) = %d, want 6", len(scheduler.Jobs))
 	}
 }
 
@@ -671,8 +671,8 @@ func TestBuildSchedulerRuntimeAssemblesScopeDispatchJobs(t *testing.T) {
 		t.Fatalf("runtime scheduler type = %T, want jobs.MaintenanceScheduler", runtime.scheduler)
 	}
 
-	if len(scheduler.Jobs) != 5 {
-		t.Fatalf("len(scheduler.Jobs) = %d, want 5", len(scheduler.Jobs))
+	if len(scheduler.Jobs) != 6 {
+		t.Fatalf("len(scheduler.Jobs) = %d, want 6", len(scheduler.Jobs))
 	}
 
 	dispatchA, ok := scheduler.Jobs[0].(jobs.ScopeDispatchJob)
@@ -695,12 +695,17 @@ func TestBuildSchedulerRuntimeAssemblesScopeDispatchJobs(t *testing.T) {
 		t.Fatalf("scheduler.Jobs[3] type = %T, want jobs.ScopeDispatchJob", scheduler.Jobs[3])
 	}
 
-	if dispatchA.ScopeBatchLimit != 25 || dispatchB.ScopeBatchLimit != 25 || dispatchC.ScopeBatchLimit != 25 || dispatchD.ScopeBatchLimit != 25 {
-		t.Fatalf("scope batch limits = (%d, %d, %d, %d), want 25", dispatchA.ScopeBatchLimit, dispatchB.ScopeBatchLimit, dispatchC.ScopeBatchLimit, dispatchD.ScopeBatchLimit)
+	dispatchE, ok := scheduler.Jobs[4].(jobs.ScopeDispatchJob)
+	if !ok {
+		t.Fatalf("scheduler.Jobs[4] type = %T, want jobs.ScopeDispatchJob", scheduler.Jobs[4])
 	}
 
-	if dispatchA.FallbackScope.Namespace != "namespace-a" || dispatchB.FallbackScope.Namespace != "namespace-a" || dispatchC.FallbackScope.Namespace != "namespace-a" || dispatchD.FallbackScope.Namespace != "namespace-a" {
-		t.Fatalf("fallback scopes = (%+v, %+v, %+v, %+v), want default namespace", dispatchA.FallbackScope, dispatchB.FallbackScope, dispatchC.FallbackScope, dispatchD.FallbackScope)
+	if dispatchA.ScopeBatchLimit != 25 || dispatchB.ScopeBatchLimit != 25 || dispatchC.ScopeBatchLimit != 25 || dispatchD.ScopeBatchLimit != 25 || dispatchE.ScopeBatchLimit != 25 {
+		t.Fatalf("scope batch limits = (%d, %d, %d, %d, %d), want 25", dispatchA.ScopeBatchLimit, dispatchB.ScopeBatchLimit, dispatchC.ScopeBatchLimit, dispatchD.ScopeBatchLimit, dispatchE.ScopeBatchLimit)
+	}
+
+	if dispatchA.FallbackScope.Namespace != "namespace-a" || dispatchB.FallbackScope.Namespace != "namespace-a" || dispatchC.FallbackScope.Namespace != "namespace-a" || dispatchD.FallbackScope.Namespace != "namespace-a" || dispatchE.FallbackScope.Namespace != "namespace-a" {
+		t.Fatalf("fallback scopes = (%+v, %+v, %+v, %+v, %+v), want default namespace", dispatchA.FallbackScope, dispatchB.FallbackScope, dispatchC.FallbackScope, dispatchD.FallbackScope, dispatchE.FallbackScope)
 	}
 
 	if dispatchA.NameValue != "embedding_rebuild_dispatch" {
@@ -729,8 +734,20 @@ func TestBuildSchedulerRuntimeAssemblesScopeDispatchJobs(t *testing.T) {
 		t.Fatalf("derived insight job cadence/limit/minimum = %v/%d/%d, want 45s/55/3", derivedInsightJob.Cadence, derivedInsightJob.Limit, derivedInsightJob.MinimumEvidence)
 	}
 
-	if _, ok := scheduler.Jobs[4].(jobs.JobExecutionCleanupJob); !ok {
-		t.Fatalf("scheduler.Jobs[4] type = %T, want jobs.JobExecutionCleanupJob", scheduler.Jobs[4])
+	if dispatchE.NameValue != "derived_insight_replay_execution_dispatch" {
+		t.Fatalf("scheduler.Jobs[4].NameValue = %q, want derived_insight_replay_execution_dispatch", dispatchE.NameValue)
+	}
+
+	replayJob, ok := dispatchE.Dispatch(dispatchE.FallbackScope).(jobs.DerivedInsightReplayExecutionJob)
+	if !ok {
+		t.Fatalf("dispatchE.Dispatch(...) type = %T, want jobs.DerivedInsightReplayExecutionJob", dispatchE.Dispatch(dispatchE.FallbackScope))
+	}
+	if replayJob.Cadence != 45*time.Second || replayJob.Limit != 55 {
+		t.Fatalf("replay job cadence/limit = %v/%d, want 45s/55", replayJob.Cadence, replayJob.Limit)
+	}
+
+	if _, ok := scheduler.Jobs[5].(jobs.JobExecutionCleanupJob); !ok {
+		t.Fatalf("scheduler.Jobs[5] type = %T, want jobs.JobExecutionCleanupJob", scheduler.Jobs[5])
 	}
 }
 

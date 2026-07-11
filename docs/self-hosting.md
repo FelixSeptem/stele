@@ -139,6 +139,154 @@ docker run --rm -p 8080:8080 \
 
 ## Smoke Check
 
+### First-ten-minutes operational loop
+
+Use this loop after `docker compose up --build -d` to prove the self-hosted `api`, `worker`, and `scheduler` modes are wired end to end. The loop uses explicit scope headers throughout; do not omit them or reuse data from another namespace.
+
+Smoke fixture scope:
+
+```text
+tenant=tenant-a
+project=project-a
+namespace=namespace-a
+public_api_key=dev-public-key
+admin_api_key=dev-admin-key
+actor=operator-a
+```
+
+1. Confirm process liveness and readiness:
+
+```bash
+curl http://localhost:8080/livez
+curl http://localhost:8080/readyz
+```
+
+2. Ingest scoped smoke fixture events. The repeated `smoke.provider_failure` events create eligible evidence for derived insight derivation and replay; `smoke.operator_recovery` gives later retrieval and context assembly an operator-resolution phrase to find.
+
+```bash
+curl -X POST http://localhost:8080/v1/events \
+  -H 'Content-Type: application/json' \
+  -H 'X-API-Key: dev-public-key' \
+  -H 'X-Stele-Tenant: tenant-a' \
+  -H 'X-Stele-Project: project-a' \
+  -H 'X-Stele-Namespace: namespace-a' \
+  -d '{"event_type":"smoke.provider_failure","content":"smoke fixture: embedding provider unavailable during rebuild attempt","source_timestamp":"2026-07-11T00:00:00Z"}'
+
+curl -X POST http://localhost:8080/v1/events \
+  -H 'Content-Type: application/json' \
+  -H 'X-API-Key: dev-public-key' \
+  -H 'X-Stele-Tenant: tenant-a' \
+  -H 'X-Stele-Project: project-a' \
+  -H 'X-Stele-Namespace: namespace-a' \
+  -d '{"event_type":"smoke.provider_failure","content":"smoke fixture: embedding provider unavailable during rebuild retry","source_timestamp":"2026-07-11T00:01:00Z"}'
+
+curl -X POST http://localhost:8080/v1/events \
+  -H 'Content-Type: application/json' \
+  -H 'X-API-Key: dev-public-key' \
+  -H 'X-Stele-Tenant: tenant-a' \
+  -H 'X-Stele-Project: project-a' \
+  -H 'X-Stele-Namespace: namespace-a' \
+  -d '{"event_type":"smoke.operator_recovery","content":"smoke fixture: operator waits for provider recovery before retrying rebuilds","source_timestamp":"2026-07-11T00:02:00Z"}'
+```
+
+3. Inspect worker and scheduler progress without querying PostgreSQL directly:
+
+```bash
+curl http://localhost:8080/v1/admin/jobs/governance/status \
+  -H 'X-API-Key: dev-admin-key'
+
+curl 'http://localhost:8080/v1/admin/jobs/status?limit=10' \
+  -H 'X-API-Key: dev-admin-key' \
+  -H 'X-Stele-Tenant: tenant-a' \
+  -H 'X-Stele-Project: project-a' \
+  -H 'X-Stele-Namespace: namespace-a'
+```
+
+If governance remains pending, inspect worker logs and `STELE_POSTGRES_DSN`. If scheduler executions are absent, verify the `scheduler` process is running and that `STELE_AUTH_DEFAULT_TENANT`, `STELE_AUTH_DEFAULT_PROJECT`, and `STELE_AUTH_DEFAULT_NAMESPACE` match the fixture scope.
+
+4. Verify retrieval and context assembly. The diagnostics flag is safe for this authenticated request and returns category/count explanations such as `included`, `omitted_by_budget`, `omitted_by_quality`, or `hidden_by_lifecycle_or_scope`.
+
+```bash
+curl -X POST http://localhost:8080/v1/memories/search \
+  -H 'Content-Type: application/json' \
+  -H 'X-API-Key: dev-public-key' \
+  -H 'X-Stele-Tenant: tenant-a' \
+  -H 'X-Stele-Project: project-a' \
+  -H 'X-Stele-Namespace: namespace-a' \
+  -d '{"query":"provider recovery rebuild","top_k":5,"include_summaries":true,"include_relations":true}'
+
+curl -X POST http://localhost:8080/v1/context/assemble \
+  -H 'Content-Type: application/json' \
+  -H 'X-API-Key: dev-public-key' \
+  -H 'X-Stele-Tenant: tenant-a' \
+  -H 'X-Stele-Project: project-a' \
+  -H 'X-Stele-Namespace: namespace-a' \
+  -d '{"query":"avoid repeated provider rebuild failures","budget":6,"include_experience_insights":true,"include_diagnostics":true}'
+```
+
+5. Run bounded derived insight replay dry-run. This previews replay decisions without mutating derived insights or canonical memory.
+
+```bash
+curl -X POST http://localhost:8080/v1/admin/derived-insight-replays:dry-run \
+  -H 'Content-Type: application/json' \
+  -H 'X-API-Key: dev-admin-key' \
+  -H 'X-Stele-Tenant: tenant-a' \
+  -H 'X-Stele-Project: project-a' \
+  -H 'X-Stele-Namespace: namespace-a' \
+  -d '{"insight_types":["failure_pattern","lesson"],"evidence_window_start":"2026-07-11T00:00:00Z","evidence_window_end":"2026-07-11T00:10:00Z","evidence_limit":20,"actor":"operator-a","reason":"first-ten-minutes smoke replay dry-run"}'
+```
+
+Expected report shape includes `counters.evidence_evaluated`, decision categories such as `create` or `skip`, and stable reason codes such as `repeated_evidence` or `insufficient_evidence`.
+
+6. Queue bounded replay apply and inspect the durable run. Apply returns a replay run id; broad mutations are executed later by scheduler-owned background work.
+
+```bash
+curl -X POST http://localhost:8080/v1/admin/derived-insight-replays \
+  -H 'Content-Type: application/json' \
+  -H 'X-API-Key: dev-admin-key' \
+  -H 'X-Stele-Tenant: tenant-a' \
+  -H 'X-Stele-Project: project-a' \
+  -H 'X-Stele-Namespace: namespace-a' \
+  -d '{"insight_types":["failure_pattern","lesson"],"evidence_window_start":"2026-07-11T00:00:00Z","evidence_window_end":"2026-07-11T00:10:00Z","evidence_limit":20,"actor":"operator-a","reason":"first-ten-minutes smoke replay apply","idempotency_key":"smoke-replay-tenant-a-project-a-namespace-a"}'
+
+curl 'http://localhost:8080/v1/admin/derived-insight-replays?mode=apply&limit=10' \
+  -H 'X-API-Key: dev-admin-key' \
+  -H 'X-Stele-Tenant: tenant-a' \
+  -H 'X-Stele-Project: project-a' \
+  -H 'X-Stele-Namespace: namespace-a'
+
+curl http://localhost:8080/v1/admin/derived-insight-replays/<replay-run-id>/report \
+  -H 'X-API-Key: dev-admin-key' \
+  -H 'X-Stele-Tenant: tenant-a' \
+  -H 'X-Stele-Project: project-a' \
+  -H 'X-Stele-Namespace: namespace-a'
+```
+
+If the run stays `pending`, verify scheduler mode is running and inspect `derived_insight_replay_execution` in `/v1/admin/jobs/status`. If the run is `failed`, read the replay report first; it contains partial counters and failure summary. If the run is `continuation_required`, repeat replay with a later bounded window or adjusted `evidence_limit`.
+
+7. Confirm replay output can become context-visible only through ordinary lifecycle, quality, scope, and budget rules:
+
+```bash
+curl -X POST http://localhost:8080/v1/context/assemble \
+  -H 'Content-Type: application/json' \
+  -H 'X-API-Key: dev-public-key' \
+  -H 'X-Stele-Tenant: tenant-a' \
+  -H 'X-Stele-Project: project-a' \
+  -H 'X-Stele-Namespace: namespace-a' \
+  -d '{"query":"avoid repeated provider rebuild failures","budget":8,"include_experience_insights":true,"include_diagnostics":true}'
+```
+
+Successful replay visibility is shown by `known_failures` or `experience_lessons` entries with citations. Absence is not automatically a failure; use `diagnostics` to distinguish budget pressure, quality ranking, lifecycle hiding, or lack of eligible evidence.
+
+8. Scrape metrics for low-cardinality replay and smoke signals:
+
+```bash
+curl http://localhost:8080/metrics | grep 'stele_derived_insight_replay_total'
+curl http://localhost:8080/metrics | grep 'stele_operations_total'
+```
+
+Replay metrics use labels such as `mode`, `result`, `insight_type`, `decision`, and `reason`. They intentionally exclude tenant, project, namespace, replay run id, insight id, actor, reason text, and raw error messages.
+
 ### Baseline startup
 
 1. Check liveness:
@@ -447,7 +595,15 @@ Privileged derived insight inspection routes:
 
 - `GET /v1/admin/derived-insights`
 - `GET /v1/admin/derived-insights/{insight_id}`
+- `GET /v1/admin/derived-insights/{insight_id}/feedback`
+- `POST /v1/admin/derived-insights/{insight_id}/feedback`
+- `POST /v1/admin/derived-insight-feedback/{feedback_id}:supersede`
 - `POST /v1/admin/derived-insights/{insight_id}:suppress`
+- `POST /v1/admin/derived-insight-replays:dry-run`
+- `GET /v1/admin/derived-insight-replays`
+- `POST /v1/admin/derived-insight-replays`
+- `GET /v1/admin/derived-insight-replays/{replay_run_id}`
+- `GET /v1/admin/derived-insight-replays/{replay_run_id}/report`
 
 Privileged manual mutation and lifecycle actions require:
 
@@ -471,6 +627,12 @@ Privileged derived insight suppression uses the same admin boundary and requires
 
 - `actor` in the JSON body
 - `reason` in the JSON body
+
+Privileged derived insight feedback uses the same admin boundary and requires:
+
+- `actor` in the JSON body
+- `reason` in the JSON body
+- bounded `type` values: `useful`, `noisy`, `incorrect`, `stale`, `redundant`, or `needs_review`
 
 Governance recovery query filters:
 
@@ -512,8 +674,13 @@ Governance recovery notes:
 - `hypothesis`, `goal`, `contradiction`, and `causal_link` are reserved vocabulary only in this phase. Stele does not autonomously infer or activate those types.
 - Derivation is asynchronous. Ingest, manual mutation, retrieval, and context assembly requests do not run failure pattern derivation in the foreground.
 - Default context assembly excludes derived insights. Callers must set `include_experience_insights=true` on `POST /v1/context/assemble` to request `known_failures` and `experience_lessons` sections.
+- Authenticated callers can set `include_diagnostics=true` on `POST /v1/context/assemble` to receive category/count diagnostics for included, budget-omitted, quality-omitted, and lifecycle-hidden experience insight sections.
 - Suppressed, forgotten, deleted, and out-of-scope insights are excluded from context assembly. Admin inspection can still read hidden insight state, evidence, and lifecycle history with `include_hidden=true`.
 - `POST /v1/admin/derived-insights/{insight_id}:suppress` records an audited lifecycle transition and preserves linked evidence history.
+- Operators can record quality feedback for derived insights without rewriting the insight body or deleting evidence. Active feedback summaries are included in admin insight detail responses and are used by scheduler derivation and optional context assembly ranking.
+- Feedback-driven policy can suppress noisy or incorrect insights through an audited lifecycle transition. A single feedback record is not a destructive delete and can be superseded while remaining visible in feedback history.
+- Feedback metrics are exposed through `/metrics` as low-cardinality `stele_insight_feedback_total` series. Labels intentionally exclude tenant, project, namespace, insight id, actor, and reason text.
+- Replay metrics are exposed through `/metrics` as low-cardinality `stele_derived_insight_replay_total` series. Labels intentionally exclude tenant, project, namespace, replay run id, insight id, actor, reason text, and raw error messages.
 - This feature does not add MCP tools, a reasoning-provider abstraction, SDK behavior, UI behavior, global agent-self namespaces, or autonomous causal or goal inference.
 
 Derived insight inspection example:
@@ -535,7 +702,7 @@ curl -X POST http://localhost:8080/v1/context/assemble \
   -H 'X-Stele-Tenant: tenant-a' \
   -H 'X-Stele-Project: project-a' \
   -H 'X-Stele-Namespace: namespace-a' \
-  -d '{"query":"prepare the next embedding rebuild run","budget":6,"include_experience_insights":true}'
+  -d '{"query":"prepare the next embedding rebuild run","budget":6,"include_experience_insights":true,"include_diagnostics":true}'
 ```
 
 Derived insight suppression example:
@@ -548,6 +715,40 @@ curl -X POST http://localhost:8080/v1/admin/derived-insights/<insight-id>:suppre
   -H 'X-Stele-Project: project-a' \
   -H 'X-Stele-Namespace: namespace-a' \
   -d '{"actor":"operator-a","reason":"noisy duplicate"}'
+```
+
+Derived insight feedback example:
+
+```bash
+curl -X POST http://localhost:8080/v1/admin/derived-insights/<insight-id>/feedback \
+  -H 'Content-Type: application/json' \
+  -H 'X-API-Key: dev-admin-key' \
+  -H 'X-Stele-Tenant: tenant-a' \
+  -H 'X-Stele-Project: project-a' \
+  -H 'X-Stele-Namespace: namespace-a' \
+  -d '{"type":"noisy","actor":"operator-a","reason":"too broad for context assembly","quality_score":0.2}'
+```
+
+Derived insight feedback history example:
+
+```bash
+curl 'http://localhost:8080/v1/admin/derived-insights/<insight-id>/feedback?include_superseded=true&limit=20' \
+  -H 'X-API-Key: dev-admin-key' \
+  -H 'X-Stele-Tenant: tenant-a' \
+  -H 'X-Stele-Project: project-a' \
+  -H 'X-Stele-Namespace: namespace-a'
+```
+
+Derived insight feedback supersession example:
+
+```bash
+curl -X POST http://localhost:8080/v1/admin/derived-insight-feedback/<feedback-id>:supersede \
+  -H 'Content-Type: application/json' \
+  -H 'X-API-Key: dev-admin-key' \
+  -H 'X-Stele-Tenant: tenant-a' \
+  -H 'X-Stele-Project: project-a' \
+  -H 'X-Stele-Namespace: namespace-a' \
+  -d '{"actor":"operator-b","reason":"replaced by more accurate review"}'
 ```
 
 ## Embedding Lifecycle
@@ -884,4 +1085,4 @@ curl 'http://localhost:8080/v1/admin/memories/<memory-id>/embedding/recovery-his
 - Active embedding cutovers are advanced by the scheduler in bounded waves before the normal lifecycle discovery pass, so provider migrations reuse the same durable rebuild execution path as drift correction.
 - Summary compaction and retention sweep are dispatched per eligible discovered scope, with the configured default scope used only as a fallback when discovery returns none.
 - Job execution cleanup remains runtime-global and runs once per cadence window instead of being fanned out per discovered scope.
-- Telemetry hook points are wired for ingest, governance worker execution, retrieval, forgetting, governance backlog inspection, embedding admission decisions, cutover state snapshots, provider readiness probes, scheduler wave dispatch, and embedding rebuild backlog plus execution inspection. The default runtime installs a Prometheus-style in-process metrics observer for the API metrics endpoint.
+- Telemetry hook points are wired for ingest, governance worker execution, retrieval, forgetting, governance backlog inspection, derived insight feedback, embedding admission decisions, cutover state snapshots, provider readiness probes, scheduler wave dispatch, and embedding rebuild backlog plus execution inspection. The default runtime installs a Prometheus-style in-process metrics observer for the API metrics endpoint.

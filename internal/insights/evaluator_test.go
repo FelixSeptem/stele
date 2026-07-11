@@ -173,6 +173,63 @@ func TestProjectLessonRequiresFailurePatternSource(t *testing.T) {
 	}
 }
 
+func TestApplyFeedbackPolicySuppressesStrongNegativeInsight(t *testing.T) {
+	pattern := activeFailurePatternForTest()
+	summary := memory.DerivedInsightFeedbackSummary{
+		InsightID:     pattern.ID,
+		Counts:        map[memory.InsightFeedbackType]int{memory.InsightFeedbackTypeNoisy: 2},
+		TotalActive:   2,
+		NegativeCount: 2,
+	}
+
+	got, decision := ApplyFeedbackPolicy(pattern, summary)
+	if got.State != memory.DerivedInsightStateSuppressed {
+		t.Fatalf("state = %s, want suppressed", got.State)
+	}
+	if decision != FeedbackPolicyDecisionSuppress {
+		t.Fatalf("decision = %s, want suppress", decision)
+	}
+	if got.Derivation.Metadata["feedback_policy_decision"] != string(FeedbackPolicyDecisionSuppress) {
+		t.Fatalf("metadata = %+v, want feedback policy decision", got.Derivation.Metadata)
+	}
+}
+
+func TestApplyFeedbackPolicyMarksNeedsReviewAsCandidate(t *testing.T) {
+	pattern := activeFailurePatternForTest()
+	summary := memory.DerivedInsightFeedbackSummary{
+		InsightID:   pattern.ID,
+		Counts:      map[memory.InsightFeedbackType]int{memory.InsightFeedbackTypeNeedsReview: 1},
+		TotalActive: 1,
+		NeedsReview: true,
+	}
+
+	got, decision := ApplyFeedbackPolicy(pattern, summary)
+	if got.State != memory.DerivedInsightStateCandidate {
+		t.Fatalf("state = %s, want candidate", got.State)
+	}
+	if decision != FeedbackPolicyDecisionNeedsReview {
+		t.Fatalf("decision = %s, want needs_review", decision)
+	}
+}
+
+func TestApplyFeedbackPolicyPreservesUsefulInsight(t *testing.T) {
+	pattern := activeFailurePatternForTest()
+	summary := memory.DerivedInsightFeedbackSummary{
+		InsightID:     pattern.ID,
+		Counts:        map[memory.InsightFeedbackType]int{memory.InsightFeedbackTypeUseful: 1},
+		TotalActive:   1,
+		PositiveCount: 1,
+	}
+
+	got, decision := ApplyFeedbackPolicy(pattern, summary)
+	if got.State != memory.DerivedInsightStateActive {
+		t.Fatalf("state = %s, want active", got.State)
+	}
+	if decision != FeedbackPolicyDecisionPreserve {
+		t.Fatalf("decision = %s, want preserve", decision)
+	}
+}
+
 func TestFailurePatternFingerprintIncludesScopeKindKeyAndWindow(t *testing.T) {
 	scope := memory.Scope{Tenant: "tenant-a", Project: "project-a", Namespace: "namespace-a"}
 	windowStart := time.Date(2026, 7, 4, 0, 0, 0, 0, time.UTC)
@@ -190,5 +247,29 @@ func TestFailurePatternFingerprintIncludesScopeKindKeyAndWindow(t *testing.T) {
 	}
 	if first != FailurePatternFingerprint(scope, memory.DerivedInsightEvidenceKindJobExecution, "provider_unavailable", windowStart, windowEnd) {
 		t.Fatal("fingerprint did not normalize equivalent failure keys")
+	}
+}
+
+func activeFailurePatternForTest() memory.DerivedInsight {
+	return memory.DerivedInsight{
+		ID:      "insight_123",
+		Scope:   memory.Scope{Tenant: "tenant-a", Project: "project-a", Namespace: "namespace-a"},
+		Type:    memory.DerivedInsightTypeFailurePattern,
+		State:   memory.DerivedInsightStateActive,
+		Title:   "Provider unavailable repeatedly",
+		Summary: "Provider unavailable caused repeated failures.",
+		Confidence: memory.DerivedInsightConfidence{
+			Score: 0.75,
+		},
+		Derivation: memory.DerivedInsightDerivation{
+			Source:      "failure_pattern_evaluator",
+			Fingerprint: "failure_pattern:fingerprint",
+			DerivedAt:   time.Date(2026, 7, 4, 12, 0, 0, 0, time.UTC),
+			Metadata:    map[string]any{},
+		},
+		Evidence: []memory.DerivedInsightEvidenceRef{
+			{Kind: memory.DerivedInsightEvidenceKindJobExecution, ID: "job_1", Relation: memory.DerivedInsightEvidenceRelationSupports},
+			{Kind: memory.DerivedInsightEvidenceKindJobExecution, ID: "job_2", Relation: memory.DerivedInsightEvidenceRelationSupports},
+		},
 	}
 }

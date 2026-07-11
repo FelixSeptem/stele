@@ -27,24 +27,27 @@ type ReadinessChecker interface {
 }
 
 type HTTPDependencies struct {
-	Readiness             ReadinessChecker
-	APIKeys               auth.StaticAPIKeys
-	AdminAPIKeys          auth.StaticAPIKeys
-	EventIngestor         memory.EventIngestor
-	MemoryQuery           MemoryQueryService
-	MemoryLifecycleAction MemoryLifecycleActionService
-	MemoryManualMutation  ManualMemoryMutationService
-	EmbeddingAdminRead    EmbeddingAdminQueryService
-	MemorySearcher        retrieval.MemorySearcher
-	ContextAssembler      retrieval.ContextAssembler
-	GovernanceStatusRead  GovernanceStatusReader
-	GovernanceAdmin       GovernanceAdminService
-	DerivedInsightAdmin   DerivedInsightAdminService
-	MemoryHistoryRead     MemoryHistoryReader
-	JobExecutionRead      JobExecutionReader
-	Metrics               MetricsRecorder
-	Logger                *log.Logger
+	Readiness                 ReadinessChecker
+	APIKeys                   auth.StaticAPIKeys
+	AdminAPIKeys              auth.StaticAPIKeys
+	EventIngestor             memory.EventIngestor
+	MemoryQuery               MemoryQueryService
+	MemoryLifecycleAction     MemoryLifecycleActionService
+	MemoryManualMutation      ManualMemoryMutationService
+	EmbeddingAdminRead        EmbeddingAdminQueryService
+	MemorySearcher            retrieval.MemorySearcher
+	ContextAssembler          retrieval.ContextAssembler
+	GovernanceStatusRead      GovernanceStatusReader
+	GovernanceAdmin           GovernanceAdminService
+	DerivedInsightAdmin       DerivedInsightAdminService
+	DerivedInsightReplayAdmin DerivedInsightReplayAdminService
+	MemoryHistoryRead         MemoryHistoryReader
+	JobExecutionRead          JobExecutionReader
+	Metrics                   MetricsRecorder
+	Logger                    *log.Logger
 }
+
+type requestIDContextKey struct{}
 
 type GovernanceStatus = jobs.GovernanceStatus
 
@@ -78,6 +81,17 @@ type DerivedInsightAdminService interface {
 	ListDerivedInsights(ctx context.Context, input memory.ListDerivedInsightsInput) ([]memory.DerivedInsight, error)
 	ReadDerivedInsight(ctx context.Context, input memory.ReadDerivedInsightInput) (memory.DerivedInsightDetail, error)
 	TransitionDerivedInsightLifecycle(ctx context.Context, transition memory.DerivedInsightLifecycleTransition) error
+	CreateDerivedInsightFeedback(ctx context.Context, input memory.CreateDerivedInsightFeedbackInput) (memory.DerivedInsightFeedback, error)
+	ListDerivedInsightFeedback(ctx context.Context, input memory.ListDerivedInsightFeedbackInput) ([]memory.DerivedInsightFeedback, error)
+	SupersedeDerivedInsightFeedback(ctx context.Context, input memory.SupersedeDerivedInsightFeedbackInput) error
+}
+
+type DerivedInsightReplayAdminService interface {
+	PlanDerivedInsightReplay(ctx context.Context, input memory.DerivedInsightReplayRequest) (memory.DerivedInsightReplayReport, error)
+	ApplyDerivedInsightReplay(ctx context.Context, input memory.DerivedInsightReplayRequest) (memory.DerivedInsightReplayRun, error)
+	ListDerivedInsightReplayRuns(ctx context.Context, input memory.ListDerivedInsightReplayRunsInput) ([]memory.DerivedInsightReplayRun, error)
+	ReadDerivedInsightReplayRun(ctx context.Context, input memory.ReadDerivedInsightReplayRunInput) (memory.DerivedInsightReplayRun, error)
+	ReadDerivedInsightReplayReport(ctx context.Context, input memory.ReadDerivedInsightReplayRunInput) (memory.DerivedInsightReplayReport, error)
 }
 
 type ManualMemoryMutationService interface {
@@ -108,6 +122,7 @@ type MetricsRecorder interface {
 	RecordAdmission(ctx context.Context, event telemetry.AdmissionEvent)
 	RecordCutoverPlanState(ctx context.Context, event telemetry.CutoverPlanStateEvent)
 	RecordCutoverItemState(ctx context.Context, event telemetry.CutoverItemStateEvent)
+	RecordInsightFeedback(ctx context.Context, event telemetry.InsightFeedbackEvent)
 }
 
 type lifecycleActionRequest struct {
@@ -117,6 +132,30 @@ type lifecycleActionRequest struct {
 type derivedInsightSuppressRequest struct {
 	Actor  string `json:"actor"`
 	Reason string `json:"reason"`
+}
+
+type derivedInsightFeedbackCreateRequest struct {
+	Type         memory.InsightFeedbackType `json:"type"`
+	Actor        string                     `json:"actor"`
+	Reason       string                     `json:"reason"`
+	QualityScore *float64                   `json:"quality_score,omitempty"`
+	Metadata     map[string]any             `json:"metadata,omitempty"`
+}
+
+type derivedInsightFeedbackSupersedeRequest struct {
+	Actor  string `json:"actor"`
+	Reason string `json:"reason"`
+}
+
+type derivedInsightReplayRequest struct {
+	InsightTypes        []memory.DerivedInsightType `json:"insight_types"`
+	EvidenceWindowStart string                      `json:"evidence_window_start"`
+	EvidenceWindowEnd   string                      `json:"evidence_window_end"`
+	EvidenceLimit       int                         `json:"evidence_limit"`
+	Actor               string                      `json:"actor"`
+	Reason              string                      `json:"reason"`
+	IdempotencyKey      string                      `json:"idempotency_key"`
+	Metadata            map[string]any              `json:"metadata,omitempty"`
 }
 
 type governanceRecoveryRequest struct {
@@ -183,6 +222,7 @@ type contextAssembleRequest struct {
 	Budget                    int    `json:"budget"`
 	IncludeRelations          bool   `json:"include_relations"`
 	IncludeExperienceInsights bool   `json:"include_experience_insights"`
+	IncludeDiagnostics        bool   `json:"include_diagnostics"`
 }
 
 func NewHTTPHandler(deps HTTPDependencies) http.Handler {
@@ -364,6 +404,25 @@ func NewHTTPHandler(deps HTTPDependencies) http.Handler {
 	)
 	mux.Handle("GET /v1/admin/derived-insights/{insight_id}", adminDerivedInsightDetail)
 
+	adminDerivedInsightFeedback := auth.APIKeyMiddleware(deps.AdminAPIKeys)(
+		auth.ScopeMiddleware()(
+			http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				handleAdminDerivedInsightFeedback(w, r, deps.DerivedInsightAdmin, deps.Metrics)
+			}),
+		),
+	)
+	mux.Handle("GET /v1/admin/derived-insights/{insight_id}/feedback", adminDerivedInsightFeedback)
+	mux.Handle("POST /v1/admin/derived-insights/{insight_id}/feedback", adminDerivedInsightFeedback)
+
+	adminDerivedInsightFeedbackAction := auth.APIKeyMiddleware(deps.AdminAPIKeys)(
+		auth.ScopeMiddleware()(
+			http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				handleAdminDerivedInsightFeedbackAction(w, r, deps.DerivedInsightAdmin, deps.Metrics)
+			}),
+		),
+	)
+	mux.Handle("POST /v1/admin/derived-insight-feedback/{feedback_action}", adminDerivedInsightFeedbackAction)
+
 	adminDerivedInsightAction := auth.APIKeyMiddleware(deps.AdminAPIKeys)(
 		auth.ScopeMiddleware()(
 			http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -372,6 +431,43 @@ func NewHTTPHandler(deps HTTPDependencies) http.Handler {
 		),
 	)
 	mux.Handle("POST /v1/admin/derived-insights/{insight_action}", adminDerivedInsightAction)
+
+	adminDerivedInsightReplayDryRun := auth.APIKeyMiddleware(deps.AdminAPIKeys)(
+		auth.ScopeMiddleware()(
+			http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				handleAdminDerivedInsightReplayDryRun(w, r, deps.DerivedInsightReplayAdmin)
+			}),
+		),
+	)
+	mux.Handle("POST /v1/admin/derived-insight-replays:dry-run", adminDerivedInsightReplayDryRun)
+
+	adminDerivedInsightReplays := auth.APIKeyMiddleware(deps.AdminAPIKeys)(
+		auth.ScopeMiddleware()(
+			http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				handleAdminDerivedInsightReplays(w, r, deps.DerivedInsightReplayAdmin)
+			}),
+		),
+	)
+	mux.Handle("GET /v1/admin/derived-insight-replays", adminDerivedInsightReplays)
+	mux.Handle("POST /v1/admin/derived-insight-replays", adminDerivedInsightReplays)
+
+	adminDerivedInsightReplayDetail := auth.APIKeyMiddleware(deps.AdminAPIKeys)(
+		auth.ScopeMiddleware()(
+			http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				handleAdminDerivedInsightReplayDetail(w, r, deps.DerivedInsightReplayAdmin)
+			}),
+		),
+	)
+	mux.Handle("GET /v1/admin/derived-insight-replays/{replay_run_id}", adminDerivedInsightReplayDetail)
+
+	adminDerivedInsightReplayReport := auth.APIKeyMiddleware(deps.AdminAPIKeys)(
+		auth.ScopeMiddleware()(
+			http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				handleAdminDerivedInsightReplayReport(w, r, deps.DerivedInsightReplayAdmin)
+			}),
+		),
+	)
+	mux.Handle("GET /v1/admin/derived-insight-replays/{replay_run_id}/report", adminDerivedInsightReplayReport)
 
 	adminEmbeddingRebuilds := auth.APIKeyMiddleware(deps.AdminAPIKeys)(
 		auth.ScopeMiddleware()(
@@ -509,7 +605,8 @@ func requestMiddleware(next http.Handler, logger *log.Logger) http.Handler {
 			logger.Printf("mode=api component=http event=request_completed path=%s method=%s request_id=%s duration=%s", r.URL.Path, r.Method, requestID, time.Since(start))
 		}(time.Now())
 
-		next.ServeHTTP(w, r)
+		ctx := context.WithValue(r.Context(), requestIDContextKey{}, requestID)
+		next.ServeHTTP(w, r.WithContext(ctx))
 	})
 }
 
@@ -519,6 +616,15 @@ func requestIDFromHeader(value string) string {
 	}
 
 	return fmt.Sprintf("req_%08x", rand.Uint32())
+}
+
+func requestIDFromContext(ctx context.Context) string {
+	value, _ := ctx.Value(requestIDContextKey{}).(string)
+	return value
+}
+
+func newFeedbackID() string {
+	return "feedback_" + strings.TrimPrefix(newID(), "id_")
 }
 
 func handleEventIngest(w http.ResponseWriter, r *http.Request, ingestor memory.EventIngestor) {
@@ -799,6 +905,7 @@ func handleContextAssembly(w http.ResponseWriter, r *http.Request, assembler ret
 		Budget:                    req.Budget,
 		IncludeRelations:          req.IncludeRelations,
 		IncludeExperienceInsights: req.IncludeExperienceInsights,
+		IncludeDiagnostics:        req.IncludeDiagnostics,
 	})
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusBadRequest)
@@ -959,6 +1066,175 @@ func handleAdminDerivedInsightDetail(w http.ResponseWriter, r *http.Request, ser
 	writeJSON(w, http.StatusOK, detail)
 }
 
+func handleAdminDerivedInsightFeedback(w http.ResponseWriter, r *http.Request, service DerivedInsightAdminService, metrics MetricsRecorder) {
+	if service == nil {
+		http.Error(w, "derived insight admin service is not configured", http.StatusServiceUnavailable)
+		return
+	}
+
+	switch r.Method {
+	case http.MethodGet:
+		handleAdminDerivedInsightFeedbackList(w, r, service)
+	case http.MethodPost:
+		handleAdminDerivedInsightFeedbackCreate(w, r, service, metrics)
+	default:
+		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+	}
+}
+
+func handleAdminDerivedInsightFeedbackCreate(w http.ResponseWriter, r *http.Request, service DerivedInsightAdminService, metrics MetricsRecorder) {
+	scope, ok := auth.ScopeFromContext(r.Context())
+	if !ok {
+		http.Error(w, "scope context is missing", http.StatusInternalServerError)
+		return
+	}
+
+	var request derivedInsightFeedbackCreateRequest
+	if r.Body != nil {
+		defer r.Body.Close()
+		if err := json.NewDecoder(r.Body).Decode(&request); err != nil {
+			http.Error(w, "invalid JSON body", http.StatusBadRequest)
+			return
+		}
+	}
+
+	input := memory.CreateDerivedInsightFeedbackInput{
+		ID:           newFeedbackID(),
+		Scope:        scope,
+		InsightID:    r.PathValue("insight_id"),
+		Type:         request.Type,
+		Actor:        strings.TrimSpace(request.Actor),
+		Reason:       strings.TrimSpace(request.Reason),
+		QualityScore: request.QualityScore,
+		CreatedAt:    time.Now().UTC(),
+		RequestID:    requestIDFromContext(r.Context()),
+		Metadata:     request.Metadata,
+	}
+	if err := input.Validate(); err != nil {
+		http.Error(w, err.Error(), http.StatusBadRequest)
+		return
+	}
+
+	feedback, err := service.CreateDerivedInsightFeedback(r.Context(), input)
+	if err != nil {
+		recordInsightFeedbackMetric(r.Context(), metrics, "create", "error", string(input.Type), "unknown", "none")
+		if errors.Is(err, pgx.ErrNoRows) {
+			http.Error(w, "derived insight not found", http.StatusNotFound)
+			return
+		}
+		http.Error(w, "failed to create derived insight feedback", http.StatusInternalServerError)
+		return
+	}
+	recordInsightFeedbackMetric(r.Context(), metrics, "create", "ok", string(feedback.Type), "unknown", "none")
+
+	writeJSON(w, http.StatusCreated, feedback)
+}
+
+func handleAdminDerivedInsightFeedbackList(w http.ResponseWriter, r *http.Request, service DerivedInsightAdminService) {
+	scope, ok := auth.ScopeFromContext(r.Context())
+	if !ok {
+		http.Error(w, "scope context is missing", http.StatusInternalServerError)
+		return
+	}
+
+	limit := 20
+	if raw := strings.TrimSpace(r.URL.Query().Get("limit")); raw != "" {
+		parsed, err := strconv.Atoi(raw)
+		if err != nil || parsed <= 0 {
+			http.Error(w, "invalid limit", http.StatusBadRequest)
+			return
+		}
+		if parsed > 100 {
+			parsed = 100
+		}
+		limit = parsed
+	}
+
+	input := memory.ListDerivedInsightFeedbackInput{
+		Scope:     scope,
+		InsightID: r.PathValue("insight_id"),
+		Type:      memory.InsightFeedbackType(strings.TrimSpace(r.URL.Query().Get("type"))),
+		Limit:     limit,
+	}
+	if raw := strings.TrimSpace(r.URL.Query().Get("include_superseded")); raw != "" {
+		parsed, err := strconv.ParseBool(raw)
+		if err != nil {
+			http.Error(w, "invalid include_superseded", http.StatusBadRequest)
+			return
+		}
+		input.IncludeSuperseded = parsed
+	}
+	if err := input.Validate(); err != nil {
+		http.Error(w, err.Error(), http.StatusBadRequest)
+		return
+	}
+
+	items, err := service.ListDerivedInsightFeedback(r.Context(), input)
+	if err != nil {
+		http.Error(w, "failed to read derived insight feedback", http.StatusInternalServerError)
+		return
+	}
+
+	writeJSON(w, http.StatusOK, map[string]any{"items": items})
+}
+
+func handleAdminDerivedInsightFeedbackAction(w http.ResponseWriter, r *http.Request, service DerivedInsightAdminService, metrics MetricsRecorder) {
+	if service == nil {
+		http.Error(w, "derived insight admin service is not configured", http.StatusServiceUnavailable)
+		return
+	}
+
+	scope, ok := auth.ScopeFromContext(r.Context())
+	if !ok {
+		http.Error(w, "scope context is missing", http.StatusInternalServerError)
+		return
+	}
+
+	feedbackID, action, err := parseDerivedInsightFeedbackActionTarget(r.PathValue("feedback_action"))
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusBadRequest)
+		return
+	}
+	if action != "supersede" {
+		http.Error(w, "unsupported derived insight feedback action", http.StatusBadRequest)
+		return
+	}
+
+	var request derivedInsightFeedbackSupersedeRequest
+	if r.Body != nil {
+		defer r.Body.Close()
+		if err := json.NewDecoder(r.Body).Decode(&request); err != nil {
+			http.Error(w, "invalid JSON body", http.StatusBadRequest)
+			return
+		}
+	}
+
+	input := memory.SupersedeDerivedInsightFeedbackInput{
+		Scope:        scope,
+		FeedbackID:   feedbackID,
+		Actor:        strings.TrimSpace(request.Actor),
+		Reason:       strings.TrimSpace(request.Reason),
+		SupersededAt: time.Now().UTC(),
+	}
+	if err := input.Validate(); err != nil {
+		http.Error(w, err.Error(), http.StatusBadRequest)
+		return
+	}
+
+	if err := service.SupersedeDerivedInsightFeedback(r.Context(), input); err != nil {
+		recordInsightFeedbackMetric(r.Context(), metrics, "supersede", "error", "unknown", "unknown", "none")
+		if errors.Is(err, pgx.ErrNoRows) {
+			http.Error(w, "derived insight feedback not found", http.StatusNotFound)
+			return
+		}
+		http.Error(w, "failed to supersede derived insight feedback", http.StatusInternalServerError)
+		return
+	}
+	recordInsightFeedbackMetric(r.Context(), metrics, "supersede", "ok", "unknown", "unknown", "none")
+
+	writeJSON(w, http.StatusOK, map[string]any{"status": "superseded", "feedback_id": feedbackID})
+}
+
 func handleAdminDerivedInsightAction(w http.ResponseWriter, r *http.Request, service DerivedInsightAdminService) {
 	if service == nil {
 		http.Error(w, "derived insight admin service is not configured", http.StatusServiceUnavailable)
@@ -1014,6 +1290,200 @@ func handleAdminDerivedInsightAction(w http.ResponseWriter, r *http.Request, ser
 	}
 
 	writeJSON(w, http.StatusOK, map[string]any{"status": "suppressed", "insight_id": insightID})
+}
+
+func handleAdminDerivedInsightReplayDryRun(w http.ResponseWriter, r *http.Request, service DerivedInsightReplayAdminService) {
+	if service == nil {
+		http.Error(w, "derived insight replay admin service is not configured", http.StatusServiceUnavailable)
+		return
+	}
+
+	input, ok := decodeDerivedInsightReplayRequest(w, r, memory.DerivedInsightReplayModeDryRun)
+	if !ok {
+		return
+	}
+
+	report, err := service.PlanDerivedInsightReplay(r.Context(), input)
+	if err != nil {
+		writeAdminDerivedInsightReplayError(w, err, "failed to plan derived insight replay")
+		return
+	}
+
+	writeJSON(w, http.StatusOK, report)
+}
+
+func handleAdminDerivedInsightReplays(w http.ResponseWriter, r *http.Request, service DerivedInsightReplayAdminService) {
+	if service == nil {
+		http.Error(w, "derived insight replay admin service is not configured", http.StatusServiceUnavailable)
+		return
+	}
+
+	switch r.Method {
+	case http.MethodGet:
+		handleAdminDerivedInsightReplayList(w, r, service)
+	case http.MethodPost:
+		handleAdminDerivedInsightReplayApply(w, r, service)
+	default:
+		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+	}
+}
+
+func handleAdminDerivedInsightReplayApply(w http.ResponseWriter, r *http.Request, service DerivedInsightReplayAdminService) {
+	input, ok := decodeDerivedInsightReplayRequest(w, r, memory.DerivedInsightReplayModeApply)
+	if !ok {
+		return
+	}
+
+	run, err := service.ApplyDerivedInsightReplay(r.Context(), input)
+	if err != nil {
+		writeAdminDerivedInsightReplayError(w, err, "failed to apply derived insight replay")
+		return
+	}
+
+	writeJSON(w, http.StatusAccepted, run)
+}
+
+func handleAdminDerivedInsightReplayList(w http.ResponseWriter, r *http.Request, service DerivedInsightReplayAdminService) {
+	scope, ok := auth.ScopeFromContext(r.Context())
+	if !ok {
+		http.Error(w, "scope context is missing", http.StatusInternalServerError)
+		return
+	}
+
+	limit := 20
+	if raw := strings.TrimSpace(r.URL.Query().Get("limit")); raw != "" {
+		parsed, err := strconv.Atoi(raw)
+		if err != nil || parsed <= 0 {
+			http.Error(w, "invalid limit", http.StatusBadRequest)
+			return
+		}
+		if parsed > 100 {
+			parsed = 100
+		}
+		limit = parsed
+	}
+
+	input := memory.ListDerivedInsightReplayRunsInput{
+		Scope:  scope,
+		Status: memory.DerivedInsightReplayStatus(strings.TrimSpace(r.URL.Query().Get("status"))),
+		Mode:   memory.DerivedInsightReplayMode(strings.TrimSpace(r.URL.Query().Get("mode"))),
+		Limit:  limit,
+	}
+	if err := input.Validate(); err != nil {
+		http.Error(w, err.Error(), http.StatusBadRequest)
+		return
+	}
+
+	items, err := service.ListDerivedInsightReplayRuns(r.Context(), input)
+	if err != nil {
+		writeAdminDerivedInsightReplayError(w, err, "failed to list derived insight replays")
+		return
+	}
+
+	writeJSON(w, http.StatusOK, map[string]any{"items": items})
+}
+
+func handleAdminDerivedInsightReplayDetail(w http.ResponseWriter, r *http.Request, service DerivedInsightReplayAdminService) {
+	if service == nil {
+		http.Error(w, "derived insight replay admin service is not configured", http.StatusServiceUnavailable)
+		return
+	}
+
+	input, ok := replayRunReadInputFromRequest(w, r)
+	if !ok {
+		return
+	}
+
+	run, err := service.ReadDerivedInsightReplayRun(r.Context(), input)
+	if err != nil {
+		writeAdminDerivedInsightReplayError(w, err, "failed to read derived insight replay")
+		return
+	}
+
+	writeJSON(w, http.StatusOK, run)
+}
+
+func handleAdminDerivedInsightReplayReport(w http.ResponseWriter, r *http.Request, service DerivedInsightReplayAdminService) {
+	if service == nil {
+		http.Error(w, "derived insight replay admin service is not configured", http.StatusServiceUnavailable)
+		return
+	}
+
+	input, ok := replayRunReadInputFromRequest(w, r)
+	if !ok {
+		return
+	}
+
+	report, err := service.ReadDerivedInsightReplayReport(r.Context(), input)
+	if err != nil {
+		writeAdminDerivedInsightReplayError(w, err, "failed to read derived insight replay report")
+		return
+	}
+
+	writeJSON(w, http.StatusOK, report)
+}
+
+func decodeDerivedInsightReplayRequest(w http.ResponseWriter, r *http.Request, mode memory.DerivedInsightReplayMode) (memory.DerivedInsightReplayRequest, bool) {
+	scope, ok := auth.ScopeFromContext(r.Context())
+	if !ok {
+		http.Error(w, "scope context is missing", http.StatusInternalServerError)
+		return memory.DerivedInsightReplayRequest{}, false
+	}
+
+	var request derivedInsightReplayRequest
+	if !decodeJSONBody(w, r, &request) {
+		return memory.DerivedInsightReplayRequest{}, false
+	}
+
+	windowStart, err := time.Parse(time.RFC3339, strings.TrimSpace(request.EvidenceWindowStart))
+	if err != nil {
+		http.Error(w, "invalid evidence_window_start", http.StatusBadRequest)
+		return memory.DerivedInsightReplayRequest{}, false
+	}
+	windowEnd, err := time.Parse(time.RFC3339, strings.TrimSpace(request.EvidenceWindowEnd))
+	if err != nil {
+		http.Error(w, "invalid evidence_window_end", http.StatusBadRequest)
+		return memory.DerivedInsightReplayRequest{}, false
+	}
+
+	input := memory.DerivedInsightReplayRequest{
+		Scope:               scope,
+		Mode:                mode,
+		InsightTypes:        request.InsightTypes,
+		EvidenceWindowStart: windowStart,
+		EvidenceWindowEnd:   windowEnd,
+		EvidenceLimit:       request.EvidenceLimit,
+		Actor:               strings.TrimSpace(request.Actor),
+		Reason:              strings.TrimSpace(request.Reason),
+		IdempotencyKey:      strings.TrimSpace(request.IdempotencyKey),
+		RequestedAt:         time.Now().UTC(),
+		Metadata:            request.Metadata,
+	}
+	if err := input.Validate(); err != nil {
+		http.Error(w, err.Error(), http.StatusBadRequest)
+		return memory.DerivedInsightReplayRequest{}, false
+	}
+
+	return input, true
+}
+
+func replayRunReadInputFromRequest(w http.ResponseWriter, r *http.Request) (memory.ReadDerivedInsightReplayRunInput, bool) {
+	scope, ok := auth.ScopeFromContext(r.Context())
+	if !ok {
+		http.Error(w, "scope context is missing", http.StatusInternalServerError)
+		return memory.ReadDerivedInsightReplayRunInput{}, false
+	}
+
+	input := memory.ReadDerivedInsightReplayRunInput{
+		Scope: scope,
+		RunID: r.PathValue("replay_run_id"),
+	}
+	if err := input.Validate(); err != nil {
+		http.Error(w, err.Error(), http.StatusBadRequest)
+		return memory.ReadDerivedInsightReplayRunInput{}, false
+	}
+
+	return input, true
 }
 
 func handleAdminEmbeddingRebuildList(w http.ResponseWriter, r *http.Request, service EmbeddingAdminQueryService) {
@@ -1902,6 +2372,19 @@ func writeAdminEmbeddingError(w http.ResponseWriter, err error, fallback string)
 	}
 }
 
+func writeAdminDerivedInsightReplayError(w http.ResponseWriter, err error, fallback string) {
+	switch {
+	case errors.Is(err, pgx.ErrNoRows):
+		http.Error(w, "derived insight replay not found", http.StatusNotFound)
+	default:
+		if strings.Contains(err.Error(), "required") || strings.Contains(err.Error(), "invalid") || strings.Contains(err.Error(), "must be") || strings.Contains(err.Error(), "not supported") {
+			http.Error(w, err.Error(), http.StatusBadRequest)
+			return
+		}
+		http.Error(w, fallback, http.StatusInternalServerError)
+	}
+}
+
 func writeAdminEmbeddingCutoverError(w http.ResponseWriter, err error, fallback string) {
 	var admissionErr memory.EmbeddingCutoverAdmissionError
 	if errors.As(err, &admissionErr) {
@@ -1993,6 +2476,19 @@ func recordEmbeddingCutoverStateMetrics(ctx context.Context, metrics MetricsReco
 	}
 }
 
+func recordInsightFeedbackMetric(ctx context.Context, metrics MetricsRecorder, operation, result, feedbackType, insightType, decision string) {
+	if metrics == nil {
+		return
+	}
+	metrics.RecordInsightFeedback(ctx, telemetry.InsightFeedbackEvent{
+		Operation:    operation,
+		Result:       result,
+		FeedbackType: feedbackType,
+		InsightType:  insightType,
+		Decision:     decision,
+	})
+}
+
 func parseMemoryClasses(values []string) []memory.MemoryClass {
 	if len(values) == 0 {
 		return nil
@@ -2050,6 +2546,15 @@ func parseDerivedInsightActionTarget(value string) (string, string, error) {
 	}
 
 	return strings.TrimSpace(insightID), strings.TrimSpace(actionName), nil
+}
+
+func parseDerivedInsightFeedbackActionTarget(value string) (string, string, error) {
+	feedbackID, actionName, ok := strings.Cut(value, ":")
+	if !ok || strings.TrimSpace(feedbackID) == "" || strings.TrimSpace(actionName) == "" {
+		return "", "", fmt.Errorf("invalid derived insight feedback action target")
+	}
+
+	return strings.TrimSpace(feedbackID), strings.TrimSpace(actionName), nil
 }
 
 func parseGovernanceRawEventActionTarget(value string) (string, governance.GovernanceRecoveryAction, error) {

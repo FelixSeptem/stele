@@ -66,7 +66,21 @@ func (s *stubDerivedInsightSource) ListDerivedInsights(ctx context.Context, inpu
 	if s.err != nil {
 		return nil, s.err
 	}
-	return s.items[input.Type], nil
+	items := s.items[input.Type]
+	filtered := make([]memory.DerivedInsight, 0, len(items))
+	for _, item := range items {
+		if input.State != "" && item.State != input.State {
+			continue
+		}
+		if !input.IncludeHidden && isHiddenDerivedInsightState(item.State) {
+			continue
+		}
+		filtered = append(filtered, item)
+	}
+	if input.Limit > 0 && len(filtered) > input.Limit {
+		filtered = filtered[:input.Limit]
+	}
+	return filtered, nil
 }
 
 type stubRetrievalObserver struct {
@@ -419,6 +433,79 @@ func TestServiceAssembleContextIncludesRequestedExperienceInsightsWithCitations(
 	}
 }
 
+func TestServiceAssembleContextDiagnosticsExplainReplayedInsightVisibility(t *testing.T) {
+	scope := memory.Scope{Tenant: "tenant-a", Project: "project-a", Namespace: "namespace-a"}
+	insights := &stubDerivedInsightSource{
+		items: map[memory.DerivedInsightType][]memory.DerivedInsight{
+			memory.DerivedInsightTypeFailurePattern: {
+				{
+					ID:       "insight_useful",
+					Scope:    scope,
+					Type:     memory.DerivedInsightTypeFailurePattern,
+					State:    memory.DerivedInsightStateActive,
+					Evidence: []memory.DerivedInsightEvidenceRef{{Kind: memory.DerivedInsightEvidenceKindJobExecution, ID: "job_1", Relation: memory.DerivedInsightEvidenceRelationSupports}},
+					FeedbackSummary: memory.DerivedInsightFeedbackSummary{
+						Counts:        map[memory.InsightFeedbackType]int{memory.InsightFeedbackTypeUseful: 1},
+						PositiveCount: 1,
+						TotalActive:   1,
+					},
+				},
+				{
+					ID:       "insight_noisy",
+					Scope:    scope,
+					Type:     memory.DerivedInsightTypeFailurePattern,
+					State:    memory.DerivedInsightStateActive,
+					Evidence: []memory.DerivedInsightEvidenceRef{{Kind: memory.DerivedInsightEvidenceKindJobExecution, ID: "job_2", Relation: memory.DerivedInsightEvidenceRelationSupports}},
+					FeedbackSummary: memory.DerivedInsightFeedbackSummary{
+						Counts:        map[memory.InsightFeedbackType]int{memory.InsightFeedbackTypeNoisy: 1},
+						NegativeCount: 1,
+						TotalActive:   1,
+					},
+				},
+				{
+					ID:       "insight_hidden",
+					Scope:    scope,
+					Type:     memory.DerivedInsightTypeFailurePattern,
+					State:    memory.DerivedInsightStateSuppressed,
+					Evidence: []memory.DerivedInsightEvidenceRef{{Kind: memory.DerivedInsightEvidenceKindJobExecution, ID: "job_3", Relation: memory.DerivedInsightEvidenceRelationSupports}},
+				},
+			},
+		},
+	}
+	service := NewService(ServiceDependencies{
+		Lexical: &stubLexicalSource{
+			hits: []ScoredMemory{
+				{Memory: memory.CanonicalMemory{ID: "mem_profile", Scope: scope, Class: memory.MemoryClassProfile, State: memory.MemoryStateActive, Content: "profile"}, LexicalScore: 1},
+			},
+		},
+		Insights: insights,
+	})
+
+	result, err := service.AssembleContext(context.Background(), AssembleContextInput{
+		Scope:                     scope,
+		Query:                     "provider failure",
+		Budget:                    2,
+		IncludeExperienceInsights: true,
+		IncludeDiagnostics:        true,
+	})
+	if err != nil {
+		t.Fatalf("AssembleContext() error = %v", err)
+	}
+
+	if len(result.KnownFailures) != 1 || result.KnownFailures[0].Insight.ID != "insight_useful" {
+		t.Fatalf("known failures = %+v, want useful insight included", result.KnownFailures)
+	}
+	if !hasContextDiagnostic(result.Diagnostics, "known_failures", "included") {
+		t.Fatalf("diagnostics = %+v, want included known_failures diagnostic", result.Diagnostics)
+	}
+	if !hasContextDiagnostic(result.Diagnostics, "known_failures", "omitted_by_quality") {
+		t.Fatalf("diagnostics = %+v, want omitted_by_quality known_failures diagnostic", result.Diagnostics)
+	}
+	if !hasContextDiagnostic(result.Diagnostics, "known_failures", "hidden_by_lifecycle_or_scope") {
+		t.Fatalf("diagnostics = %+v, want hidden lifecycle diagnostic", result.Diagnostics)
+	}
+}
+
 func TestServiceAssembleContextTrimsExperienceInsightsUnderBudgetPressure(t *testing.T) {
 	scope := memory.Scope{Tenant: "tenant-a", Project: "project-a", Namespace: "namespace-a"}
 	insights := &stubDerivedInsightSource{
@@ -451,6 +538,120 @@ func TestServiceAssembleContextTrimsExperienceInsightsUnderBudgetPressure(t *tes
 	}
 	if len(result.KnownFailures) != 0 {
 		t.Fatalf("known failures = %+v, want empty under budget pressure", result.KnownFailures)
+	}
+}
+
+func hasContextDiagnostic(items []ContextDiagnostic, section, status string) bool {
+	for _, item := range items {
+		if item.Section == section && item.Status == status {
+			return true
+		}
+	}
+	return false
+}
+
+func TestServiceAssembleContextPrioritizesUsefulExperienceInsightUnderBudget(t *testing.T) {
+	scope := memory.Scope{Tenant: "tenant-a", Project: "project-a", Namespace: "namespace-a"}
+	insights := &stubDerivedInsightSource{
+		items: map[memory.DerivedInsightType][]memory.DerivedInsight{
+			memory.DerivedInsightTypeFailurePattern: {
+				{
+					ID:      "insight_noisy",
+					Scope:   scope,
+					Type:    memory.DerivedInsightTypeFailurePattern,
+					State:   memory.DerivedInsightStateActive,
+					Title:   "Noisy pattern",
+					Summary: "Too broad.",
+					FeedbackSummary: memory.DerivedInsightFeedbackSummary{
+						Counts:        map[memory.InsightFeedbackType]int{memory.InsightFeedbackTypeNoisy: 1},
+						NegativeCount: 1,
+						TotalActive:   1,
+					},
+				},
+				{
+					ID:      "insight_useful",
+					Scope:   scope,
+					Type:    memory.DerivedInsightTypeFailurePattern,
+					State:   memory.DerivedInsightStateActive,
+					Title:   "Useful pattern",
+					Summary: "Actionable.",
+					FeedbackSummary: memory.DerivedInsightFeedbackSummary{
+						Counts:        map[memory.InsightFeedbackType]int{memory.InsightFeedbackTypeUseful: 1},
+						PositiveCount: 1,
+						TotalActive:   1,
+					},
+				},
+			},
+		},
+	}
+	service := NewService(ServiceDependencies{
+		Lexical: &stubLexicalSource{
+			hits: []ScoredMemory{
+				{Memory: memory.CanonicalMemory{ID: "mem_profile", Scope: scope, Class: memory.MemoryClassProfile, State: memory.MemoryStateActive, Content: "profile"}, LexicalScore: 1},
+			},
+		},
+		Insights: insights,
+	})
+
+	result, err := service.AssembleContext(context.Background(), AssembleContextInput{
+		Scope:                     scope,
+		Query:                     "provider failure",
+		Budget:                    2,
+		IncludeExperienceInsights: true,
+	})
+	if err != nil {
+		t.Fatalf("AssembleContext() error = %v", err)
+	}
+	if len(result.KnownFailures) != 1 || result.KnownFailures[0].Insight.ID != "insight_useful" {
+		t.Fatalf("known failures = %+v, want useful insight first under budget", result.KnownFailures)
+	}
+}
+
+func TestServiceAssembleContextOmitsNeedsReviewInsightWhenAlternativesExist(t *testing.T) {
+	scope := memory.Scope{Tenant: "tenant-a", Project: "project-a", Namespace: "namespace-a"}
+	insights := &stubDerivedInsightSource{
+		items: map[memory.DerivedInsightType][]memory.DerivedInsight{
+			memory.DerivedInsightTypeFailurePattern: {
+				{
+					ID:    "insight_review",
+					Scope: scope,
+					Type:  memory.DerivedInsightTypeFailurePattern,
+					State: memory.DerivedInsightStateActive,
+					FeedbackSummary: memory.DerivedInsightFeedbackSummary{
+						Counts:      map[memory.InsightFeedbackType]int{memory.InsightFeedbackTypeNeedsReview: 1},
+						NeedsReview: true,
+						TotalActive: 1,
+					},
+				},
+				{
+					ID:    "insight_plain",
+					Scope: scope,
+					Type:  memory.DerivedInsightTypeFailurePattern,
+					State: memory.DerivedInsightStateActive,
+				},
+			},
+		},
+	}
+	service := NewService(ServiceDependencies{
+		Lexical: &stubLexicalSource{
+			hits: []ScoredMemory{
+				{Memory: memory.CanonicalMemory{ID: "mem_profile", Scope: scope, Class: memory.MemoryClassProfile, State: memory.MemoryStateActive, Content: "profile"}, LexicalScore: 1},
+			},
+		},
+		Insights: insights,
+	})
+
+	result, err := service.AssembleContext(context.Background(), AssembleContextInput{
+		Scope:                     scope,
+		Query:                     "provider failure",
+		Budget:                    2,
+		IncludeExperienceInsights: true,
+	})
+	if err != nil {
+		t.Fatalf("AssembleContext() error = %v", err)
+	}
+	if len(result.KnownFailures) != 1 || result.KnownFailures[0].Insight.ID != "insight_plain" {
+		t.Fatalf("known failures = %+v, want non-review insight selected", result.KnownFailures)
 	}
 }
 

@@ -134,12 +134,22 @@ func TestSpecYAMLIncludesDerivedInsightAdminRoutesAndSchemas(t *testing.T) {
 		"/v1/admin/derived-insights",
 		"/v1/admin/derived-insights/{insight_id}",
 		"/v1/admin/derived-insights/{insight_id}:suppress",
+		"/v1/admin/derived-insights/{insight_id}/feedback",
+		"/v1/admin/derived-insight-feedback/{feedback_id}:supersede",
 		"DerivedInsight",
 		"DerivedInsightListResponse",
 		"DerivedInsightDetail",
+		"DerivedInsightFeedback",
+		"DerivedInsightFeedbackCreateRequest",
+		"DerivedInsightFeedbackListResponse",
+		"DerivedInsightFeedbackSupersedeRequest",
+		"DerivedInsightFeedbackSummary",
 		"DerivedInsightEvidenceRef",
 		"DerivedInsightLifecycleRecord",
 		"DerivedInsightSuppressRequest",
+		"quality_score",
+		"needs_review",
+		"superseded_at",
 		"failure_pattern",
 		"lesson",
 		"min_confidence",
@@ -147,6 +157,33 @@ func TestSpecYAMLIncludesDerivedInsightAdminRoutesAndSchemas(t *testing.T) {
 		"include_hidden",
 		"source_failure_pattern_id",
 		"derivation_fingerprint",
+	} {
+		if !strings.Contains(SpecYAML(), want) {
+			t.Fatalf("SpecYAML() missing %q", want)
+		}
+	}
+}
+
+func TestSpecYAMLIncludesDerivedInsightReplayRoutesAndSchemas(t *testing.T) {
+	for _, want := range []string{
+		"/v1/admin/derived-insight-replays:dry-run",
+		"/v1/admin/derived-insight-replays",
+		"/v1/admin/derived-insight-replays/{replay_run_id}",
+		"/v1/admin/derived-insight-replays/{replay_run_id}/report",
+		"DerivedInsightReplayRequest",
+		"DerivedInsightReplayRun",
+		"DerivedInsightReplayReport",
+		"DerivedInsightReplayCounters",
+		"DerivedInsightReplayDecision",
+		"DerivedInsightReplayStatus",
+		"DerivedInsightReplayMode",
+		"DerivedInsightReplayDecisionKind",
+		"DerivedInsightReplayReason",
+		"evidence_window_start",
+		"evidence_window_end",
+		"evidence_limit",
+		"idempotency_key",
+		"continuation_required",
 	} {
 		if !strings.Contains(SpecYAML(), want) {
 			t.Fatalf("SpecYAML() missing %q", want)

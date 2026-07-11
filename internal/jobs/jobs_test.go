@@ -223,14 +223,19 @@ func (s *stubEmbeddingProviderResolver) ResolveProvider(name string) (embedding.
 }
 
 type stubDerivedInsightStore struct {
-	evidence     []insights.FailureEvidence
-	listErr      error
-	upsertErr    error
-	listCalls    int
-	upserted     []memory.DerivedInsight
-	gotScope     memory.Scope
-	gotLimit     int
-	returnStored bool
+	evidence        []insights.FailureEvidence
+	listErr         error
+	summaryErr      error
+	upsertErr       error
+	listCalls       int
+	summaryCalls    int
+	transitionCalls int
+	upserted        []memory.DerivedInsight
+	transitions     []memory.DerivedInsightLifecycleTransition
+	gotScope        memory.Scope
+	gotLimit        int
+	summaries       map[string]memory.DerivedInsightFeedbackSummary
+	returnStored    bool
 }
 
 func (s *stubDerivedInsightStore) ListFailureEvidence(ctx context.Context, scope memory.Scope, limit int) ([]insights.FailureEvidence, error) {
@@ -249,6 +254,20 @@ func (s *stubDerivedInsightStore) UpsertDerivedInsight(ctx context.Context, insi
 	}
 	s.upserted = append(s.upserted, insight)
 	return insight, nil
+}
+
+func (s *stubDerivedInsightStore) SummarizeDerivedInsightFeedback(ctx context.Context, input memory.SummarizeDerivedInsightFeedbackInput) (memory.DerivedInsightFeedbackSummary, error) {
+	s.summaryCalls++
+	if s.summaryErr != nil {
+		return memory.DerivedInsightFeedbackSummary{}, s.summaryErr
+	}
+	return s.summaries[input.InsightID], nil
+}
+
+func (s *stubDerivedInsightStore) TransitionDerivedInsightLifecycle(ctx context.Context, transition memory.DerivedInsightLifecycleTransition) error {
+	s.transitionCalls++
+	s.transitions = append(s.transitions, transition)
+	return nil
 }
 
 type stubEmbeddingJobsObserver struct {
@@ -722,6 +741,63 @@ func TestDerivedInsightDerivationJobRunUpsertsPatternAndLesson(t *testing.T) {
 	}
 }
 
+func TestDerivedInsightDerivationJobRunSuppressesPatternWithNegativeFeedback(t *testing.T) {
+	scope := memory.Scope{Tenant: "tenant-a", Project: "project-a", Namespace: "namespace-a"}
+	now := time.Date(2026, 7, 4, 14, 0, 0, 0, time.UTC)
+	evidence := []insights.FailureEvidence{
+		{Kind: memory.DerivedInsightEvidenceKindJobExecution, ID: "job_1", FailureKey: "provider unavailable", ObservedAt: now.Add(-time.Hour)},
+		{Kind: memory.DerivedInsightEvidenceKindJobExecution, ID: "job_2", FailureKey: "provider unavailable", ObservedAt: now.Add(-30 * time.Minute)},
+	}
+	patterns, err := (insights.FailurePatternEvaluator{
+		MinimumEvidence: 2,
+		Window:          24 * time.Hour,
+		Now:             func() time.Time { return now },
+	}).Evaluate(scope, evidence)
+	if err != nil {
+		t.Fatalf("Evaluate() error = %v", err)
+	}
+	store := &stubDerivedInsightStore{
+		evidence: evidence,
+		summaries: map[string]memory.DerivedInsightFeedbackSummary{
+			patterns[0].ID: {
+				InsightID:     patterns[0].ID,
+				Counts:        map[memory.InsightFeedbackType]int{memory.InsightFeedbackTypeNoisy: 2},
+				TotalActive:   2,
+				NegativeCount: 2,
+			},
+		},
+	}
+	executions := &stubExecutionStore{beginStarted: true}
+
+	job := DerivedInsightDerivationJob{
+		Scope:           scope,
+		Store:           store,
+		ExecutionStore:  executions,
+		Cadence:         time.Hour,
+		Window:          24 * time.Hour,
+		MinimumEvidence: 2,
+		Limit:           50,
+		Now:             func() time.Time { return now },
+	}
+
+	processed, err := job.Run(context.Background())
+	if err != nil {
+		t.Fatalf("Run() error = %v", err)
+	}
+	if processed != 1 {
+		t.Fatalf("processed = %d, want suppressed pattern without lesson", processed)
+	}
+	if len(store.upserted) != 1 || store.upserted[0].State != memory.DerivedInsightStateActive {
+		t.Fatalf("upserted = %+v, want active pattern before audited suppression", store.upserted)
+	}
+	if len(store.transitions) != 1 || store.transitions[0].ToState != memory.DerivedInsightStateSuppressed || store.transitions[0].Reason == "" {
+		t.Fatalf("transitions = %+v, want feedback-driven suppression audit", store.transitions)
+	}
+	if store.summaryCalls == 0 {
+		t.Fatal("summary calls = 0, want feedback summary consumption")
+	}
+}
+
 func TestDerivedInsightDerivationJobRunSkipsDuplicateExecutionWindow(t *testing.T) {
 	scope := memory.Scope{Tenant: "tenant-a", Project: "project-a", Namespace: "namespace-a"}
 	store := &stubDerivedInsightStore{}
@@ -773,6 +849,226 @@ func TestDerivedInsightDerivationJobRunFailsSafelyWithoutPartialUnsupportedActiv
 	}
 	if len(store.upserted) != 0 {
 		t.Fatalf("upserted = %d, want no partial activation", len(store.upserted))
+	}
+}
+
+func TestDerivedInsightReplayExecutionJobRunsPendingReplayRuns(t *testing.T) {
+	scope := memory.Scope{Tenant: "tenant-a", Project: "project-a", Namespace: "namespace-a"}
+	now := time.Date(2026, 7, 11, 10, 0, 0, 0, time.UTC)
+	run := memory.DerivedInsightReplayRun{
+		ID:     "replay_123",
+		Scope:  scope,
+		Mode:   memory.DerivedInsightReplayModeApply,
+		Status: memory.DerivedInsightReplayStatusPending,
+		Request: memory.DerivedInsightReplayRequest{
+			Scope:               scope,
+			Mode:                memory.DerivedInsightReplayModeApply,
+			InsightTypes:        []memory.DerivedInsightType{memory.DerivedInsightTypeFailurePattern},
+			EvidenceWindowStart: now.Add(-24 * time.Hour),
+			EvidenceWindowEnd:   now,
+			EvidenceLimit:       100,
+			Actor:               "operator-a",
+			Reason:              "apply replay",
+			RequestedAt:         now,
+		},
+		Actor:     "operator-a",
+		Reason:    "apply replay",
+		CreatedAt: now,
+		UpdatedAt: now,
+	}
+	service := &stubReplayExecutionService{
+		runs: []memory.DerivedInsightReplayRun{run},
+		report: memory.DerivedInsightReplayReport{
+			RunID:       run.ID,
+			Scope:       scope,
+			Counters:    memory.DerivedInsightReplayCounters{Created: 1},
+			GeneratedAt: now,
+		},
+	}
+	executions := &stubExecutionStore{beginStarted: true}
+	job := DerivedInsightReplayExecutionJob{
+		Scope:          scope,
+		Service:        service,
+		ExecutionStore: executions,
+		TriggerSource:  "scheduler",
+		Cadence:        time.Hour,
+		Now:            func() time.Time { return now },
+		Limit:          10,
+	}
+
+	processed, err := job.Run(context.Background())
+	if err != nil {
+		t.Fatalf("Run() error = %v", err)
+	}
+	if processed != 1 {
+		t.Fatalf("processed = %d, want 1", processed)
+	}
+	if service.gotList.Status != memory.DerivedInsightReplayStatusPending || service.executed[0].ID != run.ID {
+		t.Fatalf("service list/executed = %+v/%+v, want pending run execution", service.gotList, service.executed)
+	}
+	if executions.lastComplete.ProcessedCount != 1 {
+		t.Fatalf("completed execution = %+v, want processed count 1", executions.lastComplete)
+	}
+}
+
+func TestDerivedInsightReplayExecutionJobRecordsFailure(t *testing.T) {
+	scope := memory.Scope{Tenant: "tenant-a", Project: "project-a", Namespace: "namespace-a"}
+	now := time.Date(2026, 7, 11, 10, 0, 0, 0, time.UTC)
+	service := &stubReplayExecutionService{listErr: errors.New("scan failed")}
+	executions := &stubExecutionStore{beginStarted: true}
+	job := DerivedInsightReplayExecutionJob{
+		Scope:          scope,
+		Service:        service,
+		ExecutionStore: executions,
+		TriggerSource:  "scheduler",
+		Cadence:        time.Hour,
+		Now:            func() time.Time { return now },
+		Limit:          10,
+	}
+
+	if _, err := job.Run(context.Background()); err == nil {
+		t.Fatal("Run() error = nil, want list failure")
+	}
+	if executions.lastFailure.ErrorMessage == "" {
+		t.Fatalf("failed execution = %+v, want failure recorded", executions.lastFailure)
+	}
+}
+
+func TestDerivedInsightReplayExecutionJobSkipsDuplicateExecutionWindow(t *testing.T) {
+	scope := memory.Scope{Tenant: "tenant-a", Project: "project-a", Namespace: "namespace-a"}
+	service := &stubReplayExecutionService{}
+	executions := &stubExecutionStore{beginStarted: false}
+	job := DerivedInsightReplayExecutionJob{
+		Scope:          scope,
+		Service:        service,
+		ExecutionStore: executions,
+		Cadence:        time.Hour,
+		Now:            func() time.Time { return time.Date(2026, 7, 11, 10, 0, 0, 0, time.UTC) },
+		Limit:          10,
+	}
+
+	processed, err := job.Run(context.Background())
+	if err != nil {
+		t.Fatalf("Run() error = %v", err)
+	}
+	if processed != 0 || service.gotList.Limit != 0 {
+		t.Fatalf("processed/list = %d/%+v, want no replay work for duplicate window", processed, service.gotList)
+	}
+	if executions.beginCalls != 1 || executions.completeCalls != 0 || executions.failCalls != 0 {
+		t.Fatalf("execution calls begin/complete/fail = %d/%d/%d, want begin only", executions.beginCalls, executions.completeCalls, executions.failCalls)
+	}
+}
+
+func TestDerivedInsightReplayExecutionJobHonorsBatchLimit(t *testing.T) {
+	scope := memory.Scope{Tenant: "tenant-a", Project: "project-a", Namespace: "namespace-a"}
+	now := time.Date(2026, 7, 11, 10, 0, 0, 0, time.UTC)
+	runA := testReplayExecutionRun(scope, "replay_a", now)
+	runB := testReplayExecutionRun(scope, "replay_b", now)
+	service := &stubReplayExecutionService{
+		runs: []memory.DerivedInsightReplayRun{runA, runB},
+		report: memory.DerivedInsightReplayReport{
+			RunID:       runA.ID,
+			Scope:       scope,
+			Counters:    memory.DerivedInsightReplayCounters{Created: 1},
+			GeneratedAt: now,
+		},
+	}
+	executions := &stubExecutionStore{beginStarted: true}
+	job := DerivedInsightReplayExecutionJob{
+		Scope:          scope,
+		Service:        service,
+		ExecutionStore: executions,
+		Cadence:        time.Hour,
+		Now:            func() time.Time { return now },
+		Limit:          1,
+	}
+
+	processed, err := job.Run(context.Background())
+	if err != nil {
+		t.Fatalf("Run() error = %v", err)
+	}
+	if processed != 1 || service.gotList.Limit != 1 || len(service.executed) != 1 {
+		t.Fatalf("processed/limit/executed = %d/%d/%d, want bounded single run", processed, service.gotList.Limit, len(service.executed))
+	}
+	if service.executed[0].ID != runA.ID {
+		t.Fatalf("executed = %+v, want first bounded run", service.executed)
+	}
+}
+
+func TestDerivedInsightReplayExecutionJobRecordsRunExecutionFailure(t *testing.T) {
+	scope := memory.Scope{Tenant: "tenant-a", Project: "project-a", Namespace: "namespace-a"}
+	now := time.Date(2026, 7, 11, 10, 0, 0, 0, time.UTC)
+	service := &stubReplayExecutionService{
+		runs:    []memory.DerivedInsightReplayRun{testReplayExecutionRun(scope, "replay_123", now)},
+		execErr: errors.New("replay execution failed"),
+	}
+	executions := &stubExecutionStore{beginStarted: true}
+	job := DerivedInsightReplayExecutionJob{
+		Scope:          scope,
+		Service:        service,
+		ExecutionStore: executions,
+		Cadence:        time.Hour,
+		Now:            func() time.Time { return now },
+		Limit:          10,
+	}
+
+	if _, err := job.Run(context.Background()); err == nil {
+		t.Fatal("Run() error = nil, want replay execution failure")
+	}
+	if executions.failCalls != 1 || executions.lastFailure.ErrorMessage == "" {
+		t.Fatalf("failure calls/record = %d/%+v, want durable failure", executions.failCalls, executions.lastFailure)
+	}
+}
+
+type stubReplayExecutionService struct {
+	gotList  memory.ListDerivedInsightReplayRunsInput
+	runs     []memory.DerivedInsightReplayRun
+	executed []memory.DerivedInsightReplayRun
+	report   memory.DerivedInsightReplayReport
+	listErr  error
+	execErr  error
+}
+
+func (s *stubReplayExecutionService) ListDerivedInsightReplayRuns(ctx context.Context, input memory.ListDerivedInsightReplayRunsInput) ([]memory.DerivedInsightReplayRun, error) {
+	s.gotList = input
+	if s.listErr != nil {
+		return nil, s.listErr
+	}
+	if input.Limit > 0 && len(s.runs) > input.Limit {
+		return s.runs[:input.Limit], nil
+	}
+	return s.runs, nil
+}
+
+func (s *stubReplayExecutionService) ExecuteDerivedInsightReplay(ctx context.Context, run memory.DerivedInsightReplayRun) (memory.DerivedInsightReplayReport, error) {
+	s.executed = append(s.executed, run)
+	if s.execErr != nil {
+		return memory.DerivedInsightReplayReport{}, s.execErr
+	}
+	return s.report, nil
+}
+
+func testReplayExecutionRun(scope memory.Scope, id string, now time.Time) memory.DerivedInsightReplayRun {
+	return memory.DerivedInsightReplayRun{
+		ID:     id,
+		Scope:  scope,
+		Mode:   memory.DerivedInsightReplayModeApply,
+		Status: memory.DerivedInsightReplayStatusPending,
+		Request: memory.DerivedInsightReplayRequest{
+			Scope:               scope,
+			Mode:                memory.DerivedInsightReplayModeApply,
+			InsightTypes:        []memory.DerivedInsightType{memory.DerivedInsightTypeFailurePattern},
+			EvidenceWindowStart: now.Add(-24 * time.Hour),
+			EvidenceWindowEnd:   now,
+			EvidenceLimit:       100,
+			Actor:               "operator-a",
+			Reason:              "apply replay",
+			RequestedAt:         now,
+		},
+		Actor:     "operator-a",
+		Reason:    "apply replay",
+		CreatedAt: now,
+		UpdatedAt: now,
 	}
 }
 

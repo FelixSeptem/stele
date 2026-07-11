@@ -40,6 +40,23 @@ type CutoverWaveDispatchEvent struct {
 	Dispatched int
 }
 
+type InsightFeedbackEvent struct {
+	Operation    string
+	Result       string
+	FeedbackType string
+	InsightType  string
+	Decision     string
+}
+
+type DerivedInsightReplayEvent struct {
+	Mode        string
+	Result      string
+	InsightType string
+	Decision    string
+	Reason      string
+	Count       int
+}
+
 type MetricsObserver struct {
 	mu       sync.Mutex
 	counters map[string]float64
@@ -151,6 +168,40 @@ func (o *MetricsObserver) RecordCutoverWaveDispatch(ctx context.Context, event C
 	o.addCounter("stele_embedding_cutover_wave_dispatched_total", labels, float64(event.Dispatched))
 }
 
+func (o *MetricsObserver) RecordInsightFeedback(ctx context.Context, event InsightFeedbackEvent) {
+	if o == nil {
+		return
+	}
+	decision := event.Decision
+	if decision == "" {
+		decision = "none"
+	}
+	o.addCounter("stele_insight_feedback_total", map[string]string{
+		"operation":     event.Operation,
+		"result":        event.Result,
+		"feedback_type": event.FeedbackType,
+		"insight_type":  event.InsightType,
+		"decision":      decision,
+	}, 1)
+}
+
+func (o *MetricsObserver) RecordDerivedInsightReplay(ctx context.Context, event DerivedInsightReplayEvent) {
+	if o == nil {
+		return
+	}
+	count := event.Count
+	if count <= 0 {
+		count = 1
+	}
+	o.addCounter("stele_derived_insight_replay_total", map[string]string{
+		"mode":         labelOrUnknown(event.Mode),
+		"result":       labelOrUnknown(event.Result),
+		"insight_type": labelOrUnknown(event.InsightType),
+		"decision":     labelOrUnknown(event.Decision),
+		"reason":       labelOrUnknown(event.Reason),
+	}, float64(count))
+}
+
 func (o *MetricsObserver) RenderPrometheus() string {
 	if o == nil {
 		return ""
@@ -171,10 +222,19 @@ func (o *MetricsObserver) RenderPrometheus() string {
 	writeMetricFamilyHeader(&builder, "stele_embedding_provider_probe_total", "counter", "Embedding provider readiness probe results.")
 	writeMetricFamilyHeader(&builder, "stele_embedding_cutover_wave_dispatch_total", "counter", "Embedding cutover wave dispatch attempts.")
 	writeMetricFamilyHeader(&builder, "stele_embedding_cutover_wave_dispatched_total", "counter", "Embedding cutover items dispatched by scheduler waves.")
+	writeMetricFamilyHeader(&builder, "stele_insight_feedback_total", "counter", "Derived insight feedback operations and policy decisions.")
+	writeMetricFamilyHeader(&builder, "stele_derived_insight_replay_total", "counter", "Derived insight replay outcomes by low-cardinality categories.")
 
 	writeMetricMap(&builder, o.counters)
 	writeMetricMap(&builder, o.gauges)
 	return builder.String()
+}
+
+func labelOrUnknown(value string) string {
+	if strings.TrimSpace(value) == "" {
+		return "unknown"
+	}
+	return value
 }
 
 func (o *MetricsObserver) addCounter(name string, labels map[string]string, value float64) {
