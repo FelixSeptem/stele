@@ -56,13 +56,14 @@ func (s Scope) Validate() error {
 }
 
 type RawEvent struct {
-	ID              string         `json:"id"`
-	Scope           Scope          `json:"scope"`
-	EventType       string         `json:"event_type"`
-	Content         string         `json:"content"`
-	Metadata        map[string]any `json:"metadata"`
-	SourceTimestamp time.Time      `json:"source_timestamp"`
-	CreatedAt       time.Time      `json:"created_at"`
+	ID              string                   `json:"id"`
+	Scope           Scope                    `json:"scope"`
+	EventType       string                   `json:"event_type"`
+	Content         string                   `json:"content"`
+	Metadata        map[string]any           `json:"metadata"`
+	SourceTimestamp time.Time                `json:"source_timestamp"`
+	CreatedAt       time.Time                `json:"created_at"`
+	Admission       *AdmissionPressureReport `json:"admission,omitempty"`
 }
 
 type CanonicalMemory struct {

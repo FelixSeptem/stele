@@ -333,6 +333,93 @@ CREATE TABLE IF NOT EXISTS derived_insight_replay_runs (
     updated_at timestamptz NOT NULL DEFAULT now()
 );
 
+CREATE TABLE IF NOT EXISTS quality_evaluation_runs (
+    id text PRIMARY KEY,
+    tenant text NOT NULL,
+    project text NOT NULL,
+    namespace text NOT NULL,
+    status text NOT NULL,
+    checks text[] NOT NULL DEFAULT '{}'::text[],
+    actor text,
+    reason text,
+    created_at timestamptz NOT NULL DEFAULT now(),
+    updated_at timestamptz NOT NULL DEFAULT now(),
+    started_at timestamptz,
+    finished_at timestamptz
+);
+
+CREATE TABLE IF NOT EXISTS quality_evaluation_findings (
+    id text PRIMARY KEY,
+    evaluation_run_id text NOT NULL REFERENCES quality_evaluation_runs(id) ON DELETE CASCADE,
+    tenant text NOT NULL,
+    project text NOT NULL,
+    namespace text NOT NULL,
+    code text NOT NULL,
+    severity text NOT NULL,
+    component text NOT NULL,
+    category text NOT NULL,
+    message text,
+    suggested_action_category text,
+    metadata jsonb NOT NULL DEFAULT '{}'::jsonb,
+    evidence jsonb NOT NULL DEFAULT '{}'::jsonb,
+    created_at timestamptz NOT NULL DEFAULT now()
+);
+
+CREATE TABLE IF NOT EXISTS repair_plans (
+    id text PRIMARY KEY,
+    tenant text NOT NULL,
+    project text NOT NULL,
+    namespace text NOT NULL,
+    evaluation_run_id text NOT NULL REFERENCES quality_evaluation_runs(id),
+    baseline_run_id text REFERENCES quality_evaluation_runs(id),
+    verification_run_id text REFERENCES quality_evaluation_runs(id),
+    status text NOT NULL,
+    verification_status text,
+    dry_run boolean NOT NULL DEFAULT false,
+    actor text NOT NULL,
+    reason text NOT NULL,
+    created_at timestamptz NOT NULL DEFAULT now(),
+    updated_at timestamptz NOT NULL DEFAULT now(),
+    approved_at timestamptz,
+    completed_at timestamptz
+);
+
+CREATE TABLE IF NOT EXISTS repair_actions (
+    id text PRIMARY KEY,
+    plan_id text NOT NULL REFERENCES repair_plans(id) ON DELETE CASCADE,
+    evaluation_run_id text NOT NULL REFERENCES quality_evaluation_runs(id),
+    finding_id text REFERENCES quality_evaluation_findings(id),
+    tenant text NOT NULL,
+    project text NOT NULL,
+    namespace text NOT NULL,
+    category text NOT NULL,
+    status text NOT NULL,
+    target_kind text,
+    target_id text,
+    reason_code text,
+    attempt integer NOT NULL DEFAULT 0,
+    worker_id text,
+    lease_until timestamptz,
+    last_error text,
+    next_attempt_at timestamptz,
+    created_at timestamptz NOT NULL DEFAULT now(),
+    updated_at timestamptz NOT NULL DEFAULT now(),
+    completed_at timestamptz
+);
+
+CREATE TABLE IF NOT EXISTS admission_pressure_audit (
+    id text PRIMARY KEY,
+    tenant text NOT NULL,
+    project text NOT NULL,
+    namespace text NOT NULL,
+    operation text NOT NULL,
+    decision text NOT NULL,
+    findings jsonb NOT NULL DEFAULT '[]'::jsonb,
+    snapshot jsonb NOT NULL DEFAULT '{}'::jsonb,
+    observed_at timestamptz NOT NULL,
+    created_at timestamptz NOT NULL DEFAULT now()
+);
+
 CREATE INDEX IF NOT EXISTS raw_events_scope_created_at_idx
     ON raw_events (tenant, project, namespace, created_at DESC);
 
@@ -444,3 +531,18 @@ CREATE INDEX IF NOT EXISTS derived_insight_replay_runs_scope_status_updated_at_i
 CREATE UNIQUE INDEX IF NOT EXISTS derived_insight_replay_runs_scope_idempotency_idx
     ON derived_insight_replay_runs (tenant, project, namespace, idempotency_key)
     WHERE idempotency_key IS NOT NULL;
+
+CREATE INDEX IF NOT EXISTS quality_evaluation_runs_scope_updated_at_idx
+    ON quality_evaluation_runs (tenant, project, namespace, updated_at DESC);
+
+CREATE INDEX IF NOT EXISTS quality_evaluation_findings_run_created_at_idx
+    ON quality_evaluation_findings (evaluation_run_id, created_at ASC);
+
+CREATE INDEX IF NOT EXISTS repair_plans_scope_updated_at_idx
+    ON repair_plans (tenant, project, namespace, updated_at DESC);
+
+CREATE INDEX IF NOT EXISTS repair_actions_scope_status_next_attempt_idx
+    ON repair_actions (tenant, project, namespace, status, next_attempt_at, updated_at ASC);
+
+CREATE INDEX IF NOT EXISTS admission_pressure_audit_scope_observed_at_idx
+    ON admission_pressure_audit (tenant, project, namespace, observed_at DESC);

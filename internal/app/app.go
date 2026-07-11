@@ -446,6 +446,13 @@ func buildAPIRuntime(ctx context.Context, cfg config.Config, deps apiRuntimeDepe
 		replayService.Observer = observer
 	}
 	httpDeps.DerivedInsightReplayAdmin = replayService
+	httpDeps.QualityAdmin = memory.NewQualityService(memory.QualityServiceOptions{
+		Store:        repo,
+		Probe:        retrievalQualityProbe{Searcher: retrievalService, Assembler: retrievalService},
+		Now:          time.Now,
+		NewID:        newQualityID,
+		MaxPlanItems: 100,
+	})
 	httpDeps.MemoryHistoryRead = memoryHistoryReaderFunc(func(ctx context.Context, scope memory.Scope, memoryID string) (memory.MemoryHistory, error) {
 		return repo.ReadMemoryHistory(ctx, scope, memoryID, true)
 	})
@@ -490,6 +497,11 @@ func buildWorkerRuntime(ctx context.Context, cfg config.Config, deps workerRunti
 
 	repo := postgres.NewRepositoryWithEmbeddingRouter(pool, embeddingRuntime.Router)
 	now := deps.now
+	scope := memory.Scope{
+		Tenant:    cfg.Auth.DefaultTenant,
+		Project:   cfg.Auth.DefaultProject,
+		Namespace: cfg.Auth.DefaultNamespace,
+	}.Normalized()
 	summary := governance.SummaryProcessor{
 		Source:         repo,
 		Repository:     repo,
@@ -537,13 +549,40 @@ func buildWorkerRuntime(ctx context.Context, cfg config.Config, deps workerRunti
 		Now:                now,
 		Observer:           deps.observer,
 	}
+	replayService := insights.ReplayService{
+		Store:           repo,
+		MinimumEvidence: cfg.Jobs.DerivedInsightMinimumEvidence,
+		Now:             now,
+		NewRunID:        newReplayID,
+	}
+	if observer, ok := deps.observer.(interface {
+		RecordDerivedInsightReplay(context.Context, telemetry.DerivedInsightReplayEvent)
+	}); ok {
+		replayService.Observer = observer
+	}
+	repairWorker := jobs.RepairActionWorker{
+		Store:         repo,
+		Processor:     jobs.GovernedRepairActionProcessor{Embedding: memory.NewEmbeddingAdminQueryService(repo, embeddingRuntime.Status), Governance: repo, Replay: replayService, Now: now},
+		Scope:         scope,
+		WorkerID:      "stele-repair-worker",
+		BatchSize:     16,
+		LeaseDuration: governanceWorkerLeaseDuration,
+		MaxAttempts:   cfg.Jobs.GovernanceMaxAttempts,
+		RetryBackoff:  cfg.Jobs.GovernanceRetryBackoff,
+		Now:           now,
+		Observer:      deps.observer,
+	}
+	workers := []jobs.LoopWorker{worker}
+	if err := scope.Validate(); err == nil {
+		workers = append(workers, repairWorker)
+	}
 
 	return workerRuntime{
 		bootstrapper: bootstrapperFunc(func(ctx context.Context) error {
 			return deps.bootstrapDatabase(ctx, pool)
 		}),
 		worker: jobs.PollingWorker{
-			Worker:       worker,
+			Worker:       jobs.CompositeWorker{Workers: workers},
 			PollInterval: cfg.Jobs.WorkerPollInterval,
 			ErrorBackoff: cfg.Jobs.WorkerErrorBackoff,
 		},
@@ -884,6 +923,14 @@ func newID() string {
 
 func newReplayID() string {
 	return "replay_" + strings.TrimPrefix(newID(), "id_")
+}
+
+func newQualityID(prefix string) string {
+	prefix = strings.TrimSpace(prefix)
+	if prefix == "" {
+		prefix = "quality"
+	}
+	return prefix + "_" + strings.TrimPrefix(newID(), "id_")
 }
 
 type bootstrapperFunc func(ctx context.Context) error

@@ -57,3 +57,40 @@ func TestSelfHostingSmokeLoopDocumentsReplayContextAndMetrics(t *testing.T) {
 		}
 	}
 }
+
+func TestSelfHostingDocsIncludeMemoryQualityRepairLoop(t *testing.T) {
+	contentBytes, err := os.ReadFile("self-hosting.md")
+	if err != nil {
+		t.Fatalf("read self-hosting.md: %v", err)
+	}
+	content := string(contentBytes)
+	spec := openapi.SpecYAML()
+
+	for _, want := range []string{
+		"Memory quality and repair loop",
+		"/v1/admin/memory-quality/evaluations",
+		"/v1/admin/memory-quality/evaluations/<evaluation-run-id>/findings",
+		"/v1/admin/memory-quality/repair-plans",
+		"/v1/admin/memory-quality/repair-plans/<repair-plan-id>:approve",
+		"/v1/admin/memory-quality/repair-plans/<repair-plan-id>:verify",
+		"admission.decision",
+		"stele_quality_",
+		"manual_review",
+	} {
+		if !strings.Contains(content, want) {
+			t.Fatalf("self-hosting quality repair docs missing %q", want)
+		}
+	}
+
+	for _, route := range []string{
+		"/v1/admin/memory-quality/evaluations",
+		"/v1/admin/memory-quality/evaluations/{evaluation_run_id}/findings",
+		"/v1/admin/memory-quality/repair-plans",
+		"/v1/admin/memory-quality/repair-plans/{repair_plan_id}:approve",
+		"/v1/admin/memory-quality/repair-plans/{repair_plan_id}:verify",
+	} {
+		if !strings.Contains(spec, route) {
+			t.Fatalf("OpenAPI spec missing documented quality route %q", route)
+		}
+	}
+}

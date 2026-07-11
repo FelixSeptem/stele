@@ -37,6 +37,144 @@ type GovernanceWorker struct {
 	Observer           telemetry.Observer
 }
 
+type RepairActionStore interface {
+	ClaimRepairActions(ctx context.Context, input memory.ClaimRepairActionsInput) ([]memory.RepairAction, error)
+	CompleteRepairAction(ctx context.Context, input memory.CompleteRepairActionInput) error
+	RecordRepairActionFailure(ctx context.Context, input memory.RecordRepairActionFailureInput) error
+}
+
+type RepairActionProcessor interface {
+	ProcessRepairAction(ctx context.Context, action memory.RepairAction) error
+}
+
+type RepairActionWorker struct {
+	Store         RepairActionStore
+	Processor     RepairActionProcessor
+	Scope         memory.Scope
+	WorkerID      string
+	BatchSize     int
+	LeaseDuration time.Duration
+	MaxAttempts   int
+	RetryBackoff  time.Duration
+	Now           func() time.Time
+	Observer      telemetry.Observer
+}
+
+func (w RepairActionWorker) RunOnce(ctx context.Context) (processed int, err error) {
+	started := time.Now()
+	if w.Store == nil {
+		return 0, fmt.Errorf("repair action store is required")
+	}
+	if w.Processor == nil {
+		return 0, fmt.Errorf("repair action processor is required")
+	}
+	now := w.nowUTC()
+	defer func() {
+		if w.Observer == nil {
+			return
+		}
+		status := "ok"
+		errorMessage := ""
+		if err != nil {
+			status = "error"
+			processed = 0
+			errorMessage = err.Error()
+		}
+		w.Observer.RecordOperation(ctx, telemetry.OperationEvent{
+			Mode:       "worker",
+			Component:  "repair_action_worker",
+			Operation:  "quality_repair",
+			Status:     status,
+			Count:      processed,
+			Duration:   time.Since(started),
+			Error:      errorMessage,
+			ObservedAt: now,
+		})
+	}()
+	claims, err := w.Store.ClaimRepairActions(ctx, memory.ClaimRepairActionsInput{
+		Scope:         w.Scope,
+		WorkerID:      w.WorkerID,
+		Now:           now,
+		LeaseDuration: w.leaseDuration(),
+		Limit:         w.batchSize(),
+	})
+	if err != nil {
+		return 0, err
+	}
+	for _, action := range claims {
+		if err := w.Processor.ProcessRepairAction(ctx, action); err != nil {
+			if recordErr := w.recordFailure(ctx, action, err); recordErr != nil {
+				return 0, recordErr
+			}
+			continue
+		}
+		if err := w.Store.CompleteRepairAction(ctx, memory.CompleteRepairActionInput{
+			Scope:       action.Scope,
+			ActionID:    action.ID,
+			WorkerID:    action.WorkerID,
+			CompletedAt: w.nowUTC(),
+			Status:      memory.RepairActionStatusCompleted,
+		}); err != nil {
+			return 0, err
+		}
+		processed++
+	}
+	return processed, nil
+}
+
+func (w RepairActionWorker) recordFailure(ctx context.Context, action memory.RepairAction, cause error) error {
+	failedAt := w.nowUTC()
+	input := memory.RecordRepairActionFailureInput{
+		Scope:        action.Scope,
+		ActionID:     action.ID,
+		WorkerID:     action.WorkerID,
+		ErrorMessage: truncateError(cause.Error(), 512),
+		FailedAt:     failedAt,
+	}
+	if action.Attempt >= w.maxAttempts() {
+		input.Exhausted = true
+	} else {
+		input.NextAttemptAt = failedAt.Add(w.retryBackoff())
+	}
+	return w.Store.RecordRepairActionFailure(ctx, input)
+}
+
+func (w RepairActionWorker) nowUTC() time.Time {
+	now := time.Now
+	if w.Now != nil {
+		now = w.Now
+	}
+	return now().UTC()
+}
+
+func (w RepairActionWorker) batchSize() int {
+	if w.BatchSize > 0 {
+		return w.BatchSize
+	}
+	return 10
+}
+
+func (w RepairActionWorker) leaseDuration() time.Duration {
+	if w.LeaseDuration > 0 {
+		return w.LeaseDuration
+	}
+	return time.Minute
+}
+
+func (w RepairActionWorker) maxAttempts() int {
+	if w.MaxAttempts > 0 {
+		return w.MaxAttempts
+	}
+	return 5
+}
+
+func (w RepairActionWorker) retryBackoff() time.Duration {
+	if w.RetryBackoff > 0 {
+		return w.RetryBackoff
+	}
+	return w.leaseDuration()
+}
+
 func (w GovernanceWorker) RunOnce(ctx context.Context) (processed int, err error) {
 	started := time.Now()
 	if w.Claimer == nil {
@@ -306,14 +444,14 @@ type ExecutionStore interface {
 	FailJobExecution(ctx context.Context, failure JobExecutionFailure) error
 }
 
-type loopWorker interface {
+type LoopWorker interface {
 	RunOnce(ctx context.Context) (int, error)
 }
 
 type waitFunc func(ctx context.Context, d time.Duration) error
 
 type PollingWorker struct {
-	Worker       loopWorker
+	Worker       LoopWorker
 	PollInterval time.Duration
 	ErrorBackoff time.Duration
 	Wait         waitFunc

@@ -543,6 +543,84 @@ The metrics surface includes admission decisions and finding codes, active or pa
 
 8. Rollback is modeled as a new forward cutover plan toward the prior provider, model, and dimensions. Do not mutate `vector_revisions` in place and do not try to reactivate an old revision as an ad hoc rollback shortcut.
 
+### Memory quality and repair loop
+
+Use this loop when ingestion still works but recall quality, semantic projection, governance backlog, or repair feasibility looks degraded. The loop stays service-side: it creates durable evaluation and repair records, then approved repair actions are picked up by worker execution rather than being performed inline by the admin request.
+
+1. Check the admission metadata returned by event ingestion. A normal response includes `event_id`; degraded or queued responses also include `admission.decision` and stable finding codes such as `semantic_projection_degraded` or `governance_backlog_high`.
+
+2. Create a scoped quality evaluation:
+
+```bash
+curl -X POST http://localhost:8080/v1/admin/memory-quality/evaluations \
+  -H 'Content-Type: application/json' \
+  -H 'X-API-Key: dev-admin-key' \
+  -H 'X-Stele-Tenant: tenant-a' \
+  -H 'X-Stele-Project: project-a' \
+  -H 'X-Stele-Namespace: namespace-a' \
+  -d '{"checks":["retrieval","context","admission_pressure","repair_pressure"],"actor":"operator-a","reason":"investigate degraded recall"}'
+```
+
+3. Inspect findings for the evaluation:
+
+```bash
+curl http://localhost:8080/v1/admin/memory-quality/evaluations/<evaluation-run-id>/findings \
+  -H 'X-API-Key: dev-admin-key' \
+  -H 'X-Stele-Tenant: tenant-a' \
+  -H 'X-Stele-Project: project-a' \
+  -H 'X-Stele-Namespace: namespace-a'
+```
+
+4. Create a repair plan from actionable findings. Use `dry_run:true` first when you only want to inspect the mapped actions.
+
+```bash
+curl -X POST http://localhost:8080/v1/admin/memory-quality/repair-plans \
+  -H 'Content-Type: application/json' \
+  -H 'X-API-Key: dev-admin-key' \
+  -H 'X-Stele-Tenant: tenant-a' \
+  -H 'X-Stele-Project: project-a' \
+  -H 'X-Stele-Namespace: namespace-a' \
+  -d '{"evaluation_run_id":"<evaluation-run-id>","actor":"operator-a","reason":"repair degraded projection and backlog","dry_run":true}'
+```
+
+5. Recreate or inspect the plan with `dry_run:false`, then approve it when the action list is safe:
+
+```bash
+curl -X POST http://localhost:8080/v1/admin/memory-quality/repair-plans/<repair-plan-id>:approve \
+  -H 'Content-Type: application/json' \
+  -H 'X-API-Key: dev-admin-key' \
+  -H 'X-Stele-Tenant: tenant-a' \
+  -H 'X-Stele-Project: project-a' \
+  -H 'X-Stele-Namespace: namespace-a' \
+  -d '{"actor":"operator-a","reason":"approve bounded repair actions"}'
+```
+
+6. Monitor repair execution through the repair plan, job status, and metrics:
+
+```bash
+curl http://localhost:8080/v1/admin/memory-quality/repair-plans/<repair-plan-id> \
+  -H 'X-API-Key: dev-admin-key' \
+  -H 'X-Stele-Tenant: tenant-a' \
+  -H 'X-Stele-Project: project-a' \
+  -H 'X-Stele-Namespace: namespace-a'
+
+curl http://localhost:8080/metrics | grep 'stele_quality_'
+```
+
+7. Run post-repair verification after executable actions finish:
+
+```bash
+curl -X POST http://localhost:8080/v1/admin/memory-quality/repair-plans/<repair-plan-id>:verify \
+  -H 'Content-Type: application/json' \
+  -H 'X-API-Key: dev-admin-key' \
+  -H 'X-Stele-Tenant: tenant-a' \
+  -H 'X-Stele-Project: project-a' \
+  -H 'X-Stele-Namespace: namespace-a' \
+  -d '{"checks":["retrieval","admission_pressure","repair_pressure"],"actor":"operator-a","reason":"verify repair outcome"}'
+```
+
+Repair plans never rewrite canonical memory content, provenance, or version history in place. Unsupported findings become `manual_review` actions, and executable actions are constrained to existing governed paths such as embedding retry, governance requeue, and derived insight replay.
+
 ## Memory Management Surface
 
 `Stele` now exposes two distinct memory management boundaries:
@@ -605,6 +683,16 @@ Privileged derived insight inspection routes:
 - `GET /v1/admin/derived-insight-replays/{replay_run_id}`
 - `GET /v1/admin/derived-insight-replays/{replay_run_id}/report`
 
+Privileged memory quality and repair routes:
+
+- `POST /v1/admin/memory-quality/evaluations`
+- `GET /v1/admin/memory-quality/evaluations/{evaluation_run_id}`
+- `GET /v1/admin/memory-quality/evaluations/{evaluation_run_id}/findings`
+- `POST /v1/admin/memory-quality/repair-plans`
+- `GET /v1/admin/memory-quality/repair-plans/{repair_plan_id}`
+- `POST /v1/admin/memory-quality/repair-plans/{repair_plan_id}:approve`
+- `POST /v1/admin/memory-quality/repair-plans/{repair_plan_id}:verify`
+
 Privileged manual mutation and lifecycle actions require:
 
 - admin API key
@@ -633,6 +721,14 @@ Privileged derived insight feedback uses the same admin boundary and requires:
 - `actor` in the JSON body
 - `reason` in the JSON body
 - bounded `type` values: `useful`, `noisy`, `incorrect`, `stale`, `redundant`, or `needs_review`
+
+Privileged memory quality and repair actions use the same admin boundary and require:
+
+- scoped headers for every evaluation and repair plan
+- `actor` in the JSON body for evaluation, repair plan creation, and approval
+- `reason` in the JSON body for repair plan creation and approval
+- bounded evaluation checks: `retrieval`, `context`, `admission_pressure`, or `repair_pressure`
+- bounded repair actions generated from findings: `embedding_retry`, `governance_requeue`, `derived_insight_replay`, or `manual_review`
 
 Governance recovery query filters:
 

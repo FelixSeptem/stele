@@ -75,11 +75,29 @@ func (s *Service) Ingest(ctx context.Context, input IngestEventInput) (event Raw
 		return RawEvent{}, fmt.Errorf("ingest store is not configured")
 	}
 
+	observedAt := s.now().UTC()
+	admission := DefaultAdmissionPressureReport(input.Scope, AdmissionPressureOperationIngest, observedAt)
+	if reader, ok := s.store.(AdmissionPressureSnapshotReader); ok {
+		snapshot, err := reader.ReadAdmissionPressureSnapshot(ctx, input.Scope, AdmissionPressureOperationIngest, observedAt)
+		if err != nil {
+			return RawEvent{}, err
+		}
+		admission = AdmissionPressureEvaluator{}.Evaluate(AdmissionPressureInput{
+			Scope:      input.Scope,
+			Operation:  AdmissionPressureOperationIngest,
+			Snapshot:   snapshot,
+			ObservedAt: observedAt,
+		})
+		if admission.Decision == AdmissionPressureDecisionReject {
+			return RawEvent{}, fmt.Errorf("%w: %s", ErrAdmissionRejected, admission.Findings[0].Code)
+		}
+	}
+
 	provenance := ProvenanceRecord{
 		ID:         uuid.NewString(),
 		Scope:      input.Scope,
 		Operation:  "ingest_event",
-		CreatedAt:  s.now().UTC(),
+		CreatedAt:  observedAt,
 		RequestID:  "",
 		Actor:      "",
 		MemoryID:   "",
@@ -91,5 +109,6 @@ func (s *Service) Ingest(ctx context.Context, input IngestEventInput) (event Raw
 		return RawEvent{}, err
 	}
 
+	event.Admission = &admission
 	return event, nil
 }

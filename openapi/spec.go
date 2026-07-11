@@ -846,6 +846,168 @@ paths:
           description: Missing or invalid admin API key
         '404':
           description: Replay report not found
+  /v1/admin/memory-quality/evaluations:
+    post:
+      operationId: createMemoryQualityEvaluation
+      parameters:
+        - $ref: '#/components/parameters/AdminAPIKey'
+        - $ref: '#/components/parameters/TenantHeader'
+        - $ref: '#/components/parameters/ProjectHeader'
+        - $ref: '#/components/parameters/NamespaceHeader'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/QualityEvaluationCreateRequest'
+      responses:
+        '201':
+          description: Quality evaluation created
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/QualityEvaluationRun'
+        '400':
+          description: Invalid request
+        '401':
+          description: Missing or invalid admin API key
+  /v1/admin/memory-quality/evaluations/{evaluation_run_id}:
+    get:
+      operationId: getMemoryQualityEvaluation
+      parameters:
+        - in: path
+          name: evaluation_run_id
+          required: true
+          schema:
+            type: string
+        - $ref: '#/components/parameters/AdminAPIKey'
+        - $ref: '#/components/parameters/TenantHeader'
+        - $ref: '#/components/parameters/ProjectHeader'
+        - $ref: '#/components/parameters/NamespaceHeader'
+      responses:
+        '200':
+          description: Quality evaluation run
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/QualityEvaluationRun'
+        '404':
+          description: Evaluation not found in scope
+  /v1/admin/memory-quality/evaluations/{evaluation_run_id}/findings:
+    get:
+      operationId: listMemoryQualityEvaluationFindings
+      parameters:
+        - in: path
+          name: evaluation_run_id
+          required: true
+          schema:
+            type: string
+        - $ref: '#/components/parameters/AdminAPIKey'
+        - $ref: '#/components/parameters/TenantHeader'
+        - $ref: '#/components/parameters/ProjectHeader'
+        - $ref: '#/components/parameters/NamespaceHeader'
+      responses:
+        '200':
+          description: Quality evaluation findings
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/QualityEvaluationFindingListResponse'
+  /v1/admin/memory-quality/repair-plans:
+    post:
+      operationId: createMemoryQualityRepairPlan
+      parameters:
+        - $ref: '#/components/parameters/AdminAPIKey'
+        - $ref: '#/components/parameters/TenantHeader'
+        - $ref: '#/components/parameters/ProjectHeader'
+        - $ref: '#/components/parameters/NamespaceHeader'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/RepairPlanCreateRequest'
+      responses:
+        '201':
+          description: Repair plan created
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/RepairPlan'
+        '422':
+          description: Repair action rejected by safety policy
+  /v1/admin/memory-quality/repair-plans/{repair_plan_id}:
+    get:
+      operationId: getMemoryQualityRepairPlan
+      parameters:
+        - in: path
+          name: repair_plan_id
+          required: true
+          schema:
+            type: string
+        - $ref: '#/components/parameters/AdminAPIKey'
+        - $ref: '#/components/parameters/TenantHeader'
+        - $ref: '#/components/parameters/ProjectHeader'
+        - $ref: '#/components/parameters/NamespaceHeader'
+      responses:
+        '200':
+          description: Repair plan
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/RepairPlan'
+  /v1/admin/memory-quality/repair-plans/{repair_plan_id}:approve:
+    post:
+      operationId: approveMemoryQualityRepairPlan
+      parameters:
+        - in: path
+          name: repair_plan_id
+          required: true
+          schema:
+            type: string
+        - $ref: '#/components/parameters/AdminAPIKey'
+        - $ref: '#/components/parameters/TenantHeader'
+        - $ref: '#/components/parameters/ProjectHeader'
+        - $ref: '#/components/parameters/NamespaceHeader'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/RepairPlanApproveRequest'
+      responses:
+        '200':
+          description: Repair plan approved
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/RepairPlan'
+  /v1/admin/memory-quality/repair-plans/{repair_plan_id}:verify:
+    post:
+      operationId: verifyMemoryQualityRepairPlan
+      parameters:
+        - in: path
+          name: repair_plan_id
+          required: true
+          schema:
+            type: string
+        - $ref: '#/components/parameters/AdminAPIKey'
+        - $ref: '#/components/parameters/TenantHeader'
+        - $ref: '#/components/parameters/ProjectHeader'
+        - $ref: '#/components/parameters/NamespaceHeader'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/RepairPlanVerifyRequest'
+      responses:
+        '200':
+          description: Repair plan verified
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/RepairPlan'
   /v1/admin/embedding/rebuilds:
     get:
       operationId: listAdminEmbeddingRebuilds
@@ -2076,6 +2238,177 @@ components:
         - event_id
       properties:
         event_id:
+          type: string
+        admission:
+          $ref: '#/components/schemas/AdmissionPressureReport'
+    AdmissionPressureReport:
+      type: object
+      properties:
+        operation:
+          type: string
+          enum: [ingest, repair]
+        decision:
+          type: string
+          enum: [accept, accept_degraded, queue, reject]
+        findings:
+          type: array
+          items:
+            $ref: '#/components/schemas/QualityFinding'
+        observed_at:
+          type: string
+          format: date-time
+    QualityFinding:
+      type: object
+      properties:
+        code:
+          type: string
+          enum: [intent_not_writable, governance_backlog_high, worker_lease_pressure_high, semantic_projection_degraded, lifecycle_hidden_returned, expected_recall_missing, unsupported_automatic_repair, canonical_rewrite_required]
+        severity:
+          type: string
+          enum: [blocker, warning]
+        component:
+          type: string
+        category:
+          type: string
+        message:
+          type: string
+        suggested_action_category:
+          type: string
+    QualityEvaluationCreateRequest:
+      type: object
+      required:
+        - checks
+        - actor
+      properties:
+        checks:
+          type: array
+          items:
+            type: string
+            enum: [retrieval, context, admission_pressure, repair_pressure]
+        actor:
+          type: string
+        reason:
+          type: string
+    QualityEvaluationRun:
+      type: object
+      properties:
+        id:
+          type: string
+        scope:
+          $ref: '#/components/schemas/Scope'
+        status:
+          type: string
+          enum: [pending, running, completed, failed, manual_review]
+        checks:
+          type: array
+          items:
+            type: string
+        actor:
+          type: string
+        reason:
+          type: string
+        created_at:
+          type: string
+          format: date-time
+        updated_at:
+          type: string
+          format: date-time
+    QualityEvaluationFinding:
+      allOf:
+        - $ref: '#/components/schemas/QualityFinding'
+        - type: object
+          properties:
+            id:
+              type: string
+            evaluation_run_id:
+              type: string
+            scope:
+              $ref: '#/components/schemas/Scope'
+            created_at:
+              type: string
+              format: date-time
+    QualityEvaluationFindingListResponse:
+      type: object
+      properties:
+        findings:
+          type: array
+          items:
+            $ref: '#/components/schemas/QualityEvaluationFinding'
+    RepairPlanCreateRequest:
+      type: object
+      required:
+        - evaluation_run_id
+        - actor
+        - reason
+      properties:
+        evaluation_run_id:
+          type: string
+        actor:
+          type: string
+        reason:
+          type: string
+        dry_run:
+          type: boolean
+    RepairPlanApproveRequest:
+      type: object
+      required:
+        - actor
+        - reason
+      properties:
+        actor:
+          type: string
+        reason:
+          type: string
+    RepairPlanVerifyRequest:
+      type: object
+      required:
+        - actor
+        - reason
+      properties:
+        checks:
+          type: array
+          items:
+            type: string
+            enum: [retrieval, context, admission_pressure, repair_pressure]
+        actor:
+          type: string
+        reason:
+          type: string
+    RepairPlan:
+      type: object
+      properties:
+        id:
+          type: string
+        scope:
+          $ref: '#/components/schemas/Scope'
+        evaluation_run_id:
+          type: string
+        status:
+          type: string
+          enum: [draft, approved, running, completed, failed, manual_review]
+        verification_status:
+          type: string
+          enum: [pending, passed, failed, manual_review]
+        dry_run:
+          type: boolean
+        actions:
+          type: array
+          items:
+            $ref: '#/components/schemas/RepairAction'
+    RepairAction:
+      type: object
+      properties:
+        id:
+          type: string
+        plan_id:
+          type: string
+        category:
+          type: string
+          enum: [embedding_retry, governance_requeue, derived_insight_replay, manual_review]
+        status:
+          type: string
+          enum: [pending, running, completed, failed, skipped, manual_review, exhausted]
+        reason_code:
           type: string
     CanonicalMemory:
       type: object

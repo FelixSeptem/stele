@@ -57,6 +57,25 @@ type DerivedInsightReplayEvent struct {
 	Count       int
 }
 
+type QualityEvaluationEvent struct {
+	Status          string
+	CheckCategory   string
+	FindingCategory string
+	Severity        string
+	Component       string
+}
+
+type RepairActionEvent struct {
+	ActionCategory string
+	Result         string
+	ReasonCategory string
+}
+
+type RepairVerificationEvent struct {
+	Status                  string
+	ResidualFindingCategory string
+}
+
 type MetricsObserver struct {
 	mu       sync.Mutex
 	counters map[string]float64
@@ -202,6 +221,40 @@ func (o *MetricsObserver) RecordDerivedInsightReplay(ctx context.Context, event 
 	}, float64(count))
 }
 
+func (o *MetricsObserver) RecordQualityEvaluation(ctx context.Context, event QualityEvaluationEvent) {
+	if o == nil {
+		return
+	}
+	o.addCounter("stele_quality_evaluation_total", map[string]string{
+		"status":           labelOrUnknown(event.Status),
+		"check_category":   labelOrUnknown(event.CheckCategory),
+		"finding_category": labelOrUnknown(event.FindingCategory),
+		"severity":         labelOrUnknown(event.Severity),
+		"component":        labelOrUnknown(event.Component),
+	}, 1)
+}
+
+func (o *MetricsObserver) RecordRepairAction(ctx context.Context, event RepairActionEvent) {
+	if o == nil {
+		return
+	}
+	o.addCounter("stele_quality_repair_actions_total", map[string]string{
+		"action_category": labelOrUnknown(event.ActionCategory),
+		"result":          labelOrUnknown(event.Result),
+		"reason_category": labelOrUnknown(event.ReasonCategory),
+	}, 1)
+}
+
+func (o *MetricsObserver) RecordRepairVerification(ctx context.Context, event RepairVerificationEvent) {
+	if o == nil {
+		return
+	}
+	o.addCounter("stele_quality_repair_verification_total", map[string]string{
+		"status":                    labelOrUnknown(event.Status),
+		"residual_finding_category": labelOrUnknown(event.ResidualFindingCategory),
+	}, 1)
+}
+
 func (o *MetricsObserver) RenderPrometheus() string {
 	if o == nil {
 		return ""
@@ -224,6 +277,9 @@ func (o *MetricsObserver) RenderPrometheus() string {
 	writeMetricFamilyHeader(&builder, "stele_embedding_cutover_wave_dispatched_total", "counter", "Embedding cutover items dispatched by scheduler waves.")
 	writeMetricFamilyHeader(&builder, "stele_insight_feedback_total", "counter", "Derived insight feedback operations and policy decisions.")
 	writeMetricFamilyHeader(&builder, "stele_derived_insight_replay_total", "counter", "Derived insight replay outcomes by low-cardinality categories.")
+	writeMetricFamilyHeader(&builder, "stele_quality_evaluation_total", "counter", "Memory quality evaluation outcomes.")
+	writeMetricFamilyHeader(&builder, "stele_quality_repair_actions_total", "counter", "Memory quality repair action outcomes.")
+	writeMetricFamilyHeader(&builder, "stele_quality_repair_verification_total", "counter", "Memory quality repair verification outcomes.")
 
 	writeMetricMap(&builder, o.counters)
 	writeMetricMap(&builder, o.gauges)

@@ -546,9 +546,9 @@ func TestBuildWorkerRuntimeWiresDurableRetrySettings(t *testing.T) {
 		t.Fatalf("runtime worker type = %T, want jobs.PollingWorker", runtime.worker)
 	}
 
-	worker, ok := poller.Worker.(jobs.GovernanceWorker)
+	worker, ok := findGovernanceWorker(poller.Worker)
 	if !ok {
-		t.Fatalf("poller.Worker type = %T, want jobs.GovernanceWorker", poller.Worker)
+		t.Fatalf("poller.Worker type = %T, want jobs.GovernanceWorker in worker graph", poller.Worker)
 	}
 
 	if worker.MaxAttempts != 7 {
@@ -570,6 +570,22 @@ func TestBuildWorkerRuntimeWiresDurableRetrySettings(t *testing.T) {
 	if poller.ErrorBackoff != 11*time.Second {
 		t.Fatalf("ErrorBackoff = %v, want 11s", poller.ErrorBackoff)
 	}
+}
+
+func findGovernanceWorker(worker jobs.LoopWorker) (jobs.GovernanceWorker, bool) {
+	if governanceWorker, ok := worker.(jobs.GovernanceWorker); ok {
+		return governanceWorker, true
+	}
+	composite, ok := worker.(jobs.CompositeWorker)
+	if !ok {
+		return jobs.GovernanceWorker{}, false
+	}
+	for _, child := range composite.Workers {
+		if governanceWorker, ok := child.(jobs.GovernanceWorker); ok {
+			return governanceWorker, true
+		}
+	}
+	return jobs.GovernanceWorker{}, false
 }
 
 func TestBuildSchedulerRuntimeAssemblesMaintenanceScheduler(t *testing.T) {
@@ -999,6 +1015,9 @@ func TestBuildAPIRuntimeAssemblesEventIngestionPath(t *testing.T) {
 	}
 
 	sourceTime := time.Date(2026, 5, 31, 12, 0, 0, 0, time.UTC)
+	mock.ExpectQuery("SELECT[\\s\\S]*FROM raw_events").
+		WithArgs("tenant-a", "project-a", "namespace-a", pgxmock.AnyArg()).
+		WillReturnRows(pgxmock.NewRows([]string{"pending_governance", "leased_governance"}).AddRow(0, 0))
 	mock.ExpectBegin()
 	mock.ExpectQuery("INSERT INTO raw_events").
 		WithArgs("tenant-a", "project-a", "namespace-a", "conversation.message", "hello world", pgxmock.AnyArg(), sourceTime).
@@ -1053,6 +1072,9 @@ func TestBuildAPIRuntimeAssemblesEventIngestionPath(t *testing.T) {
 
 	if response.EventID != "evt_123" {
 		t.Fatalf("EventID = %q, want %q", response.EventID, "evt_123")
+	}
+	if response.Admission == nil || response.Admission.Decision != memory.AdmissionPressureDecisionAccept {
+		t.Fatalf("Admission = %+v, want accept metadata", response.Admission)
 	}
 
 	invalidPayloadReq := httptest.NewRequest(http.MethodPost, "/v1/events", strings.NewReader(`{"event_type":"","content":""}`))

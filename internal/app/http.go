@@ -41,6 +41,7 @@ type HTTPDependencies struct {
 	GovernanceAdmin           GovernanceAdminService
 	DerivedInsightAdmin       DerivedInsightAdminService
 	DerivedInsightReplayAdmin DerivedInsightReplayAdminService
+	QualityAdmin              QualityAdminService
 	MemoryHistoryRead         MemoryHistoryReader
 	JobExecutionRead          JobExecutionReader
 	Metrics                   MetricsRecorder
@@ -92,6 +93,17 @@ type DerivedInsightReplayAdminService interface {
 	ListDerivedInsightReplayRuns(ctx context.Context, input memory.ListDerivedInsightReplayRunsInput) ([]memory.DerivedInsightReplayRun, error)
 	ReadDerivedInsightReplayRun(ctx context.Context, input memory.ReadDerivedInsightReplayRunInput) (memory.DerivedInsightReplayRun, error)
 	ReadDerivedInsightReplayReport(ctx context.Context, input memory.ReadDerivedInsightReplayRunInput) (memory.DerivedInsightReplayReport, error)
+}
+
+type QualityAdminService interface {
+	CreateEvaluation(ctx context.Context, input memory.CreateQualityEvaluationInput) (memory.QualityEvaluationRun, error)
+	ReadEvaluation(ctx context.Context, input memory.ReadQualityEvaluationRunInput) (memory.QualityEvaluationRun, error)
+	ListEvaluationFindings(ctx context.Context, input memory.ListQualityEvaluationFindingsInput) ([]memory.QualityEvaluationFinding, error)
+	CreateRepairPlan(ctx context.Context, input memory.CreateRepairPlanInput) (memory.RepairPlan, error)
+	ReadRepairPlan(ctx context.Context, input memory.ReadRepairPlanInput) (memory.RepairPlan, error)
+	ApproveRepairPlan(ctx context.Context, input memory.ApproveRepairPlanInput) (memory.RepairPlan, error)
+	VerifyRepairPlan(ctx context.Context, input memory.VerifyRepairPlanInput) (memory.RepairPlan, error)
+	ReadDiagnostics(ctx context.Context, input memory.ReadQualityDiagnosticsInput) (memory.QualityDiagnostics, error)
 }
 
 type ManualMemoryMutationService interface {
@@ -158,6 +170,33 @@ type derivedInsightReplayRequest struct {
 	Metadata            map[string]any              `json:"metadata,omitempty"`
 }
 
+type qualityEvaluationCreateRequest struct {
+	Checks            []memory.QualityEvaluationCheck `json:"checks"`
+	Query             string                          `json:"query"`
+	ExpectedMemoryIDs []string                        `json:"expected_memory_ids"`
+	ContextBudget     int                             `json:"context_budget"`
+	Actor             string                          `json:"actor"`
+	Reason            string                          `json:"reason"`
+}
+
+type repairPlanCreateRequest struct {
+	EvaluationRunID string `json:"evaluation_run_id"`
+	Actor           string `json:"actor"`
+	Reason          string `json:"reason"`
+	DryRun          bool   `json:"dry_run"`
+}
+
+type repairPlanApproveRequest struct {
+	Actor  string `json:"actor"`
+	Reason string `json:"reason"`
+}
+
+type repairPlanVerifyRequest struct {
+	Checks []memory.QualityEvaluationCheck `json:"checks"`
+	Actor  string                          `json:"actor"`
+	Reason string                          `json:"reason"`
+}
+
 type governanceRecoveryRequest struct {
 	Reason       string `json:"reason"`
 	ScheduledFor string `json:"scheduled_for"`
@@ -203,7 +242,8 @@ type eventIngestRequest struct {
 }
 
 type eventIngestResponse struct {
-	EventID string `json:"event_id"`
+	EventID   string                          `json:"event_id"`
+	Admission *memory.AdmissionPressureReport `json:"admission,omitempty"`
 }
 
 type memorySearchRequest struct {
@@ -469,6 +509,53 @@ func NewHTTPHandler(deps HTTPDependencies) http.Handler {
 	)
 	mux.Handle("GET /v1/admin/derived-insight-replays/{replay_run_id}/report", adminDerivedInsightReplayReport)
 
+	adminQualityEvaluations := auth.APIKeyMiddleware(deps.AdminAPIKeys)(
+		auth.ScopeMiddleware()(
+			http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				handleAdminQualityEvaluations(w, r, deps.QualityAdmin)
+			}),
+		),
+	)
+	mux.Handle("GET /v1/admin/memory-quality/evaluations/{evaluation_run_id}", adminQualityEvaluations)
+	mux.Handle("POST /v1/admin/memory-quality/evaluations", adminQualityEvaluations)
+
+	adminQualityEvaluationFindings := auth.APIKeyMiddleware(deps.AdminAPIKeys)(
+		auth.ScopeMiddleware()(
+			http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				handleAdminQualityEvaluationFindings(w, r, deps.QualityAdmin)
+			}),
+		),
+	)
+	mux.Handle("GET /v1/admin/memory-quality/evaluations/{evaluation_run_id}/findings", adminQualityEvaluationFindings)
+
+	adminRepairPlans := auth.APIKeyMiddleware(deps.AdminAPIKeys)(
+		auth.ScopeMiddleware()(
+			http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				handleAdminRepairPlans(w, r, deps.QualityAdmin)
+			}),
+		),
+	)
+	mux.Handle("GET /v1/admin/memory-quality/repair-plans/{repair_plan_id}", adminRepairPlans)
+	mux.Handle("POST /v1/admin/memory-quality/repair-plans", adminRepairPlans)
+
+	adminRepairPlanAction := auth.APIKeyMiddleware(deps.AdminAPIKeys)(
+		auth.ScopeMiddleware()(
+			http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				handleAdminRepairPlanAction(w, r, deps.QualityAdmin)
+			}),
+		),
+	)
+	mux.Handle("POST /v1/admin/memory-quality/repair-plans/{repair_plan_action}", adminRepairPlanAction)
+
+	adminQualityDiagnostics := auth.APIKeyMiddleware(deps.AdminAPIKeys)(
+		auth.ScopeMiddleware()(
+			http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				handleAdminQualityDiagnostics(w, r, deps.QualityAdmin)
+			}),
+		),
+	)
+	mux.Handle("GET /v1/admin/memory-quality/diagnostics", adminQualityDiagnostics)
+
 	adminEmbeddingRebuilds := auth.APIKeyMiddleware(deps.AdminAPIKeys)(
 		auth.ScopeMiddleware()(
 			http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -675,6 +762,9 @@ func handleEventIngest(w http.ResponseWriter, r *http.Request, ingestor memory.E
 	event, err := ingestor.Ingest(r.Context(), input)
 	if err != nil {
 		status := http.StatusInternalServerError
+		if errors.Is(err, memory.ErrAdmissionRejected) {
+			status = http.StatusUnprocessableEntity
+		}
 		if errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) {
 			status = http.StatusGatewayTimeout
 		}
@@ -682,7 +772,7 @@ func handleEventIngest(w http.ResponseWriter, r *http.Request, ingestor memory.E
 		return
 	}
 
-	writeJSON(w, http.StatusCreated, eventIngestResponse{EventID: event.ID})
+	writeJSON(w, http.StatusCreated, eventIngestResponse{EventID: event.ID, Admission: event.Admission})
 }
 
 func handleMemoryList(w http.ResponseWriter, r *http.Request, reader MemoryQueryService) {
@@ -1421,6 +1511,185 @@ func handleAdminDerivedInsightReplayReport(w http.ResponseWriter, r *http.Reques
 	}
 
 	writeJSON(w, http.StatusOK, report)
+}
+
+func handleAdminQualityEvaluations(w http.ResponseWriter, r *http.Request, service QualityAdminService) {
+	if service == nil {
+		http.Error(w, "quality admin service is not configured", http.StatusServiceUnavailable)
+		return
+	}
+	scope, ok := auth.ScopeFromContext(r.Context())
+	if !ok {
+		http.Error(w, "scope context is missing", http.StatusInternalServerError)
+		return
+	}
+	switch r.Method {
+	case http.MethodPost:
+		var req qualityEvaluationCreateRequest
+		if !decodeJSONBody(w, r, &req) {
+			return
+		}
+		run, err := service.CreateEvaluation(r.Context(), memory.CreateQualityEvaluationInput{
+			Scope:             scope,
+			Checks:            req.Checks,
+			Query:             strings.TrimSpace(req.Query),
+			ExpectedMemoryIDs: append([]string(nil), req.ExpectedMemoryIDs...),
+			ContextBudget:     req.ContextBudget,
+			Actor:             strings.TrimSpace(req.Actor),
+			Reason:            strings.TrimSpace(req.Reason),
+		})
+		if err != nil {
+			writeAdminQualityError(w, err, "failed to create quality evaluation")
+			return
+		}
+		writeJSON(w, http.StatusCreated, run)
+	case http.MethodGet:
+		run, err := service.ReadEvaluation(r.Context(), memory.ReadQualityEvaluationRunInput{
+			Scope:           scope,
+			EvaluationRunID: strings.TrimSpace(r.PathValue("evaluation_run_id")),
+		})
+		if err != nil {
+			writeAdminQualityError(w, err, "failed to read quality evaluation")
+			return
+		}
+		writeJSON(w, http.StatusOK, run)
+	default:
+		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+	}
+}
+
+func handleAdminQualityEvaluationFindings(w http.ResponseWriter, r *http.Request, service QualityAdminService) {
+	if service == nil {
+		http.Error(w, "quality admin service is not configured", http.StatusServiceUnavailable)
+		return
+	}
+	scope, ok := auth.ScopeFromContext(r.Context())
+	if !ok {
+		http.Error(w, "scope context is missing", http.StatusInternalServerError)
+		return
+	}
+	findings, err := service.ListEvaluationFindings(r.Context(), memory.ListQualityEvaluationFindingsInput{
+		Scope:           scope,
+		EvaluationRunID: strings.TrimSpace(r.PathValue("evaluation_run_id")),
+	})
+	if err != nil {
+		writeAdminQualityError(w, err, "failed to read quality evaluation findings")
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"findings": findings})
+}
+
+func handleAdminRepairPlans(w http.ResponseWriter, r *http.Request, service QualityAdminService) {
+	if service == nil {
+		http.Error(w, "quality admin service is not configured", http.StatusServiceUnavailable)
+		return
+	}
+	scope, ok := auth.ScopeFromContext(r.Context())
+	if !ok {
+		http.Error(w, "scope context is missing", http.StatusInternalServerError)
+		return
+	}
+	switch r.Method {
+	case http.MethodPost:
+		var req repairPlanCreateRequest
+		if !decodeJSONBody(w, r, &req) {
+			return
+		}
+		plan, err := service.CreateRepairPlan(r.Context(), memory.CreateRepairPlanInput{
+			Scope:           scope,
+			EvaluationRunID: strings.TrimSpace(req.EvaluationRunID),
+			Actor:           strings.TrimSpace(req.Actor),
+			Reason:          strings.TrimSpace(req.Reason),
+			DryRun:          req.DryRun,
+		})
+		if err != nil {
+			writeAdminQualityError(w, err, "failed to create repair plan")
+			return
+		}
+		writeJSON(w, http.StatusCreated, plan)
+	case http.MethodGet:
+		plan, err := service.ReadRepairPlan(r.Context(), memory.ReadRepairPlanInput{
+			Scope:        scope,
+			RepairPlanID: strings.TrimSpace(r.PathValue("repair_plan_id")),
+		})
+		if err != nil {
+			writeAdminQualityError(w, err, "failed to read repair plan")
+			return
+		}
+		writeJSON(w, http.StatusOK, plan)
+	default:
+		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+	}
+}
+
+func handleAdminRepairPlanAction(w http.ResponseWriter, r *http.Request, service QualityAdminService) {
+	if service == nil {
+		http.Error(w, "quality admin service is not configured", http.StatusServiceUnavailable)
+		return
+	}
+	scope, ok := auth.ScopeFromContext(r.Context())
+	if !ok {
+		http.Error(w, "scope context is missing", http.StatusInternalServerError)
+		return
+	}
+	planID, actionName, ok := strings.Cut(r.PathValue("repair_plan_action"), ":")
+	if !ok || strings.TrimSpace(planID) == "" || (actionName != "approve" && actionName != "verify") {
+		http.Error(w, "invalid repair plan action target", http.StatusBadRequest)
+		return
+	}
+	if actionName == "verify" {
+		var req repairPlanVerifyRequest
+		if !decodeJSONBody(w, r, &req) {
+			return
+		}
+		plan, err := service.VerifyRepairPlan(r.Context(), memory.VerifyRepairPlanInput{
+			Scope:        scope,
+			RepairPlanID: strings.TrimSpace(planID),
+			Checks:       req.Checks,
+			Actor:        strings.TrimSpace(req.Actor),
+			Reason:       strings.TrimSpace(req.Reason),
+		})
+		if err != nil {
+			writeAdminQualityError(w, err, "failed to verify repair plan")
+			return
+		}
+		writeJSON(w, http.StatusOK, plan)
+		return
+	}
+	var req repairPlanApproveRequest
+	if !decodeJSONBody(w, r, &req) {
+		return
+	}
+	plan, err := service.ApproveRepairPlan(r.Context(), memory.ApproveRepairPlanInput{
+		Scope:        scope,
+		RepairPlanID: strings.TrimSpace(planID),
+		Actor:        strings.TrimSpace(req.Actor),
+		Reason:       strings.TrimSpace(req.Reason),
+		ApprovedAt:   time.Now().UTC(),
+	})
+	if err != nil {
+		writeAdminQualityError(w, err, "failed to approve repair plan")
+		return
+	}
+	writeJSON(w, http.StatusOK, plan)
+}
+
+func handleAdminQualityDiagnostics(w http.ResponseWriter, r *http.Request, service QualityAdminService) {
+	if service == nil {
+		http.Error(w, "quality admin service is not configured", http.StatusServiceUnavailable)
+		return
+	}
+	scope, ok := auth.ScopeFromContext(r.Context())
+	if !ok {
+		http.Error(w, "scope context is missing", http.StatusInternalServerError)
+		return
+	}
+	diagnostics, err := service.ReadDiagnostics(r.Context(), memory.ReadQualityDiagnosticsInput{Scope: scope})
+	if err != nil {
+		writeAdminQualityError(w, err, "failed to read quality diagnostics")
+		return
+	}
+	writeJSON(w, http.StatusOK, diagnostics)
 }
 
 func decodeDerivedInsightReplayRequest(w http.ResponseWriter, r *http.Request, mode memory.DerivedInsightReplayMode) (memory.DerivedInsightReplayRequest, bool) {
@@ -2378,6 +2647,21 @@ func writeAdminDerivedInsightReplayError(w http.ResponseWriter, err error, fallb
 		http.Error(w, "derived insight replay not found", http.StatusNotFound)
 	default:
 		if strings.Contains(err.Error(), "required") || strings.Contains(err.Error(), "invalid") || strings.Contains(err.Error(), "must be") || strings.Contains(err.Error(), "not supported") {
+			http.Error(w, err.Error(), http.StatusBadRequest)
+			return
+		}
+		http.Error(w, fallback, http.StatusInternalServerError)
+	}
+}
+
+func writeAdminQualityError(w http.ResponseWriter, err error, fallback string) {
+	switch {
+	case errors.Is(err, memory.ErrRepairActionRejected):
+		http.Error(w, err.Error(), http.StatusUnprocessableEntity)
+	case errors.Is(err, pgx.ErrNoRows):
+		http.Error(w, "quality resource not found", http.StatusNotFound)
+	default:
+		if strings.Contains(err.Error(), "required") || strings.Contains(err.Error(), "invalid") || strings.Contains(err.Error(), "must be") || strings.Contains(err.Error(), "exceeds") {
 			http.Error(w, err.Error(), http.StatusBadRequest)
 			return
 		}

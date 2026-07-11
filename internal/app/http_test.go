@@ -31,9 +31,10 @@ func (s stubReadinessChecker) Ready(ctx context.Context) error {
 }
 
 type stubEventIngestor struct {
-	gotInput memory.IngestEventInput
-	eventID  string
-	err      error
+	gotInput  memory.IngestEventInput
+	eventID   string
+	admission *memory.AdmissionPressureReport
+	err       error
 }
 
 func (s *stubEventIngestor) Ingest(ctx context.Context, input memory.IngestEventInput) (memory.RawEvent, error) {
@@ -42,7 +43,7 @@ func (s *stubEventIngestor) Ingest(ctx context.Context, input memory.IngestEvent
 		return memory.RawEvent{}, s.err
 	}
 
-	return memory.RawEvent{ID: s.eventID}, nil
+	return memory.RawEvent{ID: s.eventID, Admission: s.admission}, nil
 }
 
 type panicEventIngestor struct{}
@@ -566,7 +567,19 @@ func TestNewHTTPHandlerRejectsMissingAPIKeyForEvents(t *testing.T) {
 }
 
 func TestNewHTTPHandlerIngestsEvent(t *testing.T) {
-	ingestor := &stubEventIngestor{eventID: "evt_123"}
+	ingestor := &stubEventIngestor{
+		eventID: "evt_123",
+		admission: &memory.AdmissionPressureReport{
+			Decision:  memory.AdmissionPressureDecisionAcceptDegraded,
+			Operation: memory.AdmissionPressureOperationIngest,
+			Findings: []memory.QualityFinding{{
+				Code:      memory.QualityFindingSemanticProjectionDegraded,
+				Severity:  memory.QualityFindingSeverityWarning,
+				Component: memory.QualityFindingComponentEmbedding,
+				Category:  memory.QualityFindingCategorySemanticProjection,
+			}},
+		},
+	}
 	handler := NewHTTPHandler(HTTPDependencies{
 		Readiness:     stubReadinessChecker{},
 		APIKeys:       map[string]struct{}{"test-key": {}},
@@ -604,6 +617,14 @@ func TestNewHTTPHandlerIngestsEvent(t *testing.T) {
 
 	if ingestor.gotInput.EventType != "conversation.message" {
 		t.Fatalf("EventType = %q, want %q", ingestor.gotInput.EventType, "conversation.message")
+	}
+
+	var response eventIngestResponse
+	if err := json.NewDecoder(rec.Body).Decode(&response); err != nil {
+		t.Fatalf("json.NewDecoder() error = %v", err)
+	}
+	if response.EventID != "evt_123" || response.Admission == nil || response.Admission.Decision != memory.AdmissionPressureDecisionAcceptDegraded {
+		t.Fatalf("response = %+v, want event id and degraded admission metadata", response)
 	}
 }
 
@@ -685,6 +706,29 @@ func TestNewHTTPHandlerReturnsServerErrorWhenIngestFails(t *testing.T) {
 
 	if rec.Code != http.StatusInternalServerError {
 		t.Fatalf("status = %d, want %d", rec.Code, http.StatusInternalServerError)
+	}
+}
+
+func TestNewHTTPHandlerReturnsUnprocessableWhenAdmissionRejectsIngest(t *testing.T) {
+	ingestor := &stubEventIngestor{err: memory.ErrAdmissionRejected}
+	handler := NewHTTPHandler(HTTPDependencies{
+		Readiness:     stubReadinessChecker{},
+		APIKeys:       map[string]struct{}{"test-key": {}},
+		EventIngestor: ingestor,
+	})
+
+	req := httptest.NewRequest(http.MethodPost, "/v1/events", bytes.NewBufferString(`{"event_type":"conversation.message","content":"hello"}`))
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("X-API-Key", "test-key")
+	req.Header.Set("X-Stele-Tenant", "tenant-a")
+	req.Header.Set("X-Stele-Project", "project-a")
+	req.Header.Set("X-Stele-Namespace", "namespace-a")
+	rec := httptest.NewRecorder()
+
+	handler.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusUnprocessableEntity {
+		t.Fatalf("status = %d, want %d", rec.Code, http.StatusUnprocessableEntity)
 	}
 }
 

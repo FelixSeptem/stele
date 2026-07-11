@@ -191,6 +191,29 @@ func TestSpecYAMLIncludesDerivedInsightReplayRoutesAndSchemas(t *testing.T) {
 	}
 }
 
+func TestSpecYAMLIncludesMemoryQualityRepairRoutesAndSchemas(t *testing.T) {
+	for _, want := range []string{
+		"/v1/admin/memory-quality/evaluations",
+		"/v1/admin/memory-quality/evaluations/{evaluation_run_id}",
+		"/v1/admin/memory-quality/evaluations/{evaluation_run_id}/findings",
+		"/v1/admin/memory-quality/repair-plans",
+		"/v1/admin/memory-quality/repair-plans/{repair_plan_id}",
+		"/v1/admin/memory-quality/repair-plans/{repair_plan_id}:approve",
+		"/v1/admin/memory-quality/repair-plans/{repair_plan_id}:verify",
+		"AdmissionPressureReport",
+		"QualityEvaluationRun",
+		"QualityEvaluationFinding",
+		"RepairPlan",
+		"RepairAction",
+		"accept_degraded",
+		"semantic_projection_degraded",
+	} {
+		if !strings.Contains(SpecYAML(), want) {
+			t.Fatalf("SpecYAML() missing %q", want)
+		}
+	}
+}
+
 func TestSpecYAMLIncludesEmbeddingRecoveryRoutesAndSchemas(t *testing.T) {
 	for _, want := range []string{
 		"/v1/admin/embedding/rebuilds/{memory_id}:retry",
