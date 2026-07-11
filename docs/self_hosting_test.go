@@ -94,3 +94,53 @@ func TestSelfHostingDocsIncludeMemoryQualityRepairLoop(t *testing.T) {
 		}
 	}
 }
+
+func TestSelfHostingDocsIncludeScopeProofAndMemorySessionLoop(t *testing.T) {
+	contentBytes, err := os.ReadFile("self-hosting.md")
+	if err != nil {
+		t.Fatalf("read self-hosting.md: %v", err)
+	}
+	content := string(contentBytes)
+	spec := openapi.SpecYAML()
+
+	for _, want := range []string{
+		"Durable scope proof and memory session loop",
+		"/v1/admin/scope-proofs",
+		"/v1/admin/scope-proofs/<proof-run-id>/report",
+		"/v1/admin/scope-proofs/<proof-run-id>:rerun",
+		"/v1/memory-sessions",
+		"/v1/memory-sessions/<session-id>/turns",
+		"/v1/memory-sessions/<session-id>/turns/<turn-id>:outcome",
+		"/v1/memory-sessions/<session-id>:verify",
+		"/v1/memory-sessions/<session-id>/report",
+		"inspect_context_diagnostics",
+		"open_quality_evaluation",
+		"open_repair_plan",
+		"stele_scope_proof_steps_total",
+		"stele_memory_session_verifications_total",
+		"SDK/UI",
+		"external agent runtime integration",
+		"capacity/load proof",
+		"backup/restore proof",
+		"long-term memory usefulness scoring",
+	} {
+		if !strings.Contains(content, want) {
+			t.Fatalf("self-hosting proof/session docs missing %q", want)
+		}
+	}
+
+	for _, route := range []string{
+		"/v1/admin/scope-proofs",
+		"/v1/admin/scope-proofs/{proof_run_id}/report",
+		"/v1/admin/scope-proofs/{proof_run_id}:rerun",
+		"/v1/memory-sessions",
+		"/v1/memory-sessions/{session_id}/turns",
+		"/v1/memory-sessions/{session_id}/turns/{turn_id}:outcome",
+		"/v1/memory-sessions/{session_id}:verify",
+		"/v1/memory-sessions/{session_id}/report",
+	} {
+		if !strings.Contains(spec, route) {
+			t.Fatalf("OpenAPI spec missing documented proof/session route %q", route)
+		}
+	}
+}

@@ -420,6 +420,118 @@ CREATE TABLE IF NOT EXISTS admission_pressure_audit (
     created_at timestamptz NOT NULL DEFAULT now()
 );
 
+CREATE TABLE IF NOT EXISTS scope_proof_runs (
+    id text PRIMARY KEY,
+    tenant text NOT NULL,
+    project text NOT NULL,
+    namespace text NOT NULL,
+    status text NOT NULL,
+    verdict text NOT NULL,
+    checks text[] NOT NULL DEFAULT '{}'::text[],
+    fixture_mode text NOT NULL,
+    actor text NOT NULL,
+    reason text NOT NULL,
+    rerun_of text REFERENCES scope_proof_runs(id),
+    linked_session_id text,
+    failure_category text,
+    summary jsonb NOT NULL DEFAULT '{}'::jsonb,
+    created_at timestamptz NOT NULL DEFAULT now(),
+    updated_at timestamptz NOT NULL DEFAULT now(),
+    started_at timestamptz,
+    finished_at timestamptz
+);
+
+CREATE TABLE IF NOT EXISTS scope_proof_steps (
+    id text PRIMARY KEY,
+    proof_id text NOT NULL REFERENCES scope_proof_runs(id) ON DELETE CASCADE,
+    tenant text NOT NULL,
+    project text NOT NULL,
+    namespace text NOT NULL,
+    step text NOT NULL,
+    status text NOT NULL,
+    verdict text,
+    failure_category text,
+    evidence jsonb NOT NULL DEFAULT '{}'::jsonb,
+    attempt integer NOT NULL DEFAULT 0,
+    worker_id text,
+    lease_until timestamptz,
+    last_error text,
+    next_attempt_at timestamptz,
+    created_at timestamptz NOT NULL DEFAULT now(),
+    updated_at timestamptz NOT NULL DEFAULT now(),
+    completed_at timestamptz
+);
+
+CREATE TABLE IF NOT EXISTS memory_session_runs (
+    id text PRIMARY KEY,
+    tenant text NOT NULL,
+    project text NOT NULL,
+    namespace text NOT NULL,
+    status text NOT NULL,
+    verdict text NOT NULL,
+    actor text,
+    reason text,
+    metadata jsonb NOT NULL DEFAULT '{}'::jsonb,
+    failure_category text,
+    created_at timestamptz NOT NULL DEFAULT now(),
+    updated_at timestamptz NOT NULL DEFAULT now(),
+    started_at timestamptz,
+    finished_at timestamptz
+);
+
+CREATE TABLE IF NOT EXISTS memory_session_turns (
+    id text PRIMARY KEY,
+    session_id text NOT NULL REFERENCES memory_session_runs(id) ON DELETE CASCADE,
+    tenant text NOT NULL,
+    project text NOT NULL,
+    namespace text NOT NULL,
+    status text NOT NULL,
+    query text NOT NULL,
+    context_evidence jsonb NOT NULL DEFAULT '{}'::jsonb,
+    outcome_event_ids text[] NOT NULL DEFAULT '{}'::text[],
+    expected_recall text[] NOT NULL DEFAULT '{}'::text[],
+    verification_status text,
+    failure_category text,
+    created_at timestamptz NOT NULL DEFAULT now(),
+    updated_at timestamptz NOT NULL DEFAULT now(),
+    verified_at timestamptz
+);
+
+CREATE TABLE IF NOT EXISTS memory_session_verifications (
+    id text PRIMARY KEY,
+    session_id text NOT NULL REFERENCES memory_session_runs(id) ON DELETE CASCADE,
+    turn_id text REFERENCES memory_session_turns(id) ON DELETE CASCADE,
+    tenant text NOT NULL,
+    project text NOT NULL,
+    namespace text NOT NULL,
+    status text NOT NULL,
+    verdict text NOT NULL,
+    expected_recall text[] NOT NULL DEFAULT '{}'::text[],
+    evidence jsonb NOT NULL DEFAULT '{}'::jsonb,
+    failure_category text,
+    attempt integer NOT NULL DEFAULT 0,
+    worker_id text,
+    lease_until timestamptz,
+    last_error text,
+    next_attempt_at timestamptz,
+    created_at timestamptz NOT NULL DEFAULT now(),
+    updated_at timestamptz NOT NULL DEFAULT now(),
+    completed_at timestamptz
+);
+
+CREATE TABLE IF NOT EXISTS memory_loop_evidence_links (
+    id text PRIMARY KEY,
+    tenant text NOT NULL,
+    project text NOT NULL,
+    namespace text NOT NULL,
+    owner_kind text NOT NULL,
+    owner_id text NOT NULL,
+    evidence_kind text NOT NULL,
+    evidence_id text NOT NULL,
+    metadata jsonb NOT NULL DEFAULT '{}'::jsonb,
+    created_at timestamptz NOT NULL DEFAULT now()
+);
+
 CREATE INDEX IF NOT EXISTS raw_events_scope_created_at_idx
     ON raw_events (tenant, project, namespace, created_at DESC);
 
@@ -546,3 +658,30 @@ CREATE INDEX IF NOT EXISTS repair_actions_scope_status_next_attempt_idx
 
 CREATE INDEX IF NOT EXISTS admission_pressure_audit_scope_observed_at_idx
     ON admission_pressure_audit (tenant, project, namespace, observed_at DESC);
+
+CREATE INDEX IF NOT EXISTS scope_proof_runs_scope_updated_at_idx
+    ON scope_proof_runs (tenant, project, namespace, updated_at DESC);
+
+CREATE INDEX IF NOT EXISTS scope_proof_runs_scope_status_updated_at_idx
+    ON scope_proof_runs (tenant, project, namespace, status, updated_at DESC);
+
+CREATE INDEX IF NOT EXISTS scope_proof_steps_scope_status_next_attempt_idx
+    ON scope_proof_steps (tenant, project, namespace, status, next_attempt_at, updated_at ASC);
+
+CREATE INDEX IF NOT EXISTS scope_proof_steps_proof_created_at_idx
+    ON scope_proof_steps (proof_id, created_at ASC);
+
+CREATE INDEX IF NOT EXISTS memory_session_runs_scope_updated_at_idx
+    ON memory_session_runs (tenant, project, namespace, updated_at DESC);
+
+CREATE INDEX IF NOT EXISTS memory_session_runs_scope_status_updated_at_idx
+    ON memory_session_runs (tenant, project, namespace, status, updated_at DESC);
+
+CREATE INDEX IF NOT EXISTS memory_session_turns_session_created_at_idx
+    ON memory_session_turns (session_id, created_at ASC);
+
+CREATE INDEX IF NOT EXISTS memory_session_verifications_scope_status_next_attempt_idx
+    ON memory_session_verifications (tenant, project, namespace, status, next_attempt_at, updated_at ASC);
+
+CREATE INDEX IF NOT EXISTS memory_loop_evidence_links_owner_idx
+    ON memory_loop_evidence_links (tenant, project, namespace, owner_kind, owner_id, created_at DESC);

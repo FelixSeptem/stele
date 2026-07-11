@@ -42,6 +42,8 @@ type HTTPDependencies struct {
 	DerivedInsightAdmin       DerivedInsightAdminService
 	DerivedInsightReplayAdmin DerivedInsightReplayAdminService
 	QualityAdmin              QualityAdminService
+	ScopeProofAdmin           ScopeProofAdminService
+	MemorySession             MemorySessionService
 	MemoryHistoryRead         MemoryHistoryReader
 	JobExecutionRead          JobExecutionReader
 	Metrics                   MetricsRecorder
@@ -104,6 +106,24 @@ type QualityAdminService interface {
 	ApproveRepairPlan(ctx context.Context, input memory.ApproveRepairPlanInput) (memory.RepairPlan, error)
 	VerifyRepairPlan(ctx context.Context, input memory.VerifyRepairPlanInput) (memory.RepairPlan, error)
 	ReadDiagnostics(ctx context.Context, input memory.ReadQualityDiagnosticsInput) (memory.QualityDiagnostics, error)
+}
+
+type ScopeProofAdminService interface {
+	CreateProofRun(ctx context.Context, input memory.CreateScopeProofRunInput) (memory.ScopeProofRun, error)
+	ListProofRuns(ctx context.Context, input memory.ListScopeProofRunsInput) ([]memory.ScopeProofRun, error)
+	ReadProofRun(ctx context.Context, input memory.ReadScopeProofRunInput) (memory.ScopeProofRun, error)
+	ReadProofReport(ctx context.Context, input memory.ReadScopeProofRunInput) (memory.ScopeProofReport, error)
+	RerunProofRun(ctx context.Context, input memory.RerunScopeProofRunInput) (memory.ScopeProofRun, error)
+}
+
+type MemorySessionService interface {
+	CreateSession(ctx context.Context, input memory.CreateMemorySessionInput) (memory.MemorySessionRun, error)
+	ListSessions(ctx context.Context, input memory.ListMemorySessionRunsInput) ([]memory.MemorySessionRun, error)
+	ReadSession(ctx context.Context, input memory.ReadMemorySessionRunInput) (memory.MemorySessionRun, error)
+	CreateTurn(ctx context.Context, input memory.CreateMemorySessionTurnInput) (memory.MemorySessionTurn, error)
+	RecordTurnOutcome(ctx context.Context, input memory.RecordMemorySessionTurnOutcomeInput) (memory.MemorySessionTurn, error)
+	RequestVerification(ctx context.Context, input memory.RequestMemorySessionVerificationInput) (memory.MemorySessionVerification, error)
+	ReadSessionReport(ctx context.Context, input memory.ReadMemorySessionRunInput) (memory.MemorySessionReport, error)
 }
 
 type ManualMemoryMutationService interface {
@@ -177,6 +197,42 @@ type qualityEvaluationCreateRequest struct {
 	ContextBudget     int                             `json:"context_budget"`
 	Actor             string                          `json:"actor"`
 	Reason            string                          `json:"reason"`
+}
+
+type scopeProofCreateRequest struct {
+	Checks      []memory.ScopeProofCheck     `json:"checks"`
+	FixtureMode memory.ScopeProofFixtureMode `json:"fixture_mode"`
+	Actor       string                       `json:"actor"`
+	Reason      string                       `json:"reason"`
+}
+
+type scopeProofRerunRequest struct {
+	Actor  string `json:"actor"`
+	Reason string `json:"reason"`
+}
+
+type memorySessionCreateRequest struct {
+	Actor    string         `json:"actor"`
+	Reason   string         `json:"reason"`
+	Metadata map[string]any `json:"metadata,omitempty"`
+}
+
+type memorySessionTurnCreateRequest struct {
+	Query                     string `json:"query"`
+	ContextBudget             int    `json:"context_budget"`
+	IncludeRelations          bool   `json:"include_relations"`
+	IncludeExperienceInsights bool   `json:"include_experience_insights"`
+	IncludeDiagnostics        bool   `json:"include_diagnostics"`
+}
+
+type memorySessionTurnOutcomeRequest struct {
+	OutcomeEventIDs []string `json:"outcome_event_ids"`
+	ExpectedRecall  []string `json:"expected_recall"`
+}
+
+type memorySessionVerificationRequest struct {
+	TurnID         string   `json:"turn_id"`
+	ExpectedRecall []string `json:"expected_recall"`
 }
 
 type repairPlanCreateRequest struct {
@@ -365,6 +421,61 @@ func NewHTTPHandler(deps HTTPDependencies) http.Handler {
 	)
 	mux.Handle("POST /v1/context/assemble", protectedContext)
 
+	protectedMemorySessions := auth.APIKeyMiddleware(deps.APIKeys)(
+		auth.ScopeMiddleware()(
+			http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				handleMemorySessions(w, r, deps.MemorySession)
+			}),
+		),
+	)
+	mux.Handle("GET /v1/memory-sessions", protectedMemorySessions)
+	mux.Handle("POST /v1/memory-sessions", protectedMemorySessions)
+
+	protectedMemorySessionDetail := auth.APIKeyMiddleware(deps.APIKeys)(
+		auth.ScopeMiddleware()(
+			http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				handleMemorySessionDetail(w, r, deps.MemorySession)
+			}),
+		),
+	)
+	mux.Handle("GET /v1/memory-sessions/{session_id}", protectedMemorySessionDetail)
+
+	protectedMemorySessionReport := auth.APIKeyMiddleware(deps.APIKeys)(
+		auth.ScopeMiddleware()(
+			http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				handleMemorySessionReport(w, r, deps.MemorySession)
+			}),
+		),
+	)
+	mux.Handle("GET /v1/memory-sessions/{session_id}/report", protectedMemorySessionReport)
+
+	protectedMemorySessionTurns := auth.APIKeyMiddleware(deps.APIKeys)(
+		auth.ScopeMiddleware()(
+			http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				handleMemorySessionTurns(w, r, deps.MemorySession)
+			}),
+		),
+	)
+	mux.Handle("POST /v1/memory-sessions/{session_id}/turns", protectedMemorySessionTurns)
+
+	protectedMemorySessionTurnAction := auth.APIKeyMiddleware(deps.APIKeys)(
+		auth.ScopeMiddleware()(
+			http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				handleMemorySessionTurnAction(w, r, deps.MemorySession)
+			}),
+		),
+	)
+	mux.Handle("POST /v1/memory-sessions/{session_id}/turns/{turn_action}", protectedMemorySessionTurnAction)
+
+	protectedMemorySessionAction := auth.APIKeyMiddleware(deps.APIKeys)(
+		auth.ScopeMiddleware()(
+			http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				handleMemorySessionAction(w, r, deps.MemorySession)
+			}),
+		),
+	)
+	mux.Handle("POST /v1/memory-sessions/{session_action}", protectedMemorySessionAction)
+
 	adminGovernance := auth.APIKeyMiddleware(deps.AdminAPIKeys)(
 		http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 			handleGovernanceStatus(w, r, deps.GovernanceStatusRead)
@@ -508,6 +619,43 @@ func NewHTTPHandler(deps HTTPDependencies) http.Handler {
 		),
 	)
 	mux.Handle("GET /v1/admin/derived-insight-replays/{replay_run_id}/report", adminDerivedInsightReplayReport)
+
+	adminScopeProofs := auth.APIKeyMiddleware(deps.AdminAPIKeys)(
+		auth.ScopeMiddleware()(
+			http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				handleAdminScopeProofs(w, r, deps.ScopeProofAdmin)
+			}),
+		),
+	)
+	mux.Handle("GET /v1/admin/scope-proofs", adminScopeProofs)
+	mux.Handle("POST /v1/admin/scope-proofs", adminScopeProofs)
+
+	adminScopeProofDetail := auth.APIKeyMiddleware(deps.AdminAPIKeys)(
+		auth.ScopeMiddleware()(
+			http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				handleAdminScopeProofDetail(w, r, deps.ScopeProofAdmin)
+			}),
+		),
+	)
+	mux.Handle("GET /v1/admin/scope-proofs/{proof_run_id}", adminScopeProofDetail)
+
+	adminScopeProofReport := auth.APIKeyMiddleware(deps.AdminAPIKeys)(
+		auth.ScopeMiddleware()(
+			http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				handleAdminScopeProofReport(w, r, deps.ScopeProofAdmin)
+			}),
+		),
+	)
+	mux.Handle("GET /v1/admin/scope-proofs/{proof_run_id}/report", adminScopeProofReport)
+
+	adminScopeProofAction := auth.APIKeyMiddleware(deps.AdminAPIKeys)(
+		auth.ScopeMiddleware()(
+			http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				handleAdminScopeProofAction(w, r, deps.ScopeProofAdmin)
+			}),
+		),
+	)
+	mux.Handle("POST /v1/admin/scope-proofs/{proof_run_action}", adminScopeProofAction)
 
 	adminQualityEvaluations := auth.APIKeyMiddleware(deps.AdminAPIKeys)(
 		auth.ScopeMiddleware()(
@@ -1003,6 +1151,191 @@ func handleContextAssembly(w http.ResponseWriter, r *http.Request, assembler ret
 	}
 
 	writeJSON(w, http.StatusOK, result)
+}
+
+func handleMemorySessions(w http.ResponseWriter, r *http.Request, service MemorySessionService) {
+	if service == nil {
+		http.Error(w, "memory session service is not configured", http.StatusServiceUnavailable)
+		return
+	}
+	scope, ok := auth.ScopeFromContext(r.Context())
+	if !ok {
+		http.Error(w, "scope context is missing", http.StatusInternalServerError)
+		return
+	}
+	switch r.Method {
+	case http.MethodPost:
+		var req memorySessionCreateRequest
+		if !decodeJSONBody(w, r, &req) {
+			return
+		}
+		session, err := service.CreateSession(r.Context(), memory.CreateMemorySessionInput{
+			Scope:    scope,
+			Actor:    strings.TrimSpace(req.Actor),
+			Reason:   strings.TrimSpace(req.Reason),
+			Metadata: req.Metadata,
+		})
+		if err != nil {
+			writeMemorySessionError(w, err, "failed to create memory session")
+			return
+		}
+		writeJSON(w, http.StatusCreated, session)
+	case http.MethodGet:
+		limit := 20
+		if raw := strings.TrimSpace(r.URL.Query().Get("limit")); raw != "" {
+			parsed, err := strconv.Atoi(raw)
+			if err != nil || parsed < 0 {
+				http.Error(w, "invalid limit", http.StatusBadRequest)
+				return
+			}
+			limit = parsed
+		}
+		sessions, err := service.ListSessions(r.Context(), memory.ListMemorySessionRunsInput{Scope: scope, Limit: limit})
+		if err != nil {
+			writeMemorySessionError(w, err, "failed to list memory sessions")
+			return
+		}
+		writeJSON(w, http.StatusOK, map[string]any{"memory_sessions": sessions})
+	default:
+		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+	}
+}
+
+func handleMemorySessionDetail(w http.ResponseWriter, r *http.Request, service MemorySessionService) {
+	if service == nil {
+		http.Error(w, "memory session service is not configured", http.StatusServiceUnavailable)
+		return
+	}
+	scope, ok := auth.ScopeFromContext(r.Context())
+	if !ok {
+		http.Error(w, "scope context is missing", http.StatusInternalServerError)
+		return
+	}
+	session, err := service.ReadSession(r.Context(), memory.ReadMemorySessionRunInput{
+		Scope:     scope,
+		SessionID: strings.TrimSpace(r.PathValue("session_id")),
+	})
+	if err != nil {
+		writeMemorySessionError(w, err, "failed to read memory session")
+		return
+	}
+	writeJSON(w, http.StatusOK, session)
+}
+
+func handleMemorySessionReport(w http.ResponseWriter, r *http.Request, service MemorySessionService) {
+	if service == nil {
+		http.Error(w, "memory session service is not configured", http.StatusServiceUnavailable)
+		return
+	}
+	scope, ok := auth.ScopeFromContext(r.Context())
+	if !ok {
+		http.Error(w, "scope context is missing", http.StatusInternalServerError)
+		return
+	}
+	report, err := service.ReadSessionReport(r.Context(), memory.ReadMemorySessionRunInput{
+		Scope:     scope,
+		SessionID: strings.TrimSpace(r.PathValue("session_id")),
+	})
+	if err != nil {
+		writeMemorySessionError(w, err, "failed to read memory session report")
+		return
+	}
+	writeJSON(w, http.StatusOK, report)
+}
+
+func handleMemorySessionTurns(w http.ResponseWriter, r *http.Request, service MemorySessionService) {
+	if service == nil {
+		http.Error(w, "memory session service is not configured", http.StatusServiceUnavailable)
+		return
+	}
+	scope, ok := auth.ScopeFromContext(r.Context())
+	if !ok {
+		http.Error(w, "scope context is missing", http.StatusInternalServerError)
+		return
+	}
+	var req memorySessionTurnCreateRequest
+	if !decodeJSONBody(w, r, &req) {
+		return
+	}
+	turn, err := service.CreateTurn(r.Context(), memory.CreateMemorySessionTurnInput{
+		Scope:                     scope,
+		SessionID:                 strings.TrimSpace(r.PathValue("session_id")),
+		Query:                     strings.TrimSpace(req.Query),
+		ContextBudget:             req.ContextBudget,
+		IncludeRelations:          req.IncludeRelations,
+		IncludeExperienceInsights: req.IncludeExperienceInsights,
+		IncludeDiagnostics:        req.IncludeDiagnostics,
+	})
+	if err != nil {
+		writeMemorySessionError(w, err, "failed to create memory session turn")
+		return
+	}
+	writeJSON(w, http.StatusCreated, turn)
+}
+
+func handleMemorySessionTurnAction(w http.ResponseWriter, r *http.Request, service MemorySessionService) {
+	if service == nil {
+		http.Error(w, "memory session service is not configured", http.StatusServiceUnavailable)
+		return
+	}
+	scope, ok := auth.ScopeFromContext(r.Context())
+	if !ok {
+		http.Error(w, "scope context is missing", http.StatusInternalServerError)
+		return
+	}
+	turnID, actionName, ok := strings.Cut(r.PathValue("turn_action"), ":")
+	if !ok || strings.TrimSpace(turnID) == "" || actionName != "outcome" {
+		http.Error(w, "invalid memory session turn action target", http.StatusBadRequest)
+		return
+	}
+	var req memorySessionTurnOutcomeRequest
+	if !decodeJSONBody(w, r, &req) {
+		return
+	}
+	turn, err := service.RecordTurnOutcome(r.Context(), memory.RecordMemorySessionTurnOutcomeInput{
+		Scope:           scope,
+		SessionID:       strings.TrimSpace(r.PathValue("session_id")),
+		TurnID:          strings.TrimSpace(turnID),
+		OutcomeEventIDs: append([]string(nil), req.OutcomeEventIDs...),
+		ExpectedRecall:  append([]string(nil), req.ExpectedRecall...),
+	})
+	if err != nil {
+		writeMemorySessionError(w, err, "failed to record memory session turn outcome")
+		return
+	}
+	writeJSON(w, http.StatusOK, turn)
+}
+
+func handleMemorySessionAction(w http.ResponseWriter, r *http.Request, service MemorySessionService) {
+	if service == nil {
+		http.Error(w, "memory session service is not configured", http.StatusServiceUnavailable)
+		return
+	}
+	scope, ok := auth.ScopeFromContext(r.Context())
+	if !ok {
+		http.Error(w, "scope context is missing", http.StatusInternalServerError)
+		return
+	}
+	sessionID, actionName, ok := strings.Cut(r.PathValue("session_action"), ":")
+	if !ok || strings.TrimSpace(sessionID) == "" || actionName != "verify" {
+		http.Error(w, "invalid memory session action target", http.StatusBadRequest)
+		return
+	}
+	var req memorySessionVerificationRequest
+	if !decodeJSONBody(w, r, &req) {
+		return
+	}
+	verification, err := service.RequestVerification(r.Context(), memory.RequestMemorySessionVerificationInput{
+		Scope:          scope,
+		SessionID:      strings.TrimSpace(sessionID),
+		TurnID:         strings.TrimSpace(req.TurnID),
+		ExpectedRecall: append([]string(nil), req.ExpectedRecall...),
+	})
+	if err != nil {
+		writeMemorySessionError(w, err, "failed to request memory session verification")
+		return
+	}
+	writeJSON(w, http.StatusAccepted, verification)
 }
 
 func handleGovernanceStatus(w http.ResponseWriter, r *http.Request, reader GovernanceStatusReader) {
@@ -1511,6 +1844,129 @@ func handleAdminDerivedInsightReplayReport(w http.ResponseWriter, r *http.Reques
 	}
 
 	writeJSON(w, http.StatusOK, report)
+}
+
+func handleAdminScopeProofs(w http.ResponseWriter, r *http.Request, service ScopeProofAdminService) {
+	if service == nil {
+		http.Error(w, "scope proof admin service is not configured", http.StatusServiceUnavailable)
+		return
+	}
+	scope, ok := auth.ScopeFromContext(r.Context())
+	if !ok {
+		http.Error(w, "scope context is missing", http.StatusInternalServerError)
+		return
+	}
+	switch r.Method {
+	case http.MethodPost:
+		var req scopeProofCreateRequest
+		if !decodeJSONBody(w, r, &req) {
+			return
+		}
+		run, err := service.CreateProofRun(r.Context(), memory.CreateScopeProofRunInput{
+			Scope:       scope,
+			Checks:      req.Checks,
+			FixtureMode: req.FixtureMode,
+			Actor:       strings.TrimSpace(req.Actor),
+			Reason:      strings.TrimSpace(req.Reason),
+		})
+		if err != nil {
+			writeAdminScopeProofError(w, err, "failed to create scope proof")
+			return
+		}
+		writeJSON(w, http.StatusCreated, run)
+	case http.MethodGet:
+		limit := 20
+		if raw := strings.TrimSpace(r.URL.Query().Get("limit")); raw != "" {
+			parsed, err := strconv.Atoi(raw)
+			if err != nil || parsed < 0 {
+				http.Error(w, "invalid limit", http.StatusBadRequest)
+				return
+			}
+			limit = parsed
+		}
+		runs, err := service.ListProofRuns(r.Context(), memory.ListScopeProofRunsInput{Scope: scope, Limit: limit})
+		if err != nil {
+			writeAdminScopeProofError(w, err, "failed to list scope proofs")
+			return
+		}
+		writeJSON(w, http.StatusOK, map[string]any{"proof_runs": runs})
+	default:
+		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+	}
+}
+
+func handleAdminScopeProofDetail(w http.ResponseWriter, r *http.Request, service ScopeProofAdminService) {
+	if service == nil {
+		http.Error(w, "scope proof admin service is not configured", http.StatusServiceUnavailable)
+		return
+	}
+	scope, ok := auth.ScopeFromContext(r.Context())
+	if !ok {
+		http.Error(w, "scope context is missing", http.StatusInternalServerError)
+		return
+	}
+	run, err := service.ReadProofRun(r.Context(), memory.ReadScopeProofRunInput{
+		Scope:   scope,
+		ProofID: strings.TrimSpace(r.PathValue("proof_run_id")),
+	})
+	if err != nil {
+		writeAdminScopeProofError(w, err, "failed to read scope proof")
+		return
+	}
+	writeJSON(w, http.StatusOK, run)
+}
+
+func handleAdminScopeProofReport(w http.ResponseWriter, r *http.Request, service ScopeProofAdminService) {
+	if service == nil {
+		http.Error(w, "scope proof admin service is not configured", http.StatusServiceUnavailable)
+		return
+	}
+	scope, ok := auth.ScopeFromContext(r.Context())
+	if !ok {
+		http.Error(w, "scope context is missing", http.StatusInternalServerError)
+		return
+	}
+	report, err := service.ReadProofReport(r.Context(), memory.ReadScopeProofRunInput{
+		Scope:   scope,
+		ProofID: strings.TrimSpace(r.PathValue("proof_run_id")),
+	})
+	if err != nil {
+		writeAdminScopeProofError(w, err, "failed to read scope proof report")
+		return
+	}
+	writeJSON(w, http.StatusOK, report)
+}
+
+func handleAdminScopeProofAction(w http.ResponseWriter, r *http.Request, service ScopeProofAdminService) {
+	if service == nil {
+		http.Error(w, "scope proof admin service is not configured", http.StatusServiceUnavailable)
+		return
+	}
+	scope, ok := auth.ScopeFromContext(r.Context())
+	if !ok {
+		http.Error(w, "scope context is missing", http.StatusInternalServerError)
+		return
+	}
+	proofID, actionName, ok := strings.Cut(r.PathValue("proof_run_action"), ":")
+	if !ok || strings.TrimSpace(proofID) == "" || actionName != "rerun" {
+		http.Error(w, "invalid scope proof action target", http.StatusBadRequest)
+		return
+	}
+	var req scopeProofRerunRequest
+	if !decodeJSONBody(w, r, &req) {
+		return
+	}
+	run, err := service.RerunProofRun(r.Context(), memory.RerunScopeProofRunInput{
+		Scope:   scope,
+		ProofID: strings.TrimSpace(proofID),
+		Actor:   strings.TrimSpace(req.Actor),
+		Reason:  strings.TrimSpace(req.Reason),
+	})
+	if err != nil {
+		writeAdminScopeProofError(w, err, "failed to rerun scope proof")
+		return
+	}
+	writeJSON(w, http.StatusCreated, run)
 }
 
 func handleAdminQualityEvaluations(w http.ResponseWriter, r *http.Request, service QualityAdminService) {
@@ -2662,6 +3118,34 @@ func writeAdminQualityError(w http.ResponseWriter, err error, fallback string) {
 		http.Error(w, "quality resource not found", http.StatusNotFound)
 	default:
 		if strings.Contains(err.Error(), "required") || strings.Contains(err.Error(), "invalid") || strings.Contains(err.Error(), "must be") || strings.Contains(err.Error(), "exceeds") {
+			http.Error(w, err.Error(), http.StatusBadRequest)
+			return
+		}
+		http.Error(w, fallback, http.StatusInternalServerError)
+	}
+}
+
+func writeAdminScopeProofError(w http.ResponseWriter, err error, fallback string) {
+	switch {
+	case errors.Is(err, pgx.ErrNoRows):
+		http.Error(w, "scope proof resource not found", http.StatusNotFound)
+	default:
+		if strings.Contains(err.Error(), "required") || strings.Contains(err.Error(), "invalid") || strings.Contains(err.Error(), "must be") {
+			http.Error(w, err.Error(), http.StatusBadRequest)
+			return
+		}
+		http.Error(w, fallback, http.StatusInternalServerError)
+	}
+}
+
+func writeMemorySessionError(w http.ResponseWriter, err error, fallback string) {
+	switch {
+	case errors.Is(err, pgx.ErrNoRows):
+		http.Error(w, "memory session resource not found", http.StatusNotFound)
+	case strings.Contains(err.Error(), "not configured"):
+		http.Error(w, err.Error(), http.StatusServiceUnavailable)
+	default:
+		if strings.Contains(err.Error(), "required") || strings.Contains(err.Error(), "invalid") || strings.Contains(err.Error(), "must be") {
 			http.Error(w, err.Error(), http.StatusBadRequest)
 			return
 		}

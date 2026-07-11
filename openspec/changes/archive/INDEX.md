@@ -1,6 +1,6 @@
 # Archive Index
 
-Updated: 2026-07-11 12:05:22
+Updated: 2026-07-11 16:45:21
 
 - 001 -> bootstrap-foundation-and-event-ingestion
 - 002 -> governance-pipeline-and-memory-consolidation
@@ -18,3 +18,4 @@ Updated: 2026-07-11 12:05:22
 - 014 -> governed-insight-quality-feedback
 - 015 -> self-hosting-operational-replay-loop
 - 016 -> memory-quality-admission-repair-loop
+- 017 -> scope-proof-and-agent-session-memory-loop

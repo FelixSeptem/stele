@@ -369,6 +369,154 @@ type stubDerivedInsightReplayAdminService struct {
 	validate      bool
 }
 
+type stubScopeProofAdminService struct {
+	gotCreateInput memory.CreateScopeProofRunInput
+	gotListInput   memory.ListScopeProofRunsInput
+	gotReadInput   memory.ReadScopeProofRunInput
+	gotRerunInput  memory.RerunScopeProofRunInput
+	run            memory.ScopeProofRun
+	runs           []memory.ScopeProofRun
+	report         memory.ScopeProofReport
+	err            error
+	validate       bool
+}
+
+type stubMemorySessionService struct {
+	gotCreateInput       memory.CreateMemorySessionInput
+	gotListInput         memory.ListMemorySessionRunsInput
+	gotReadInput         memory.ReadMemorySessionRunInput
+	gotCreateTurnInput   memory.CreateMemorySessionTurnInput
+	gotOutcomeInput      memory.RecordMemorySessionTurnOutcomeInput
+	gotVerificationInput memory.RequestMemorySessionVerificationInput
+	session              memory.MemorySessionRun
+	sessions             []memory.MemorySessionRun
+	turn                 memory.MemorySessionTurn
+	verification         memory.MemorySessionVerification
+	report               memory.MemorySessionReport
+	err                  error
+	validate             bool
+}
+
+func (s *stubScopeProofAdminService) CreateProofRun(ctx context.Context, input memory.CreateScopeProofRunInput) (memory.ScopeProofRun, error) {
+	s.gotCreateInput = input
+	if s.validate {
+		if err := input.Validate(); err != nil {
+			return memory.ScopeProofRun{}, err
+		}
+	}
+	return s.run, s.err
+}
+
+func (s *stubScopeProofAdminService) ListProofRuns(ctx context.Context, input memory.ListScopeProofRunsInput) ([]memory.ScopeProofRun, error) {
+	s.gotListInput = input
+	if s.validate {
+		if err := input.Validate(); err != nil {
+			return nil, err
+		}
+	}
+	return s.runs, s.err
+}
+
+func (s *stubScopeProofAdminService) ReadProofRun(ctx context.Context, input memory.ReadScopeProofRunInput) (memory.ScopeProofRun, error) {
+	s.gotReadInput = input
+	if s.validate {
+		if err := input.Validate(); err != nil {
+			return memory.ScopeProofRun{}, err
+		}
+	}
+	return s.run, s.err
+}
+
+func (s *stubScopeProofAdminService) ReadProofReport(ctx context.Context, input memory.ReadScopeProofRunInput) (memory.ScopeProofReport, error) {
+	s.gotReadInput = input
+	if s.validate {
+		if err := input.Validate(); err != nil {
+			return memory.ScopeProofReport{}, err
+		}
+	}
+	return s.report, s.err
+}
+
+func (s *stubScopeProofAdminService) RerunProofRun(ctx context.Context, input memory.RerunScopeProofRunInput) (memory.ScopeProofRun, error) {
+	s.gotRerunInput = input
+	if s.validate {
+		if err := input.Validate(); err != nil {
+			return memory.ScopeProofRun{}, err
+		}
+	}
+	return s.run, s.err
+}
+
+func (s *stubMemorySessionService) CreateSession(ctx context.Context, input memory.CreateMemorySessionInput) (memory.MemorySessionRun, error) {
+	s.gotCreateInput = input
+	if s.validate {
+		if err := input.Validate(); err != nil {
+			return memory.MemorySessionRun{}, err
+		}
+	}
+	return s.session, s.err
+}
+
+func (s *stubMemorySessionService) ListSessions(ctx context.Context, input memory.ListMemorySessionRunsInput) ([]memory.MemorySessionRun, error) {
+	s.gotListInput = input
+	if s.validate {
+		if err := input.Validate(); err != nil {
+			return nil, err
+		}
+	}
+	return s.sessions, s.err
+}
+
+func (s *stubMemorySessionService) ReadSession(ctx context.Context, input memory.ReadMemorySessionRunInput) (memory.MemorySessionRun, error) {
+	s.gotReadInput = input
+	if s.validate {
+		if err := input.Validate(); err != nil {
+			return memory.MemorySessionRun{}, err
+		}
+	}
+	return s.session, s.err
+}
+
+func (s *stubMemorySessionService) CreateTurn(ctx context.Context, input memory.CreateMemorySessionTurnInput) (memory.MemorySessionTurn, error) {
+	s.gotCreateTurnInput = input
+	if s.validate {
+		if err := input.Validate(); err != nil {
+			return memory.MemorySessionTurn{}, err
+		}
+	}
+	return s.turn, s.err
+}
+
+func (s *stubMemorySessionService) RecordTurnOutcome(ctx context.Context, input memory.RecordMemorySessionTurnOutcomeInput) (memory.MemorySessionTurn, error) {
+	s.gotOutcomeInput = input
+	if s.validate {
+		if err := input.Validate(); err != nil {
+			return memory.MemorySessionTurn{}, err
+		}
+	}
+	return s.turn, s.err
+}
+
+func (s *stubMemorySessionService) RequestVerification(ctx context.Context, input memory.RequestMemorySessionVerificationInput) (memory.MemorySessionVerification, error) {
+	s.gotVerificationInput = input
+	if s.validate {
+		if err := input.Validate(); err != nil {
+			return memory.MemorySessionVerification{}, err
+		}
+	}
+	return s.verification, s.err
+}
+
+func (s *stubMemorySessionService) ReadSessionReport(ctx context.Context, input memory.ReadMemorySessionRunInput) (memory.MemorySessionReport, error) {
+	s.gotReadInput = input
+	if s.validate {
+		if err := input.Validate(); err != nil {
+			return memory.MemorySessionReport{}, err
+		}
+	}
+	return s.report, s.err
+}
+
 func (s *stubDerivedInsightReplayAdminService) PlanDerivedInsightReplay(ctx context.Context, input memory.DerivedInsightReplayRequest) (memory.DerivedInsightReplayReport, error) {
 	s.gotPlanInput = input
 	if s.validate {
@@ -3012,6 +3160,279 @@ func TestNewHTTPHandlerReclassifiesAdminMemory(t *testing.T) {
 	if service.gotReclassifyInput.TargetClass != memory.MemoryClassProcedural {
 		t.Fatalf("target class = %q, want procedural", service.gotReclassifyInput.TargetClass)
 	}
+}
+
+func TestNewHTTPHandlerServesAdminScopeProofRuns(t *testing.T) {
+	scope := memory.Scope{Tenant: "tenant-a", Project: "project-a", Namespace: "namespace-a"}
+	now := time.Date(2026, 7, 11, 19, 30, 0, 0, time.UTC)
+	service := &stubScopeProofAdminService{
+		run: memory.ScopeProofRun{
+			ID:          "proof_1",
+			Scope:       scope,
+			Status:      memory.ScopeProofStatusPending,
+			Verdict:     memory.ScopeProofVerdictPending,
+			Checks:      []memory.ScopeProofCheck{memory.ScopeProofCheckIngestion},
+			FixtureMode: memory.ScopeProofFixtureModeSmoke,
+			Actor:       "operator-a",
+			Reason:      "prove scope",
+			CreatedAt:   now,
+			UpdatedAt:   now,
+		},
+		runs: []memory.ScopeProofRun{{
+			ID:          "proof_1",
+			Scope:       scope,
+			Status:      memory.ScopeProofStatusPending,
+			Verdict:     memory.ScopeProofVerdictPending,
+			FixtureMode: memory.ScopeProofFixtureModeSmoke,
+			CreatedAt:   now,
+			UpdatedAt:   now,
+		}},
+		report: memory.ScopeProofReport{
+			Run:         memory.ScopeProofRun{ID: "proof_1", Scope: scope, Status: memory.ScopeProofStatusPending, Verdict: memory.ScopeProofVerdictPending},
+			NextActions: []string{"inspect_proof_steps"},
+		},
+		validate: true,
+	}
+	handler := NewHTTPHandler(HTTPDependencies{
+		Readiness:       stubReadinessChecker{},
+		AdminAPIKeys:    map[string]struct{}{"admin-key": {}},
+		ScopeProofAdmin: service,
+	})
+
+	createReq := httptest.NewRequest(http.MethodPost, "/v1/admin/scope-proofs", strings.NewReader(`{"checks":["ingestion"],"fixture_mode":"smoke","actor":"operator-a","reason":"prove scope"}`))
+	setAdminScopeHeaders(createReq)
+	createResp := httptest.NewRecorder()
+	handler.ServeHTTP(createResp, createReq)
+	if createResp.Code != http.StatusCreated {
+		t.Fatalf("create status = %d body=%s, want 201", createResp.Code, createResp.Body.String())
+	}
+	if service.gotCreateInput.Scope != scope || service.gotCreateInput.Checks[0] != memory.ScopeProofCheckIngestion {
+		t.Fatalf("create input = %+v, want scoped ingestion proof", service.gotCreateInput)
+	}
+
+	listReq := httptest.NewRequest(http.MethodGet, "/v1/admin/scope-proofs?limit=10", nil)
+	setAdminScopeHeaders(listReq)
+	listResp := httptest.NewRecorder()
+	handler.ServeHTTP(listResp, listReq)
+	if listResp.Code != http.StatusOK {
+		t.Fatalf("list status = %d body=%s, want 200", listResp.Code, listResp.Body.String())
+	}
+	if service.gotListInput.Limit != 10 || service.gotListInput.Scope != scope {
+		t.Fatalf("list input = %+v, want scoped limit 10", service.gotListInput)
+	}
+
+	reportReq := httptest.NewRequest(http.MethodGet, "/v1/admin/scope-proofs/proof_1/report", nil)
+	setAdminScopeHeaders(reportReq)
+	reportResp := httptest.NewRecorder()
+	handler.ServeHTTP(reportResp, reportReq)
+	if reportResp.Code != http.StatusOK {
+		t.Fatalf("report status = %d body=%s, want 200", reportResp.Code, reportResp.Body.String())
+	}
+	if service.gotReadInput.ProofID != "proof_1" || service.gotReadInput.Scope != scope {
+		t.Fatalf("report input = %+v, want proof_1 scoped", service.gotReadInput)
+	}
+
+	rerunReq := httptest.NewRequest(http.MethodPost, "/v1/admin/scope-proofs/proof_1:rerun", strings.NewReader(`{"actor":"operator-b","reason":"verify remediation"}`))
+	setAdminScopeHeaders(rerunReq)
+	rerunResp := httptest.NewRecorder()
+	handler.ServeHTTP(rerunResp, rerunReq)
+	if rerunResp.Code != http.StatusCreated {
+		t.Fatalf("rerun status = %d body=%s, want 201", rerunResp.Code, rerunResp.Body.String())
+	}
+	if service.gotRerunInput.ProofID != "proof_1" || service.gotRerunInput.Actor != "operator-b" {
+		t.Fatalf("rerun input = %+v, want proof_1 operator-b", service.gotRerunInput)
+	}
+}
+
+func TestNewHTTPHandlerRejectsAdminScopeProofWithoutAdminKey(t *testing.T) {
+	handler := NewHTTPHandler(HTTPDependencies{
+		Readiness:       stubReadinessChecker{},
+		AdminAPIKeys:    map[string]struct{}{"admin-key": {}},
+		ScopeProofAdmin: &stubScopeProofAdminService{},
+	})
+	req := httptest.NewRequest(http.MethodPost, "/v1/admin/scope-proofs", strings.NewReader(`{"checks":["ingestion"],"fixture_mode":"smoke","actor":"operator-a","reason":"prove scope"}`))
+	req.Header.Set("X-Stele-Tenant", "tenant-a")
+	req.Header.Set("X-Stele-Project", "project-a")
+	req.Header.Set("X-Stele-Namespace", "namespace-a")
+	resp := httptest.NewRecorder()
+
+	handler.ServeHTTP(resp, req)
+
+	if resp.Code != http.StatusUnauthorized {
+		t.Fatalf("status = %d, want 401", resp.Code)
+	}
+}
+
+func TestNewHTTPHandlerServesMemorySessionLoop(t *testing.T) {
+	scope := memory.Scope{Tenant: "tenant-a", Project: "project-a", Namespace: "namespace-a"}
+	now := time.Date(2026, 7, 11, 20, 45, 0, 0, time.UTC)
+	service := &stubMemorySessionService{
+		session: memory.MemorySessionRun{
+			ID:        "session_1",
+			Scope:     scope,
+			Status:    memory.MemorySessionStatusActive,
+			Verdict:   memory.ScopeProofVerdictPending,
+			Actor:     "agent-a",
+			Reason:    "serve user turn",
+			Metadata:  map[string]any{"integration": "test-agent"},
+			CreatedAt: now,
+			UpdatedAt: now,
+		},
+		sessions: []memory.MemorySessionRun{{
+			ID:        "session_1",
+			Scope:     scope,
+			Status:    memory.MemorySessionStatusActive,
+			Verdict:   memory.ScopeProofVerdictPending,
+			CreatedAt: now,
+			UpdatedAt: now,
+		}},
+		turn: memory.MemorySessionTurn{
+			ID:              "turn_1",
+			SessionID:       "session_1",
+			Scope:           scope,
+			Status:          memory.MemorySessionTurnStatusContextAssembled,
+			Query:           "remember deployment preference",
+			ContextEvidence: map[string]any{"memory_ids": []any{"mem_1"}},
+			OutcomeEventIDs: []string{"evt_2"},
+			ExpectedRecall:  []string{"evt_2"},
+			CreatedAt:       now,
+			UpdatedAt:       now,
+		},
+		verification: memory.MemorySessionVerification{
+			ID:             "verification_1",
+			SessionID:      "session_1",
+			TurnID:         "turn_1",
+			Scope:          scope,
+			Status:         memory.ScopeProofStepStatusPending,
+			Verdict:        memory.ScopeProofVerdictPending,
+			ExpectedRecall: []string{"evt_2"},
+			CreatedAt:      now,
+			UpdatedAt:      now,
+		},
+		report: memory.MemorySessionReport{
+			Session:     memory.MemorySessionRun{ID: "session_1", Scope: scope, Status: memory.MemorySessionStatusActive, Verdict: memory.ScopeProofVerdictPending},
+			NextActions: []string{"wait_for_session_verification"},
+		},
+		validate: true,
+	}
+	handler := NewHTTPHandler(HTTPDependencies{
+		Readiness:     stubReadinessChecker{},
+		APIKeys:       map[string]struct{}{"test-key": {}},
+		MemorySession: service,
+	})
+
+	createReq := httptest.NewRequest(http.MethodPost, "/v1/memory-sessions", strings.NewReader(`{"actor":"agent-a","reason":"serve user turn","metadata":{"integration":"test-agent"}}`))
+	setAPIScopeHeaders(createReq)
+	createResp := httptest.NewRecorder()
+	handler.ServeHTTP(createResp, createReq)
+	if createResp.Code != http.StatusCreated {
+		t.Fatalf("create status = %d body=%s, want 201", createResp.Code, createResp.Body.String())
+	}
+	if service.gotCreateInput.Scope != scope || service.gotCreateInput.Metadata["integration"] != "test-agent" {
+		t.Fatalf("create input = %+v, want scoped metadata", service.gotCreateInput)
+	}
+
+	listReq := httptest.NewRequest(http.MethodGet, "/v1/memory-sessions?limit=10", nil)
+	setAPIScopeHeaders(listReq)
+	listResp := httptest.NewRecorder()
+	handler.ServeHTTP(listResp, listReq)
+	if listResp.Code != http.StatusOK {
+		t.Fatalf("list status = %d body=%s, want 200", listResp.Code, listResp.Body.String())
+	}
+	if service.gotListInput.Scope != scope || service.gotListInput.Limit != 10 {
+		t.Fatalf("list input = %+v, want scoped limit 10", service.gotListInput)
+	}
+
+	turnReq := httptest.NewRequest(http.MethodPost, "/v1/memory-sessions/session_1/turns", strings.NewReader(`{"query":"remember deployment preference","context_budget":1200,"include_relations":true,"include_experience_insights":true}`))
+	setAPIScopeHeaders(turnReq)
+	turnResp := httptest.NewRecorder()
+	handler.ServeHTTP(turnResp, turnReq)
+	if turnResp.Code != http.StatusCreated {
+		t.Fatalf("turn status = %d body=%s, want 201", turnResp.Code, turnResp.Body.String())
+	}
+	if service.gotCreateTurnInput.SessionID != "session_1" || service.gotCreateTurnInput.ContextBudget != 1200 {
+		t.Fatalf("turn input = %+v, want session_1 budget 1200", service.gotCreateTurnInput)
+	}
+
+	outcomeReq := httptest.NewRequest(http.MethodPost, "/v1/memory-sessions/session_1/turns/turn_1:outcome", strings.NewReader(`{"outcome_event_ids":["evt_2"],"expected_recall":["evt_2"]}`))
+	setAPIScopeHeaders(outcomeReq)
+	outcomeResp := httptest.NewRecorder()
+	handler.ServeHTTP(outcomeResp, outcomeReq)
+	if outcomeResp.Code != http.StatusOK {
+		t.Fatalf("outcome status = %d body=%s, want 200", outcomeResp.Code, outcomeResp.Body.String())
+	}
+	if service.gotOutcomeInput.TurnID != "turn_1" || service.gotOutcomeInput.OutcomeEventIDs[0] != "evt_2" {
+		t.Fatalf("outcome input = %+v, want turn_1 evt_2", service.gotOutcomeInput)
+	}
+
+	verifyReq := httptest.NewRequest(http.MethodPost, "/v1/memory-sessions/session_1:verify", strings.NewReader(`{"turn_id":"turn_1","expected_recall":["evt_2"]}`))
+	setAPIScopeHeaders(verifyReq)
+	verifyResp := httptest.NewRecorder()
+	handler.ServeHTTP(verifyResp, verifyReq)
+	if verifyResp.Code != http.StatusAccepted {
+		t.Fatalf("verify status = %d body=%s, want 202", verifyResp.Code, verifyResp.Body.String())
+	}
+	if service.gotVerificationInput.SessionID != "session_1" || service.gotVerificationInput.ExpectedRecall[0] != "evt_2" {
+		t.Fatalf("verification input = %+v, want session_1 evt_2", service.gotVerificationInput)
+	}
+
+	reportReq := httptest.NewRequest(http.MethodGet, "/v1/memory-sessions/session_1/report", nil)
+	setAPIScopeHeaders(reportReq)
+	reportResp := httptest.NewRecorder()
+	handler.ServeHTTP(reportResp, reportReq)
+	if reportResp.Code != http.StatusOK {
+		t.Fatalf("report status = %d body=%s, want 200", reportResp.Code, reportResp.Body.String())
+	}
+	if service.gotReadInput.SessionID != "session_1" || service.gotReadInput.Scope != scope {
+		t.Fatalf("report input = %+v, want scoped session_1", service.gotReadInput)
+	}
+}
+
+func TestNewHTTPHandlerRejectsMemorySessionWithoutAPIKey(t *testing.T) {
+	handler := NewHTTPHandler(HTTPDependencies{
+		Readiness:     stubReadinessChecker{},
+		APIKeys:       map[string]struct{}{"test-key": {}},
+		MemorySession: &stubMemorySessionService{},
+	})
+	req := httptest.NewRequest(http.MethodPost, "/v1/memory-sessions", strings.NewReader(`{"actor":"agent-a","reason":"serve user turn"}`))
+	req.Header.Set("X-Stele-Tenant", "tenant-a")
+	req.Header.Set("X-Stele-Project", "project-a")
+	req.Header.Set("X-Stele-Namespace", "namespace-a")
+	resp := httptest.NewRecorder()
+
+	handler.ServeHTTP(resp, req)
+
+	if resp.Code != http.StatusUnauthorized {
+		t.Fatalf("status = %d, want 401", resp.Code)
+	}
+}
+
+func TestNewHTTPHandlerRejectsOutOfScopeMemorySessionReport(t *testing.T) {
+	service := &stubMemorySessionService{err: pgx.ErrNoRows}
+	handler := NewHTTPHandler(HTTPDependencies{
+		Readiness:     stubReadinessChecker{},
+		APIKeys:       map[string]struct{}{"test-key": {}},
+		MemorySession: service,
+	})
+	req := httptest.NewRequest(http.MethodGet, "/v1/memory-sessions/session_other/report", nil)
+	setAPIScopeHeaders(req)
+	resp := httptest.NewRecorder()
+
+	handler.ServeHTTP(resp, req)
+
+	if resp.Code != http.StatusNotFound {
+		t.Fatalf("status = %d body=%s, want 404", resp.Code, resp.Body.String())
+	}
+	if service.gotReadInput.SessionID != "session_other" {
+		t.Fatalf("read input = %+v, want session_other scoped", service.gotReadInput)
+	}
+}
+
+func setAPIScopeHeaders(req *http.Request) {
+	req.Header.Set("X-API-Key", "test-key")
+	req.Header.Set("X-Stele-Tenant", "tenant-a")
+	req.Header.Set("X-Stele-Project", "project-a")
+	req.Header.Set("X-Stele-Namespace", "namespace-a")
 }
 
 func setAdminScopeHeaders(req *http.Request) {

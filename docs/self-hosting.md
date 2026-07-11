@@ -287,6 +287,112 @@ curl http://localhost:8080/metrics | grep 'stele_operations_total'
 
 Replay metrics use labels such as `mode`, `result`, `insight_type`, `decision`, and `reason`. They intentionally exclude tenant, project, namespace, replay run id, insight id, actor, reason text, and raw error messages.
 
+### Durable scope proof and memory session loop
+
+Use the durable proof workflow when you need an auditable answer to whether a tenant/project/namespace can accept memory, process it, retrieve it, assemble context, surface quality findings, recommend repair, and be rerun after remediation. This replaces treating unrelated smoke endpoint responses as the primary source of truth.
+
+1. Create a scoped proof run:
+
+```bash
+curl -X POST http://localhost:8080/v1/admin/scope-proofs \
+  -H 'Content-Type: application/json' \
+  -H 'X-API-Key: dev-admin-key' \
+  -H 'X-Stele-Tenant: tenant-a' \
+  -H 'X-Stele-Project: project-a' \
+  -H 'X-Stele-Namespace: namespace-a' \
+  -d '{"checks":["scope_resolution","ingestion","governance","retrieval","context","replay","quality","repair"],"fixture_mode":"smoke","actor":"operator-a","reason":"prove fresh scope memory loop"}'
+```
+
+2. Inspect the proof and report. The run contains step state; the report adds linked evidence and stable next actions.
+
+```bash
+curl http://localhost:8080/v1/admin/scope-proofs/<proof-run-id> \
+  -H 'X-API-Key: dev-admin-key' \
+  -H 'X-Stele-Tenant: tenant-a' \
+  -H 'X-Stele-Project: project-a' \
+  -H 'X-Stele-Namespace: namespace-a'
+
+curl http://localhost:8080/v1/admin/scope-proofs/<proof-run-id>/report \
+  -H 'X-API-Key: dev-admin-key' \
+  -H 'X-Stele-Tenant: tenant-a' \
+  -H 'X-Stele-Project: project-a' \
+  -H 'X-Stele-Namespace: namespace-a'
+```
+
+3. Diagnose failures from the report's `next_actions` instead of guessing from raw HTTP responses:
+
+- `inspect_governance_status` or `inspect_worker_jobs`: read `/v1/admin/jobs/governance/status` and `/v1/admin/jobs/status`.
+- `inspect_retrieval_quality`: create or open `/v1/admin/memory-quality/evaluations`.
+- `inspect_context_diagnostics`: rerun `/v1/context/assemble` with `"include_diagnostics":true`.
+- `open_quality_evaluation`: inspect `/v1/admin/memory-quality/evaluations/<evaluation-run-id>/findings`.
+- `open_repair_plan`: inspect or approve `/v1/admin/memory-quality/repair-plans/<repair-plan-id>` only after review.
+- `inspect_derived_insight_replay`: read `/v1/admin/derived-insight-replays/<replay-run-id>/report`.
+
+4. Rerun after remediation. Reruns create a new proof linked to the previous run; they do not overwrite the original evidence.
+
+```bash
+curl -X POST http://localhost:8080/v1/admin/scope-proofs/<proof-run-id>:rerun \
+  -H 'Content-Type: application/json' \
+  -H 'X-API-Key: dev-admin-key' \
+  -H 'X-Stele-Tenant: tenant-a' \
+  -H 'X-Stele-Project: project-a' \
+  -H 'X-Stele-Namespace: namespace-a' \
+  -d '{"actor":"operator-a","reason":"rerun after proof remediation"}'
+```
+
+5. Exercise the external-agent memory session contract. Stele assembles context and records memory-relevant outcomes, but the external agent still owns model calls, prompt orchestration, and final answers.
+
+```bash
+curl -X POST http://localhost:8080/v1/memory-sessions \
+  -H 'Content-Type: application/json' \
+  -H 'X-API-Key: dev-public-key' \
+  -H 'X-Stele-Tenant: tenant-a' \
+  -H 'X-Stele-Project: project-a' \
+  -H 'X-Stele-Namespace: namespace-a' \
+  -d '{"actor":"agent-a","reason":"serve user turn","metadata":{"integration":"self-hosting-smoke"}}'
+
+curl -X POST http://localhost:8080/v1/memory-sessions/<session-id>/turns \
+  -H 'Content-Type: application/json' \
+  -H 'X-API-Key: dev-public-key' \
+  -H 'X-Stele-Tenant: tenant-a' \
+  -H 'X-Stele-Project: project-a' \
+  -H 'X-Stele-Namespace: namespace-a' \
+  -d '{"query":"remember deployment preference","context_budget":1200,"include_relations":true,"include_experience_insights":true,"include_diagnostics":true}'
+
+curl -X POST http://localhost:8080/v1/memory-sessions/<session-id>/turns/<turn-id>:outcome \
+  -H 'Content-Type: application/json' \
+  -H 'X-API-Key: dev-public-key' \
+  -H 'X-Stele-Tenant: tenant-a' \
+  -H 'X-Stele-Project: project-a' \
+  -H 'X-Stele-Namespace: namespace-a' \
+  -d '{"outcome_event_ids":["<event-id>"],"expected_recall":["<event-id>"]}'
+
+curl -X POST http://localhost:8080/v1/memory-sessions/<session-id>:verify \
+  -H 'Content-Type: application/json' \
+  -H 'X-API-Key: dev-public-key' \
+  -H 'X-Stele-Tenant: tenant-a' \
+  -H 'X-Stele-Project: project-a' \
+  -H 'X-Stele-Namespace: namespace-a' \
+  -d '{"turn_id":"<turn-id>","expected_recall":["<event-id>"]}'
+
+curl http://localhost:8080/v1/memory-sessions/<session-id>/report \
+  -H 'X-API-Key: dev-public-key' \
+  -H 'X-Stele-Tenant: tenant-a' \
+  -H 'X-Stele-Project: project-a' \
+  -H 'X-Stele-Namespace: namespace-a'
+```
+
+6. Scrape proof/session metrics. These metrics are intentionally low-cardinality and exclude tenant, project, namespace, proof id, session id, turn id, event id, memory id, actor, and reason text.
+
+```bash
+curl http://localhost:8080/metrics | grep 'stele_scope_proof_steps_total'
+curl http://localhost:8080/metrics | grep 'stele_memory_session_verifications_total'
+```
+
+This closes the service-side loop: `scope proof -> session context -> external agent turn -> turn outcome ingestion -> governance -> retrieval/context verification -> quality/repair recommendation -> rerun proof/session`.
+
+Remaining product gaps after this service loop are explicit: SDK/UI onboarding, external agent runtime integration, alert routing, capacity/load proof, backup/restore proof, and long-term memory usefulness scoring remain outside the service-owned scope.
+
 ### Baseline startup
 
 1. Check liveness:
@@ -1173,6 +1279,7 @@ curl 'http://localhost:8080/v1/admin/memories/<memory-id>/embedding/recovery-his
 - `api` logs request completion and panic recovery in structured key-value style.
 - `GET /livez`, `GET /readyz`, and `GET /metrics` provide process liveness, mode-aware readiness, and Prometheus-style runtime metrics for self-hosted orchestration.
 - `worker` logs polling loop failures and successful batch execution.
+- `worker` also logs scope proof step transitions and memory session verification transitions in structured key-value style.
 - `scheduler` logs maintenance job execution results and backoff retries.
 - The worker persists retryable governance failures with bounded retry state instead of relying only on lease expiry.
 - Raw events that hit the retry ceiling are marked exhausted and stop automatic claim until an explicit admin recovery action intervenes.
@@ -1181,4 +1288,4 @@ curl 'http://localhost:8080/v1/admin/memories/<memory-id>/embedding/recovery-his
 - Active embedding cutovers are advanced by the scheduler in bounded waves before the normal lifecycle discovery pass, so provider migrations reuse the same durable rebuild execution path as drift correction.
 - Summary compaction and retention sweep are dispatched per eligible discovered scope, with the configured default scope used only as a fallback when discovery returns none.
 - Job execution cleanup remains runtime-global and runs once per cadence window instead of being fanned out per discovered scope.
-- Telemetry hook points are wired for ingest, governance worker execution, retrieval, forgetting, governance backlog inspection, derived insight feedback, embedding admission decisions, cutover state snapshots, provider readiness probes, scheduler wave dispatch, and embedding rebuild backlog plus execution inspection. The default runtime installs a Prometheus-style in-process metrics observer for the API metrics endpoint.
+- Telemetry hook points are wired for ingest, governance worker execution, retrieval, forgetting, governance backlog inspection, derived insight feedback, embedding admission decisions, cutover state snapshots, provider readiness probes, scheduler wave dispatch, embedding rebuild backlog plus execution inspection, scope proof runs and steps, memory session runs and turns, and memory session verification outcomes. The default runtime installs a Prometheus-style in-process metrics observer for the API metrics endpoint.

@@ -162,3 +162,54 @@ func TestMetricsObserverExportsDerivedInsightReplaySignalsWithoutHighCardinality
 		}
 	}
 }
+
+func TestMetricsObserverExportsScopeProofAndSessionSignalsWithoutHighCardinalityLabels(t *testing.T) {
+	observer := NewMetricsObserver()
+	ctx := context.Background()
+
+	observer.RecordScopeProofRun(ctx, ScopeProofRunEvent{
+		Status:          "completed",
+		Verdict:         "passed_degraded",
+		FailureCategory: "context",
+	})
+	observer.RecordScopeProofStep(ctx, ScopeProofStepEvent{
+		Step:            "context_assembled",
+		Status:          "completed",
+		Verdict:         "passed_degraded",
+		Component:       "context",
+		FailureCategory: "context",
+	})
+	observer.RecordMemorySessionRun(ctx, MemorySessionRunEvent{
+		Status:          "completed",
+		Verdict:         "passed_degraded",
+		FailureCategory: "retrieval",
+	})
+	observer.RecordMemorySessionTurn(ctx, MemorySessionTurnEvent{
+		Status:             "verified",
+		VerificationStatus: "passed_degraded",
+		FailureCategory:    "retrieval",
+	})
+	observer.RecordMemorySessionVerification(ctx, MemorySessionVerificationEvent{
+		Status:          "completed",
+		Verdict:         "passed_degraded",
+		FailureCategory: "retrieval",
+	})
+
+	metrics := observer.RenderPrometheus()
+	for _, want := range []string{
+		`stele_scope_proof_runs_total{failure_category="context",status="completed",verdict="passed_degraded"} 1`,
+		`stele_scope_proof_steps_total{component="context",failure_category="context",status="completed",step="context_assembled",verdict="passed_degraded"} 1`,
+		`stele_memory_session_runs_total{failure_category="retrieval",status="completed",verdict="passed_degraded"} 1`,
+		`stele_memory_session_turns_total{failure_category="retrieval",status="verified",verification_status="passed_degraded"} 1`,
+		`stele_memory_session_verifications_total{failure_category="retrieval",status="completed",verdict="passed_degraded"} 1`,
+	} {
+		if !strings.Contains(metrics, want) {
+			t.Fatalf("metrics missing %q\n%s", want, metrics)
+		}
+	}
+	for _, forbidden := range []string{"tenant", "project", "namespace", "proof_id", "session_id", "turn_id", "event_id", "memory_id", "actor", "reason_text"} {
+		if strings.Contains(metrics, forbidden) {
+			t.Fatalf("metrics contain high-cardinality label %q\n%s", forbidden, metrics)
+		}
+	}
+}

@@ -224,6 +224,171 @@ paths:
           description: Invalid request
         '401':
           description: Missing or invalid API key
+  /v1/memory-sessions:
+    get:
+      operationId: listMemorySessions
+      parameters:
+        - $ref: '#/components/parameters/PublicAPIKey'
+        - $ref: '#/components/parameters/TenantHeader'
+        - $ref: '#/components/parameters/ProjectHeader'
+        - $ref: '#/components/parameters/NamespaceHeader'
+        - in: query
+          name: limit
+          required: false
+          schema:
+            type: integer
+      responses:
+        '200':
+          description: Scoped memory sessions
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/MemorySessionListResponse'
+        '401':
+          description: Missing or invalid API key
+    post:
+      operationId: createMemorySession
+      parameters:
+        - $ref: '#/components/parameters/PublicAPIKey'
+        - $ref: '#/components/parameters/TenantHeader'
+        - $ref: '#/components/parameters/ProjectHeader'
+        - $ref: '#/components/parameters/NamespaceHeader'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/CreateMemorySessionRequest'
+      responses:
+        '201':
+          description: Memory session created
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/MemorySessionRun'
+        '400':
+          description: Invalid request
+        '401':
+          description: Missing or invalid API key
+  /v1/memory-sessions/{session_id}:
+    get:
+      operationId: getMemorySession
+      parameters:
+        - $ref: '#/components/parameters/SessionIDPath'
+        - $ref: '#/components/parameters/PublicAPIKey'
+        - $ref: '#/components/parameters/TenantHeader'
+        - $ref: '#/components/parameters/ProjectHeader'
+        - $ref: '#/components/parameters/NamespaceHeader'
+      responses:
+        '200':
+          description: Memory session detail
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/MemorySessionRun'
+        '401':
+          description: Missing or invalid API key
+        '404':
+          description: Session not found
+  /v1/memory-sessions/{session_id}/report:
+    get:
+      operationId: getMemorySessionReport
+      parameters:
+        - $ref: '#/components/parameters/SessionIDPath'
+        - $ref: '#/components/parameters/PublicAPIKey'
+        - $ref: '#/components/parameters/TenantHeader'
+        - $ref: '#/components/parameters/ProjectHeader'
+        - $ref: '#/components/parameters/NamespaceHeader'
+      responses:
+        '200':
+          description: Memory session report with bounded evidence and next actions
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/MemorySessionReport'
+        '401':
+          description: Missing or invalid API key
+        '404':
+          description: Session not found
+  /v1/memory-sessions/{session_id}/turns:
+    post:
+      operationId: createMemorySessionTurn
+      parameters:
+        - $ref: '#/components/parameters/SessionIDPath'
+        - $ref: '#/components/parameters/PublicAPIKey'
+        - $ref: '#/components/parameters/TenantHeader'
+        - $ref: '#/components/parameters/ProjectHeader'
+        - $ref: '#/components/parameters/NamespaceHeader'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/CreateMemorySessionTurnRequest'
+      responses:
+        '201':
+          description: Session turn created with assembled context evidence
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/MemorySessionTurn'
+        '400':
+          description: Invalid request
+        '401':
+          description: Missing or invalid API key
+  /v1/memory-sessions/{session_id}/turns/{turn_id}:outcome:
+    post:
+      operationId: recordMemorySessionTurnOutcome
+      parameters:
+        - $ref: '#/components/parameters/SessionIDPath'
+        - $ref: '#/components/parameters/TurnIDPath'
+        - $ref: '#/components/parameters/PublicAPIKey'
+        - $ref: '#/components/parameters/TenantHeader'
+        - $ref: '#/components/parameters/ProjectHeader'
+        - $ref: '#/components/parameters/NamespaceHeader'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/RecordMemorySessionOutcomeRequest'
+      responses:
+        '200':
+          description: External turn outcome recorded
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/MemorySessionTurn'
+        '400':
+          description: Invalid request
+        '401':
+          description: Missing or invalid API key
+  /v1/memory-sessions/{session_id}:verify:
+    post:
+      operationId: requestMemorySessionVerification
+      parameters:
+        - $ref: '#/components/parameters/SessionIDPath'
+        - $ref: '#/components/parameters/PublicAPIKey'
+        - $ref: '#/components/parameters/TenantHeader'
+        - $ref: '#/components/parameters/ProjectHeader'
+        - $ref: '#/components/parameters/NamespaceHeader'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/RequestMemorySessionVerificationRequest'
+      responses:
+        '202':
+          description: Session verification requested
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/MemorySessionVerification'
+        '400':
+          description: Invalid request
+        '401':
+          description: Missing or invalid API key
   /v1/admin/jobs/governance/status:
     get:
       operationId: getAdminGovernanceStatus
@@ -472,6 +637,120 @@ paths:
                 $ref: '#/components/schemas/JobExecutionListResponse'
         '401':
           description: Missing or invalid admin API key
+  /v1/admin/scope-proofs:
+    get:
+      operationId: listAdminScopeProofs
+      parameters:
+        - $ref: '#/components/parameters/AdminAPIKey'
+        - $ref: '#/components/parameters/TenantHeader'
+        - $ref: '#/components/parameters/ProjectHeader'
+        - $ref: '#/components/parameters/NamespaceHeader'
+        - in: query
+          name: limit
+          required: false
+          schema:
+            type: integer
+      responses:
+        '200':
+          description: Scoped proof run summaries
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ScopeProofListResponse'
+        '401':
+          description: Missing or invalid admin API key
+    post:
+      operationId: createAdminScopeProof
+      parameters:
+        - $ref: '#/components/parameters/AdminAPIKey'
+        - $ref: '#/components/parameters/TenantHeader'
+        - $ref: '#/components/parameters/ProjectHeader'
+        - $ref: '#/components/parameters/NamespaceHeader'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/CreateScopeProofRequest'
+      responses:
+        '201':
+          description: Scope proof run created
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ScopeProofRun'
+        '400':
+          description: Invalid request
+        '401':
+          description: Missing or invalid admin API key
+  /v1/admin/scope-proofs/{proof_run_id}:
+    get:
+      operationId: getAdminScopeProof
+      parameters:
+        - $ref: '#/components/parameters/ProofRunIDPath'
+        - $ref: '#/components/parameters/AdminAPIKey'
+        - $ref: '#/components/parameters/TenantHeader'
+        - $ref: '#/components/parameters/ProjectHeader'
+        - $ref: '#/components/parameters/NamespaceHeader'
+      responses:
+        '200':
+          description: Scope proof run detail
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ScopeProofRun'
+        '401':
+          description: Missing or invalid admin API key
+        '404':
+          description: Proof run not found
+  /v1/admin/scope-proofs/{proof_run_id}/report:
+    get:
+      operationId: getAdminScopeProofReport
+      parameters:
+        - $ref: '#/components/parameters/ProofRunIDPath'
+        - $ref: '#/components/parameters/AdminAPIKey'
+        - $ref: '#/components/parameters/TenantHeader'
+        - $ref: '#/components/parameters/ProjectHeader'
+        - $ref: '#/components/parameters/NamespaceHeader'
+      responses:
+        '200':
+          description: Scope proof report with durable evidence links and next actions
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ScopeProofReport'
+        '401':
+          description: Missing or invalid admin API key
+        '404':
+          description: Proof run not found
+  /v1/admin/scope-proofs/{proof_run_id}:rerun:
+    post:
+      operationId: rerunAdminScopeProof
+      parameters:
+        - $ref: '#/components/parameters/ProofRunIDPath'
+        - $ref: '#/components/parameters/AdminAPIKey'
+        - $ref: '#/components/parameters/TenantHeader'
+        - $ref: '#/components/parameters/ProjectHeader'
+        - $ref: '#/components/parameters/NamespaceHeader'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/RerunScopeProofRequest'
+      responses:
+        '201':
+          description: New proof run created from prior proof template
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ScopeProofRun'
+        '400':
+          description: Invalid request
+        '401':
+          description: Missing or invalid admin API key
+        '404':
+          description: Proof run not found
   /v1/admin/memories/{memory_id}/history:
     get:
       operationId: getAdminMemoryHistory
@@ -1687,6 +1966,24 @@ components:
       required: true
       schema:
         type: string
+    ProofRunIDPath:
+      in: path
+      name: proof_run_id
+      required: true
+      schema:
+        type: string
+    SessionIDPath:
+      in: path
+      name: session_id
+      required: true
+      schema:
+        type: string
+    TurnIDPath:
+      in: path
+      name: turn_id
+      required: true
+      schema:
+        type: string
     CutoverPlanIDPath:
       in: path
       name: cutover_plan_id
@@ -1707,6 +2004,362 @@ components:
           type: string
         namespace:
           type: string
+    ScopeProofStatus:
+      type: string
+      enum: [pending, running, completed, failed, manual_review]
+    ScopeProofStepStatus:
+      type: string
+      enum: [pending, running, completed, failed, skipped, manual_review, exhausted]
+    ScopeProofVerdict:
+      type: string
+      enum: [pending, passed, passed_degraded, failed, manual_review]
+    ScopeProofCheck:
+      type: string
+      enum: [scope_resolution, ingestion, governance, retrieval, context, replay, quality, repair]
+    ScopeProofFixtureMode:
+      type: string
+      enum: [smoke, operator_provided, none]
+    ProofFailureCategory:
+      type: string
+      enum: [scope, ingestion, governance, retrieval, context, replay, quality, repair, worker, unsupported]
+    CreateScopeProofRequest:
+      type: object
+      required:
+        - checks
+        - actor
+        - reason
+      properties:
+        checks:
+          type: array
+          items:
+            $ref: '#/components/schemas/ScopeProofCheck'
+        fixture_mode:
+          $ref: '#/components/schemas/ScopeProofFixtureMode'
+        actor:
+          type: string
+        reason:
+          type: string
+    RerunScopeProofRequest:
+      type: object
+      required:
+        - actor
+        - reason
+      properties:
+        actor:
+          type: string
+        reason:
+          type: string
+    ScopeProofStep:
+      type: object
+      properties:
+        id:
+          type: string
+        proof_id:
+          type: string
+        scope:
+          $ref: '#/components/schemas/Scope'
+        step:
+          type: string
+        status:
+          $ref: '#/components/schemas/ScopeProofStepStatus'
+        verdict:
+          $ref: '#/components/schemas/ScopeProofVerdict'
+        failure_category:
+          $ref: '#/components/schemas/ProofFailureCategory'
+        evidence:
+          type: object
+          additionalProperties: true
+        attempt:
+          type: integer
+        worker_id:
+          type: string
+        lease_until:
+          type: string
+          format: date-time
+        last_error:
+          type: string
+        next_attempt_at:
+          type: string
+          format: date-time
+        created_at:
+          type: string
+          format: date-time
+        updated_at:
+          type: string
+          format: date-time
+        completed_at:
+          type: string
+          format: date-time
+    ScopeProofRun:
+      type: object
+      properties:
+        id:
+          type: string
+        scope:
+          $ref: '#/components/schemas/Scope'
+        status:
+          $ref: '#/components/schemas/ScopeProofStatus'
+        verdict:
+          $ref: '#/components/schemas/ScopeProofVerdict'
+        checks:
+          type: array
+          items:
+            $ref: '#/components/schemas/ScopeProofCheck'
+        fixture_mode:
+          $ref: '#/components/schemas/ScopeProofFixtureMode'
+        actor:
+          type: string
+        reason:
+          type: string
+        rerun_of:
+          type: string
+        linked_session_id:
+          type: string
+        failure_category:
+          $ref: '#/components/schemas/ProofFailureCategory'
+        summary:
+          type: object
+          additionalProperties: true
+        created_at:
+          type: string
+          format: date-time
+        updated_at:
+          type: string
+          format: date-time
+        started_at:
+          type: string
+          format: date-time
+        finished_at:
+          type: string
+          format: date-time
+        steps:
+          type: array
+          items:
+            $ref: '#/components/schemas/ScopeProofStep'
+    ScopeProofListResponse:
+      type: object
+      required:
+        - runs
+      properties:
+        runs:
+          type: array
+          items:
+            $ref: '#/components/schemas/ScopeProofRun'
+    LoopReportEvidence:
+      type: object
+      properties:
+        quality_evaluation_ids:
+          type: array
+          items:
+            type: string
+        replay_run_ids:
+          type: array
+          items:
+            type: string
+        repair_plan_ids:
+          type: array
+          items:
+            type: string
+        failure_categories:
+          type: array
+          items:
+            $ref: '#/components/schemas/ProofFailureCategory'
+    ScopeProofReport:
+      type: object
+      required:
+        - run
+      properties:
+        run:
+          $ref: '#/components/schemas/ScopeProofRun'
+        evidence:
+          $ref: '#/components/schemas/LoopReportEvidence'
+        next_actions:
+          type: array
+          items:
+            type: string
+    MemorySessionStatus:
+      type: string
+      enum: [active, verifying, completed, failed, manual_review]
+    MemorySessionTurnStatus:
+      type: string
+      enum: [pending, context_assembled, outcome_recorded, verifying, verified, failed]
+    CreateMemorySessionRequest:
+      type: object
+      properties:
+        actor:
+          type: string
+        reason:
+          type: string
+        metadata:
+          type: object
+          additionalProperties: true
+    CreateMemorySessionTurnRequest:
+      type: object
+      required:
+        - query
+      properties:
+        turn_id:
+          type: string
+        query:
+          type: string
+        context_budget:
+          type: integer
+        include_relations:
+          type: boolean
+        include_experience_insights:
+          type: boolean
+        include_diagnostics:
+          type: boolean
+    RecordMemorySessionOutcomeRequest:
+      type: object
+      properties:
+        outcome_event_ids:
+          type: array
+          items:
+            type: string
+        expected_recall:
+          type: array
+          items:
+            type: string
+    RequestMemorySessionVerificationRequest:
+      type: object
+      properties:
+        turn_id:
+          type: string
+        expected_recall:
+          type: array
+          items:
+            type: string
+    MemorySessionTurn:
+      type: object
+      properties:
+        id:
+          type: string
+        session_id:
+          type: string
+        scope:
+          $ref: '#/components/schemas/Scope'
+        status:
+          $ref: '#/components/schemas/MemorySessionTurnStatus'
+        query:
+          type: string
+        context_evidence:
+          type: object
+          additionalProperties: true
+        outcome_event_ids:
+          type: array
+          items:
+            type: string
+        expected_recall:
+          type: array
+          items:
+            type: string
+        verification_status:
+          $ref: '#/components/schemas/ScopeProofVerdict'
+        failure_category:
+          $ref: '#/components/schemas/ProofFailureCategory'
+        created_at:
+          type: string
+          format: date-time
+        updated_at:
+          type: string
+          format: date-time
+        verified_at:
+          type: string
+          format: date-time
+    MemorySessionRun:
+      type: object
+      properties:
+        id:
+          type: string
+        scope:
+          $ref: '#/components/schemas/Scope'
+        status:
+          $ref: '#/components/schemas/MemorySessionStatus'
+        verdict:
+          $ref: '#/components/schemas/ScopeProofVerdict'
+        actor:
+          type: string
+        reason:
+          type: string
+        metadata:
+          type: object
+          additionalProperties: true
+        failure_category:
+          $ref: '#/components/schemas/ProofFailureCategory'
+        created_at:
+          type: string
+          format: date-time
+        updated_at:
+          type: string
+          format: date-time
+        started_at:
+          type: string
+          format: date-time
+        finished_at:
+          type: string
+          format: date-time
+        turns:
+          type: array
+          items:
+            $ref: '#/components/schemas/MemorySessionTurn'
+    MemorySessionListResponse:
+      type: object
+      required:
+        - sessions
+      properties:
+        sessions:
+          type: array
+          items:
+            $ref: '#/components/schemas/MemorySessionRun'
+    MemorySessionVerification:
+      type: object
+      properties:
+        id:
+          type: string
+        session_id:
+          type: string
+        turn_id:
+          type: string
+        scope:
+          $ref: '#/components/schemas/Scope'
+        status:
+          $ref: '#/components/schemas/ScopeProofStepStatus'
+        verdict:
+          $ref: '#/components/schemas/ScopeProofVerdict'
+        expected_recall:
+          type: array
+          items:
+            type: string
+        evidence:
+          type: object
+          additionalProperties: true
+        failure_category:
+          $ref: '#/components/schemas/ProofFailureCategory'
+        attempt:
+          type: integer
+        created_at:
+          type: string
+          format: date-time
+        updated_at:
+          type: string
+          format: date-time
+        completed_at:
+          type: string
+          format: date-time
+    MemorySessionReport:
+      type: object
+      required:
+        - session
+      properties:
+        session:
+          $ref: '#/components/schemas/MemorySessionRun'
+        evidence:
+          $ref: '#/components/schemas/LoopReportEvidence'
+        next_actions:
+          type: array
+          items:
+            type: string
     DerivedInsightType:
       type: string
       enum:

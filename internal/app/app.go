@@ -446,12 +446,24 @@ func buildAPIRuntime(ctx context.Context, cfg config.Config, deps apiRuntimeDepe
 		replayService.Observer = observer
 	}
 	httpDeps.DerivedInsightReplayAdmin = replayService
-	httpDeps.QualityAdmin = memory.NewQualityService(memory.QualityServiceOptions{
+	qualityService := memory.NewQualityService(memory.QualityServiceOptions{
 		Store:        repo,
 		Probe:        retrievalQualityProbe{Searcher: retrievalService, Assembler: retrievalService},
 		Now:          time.Now,
 		NewID:        newQualityID,
 		MaxPlanItems: 100,
+	})
+	httpDeps.QualityAdmin = qualityService
+	httpDeps.ScopeProofAdmin = memory.NewScopeProofService(memory.ScopeProofServiceOptions{
+		Store: repo,
+		Now:   time.Now,
+		NewID: newQualityID,
+	})
+	httpDeps.MemorySession = memory.NewMemorySessionService(memory.MemorySessionServiceOptions{
+		Store:            repo,
+		ContextAssembler: memorySessionContextAdapter{assembler: retrievalService},
+		Now:              time.Now,
+		NewID:            newQualityID,
 	})
 	httpDeps.MemoryHistoryRead = memoryHistoryReaderFunc(func(ctx context.Context, scope memory.Scope, memoryID string) (memory.MemoryHistory, error) {
 		return repo.ReadMemoryHistory(ctx, scope, memoryID, true)
@@ -534,6 +546,14 @@ func buildWorkerRuntime(ctx context.Context, cfg config.Config, deps workerRunti
 		Now:       now,
 		Summary:   summary,
 	}
+	ingestor := memory.NewService(repo, now, deps.observer)
+	retrievalService := retrieval.NewService(retrieval.ServiceDependencies{
+		Lexical:   repo,
+		Semantic:  repo,
+		Relations: repo,
+		Citations: repo,
+		Insights:  repo,
+	}, deps.observer)
 
 	worker := jobs.GovernanceWorker{
 		Claimer:            repo,
@@ -560,6 +580,13 @@ func buildWorkerRuntime(ctx context.Context, cfg config.Config, deps workerRunti
 	}); ok {
 		replayService.Observer = observer
 	}
+	qualityService := memory.NewQualityService(memory.QualityServiceOptions{
+		Store:        repo,
+		Probe:        retrievalQualityProbe{Searcher: retrievalService, Assembler: retrievalService},
+		Now:          now,
+		NewID:        newQualityID,
+		MaxPlanItems: 100,
+	})
 	repairWorker := jobs.RepairActionWorker{
 		Store:         repo,
 		Processor:     jobs.GovernedRepairActionProcessor{Embedding: memory.NewEmbeddingAdminQueryService(repo, embeddingRuntime.Status), Governance: repo, Replay: replayService, Now: now},
@@ -572,9 +599,44 @@ func buildWorkerRuntime(ctx context.Context, cfg config.Config, deps workerRunti
 		Now:           now,
 		Observer:      deps.observer,
 	}
+	proofWorker := jobs.ScopeProofStepWorker{
+		Store: repo,
+		Executor: serviceScopeProofStepExecutor{
+			Ingestor:  ingestor,
+			Searcher:  retrievalService,
+			Assembler: retrievalService,
+			Governance: governanceStatusReaderFunc(func(ctx context.Context) (GovernanceStatus, error) {
+				return repo.ReadGovernanceStatus(ctx, now().UTC())
+			}),
+			Replay:  replayService,
+			Quality: qualityService,
+			Now:     now,
+		},
+		Scope:         scope,
+		WorkerID:      "stele-scope-proof-worker",
+		BatchSize:     16,
+		LeaseDuration: governanceWorkerLeaseDuration,
+		MaxAttempts:   cfg.Jobs.GovernanceMaxAttempts,
+		RetryBackoff:  cfg.Jobs.GovernanceRetryBackoff,
+		Now:           now,
+		Observer:      deps.observer,
+	}
+	sessionVerificationWorker := jobs.MemorySessionVerificationWorker{
+		Store:         repo,
+		Runner:        serviceMemorySessionVerificationRunner{Assembler: retrievalService},
+		Scope:         scope,
+		WorkerID:      "stele-memory-session-verification-worker",
+		BatchSize:     16,
+		LeaseDuration: governanceWorkerLeaseDuration,
+		MaxAttempts:   cfg.Jobs.GovernanceMaxAttempts,
+		RetryBackoff:  cfg.Jobs.GovernanceRetryBackoff,
+		Now:           now,
+		Observer:      deps.observer,
+	}
 	workers := []jobs.LoopWorker{worker}
 	if err := scope.Validate(); err == nil {
 		workers = append(workers, repairWorker)
+		workers = append(workers, proofWorker, sessionVerificationWorker)
 	}
 
 	return workerRuntime{
@@ -1061,6 +1123,378 @@ func (r observedGovernanceStatusReader) ReadGovernanceStatus(ctx context.Context
 	}
 
 	return status, err
+}
+
+type memorySessionContextAdapter struct {
+	assembler retrieval.ContextAssembler
+}
+
+func (a memorySessionContextAdapter) AssembleSessionContext(ctx context.Context, request memory.MemorySessionContextRequest) (memory.MemorySessionContextEvidence, error) {
+	if a.assembler == nil {
+		return memory.MemorySessionContextEvidence{}, fmt.Errorf("context assembler is not configured")
+	}
+	result, err := a.assembler.AssembleContext(ctx, retrieval.AssembleContextInput{
+		Scope:                     request.Scope,
+		Query:                     request.Query,
+		Budget:                    request.Budget,
+		IncludeRelations:          request.IncludeRelations,
+		IncludeExperienceInsights: request.IncludeExperienceInsights,
+		IncludeDiagnostics:        request.IncludeDiagnostics,
+	})
+	if err != nil {
+		return memory.MemorySessionContextEvidence{}, err
+	}
+	memoryIDs := boundedUniqueMemoryIDs(result, 100)
+	citations := boundedUniqueCitationIDs(result.Citations, 100)
+	diagnostics := boundedContextDiagnostics(result.Diagnostics, 100)
+	return memory.MemorySessionContextEvidence{
+		Summary:     fmt.Sprintf("assembled context with %d memories and %d citations", len(memoryIDs), len(citations)),
+		MemoryIDs:   memoryIDs,
+		Citations:   citations,
+		Diagnostics: diagnostics,
+	}, nil
+}
+
+func boundedUniqueMemoryIDs(result retrieval.AssembledContext, limit int) []string {
+	seen := map[string]struct{}{}
+	ids := make([]string, 0)
+	appendHits := func(hits []retrieval.SearchHit) {
+		for _, hit := range hits {
+			if len(ids) >= limit {
+				return
+			}
+			id := strings.TrimSpace(hit.Memory.ID)
+			if id == "" {
+				continue
+			}
+			if _, ok := seen[id]; ok {
+				continue
+			}
+			seen[id] = struct{}{}
+			ids = append(ids, id)
+		}
+	}
+	appendHits(result.Profile)
+	appendHits(result.RecentSession)
+	appendHits(result.RecentEpisodes)
+	appendHits(result.RelevantSummaries)
+	appendHits(result.RelatedEntities)
+	return ids
+}
+
+func boundedUniqueCitationIDs(citations []retrieval.Citation, limit int) []string {
+	seen := map[string]struct{}{}
+	ids := make([]string, 0, len(citations))
+	for _, citation := range citations {
+		if len(ids) >= limit {
+			return ids
+		}
+		id := strings.TrimSpace(citation.RawEventID)
+		if id == "" {
+			id = strings.TrimSpace(citation.MemoryID)
+		}
+		if id == "" {
+			continue
+		}
+		if _, ok := seen[id]; ok {
+			continue
+		}
+		seen[id] = struct{}{}
+		ids = append(ids, id)
+	}
+	return ids
+}
+
+func boundedContextDiagnostics(items []retrieval.ContextDiagnostic, limit int) []string {
+	diagnostics := make([]string, 0, len(items))
+	for _, item := range items {
+		if len(diagnostics) >= limit {
+			return diagnostics
+		}
+		section := strings.TrimSpace(item.Section)
+		status := strings.TrimSpace(item.Status)
+		if section == "" && status == "" {
+			continue
+		}
+		if section == "" {
+			diagnostics = append(diagnostics, status)
+			continue
+		}
+		if status == "" {
+			diagnostics = append(diagnostics, section)
+			continue
+		}
+		diagnostics = append(diagnostics, section+":"+status)
+	}
+	return diagnostics
+}
+
+type serviceScopeProofStepExecutor struct {
+	Ingestor   memory.EventIngestor
+	Searcher   retrieval.MemorySearcher
+	Assembler  retrieval.ContextAssembler
+	Governance GovernanceStatusReader
+	Replay     scopeProofReplayPlanner
+	Quality    scopeProofQualityPlanner
+	Now        func() time.Time
+}
+
+type scopeProofReplayPlanner interface {
+	PlanDerivedInsightReplay(ctx context.Context, input memory.DerivedInsightReplayRequest) (memory.DerivedInsightReplayReport, error)
+}
+
+type scopeProofQualityPlanner interface {
+	CreateEvaluation(ctx context.Context, input memory.CreateQualityEvaluationInput) (memory.QualityEvaluationRun, error)
+	CreateRepairPlan(ctx context.Context, input memory.CreateRepairPlanInput) (memory.RepairPlan, error)
+}
+
+func (e serviceScopeProofStepExecutor) ExecuteScopeProofStep(ctx context.Context, step memory.ScopeProofStep) (memory.ScopeProofStepResult, error) {
+	evidence := map[string]any{"step": string(step.Step)}
+	switch step.Step {
+	case memory.ScopeProofStepScopeResolved:
+		evidence["tenant"] = step.Scope.Tenant
+		evidence["project"] = step.Scope.Project
+		evidence["namespace"] = step.Scope.Namespace
+	case memory.ScopeProofStepFixturePlanned:
+		evidence["fixture_event_type"] = "stele.scope_proof.fixture"
+	case memory.ScopeProofStepIngestion:
+		if e.Ingestor == nil {
+			return memory.ScopeProofStepResult{}, fmt.Errorf("proof ingestion service is not configured")
+		}
+		event, err := e.Ingestor.Ingest(ctx, memory.IngestEventInput{
+			Scope:     step.Scope,
+			EventType: "stele.scope_proof.fixture",
+			Content:   "stele scope proof fixture for scoped memory loop verification",
+			Metadata: map[string]any{
+				"scope_proof_id": step.ProofID,
+				"proof_step_id":  step.ID,
+				"fixture":        true,
+			},
+			SourceTimestamp: e.nowUTC(),
+		})
+		if err != nil {
+			return memory.ScopeProofStepResult{}, err
+		}
+		evidence["event_id"] = event.ID
+		if event.Admission != nil {
+			evidence["admission_decision"] = event.Admission.Decision
+		}
+	case memory.ScopeProofStepGovernanceProcessed:
+		if e.Governance == nil {
+			return memory.ScopeProofStepResult{}, fmt.Errorf("proof governance status reader is not configured")
+		}
+		status, err := e.Governance.ReadGovernanceStatus(ctx)
+		if err != nil {
+			return memory.ScopeProofStepResult{}, err
+		}
+		evidence["pending_raw_events"] = status.PendingRawEvents
+		evidence["leased_raw_events"] = status.LeasedRawEvents
+		evidence["processed_raw_events"] = status.ProcessedRawEvents
+		evidence["observed_at"] = status.ObservedAt
+		if status.PendingRawEvents > 0 || status.LeasedRawEvents > 0 {
+			return memory.ScopeProofStepResult{
+				Verdict:         memory.ScopeProofVerdictPassedDegraded,
+				FailureCategory: memory.ProofFailureCategoryGovernance,
+				Evidence:        evidence,
+			}, nil
+		}
+	case memory.ScopeProofStepRetrievalRecalled:
+		if e.Searcher == nil {
+			return memory.ScopeProofStepResult{}, fmt.Errorf("proof retrieval service is not configured")
+		}
+		result, err := e.Searcher.Search(ctx, retrieval.SearchInput{
+			Scope: step.Scope,
+			Query: "stele scope proof fixture",
+			TopK:  5,
+		})
+		if err != nil {
+			return memory.ScopeProofStepResult{}, err
+		}
+		evidence["hit_count"] = len(result.Hits)
+		evidence["memory_ids"] = searchHitMemoryIDs(result.Hits, 20)
+	case memory.ScopeProofStepContextAssembled:
+		if e.Assembler == nil {
+			return memory.ScopeProofStepResult{}, fmt.Errorf("proof context assembler is not configured")
+		}
+		result, err := e.Assembler.AssembleContext(ctx, retrieval.AssembleContextInput{
+			Scope:              step.Scope,
+			Query:              "stele scope proof fixture",
+			Budget:             1200,
+			IncludeDiagnostics: true,
+		})
+		if err != nil {
+			return memory.ScopeProofStepResult{}, err
+		}
+		memoryIDs := boundedUniqueMemoryIDs(result, 100)
+		evidence["memory_ids"] = memoryIDs
+		evidence["citation_ids"] = boundedUniqueCitationIDs(result.Citations, 100)
+		evidence["diagnostics"] = boundedContextDiagnostics(result.Diagnostics, 100)
+	case memory.ScopeProofStepReplayChecked:
+		if e.Replay == nil {
+			evidence["optional"] = true
+			evidence["skipped_reason"] = "derived_insight_replay_service_not_configured"
+			break
+		}
+		report, err := e.Replay.PlanDerivedInsightReplay(ctx, memory.DerivedInsightReplayRequest{
+			Scope:               step.Scope,
+			Mode:                memory.DerivedInsightReplayModeDryRun,
+			InsightTypes:        []memory.DerivedInsightType{memory.DerivedInsightTypeFailurePattern, memory.DerivedInsightTypeLesson},
+			EvidenceWindowStart: e.nowUTC().Add(-24 * time.Hour),
+			EvidenceWindowEnd:   e.nowUTC(),
+			EvidenceLimit:       100,
+			Actor:               "stele-scope-proof-worker",
+			Reason:              "scope proof optional derived insight replay check",
+			IdempotencyKey:      "scope-proof:" + step.ProofID + ":replay",
+			RequestedAt:         e.nowUTC(),
+			Metadata: map[string]any{
+				"scope_proof_id": step.ProofID,
+				"proof_step_id":  step.ID,
+			},
+		})
+		if err != nil {
+			return memory.ScopeProofStepResult{}, err
+		}
+		evidence["replay_run_id"] = report.RunID
+		evidence["evidence_evaluated"] = report.Counters.EvidenceEvaluated
+		evidence["decisions"] = len(report.Decisions)
+	case memory.ScopeProofStepQualityEvaluated:
+		if e.Quality == nil {
+			return memory.ScopeProofStepResult{}, fmt.Errorf("proof quality service is not configured")
+		}
+		evaluation, err := e.createProofQualityEvaluation(ctx, step.Scope)
+		if err != nil {
+			return memory.ScopeProofStepResult{}, err
+		}
+		evidence["evaluation_run_id"] = evaluation.ID
+		evidence["evaluation_status"] = evaluation.Status
+	case memory.ScopeProofStepRepairRecommended:
+		if e.Quality == nil {
+			return memory.ScopeProofStepResult{}, fmt.Errorf("proof quality service is not configured")
+		}
+		evaluationRunID := strings.TrimSpace(stringFromEvidence(step.Evidence, "evaluation_run_id"))
+		if evaluationRunID == "" {
+			evaluation, err := e.createProofQualityEvaluation(ctx, step.Scope)
+			if err != nil {
+				return memory.ScopeProofStepResult{}, err
+			}
+			evaluationRunID = evaluation.ID
+			evidence["evaluation_run_id"] = evaluation.ID
+			evidence["evaluation_status"] = evaluation.Status
+		}
+		plan, err := e.Quality.CreateRepairPlan(ctx, memory.CreateRepairPlanInput{
+			Scope:           step.Scope,
+			EvaluationRunID: evaluationRunID,
+			Actor:           "stele-scope-proof-worker",
+			Reason:          "scope proof repair recommendation",
+			DryRun:          true,
+		})
+		if err != nil {
+			return memory.ScopeProofStepResult{}, err
+		}
+		evidence["repair_plan_id"] = plan.ID
+		evidence["repair_plan_status"] = plan.Status
+		evidence["dry_run"] = plan.DryRun
+	case memory.ScopeProofStepCompleted:
+		evidence["completed"] = true
+	default:
+		return memory.ScopeProofStepResult{}, fmt.Errorf("scope proof step %q is not supported", step.Step)
+	}
+	return memory.ScopeProofStepResult{
+		Verdict:  memory.ScopeProofVerdictPassed,
+		Evidence: evidence,
+	}, nil
+}
+
+func (e serviceScopeProofStepExecutor) nowUTC() time.Time {
+	now := time.Now
+	if e.Now != nil {
+		now = e.Now
+	}
+	return now().UTC()
+}
+
+func (e serviceScopeProofStepExecutor) createProofQualityEvaluation(ctx context.Context, scope memory.Scope) (memory.QualityEvaluationRun, error) {
+	return e.Quality.CreateEvaluation(ctx, memory.CreateQualityEvaluationInput{
+		Scope: scope,
+		Checks: []memory.QualityEvaluationCheck{
+			memory.QualityEvaluationCheckRetrieval,
+			memory.QualityEvaluationCheckContext,
+			memory.QualityEvaluationCheckAdmissionPressure,
+			memory.QualityEvaluationCheckRepairPressure,
+		},
+		Query:         "stele scope proof fixture",
+		ContextBudget: 1200,
+		Actor:         "stele-scope-proof-worker",
+		Reason:        "scope proof quality evaluation",
+	})
+}
+
+func stringFromEvidence(evidence map[string]any, key string) string {
+	if evidence == nil {
+		return ""
+	}
+	switch value := evidence[key].(type) {
+	case string:
+		return value
+	case fmt.Stringer:
+		return value.String()
+	default:
+		return ""
+	}
+}
+
+type serviceMemorySessionVerificationRunner struct {
+	Assembler retrieval.ContextAssembler
+}
+
+func (r serviceMemorySessionVerificationRunner) VerifyMemorySession(ctx context.Context, verification memory.MemorySessionVerification) (memory.MemorySessionVerificationResult, error) {
+	if r.Assembler == nil {
+		return memory.MemorySessionVerificationResult{}, fmt.Errorf("memory session verification context assembler is not configured")
+	}
+	query := strings.Join(verification.ExpectedRecall, " ")
+	if strings.TrimSpace(query) == "" {
+		query = "memory session verification"
+	}
+	result, err := r.Assembler.AssembleContext(ctx, retrieval.AssembleContextInput{
+		Scope:              verification.Scope,
+		Query:              query,
+		Budget:             1200,
+		IncludeDiagnostics: true,
+	})
+	if err != nil {
+		return memory.MemorySessionVerificationResult{}, err
+	}
+	citations := boundedUniqueCitationIDs(result.Citations, 100)
+	evidence := map[string]any{
+		"memory_ids":    boundedUniqueMemoryIDs(result, 100),
+		"citation_ids":  citations,
+		"diagnostics":   boundedContextDiagnostics(result.Diagnostics, 100),
+		"expected_size": len(verification.ExpectedRecall),
+	}
+	verdict := memory.ScopeProofVerdictPassed
+	if len(verification.ExpectedRecall) > 0 && len(citations) == 0 {
+		verdict = memory.ScopeProofVerdictPassedDegraded
+		evidence["degraded_reason"] = "expected_recall_not_observed_in_citations"
+	}
+	return memory.MemorySessionVerificationResult{
+		Verdict:  verdict,
+		Evidence: evidence,
+	}, nil
+}
+
+func searchHitMemoryIDs(hits []retrieval.SearchHit, limit int) []string {
+	ids := make([]string, 0, len(hits))
+	for _, hit := range hits {
+		if len(ids) >= limit {
+			return ids
+		}
+		id := strings.TrimSpace(hit.Memory.ID)
+		if id == "" {
+			continue
+		}
+		ids = append(ids, id)
+	}
+	return ids
 }
 
 func firstPositiveDuration(values ...time.Duration) time.Duration {

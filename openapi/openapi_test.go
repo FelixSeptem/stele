@@ -214,6 +214,43 @@ func TestSpecYAMLIncludesMemoryQualityRepairRoutesAndSchemas(t *testing.T) {
 	}
 }
 
+func TestSpecYAMLIncludesScopeProofAndMemorySessionRoutesAndSchemas(t *testing.T) {
+	for _, want := range []string{
+		"/v1/admin/scope-proofs",
+		"/v1/admin/scope-proofs/{proof_run_id}",
+		"/v1/admin/scope-proofs/{proof_run_id}/report",
+		"/v1/admin/scope-proofs/{proof_run_id}:rerun",
+		"/v1/memory-sessions",
+		"/v1/memory-sessions/{session_id}",
+		"/v1/memory-sessions/{session_id}/report",
+		"/v1/memory-sessions/{session_id}/turns",
+		"/v1/memory-sessions/{session_id}/turns/{turn_id}:outcome",
+		"/v1/memory-sessions/{session_id}:verify",
+		"ScopeProofRun",
+		"ScopeProofStep",
+		"ScopeProofReport",
+		"LoopReportEvidence",
+		"MemorySessionRun",
+		"MemorySessionTurn",
+		"MemorySessionReport",
+		"CreateScopeProofRequest",
+		"CreateMemorySessionRequest",
+		"CreateMemorySessionTurnRequest",
+		"RecordMemorySessionOutcomeRequest",
+		"RequestMemorySessionVerificationRequest",
+		"failure_categories",
+		"quality_evaluation_ids",
+		"repair_plan_ids",
+		"next_actions",
+		"actor",
+		"reason",
+	} {
+		if !strings.Contains(SpecYAML(), want) {
+			t.Fatalf("SpecYAML() missing %q", want)
+		}
+	}
+}
+
 func TestSpecYAMLIncludesEmbeddingRecoveryRoutesAndSchemas(t *testing.T) {
 	for _, want := range []string{
 		"/v1/admin/embedding/rebuilds/{memory_id}:retry",

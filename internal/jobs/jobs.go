@@ -47,6 +47,57 @@ type RepairActionProcessor interface {
 	ProcessRepairAction(ctx context.Context, action memory.RepairAction) error
 }
 
+type ScopeProofStepStore interface {
+	ClaimScopeProofSteps(ctx context.Context, input memory.ClaimScopeProofStepsInput) ([]memory.ScopeProofStep, error)
+	CompleteScopeProofStep(ctx context.Context, input memory.CompleteScopeProofStepInput) error
+	RecordScopeProofStepFailure(ctx context.Context, input memory.RecordScopeProofStepFailureInput) error
+	UpdateScopeProofRunStatus(ctx context.Context, input memory.UpdateScopeProofRunStatusInput) (memory.ScopeProofRun, error)
+}
+
+type ScopeProofStepExecutor interface {
+	ExecuteScopeProofStep(ctx context.Context, step memory.ScopeProofStep) (memory.ScopeProofStepResult, error)
+}
+
+type ScopeProofStepWorker struct {
+	Store         ScopeProofStepStore
+	Executor      ScopeProofStepExecutor
+	Scope         memory.Scope
+	WorkerID      string
+	BatchSize     int
+	LeaseDuration time.Duration
+	MaxAttempts   int
+	RetryBackoff  time.Duration
+	Now           func() time.Time
+	Observer      telemetry.Observer
+	Logger        *log.Logger
+}
+
+type MemorySessionVerificationStore interface {
+	ClaimMemorySessionVerifications(ctx context.Context, input memory.ClaimMemorySessionVerificationsInput) ([]memory.MemorySessionVerification, error)
+	CompleteMemorySessionVerification(ctx context.Context, input memory.CompleteMemorySessionVerificationInput) error
+	RecordMemorySessionVerificationFailure(ctx context.Context, input memory.RecordMemorySessionVerificationFailureInput) error
+	UpdateMemorySessionRunStatus(ctx context.Context, input memory.UpdateMemorySessionRunStatusInput) (memory.MemorySessionRun, error)
+	UpdateMemorySessionTurnOutcome(ctx context.Context, input memory.UpdateMemorySessionTurnOutcomeInput) (memory.MemorySessionTurn, error)
+}
+
+type MemorySessionVerificationRunner interface {
+	VerifyMemorySession(ctx context.Context, verification memory.MemorySessionVerification) (memory.MemorySessionVerificationResult, error)
+}
+
+type MemorySessionVerificationWorker struct {
+	Store         MemorySessionVerificationStore
+	Runner        MemorySessionVerificationRunner
+	Scope         memory.Scope
+	WorkerID      string
+	BatchSize     int
+	LeaseDuration time.Duration
+	MaxAttempts   int
+	RetryBackoff  time.Duration
+	Now           func() time.Time
+	Observer      telemetry.Observer
+	Logger        *log.Logger
+}
+
 type RepairActionWorker struct {
 	Store         RepairActionStore
 	Processor     RepairActionProcessor
@@ -58,6 +109,589 @@ type RepairActionWorker struct {
 	RetryBackoff  time.Duration
 	Now           func() time.Time
 	Observer      telemetry.Observer
+}
+
+func (w ScopeProofStepWorker) RunOnce(ctx context.Context) (processed int, err error) {
+	started := time.Now()
+	if w.Store == nil {
+		return 0, fmt.Errorf("scope proof step store is required")
+	}
+	if w.Executor == nil {
+		return 0, fmt.Errorf("scope proof step executor is required")
+	}
+	now := w.nowUTC()
+	defer func() {
+		w.recordOperation(ctx, "scope_proof_step_worker", "scope_proof", started, now, processed, err)
+	}()
+	claims, err := w.Store.ClaimScopeProofSteps(ctx, memory.ClaimScopeProofStepsInput{
+		Scope:         w.Scope,
+		WorkerID:      w.WorkerID,
+		Now:           now,
+		LeaseDuration: w.leaseDuration(),
+		Limit:         w.batchSize(),
+	})
+	if err != nil {
+		return 0, err
+	}
+	for _, step := range claims {
+		result, execErr := w.Executor.ExecuteScopeProofStep(ctx, step)
+		if execErr != nil {
+			if recordErr := w.recordFailure(ctx, step, execErr); recordErr != nil {
+				return 0, recordErr
+			}
+			continue
+		}
+		status := result.Status
+		if status == "" {
+			status = memory.ScopeProofStepStatusCompleted
+		}
+		verdict := result.Verdict
+		if verdict == "" {
+			verdict = memory.ScopeProofVerdictPassed
+		}
+		if err := w.Store.CompleteScopeProofStep(ctx, memory.CompleteScopeProofStepInput{
+			Scope:           step.Scope,
+			StepID:          step.ID,
+			ProofID:         step.ProofID,
+			WorkerID:        step.WorkerID,
+			Status:          status,
+			Verdict:         verdict,
+			Evidence:        result.Evidence,
+			FailureCategory: result.FailureCategory,
+			CompletedAt:     w.nowUTC(),
+		}); err != nil {
+			return 0, err
+		}
+		w.recordProofStep(ctx, step.Step, status, verdict, result.FailureCategory)
+		w.logProofStep("step_completed", step.Step, status, verdict, result.FailureCategory)
+		if step.Step == memory.ScopeProofStepCompleted {
+			if err := w.reduceProofVerdict(ctx, step, result, status, verdict); err != nil {
+				return 0, err
+			}
+		}
+		processed++
+	}
+	return processed, nil
+}
+
+func (w ScopeProofStepWorker) reduceProofVerdict(ctx context.Context, step memory.ScopeProofStep, result memory.ScopeProofStepResult, status memory.ScopeProofStepStatus, verdict memory.ScopeProofVerdict) error {
+	runStatus := memory.ScopeProofStatusCompleted
+	if status == memory.ScopeProofStepStatusFailed || verdict == memory.ScopeProofVerdictFailed {
+		runStatus = memory.ScopeProofStatusFailed
+	}
+	if status == memory.ScopeProofStepStatusManualReview || verdict == memory.ScopeProofVerdictManualReview {
+		runStatus = memory.ScopeProofStatusManualReview
+	}
+	_, err := w.Store.UpdateScopeProofRunStatus(ctx, memory.UpdateScopeProofRunStatusInput{
+		Scope:           step.Scope,
+		ProofID:         step.ProofID,
+		Status:          runStatus,
+		Verdict:         verdict,
+		FailureCategory: result.FailureCategory,
+		Summary:         result.Evidence,
+		UpdatedAt:       w.nowUTC(),
+		FinishedAt:      w.nowUTC(),
+	})
+	if err == nil {
+		w.recordProofRun(ctx, runStatus, verdict, result.FailureCategory)
+		w.logProofRun("run_updated", runStatus, verdict, result.FailureCategory)
+	}
+	return err
+}
+
+func (w ScopeProofStepWorker) recordFailure(ctx context.Context, step memory.ScopeProofStep, cause error) error {
+	failedAt := w.nowUTC()
+	input := memory.RecordScopeProofStepFailureInput{
+		Scope:           step.Scope,
+		StepID:          step.ID,
+		ProofID:         step.ProofID,
+		WorkerID:        step.WorkerID,
+		Status:          memory.ScopeProofStepStatusFailed,
+		Verdict:         memory.ScopeProofVerdictFailed,
+		FailureCategory: memory.ProofFailureCategoryWorker,
+		ErrorMessage:    truncateError(cause.Error(), 512),
+		FailedAt:        failedAt,
+	}
+	if step.Attempt >= w.maxAttempts() {
+		input.Status = memory.ScopeProofStepStatusExhausted
+		if _, err := w.Store.UpdateScopeProofRunStatus(ctx, memory.UpdateScopeProofRunStatusInput{
+			Scope:           step.Scope,
+			ProofID:         step.ProofID,
+			Status:          memory.ScopeProofStatusFailed,
+			Verdict:         memory.ScopeProofVerdictFailed,
+			FailureCategory: memory.ProofFailureCategoryWorker,
+			Summary:         map[string]any{"failed_step": string(step.Step), "error": input.ErrorMessage},
+			UpdatedAt:       failedAt,
+			FinishedAt:      failedAt,
+		}); err != nil {
+			return err
+		}
+		w.recordProofRun(ctx, memory.ScopeProofStatusFailed, memory.ScopeProofVerdictFailed, memory.ProofFailureCategoryWorker)
+		w.logProofRun("run_updated", memory.ScopeProofStatusFailed, memory.ScopeProofVerdictFailed, memory.ProofFailureCategoryWorker)
+	} else {
+		input.NextAttemptAt = failedAt.Add(w.retryBackoff())
+	}
+	if err := w.Store.RecordScopeProofStepFailure(ctx, input); err != nil {
+		return err
+	}
+	w.recordProofStep(ctx, step.Step, input.Status, memory.ScopeProofVerdictFailed, input.FailureCategory)
+	w.logProofStep("step_failed", step.Step, input.Status, memory.ScopeProofVerdictFailed, input.FailureCategory)
+	return nil
+}
+
+func (w ScopeProofStepWorker) nowUTC() time.Time {
+	now := time.Now
+	if w.Now != nil {
+		now = w.Now
+	}
+	return now().UTC()
+}
+
+func (w ScopeProofStepWorker) batchSize() int {
+	if w.BatchSize > 0 {
+		return w.BatchSize
+	}
+	return 10
+}
+
+func (w ScopeProofStepWorker) leaseDuration() time.Duration {
+	if w.LeaseDuration > 0 {
+		return w.LeaseDuration
+	}
+	return time.Minute
+}
+
+func (w ScopeProofStepWorker) maxAttempts() int {
+	if w.MaxAttempts > 0 {
+		return w.MaxAttempts
+	}
+	return 5
+}
+
+func (w ScopeProofStepWorker) retryBackoff() time.Duration {
+	if w.RetryBackoff > 0 {
+		return w.RetryBackoff
+	}
+	return w.leaseDuration()
+}
+
+func (w ScopeProofStepWorker) recordOperation(ctx context.Context, component, operation string, started time.Time, observedAt time.Time, processed int, err error) {
+	if w.Observer == nil {
+		return
+	}
+	status := "ok"
+	errorMessage := ""
+	if err != nil {
+		status = "error"
+		processed = 0
+		errorMessage = err.Error()
+	}
+	w.Observer.RecordOperation(ctx, telemetry.OperationEvent{
+		Mode:       "worker",
+		Component:  component,
+		Operation:  operation,
+		Status:     status,
+		Count:      processed,
+		Duration:   time.Since(started),
+		Error:      errorMessage,
+		ObservedAt: observedAt,
+	})
+}
+
+func (w ScopeProofStepWorker) recordProofStep(ctx context.Context, step memory.ScopeProofStepName, status memory.ScopeProofStepStatus, verdict memory.ScopeProofVerdict, category memory.ProofFailureCategory) {
+	observer, ok := w.Observer.(interface {
+		RecordScopeProofStep(ctx context.Context, event telemetry.ScopeProofStepEvent)
+	})
+	if !ok {
+		return
+	}
+	observer.RecordScopeProofStep(ctx, telemetry.ScopeProofStepEvent{
+		Step:            string(step),
+		Status:          string(status),
+		Verdict:         string(verdict),
+		Component:       proofStepComponent(step),
+		FailureCategory: string(category),
+	})
+}
+
+func (w ScopeProofStepWorker) recordProofRun(ctx context.Context, status memory.ScopeProofStatus, verdict memory.ScopeProofVerdict, category memory.ProofFailureCategory) {
+	observer, ok := w.Observer.(interface {
+		RecordScopeProofRun(ctx context.Context, event telemetry.ScopeProofRunEvent)
+	})
+	if !ok {
+		return
+	}
+	observer.RecordScopeProofRun(ctx, telemetry.ScopeProofRunEvent{
+		Status:          string(status),
+		Verdict:         string(verdict),
+		FailureCategory: string(category),
+	})
+}
+
+func (w ScopeProofStepWorker) logProofStep(event string, step memory.ScopeProofStepName, status memory.ScopeProofStepStatus, verdict memory.ScopeProofVerdict, category memory.ProofFailureCategory) {
+	logger := w.Logger
+	if logger == nil {
+		logger = log.Default()
+	}
+	logger.Printf(
+		"mode=worker component=scope_proof_step_worker event=%s step=%s status=%s verdict=%s failure_category=%s",
+		event,
+		step,
+		status,
+		verdict,
+		labelOrUnknownString(string(category)),
+	)
+}
+
+func (w ScopeProofStepWorker) logProofRun(event string, status memory.ScopeProofStatus, verdict memory.ScopeProofVerdict, category memory.ProofFailureCategory) {
+	logger := w.Logger
+	if logger == nil {
+		logger = log.Default()
+	}
+	logger.Printf(
+		"mode=worker component=scope_proof_step_worker event=%s status=%s verdict=%s failure_category=%s",
+		event,
+		status,
+		verdict,
+		labelOrUnknownString(string(category)),
+	)
+}
+
+func (w MemorySessionVerificationWorker) RunOnce(ctx context.Context) (processed int, err error) {
+	started := time.Now()
+	if w.Store == nil {
+		return 0, fmt.Errorf("memory session verification store is required")
+	}
+	if w.Runner == nil {
+		return 0, fmt.Errorf("memory session verification runner is required")
+	}
+	now := w.nowUTC()
+	defer func() {
+		w.recordOperation(ctx, "memory_session_verification_worker", "memory_session_verification", started, now, processed, err)
+	}()
+	claims, err := w.Store.ClaimMemorySessionVerifications(ctx, memory.ClaimMemorySessionVerificationsInput{
+		Scope:         w.Scope,
+		WorkerID:      w.WorkerID,
+		Now:           now,
+		LeaseDuration: w.leaseDuration(),
+		Limit:         w.batchSize(),
+	})
+	if err != nil {
+		return 0, err
+	}
+	for _, verification := range claims {
+		result, verifyErr := w.Runner.VerifyMemorySession(ctx, verification)
+		if verifyErr != nil {
+			if recordErr := w.recordFailure(ctx, verification, verifyErr); recordErr != nil {
+				return 0, recordErr
+			}
+			continue
+		}
+		status := result.Status
+		if status == "" {
+			status = memory.ScopeProofStepStatusCompleted
+		}
+		verdict := result.Verdict
+		if verdict == "" {
+			verdict = memory.ScopeProofVerdictPassed
+		}
+		if err := w.Store.CompleteMemorySessionVerification(ctx, memory.CompleteMemorySessionVerificationInput{
+			Scope:           verification.Scope,
+			VerificationID:  verification.ID,
+			SessionID:       verification.SessionID,
+			TurnID:          verification.TurnID,
+			WorkerID:        verification.WorkerID,
+			Status:          status,
+			Verdict:         verdict,
+			Evidence:        result.Evidence,
+			FailureCategory: result.FailureCategory,
+			CompletedAt:     w.nowUTC(),
+		}); err != nil {
+			return 0, err
+		}
+		if err := w.updateVerificationTargets(ctx, verification, result, status, verdict); err != nil {
+			return 0, err
+		}
+		w.recordSessionVerification(ctx, status, verdict, result.FailureCategory)
+		w.logSessionVerification("verification_completed", status, verdict, result.FailureCategory)
+		processed++
+	}
+	return processed, nil
+}
+
+func (w MemorySessionVerificationWorker) updateVerificationTargets(ctx context.Context, verification memory.MemorySessionVerification, result memory.MemorySessionVerificationResult, status memory.ScopeProofStepStatus, verdict memory.ScopeProofVerdict) error {
+	sessionStatus := memory.MemorySessionStatusCompleted
+	if status == memory.ScopeProofStepStatusFailed || verdict == memory.ScopeProofVerdictFailed {
+		sessionStatus = memory.MemorySessionStatusFailed
+	}
+	if status == memory.ScopeProofStepStatusManualReview || verdict == memory.ScopeProofVerdictManualReview {
+		sessionStatus = memory.MemorySessionStatusManualReview
+	}
+	now := w.nowUTC()
+	if _, err := w.Store.UpdateMemorySessionRunStatus(ctx, memory.UpdateMemorySessionRunStatusInput{
+		Scope:           verification.Scope,
+		SessionID:       verification.SessionID,
+		Status:          sessionStatus,
+		Verdict:         verdict,
+		FailureCategory: result.FailureCategory,
+		UpdatedAt:       now,
+		FinishedAt:      now,
+	}); err != nil {
+		return err
+	}
+	w.recordSessionRun(ctx, sessionStatus, verdict, result.FailureCategory)
+	w.logSessionRun("session_updated", sessionStatus, verdict, result.FailureCategory)
+	if strings.TrimSpace(verification.TurnID) == "" {
+		return nil
+	}
+	turnStatus := memory.MemorySessionTurnStatusVerified
+	if status == memory.ScopeProofStepStatusFailed || verdict == memory.ScopeProofVerdictFailed {
+		turnStatus = memory.MemorySessionTurnStatusFailed
+	}
+	_, err := w.Store.UpdateMemorySessionTurnOutcome(ctx, memory.UpdateMemorySessionTurnOutcomeInput{
+		Scope:              verification.Scope,
+		SessionID:          verification.SessionID,
+		TurnID:             verification.TurnID,
+		Status:             turnStatus,
+		ExpectedRecall:     append([]string(nil), verification.ExpectedRecall...),
+		VerificationStatus: verdict,
+		FailureCategory:    result.FailureCategory,
+		UpdatedAt:          now,
+		VerifiedAt:         now,
+	})
+	if err == nil {
+		w.recordSessionTurn(ctx, turnStatus, verdict, result.FailureCategory)
+		w.logSessionTurn("turn_updated", turnStatus, verdict, result.FailureCategory)
+	}
+	return err
+}
+
+func (w MemorySessionVerificationWorker) recordFailure(ctx context.Context, verification memory.MemorySessionVerification, cause error) error {
+	failedAt := w.nowUTC()
+	input := memory.RecordMemorySessionVerificationFailureInput{
+		Scope:           verification.Scope,
+		VerificationID:  verification.ID,
+		SessionID:       verification.SessionID,
+		TurnID:          verification.TurnID,
+		WorkerID:        verification.WorkerID,
+		Status:          memory.ScopeProofStepStatusFailed,
+		Verdict:         memory.ScopeProofVerdictFailed,
+		FailureCategory: memory.ProofFailureCategoryWorker,
+		ErrorMessage:    truncateError(cause.Error(), 512),
+		FailedAt:        failedAt,
+	}
+	if verification.Attempt >= w.maxAttempts() {
+		input.Status = memory.ScopeProofStepStatusExhausted
+		if _, err := w.Store.UpdateMemorySessionRunStatus(ctx, memory.UpdateMemorySessionRunStatusInput{
+			Scope:           verification.Scope,
+			SessionID:       verification.SessionID,
+			Status:          memory.MemorySessionStatusFailed,
+			Verdict:         memory.ScopeProofVerdictFailed,
+			FailureCategory: memory.ProofFailureCategoryWorker,
+			UpdatedAt:       failedAt,
+			FinishedAt:      failedAt,
+		}); err != nil {
+			return err
+		}
+		w.recordSessionRun(ctx, memory.MemorySessionStatusFailed, memory.ScopeProofVerdictFailed, memory.ProofFailureCategoryWorker)
+		w.logSessionRun("session_updated", memory.MemorySessionStatusFailed, memory.ScopeProofVerdictFailed, memory.ProofFailureCategoryWorker)
+	} else {
+		input.NextAttemptAt = failedAt.Add(w.retryBackoff())
+		if _, err := w.Store.UpdateMemorySessionRunStatus(ctx, memory.UpdateMemorySessionRunStatusInput{
+			Scope:     verification.Scope,
+			SessionID: verification.SessionID,
+			Status:    memory.MemorySessionStatusVerifying,
+			Verdict:   memory.ScopeProofVerdictPending,
+			UpdatedAt: failedAt,
+		}); err != nil {
+			return err
+		}
+		w.recordSessionRun(ctx, memory.MemorySessionStatusVerifying, memory.ScopeProofVerdictPending, "")
+		w.logSessionRun("session_updated", memory.MemorySessionStatusVerifying, memory.ScopeProofVerdictPending, "")
+	}
+	if err := w.Store.RecordMemorySessionVerificationFailure(ctx, input); err != nil {
+		return err
+	}
+	w.recordSessionVerification(ctx, input.Status, memory.ScopeProofVerdictFailed, input.FailureCategory)
+	w.logSessionVerification("verification_failed", input.Status, memory.ScopeProofVerdictFailed, input.FailureCategory)
+	return nil
+}
+
+func (w MemorySessionVerificationWorker) nowUTC() time.Time {
+	now := time.Now
+	if w.Now != nil {
+		now = w.Now
+	}
+	return now().UTC()
+}
+
+func (w MemorySessionVerificationWorker) batchSize() int {
+	if w.BatchSize > 0 {
+		return w.BatchSize
+	}
+	return 10
+}
+
+func (w MemorySessionVerificationWorker) leaseDuration() time.Duration {
+	if w.LeaseDuration > 0 {
+		return w.LeaseDuration
+	}
+	return time.Minute
+}
+
+func (w MemorySessionVerificationWorker) maxAttempts() int {
+	if w.MaxAttempts > 0 {
+		return w.MaxAttempts
+	}
+	return 5
+}
+
+func (w MemorySessionVerificationWorker) retryBackoff() time.Duration {
+	if w.RetryBackoff > 0 {
+		return w.RetryBackoff
+	}
+	return w.leaseDuration()
+}
+
+func (w MemorySessionVerificationWorker) recordOperation(ctx context.Context, component, operation string, started time.Time, observedAt time.Time, processed int, err error) {
+	if w.Observer == nil {
+		return
+	}
+	status := "ok"
+	errorMessage := ""
+	if err != nil {
+		status = "error"
+		processed = 0
+		errorMessage = err.Error()
+	}
+	w.Observer.RecordOperation(ctx, telemetry.OperationEvent{
+		Mode:       "worker",
+		Component:  component,
+		Operation:  operation,
+		Status:     status,
+		Count:      processed,
+		Duration:   time.Since(started),
+		Error:      errorMessage,
+		ObservedAt: observedAt,
+	})
+}
+
+func (w MemorySessionVerificationWorker) recordSessionRun(ctx context.Context, status memory.MemorySessionStatus, verdict memory.ScopeProofVerdict, category memory.ProofFailureCategory) {
+	observer, ok := w.Observer.(interface {
+		RecordMemorySessionRun(ctx context.Context, event telemetry.MemorySessionRunEvent)
+	})
+	if !ok {
+		return
+	}
+	observer.RecordMemorySessionRun(ctx, telemetry.MemorySessionRunEvent{
+		Status:          string(status),
+		Verdict:         string(verdict),
+		FailureCategory: string(category),
+	})
+}
+
+func (w MemorySessionVerificationWorker) recordSessionTurn(ctx context.Context, status memory.MemorySessionTurnStatus, verificationStatus memory.ScopeProofVerdict, category memory.ProofFailureCategory) {
+	observer, ok := w.Observer.(interface {
+		RecordMemorySessionTurn(ctx context.Context, event telemetry.MemorySessionTurnEvent)
+	})
+	if !ok {
+		return
+	}
+	observer.RecordMemorySessionTurn(ctx, telemetry.MemorySessionTurnEvent{
+		Status:             string(status),
+		VerificationStatus: string(verificationStatus),
+		FailureCategory:    string(category),
+	})
+}
+
+func (w MemorySessionVerificationWorker) recordSessionVerification(ctx context.Context, status memory.ScopeProofStepStatus, verdict memory.ScopeProofVerdict, category memory.ProofFailureCategory) {
+	observer, ok := w.Observer.(interface {
+		RecordMemorySessionVerification(ctx context.Context, event telemetry.MemorySessionVerificationEvent)
+	})
+	if !ok {
+		return
+	}
+	observer.RecordMemorySessionVerification(ctx, telemetry.MemorySessionVerificationEvent{
+		Status:          string(status),
+		Verdict:         string(verdict),
+		FailureCategory: string(category),
+	})
+}
+
+func (w MemorySessionVerificationWorker) logSessionRun(event string, status memory.MemorySessionStatus, verdict memory.ScopeProofVerdict, category memory.ProofFailureCategory) {
+	logger := w.Logger
+	if logger == nil {
+		logger = log.Default()
+	}
+	logger.Printf(
+		"mode=worker component=memory_session_verification_worker event=%s status=%s verdict=%s failure_category=%s",
+		event,
+		status,
+		verdict,
+		labelOrUnknownString(string(category)),
+	)
+}
+
+func (w MemorySessionVerificationWorker) logSessionTurn(event string, status memory.MemorySessionTurnStatus, verificationStatus memory.ScopeProofVerdict, category memory.ProofFailureCategory) {
+	logger := w.Logger
+	if logger == nil {
+		logger = log.Default()
+	}
+	logger.Printf(
+		"mode=worker component=memory_session_verification_worker event=%s status=%s verification_status=%s failure_category=%s",
+		event,
+		status,
+		verificationStatus,
+		labelOrUnknownString(string(category)),
+	)
+}
+
+func (w MemorySessionVerificationWorker) logSessionVerification(event string, status memory.ScopeProofStepStatus, verdict memory.ScopeProofVerdict, category memory.ProofFailureCategory) {
+	logger := w.Logger
+	if logger == nil {
+		logger = log.Default()
+	}
+	logger.Printf(
+		"mode=worker component=memory_session_verification_worker event=%s status=%s verdict=%s failure_category=%s",
+		event,
+		status,
+		verdict,
+		labelOrUnknownString(string(category)),
+	)
+}
+
+func proofStepComponent(step memory.ScopeProofStepName) string {
+	switch step {
+	case memory.ScopeProofStepScopeResolved:
+		return "scope"
+	case memory.ScopeProofStepFixturePlanned:
+		return "fixture"
+	case memory.ScopeProofStepIngestion:
+		return "ingestion"
+	case memory.ScopeProofStepGovernanceProcessed:
+		return "governance"
+	case memory.ScopeProofStepRetrievalRecalled:
+		return "retrieval"
+	case memory.ScopeProofStepContextAssembled:
+		return "context"
+	case memory.ScopeProofStepReplayChecked:
+		return "replay"
+	case memory.ScopeProofStepQualityEvaluated:
+		return "quality"
+	case memory.ScopeProofStepRepairRecommended:
+		return "repair"
+	case memory.ScopeProofStepCompleted:
+		return "verdict"
+	default:
+		return "unknown"
+	}
+}
+
+func labelOrUnknownString(value string) string {
+	if strings.TrimSpace(value) == "" {
+		return "unknown"
+	}
+	return value
 }
 
 func (w RepairActionWorker) RunOnce(ctx context.Context) (processed int, err error) {

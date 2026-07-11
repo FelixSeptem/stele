@@ -76,6 +76,38 @@ type RepairVerificationEvent struct {
 	ResidualFindingCategory string
 }
 
+type ScopeProofRunEvent struct {
+	Status          string
+	Verdict         string
+	FailureCategory string
+}
+
+type ScopeProofStepEvent struct {
+	Step            string
+	Status          string
+	Verdict         string
+	Component       string
+	FailureCategory string
+}
+
+type MemorySessionRunEvent struct {
+	Status          string
+	Verdict         string
+	FailureCategory string
+}
+
+type MemorySessionTurnEvent struct {
+	Status             string
+	VerificationStatus string
+	FailureCategory    string
+}
+
+type MemorySessionVerificationEvent struct {
+	Status          string
+	Verdict         string
+	FailureCategory string
+}
+
 type MetricsObserver struct {
 	mu       sync.Mutex
 	counters map[string]float64
@@ -255,6 +287,63 @@ func (o *MetricsObserver) RecordRepairVerification(ctx context.Context, event Re
 	}, 1)
 }
 
+func (o *MetricsObserver) RecordScopeProofRun(ctx context.Context, event ScopeProofRunEvent) {
+	if o == nil {
+		return
+	}
+	o.addCounter("stele_scope_proof_runs_total", map[string]string{
+		"status":           labelOrUnknown(event.Status),
+		"verdict":          labelOrUnknown(event.Verdict),
+		"failure_category": labelOrUnknown(event.FailureCategory),
+	}, 1)
+}
+
+func (o *MetricsObserver) RecordScopeProofStep(ctx context.Context, event ScopeProofStepEvent) {
+	if o == nil {
+		return
+	}
+	o.addCounter("stele_scope_proof_steps_total", map[string]string{
+		"step":             labelOrUnknown(event.Step),
+		"status":           labelOrUnknown(event.Status),
+		"verdict":          labelOrUnknown(event.Verdict),
+		"component":        labelOrUnknown(event.Component),
+		"failure_category": labelOrUnknown(event.FailureCategory),
+	}, 1)
+}
+
+func (o *MetricsObserver) RecordMemorySessionRun(ctx context.Context, event MemorySessionRunEvent) {
+	if o == nil {
+		return
+	}
+	o.addCounter("stele_memory_session_runs_total", map[string]string{
+		"status":           labelOrUnknown(event.Status),
+		"verdict":          labelOrUnknown(event.Verdict),
+		"failure_category": labelOrUnknown(event.FailureCategory),
+	}, 1)
+}
+
+func (o *MetricsObserver) RecordMemorySessionTurn(ctx context.Context, event MemorySessionTurnEvent) {
+	if o == nil {
+		return
+	}
+	o.addCounter("stele_memory_session_turns_total", map[string]string{
+		"status":              labelOrUnknown(event.Status),
+		"verification_status": labelOrUnknown(event.VerificationStatus),
+		"failure_category":    labelOrUnknown(event.FailureCategory),
+	}, 1)
+}
+
+func (o *MetricsObserver) RecordMemorySessionVerification(ctx context.Context, event MemorySessionVerificationEvent) {
+	if o == nil {
+		return
+	}
+	o.addCounter("stele_memory_session_verifications_total", map[string]string{
+		"status":           labelOrUnknown(event.Status),
+		"verdict":          labelOrUnknown(event.Verdict),
+		"failure_category": labelOrUnknown(event.FailureCategory),
+	}, 1)
+}
+
 func (o *MetricsObserver) RenderPrometheus() string {
 	if o == nil {
 		return ""
@@ -280,6 +369,11 @@ func (o *MetricsObserver) RenderPrometheus() string {
 	writeMetricFamilyHeader(&builder, "stele_quality_evaluation_total", "counter", "Memory quality evaluation outcomes.")
 	writeMetricFamilyHeader(&builder, "stele_quality_repair_actions_total", "counter", "Memory quality repair action outcomes.")
 	writeMetricFamilyHeader(&builder, "stele_quality_repair_verification_total", "counter", "Memory quality repair verification outcomes.")
+	writeMetricFamilyHeader(&builder, "stele_scope_proof_runs_total", "counter", "Scope proof run outcomes by bounded categories.")
+	writeMetricFamilyHeader(&builder, "stele_scope_proof_steps_total", "counter", "Scope proof step outcomes by bounded categories.")
+	writeMetricFamilyHeader(&builder, "stele_memory_session_runs_total", "counter", "Memory session run outcomes by bounded categories.")
+	writeMetricFamilyHeader(&builder, "stele_memory_session_turns_total", "counter", "Memory session turn outcomes by bounded categories.")
+	writeMetricFamilyHeader(&builder, "stele_memory_session_verifications_total", "counter", "Memory session verification outcomes by bounded categories.")
 
 	writeMetricMap(&builder, o.counters)
 	writeMetricMap(&builder, o.gauges)
