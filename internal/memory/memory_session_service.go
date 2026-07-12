@@ -63,6 +63,7 @@ type MemorySessionServiceOptions struct {
 	ContextAssembler     MemorySessionContextAssembler
 	EventIngestor        EventIngestor
 	UsefulnessSummarizer UsefulnessFeedbackSummarizer
+	TaskSummarizer       TaskEvaluationSummarizer
 	Now                  func() time.Time
 	NewID                func(prefix string) string
 }
@@ -72,6 +73,7 @@ type MemorySessionService struct {
 	contextAssembler     MemorySessionContextAssembler
 	eventIngestor        EventIngestor
 	usefulnessSummarizer UsefulnessFeedbackSummarizer
+	taskSummarizer       TaskEvaluationSummarizer
 	now                  func() time.Time
 	newID                func(prefix string) string
 }
@@ -92,6 +94,7 @@ func NewMemorySessionService(options MemorySessionServiceOptions) *MemorySession
 		contextAssembler:     options.ContextAssembler,
 		eventIngestor:        options.EventIngestor,
 		usefulnessSummarizer: options.UsefulnessSummarizer,
+		taskSummarizer:       options.TaskSummarizer,
 		now:                  now,
 		newID:                newID,
 	}
@@ -267,10 +270,11 @@ func (s *MemorySessionService) RequestVerification(ctx context.Context, input Re
 }
 
 type MemorySessionReport struct {
-	Session           MemorySessionRun            `json:"session"`
-	Evidence          LoopReportEvidence          `json:"evidence,omitempty"`
-	FeedbackSummaries []UsefulnessFeedbackSummary `json:"feedback_summaries,omitempty"`
-	NextActions       []string                    `json:"next_actions,omitempty"`
+	Session                 MemorySessionRun            `json:"session"`
+	Evidence                LoopReportEvidence          `json:"evidence,omitempty"`
+	FeedbackSummaries       []UsefulnessFeedbackSummary `json:"feedback_summaries,omitempty"`
+	TaskEvaluationSummaries []TaskSummarySignal         `json:"task_evaluation_summaries,omitempty"`
+	NextActions             []string                    `json:"next_actions,omitempty"`
 }
 
 func (s *MemorySessionService) ReadSessionReport(ctx context.Context, input ReadMemorySessionRunInput) (MemorySessionReport, error) {
@@ -283,11 +287,16 @@ func (s *MemorySessionService) ReadSessionReport(ctx context.Context, input Read
 	if err != nil {
 		return MemorySessionReport{}, err
 	}
+	taskSummaries, err := s.memorySessionTaskSummaries(ctx, session)
+	if err != nil {
+		return MemorySessionReport{}, err
+	}
 	return MemorySessionReport{
-		Session:           session,
-		Evidence:          evidence,
-		FeedbackSummaries: feedbackSummaries,
-		NextActions:       memorySessionNextActions(session, evidence),
+		Session:                 session,
+		Evidence:                evidence,
+		FeedbackSummaries:       feedbackSummaries,
+		TaskEvaluationSummaries: taskSummaries,
+		NextActions:             memorySessionNextActions(session, evidence, taskSummaries),
 	}, nil
 }
 
@@ -308,9 +317,156 @@ func (s *MemorySessionService) memorySessionFeedbackSummaries(ctx context.Contex
 		if summary.TotalActive == 0 {
 			continue
 		}
+		summary = s.decorateUsefulnessSummaryWithTaskData(ctx, session.Scope, summary)
 		summaries = append(summaries, summary)
 	}
 	return summaries, nil
+}
+
+func (s *MemorySessionService) decorateUsefulnessSummaryWithTaskData(ctx context.Context, scope Scope, summary UsefulnessFeedbackSummary) UsefulnessFeedbackSummary {
+	if s.taskSummarizer == nil {
+		return summary
+	}
+	taskSummary, err := s.taskSummarizer.SummarizeTaskEvaluations(ctx, SummarizeTaskEvaluationsInput{
+		Scope:              scope,
+		EvidenceTargetKind: evidenceTargetKindForFeedbackSubject(summary.Subject),
+		EvidenceTargetID:   evidenceTargetIDForFeedbackSubject(summary.Subject),
+	})
+	if err != nil || taskSummary.ActiveEvaluations == 0 {
+		return summary
+	}
+	summary.TaskEvaluationIDs = append([]string(nil), taskSummary.TaskEvaluationIDs...)
+	summary.TaskVerdictCounts = copyTaskVerdictCounts(taskSummary.VerdictCounts)
+	summary.TaskContributionCounts = copyTaskContributionCounts(taskSummary.ContributionCounts)
+	summary.LastTaskEvaluationAt = taskSummary.LastEvaluationAt
+	return summary
+}
+
+func evidenceTargetKindForFeedbackSubject(subject UsefulnessFeedbackSubject) TaskEvidenceTargetKind {
+	switch subject.Kind {
+	case UsefulnessFeedbackSubjectSession:
+		return TaskEvidenceTargetSession
+	case UsefulnessFeedbackSubjectTurn:
+		return TaskEvidenceTargetTurn
+	case UsefulnessFeedbackSubjectVerification:
+		return TaskEvidenceTargetVerification
+	case UsefulnessFeedbackSubjectRawEvent:
+		return TaskEvidenceTargetRawEvent
+	case UsefulnessFeedbackSubjectMemory:
+		return TaskEvidenceTargetMemory
+	case UsefulnessFeedbackSubjectCitation:
+		return TaskEvidenceTargetContextCitation
+	case UsefulnessFeedbackSubjectDerivedInsight:
+		return TaskEvidenceTargetDerivedInsight
+	case UsefulnessFeedbackSubjectExpectedRecall:
+		return TaskEvidenceTargetExpectedRecall
+	default:
+		return ""
+	}
+}
+
+func evidenceTargetIDForFeedbackSubject(subject UsefulnessFeedbackSubject) string {
+	if subject.Kind == UsefulnessFeedbackSubjectExpectedRecall {
+		if subject.ExpectedRecallTarget.Kind == ExpectedRecallTargetOpaque {
+			return subject.ExpectedRecallTarget.OpaqueToken
+		}
+		return subject.ExpectedRecallTarget.ID
+	}
+	return subject.ID
+}
+
+func (s *MemorySessionService) memorySessionTaskSummaries(ctx context.Context, session MemorySessionRun) ([]TaskSummarySignal, error) {
+	if s.taskSummarizer == nil {
+		return nil, nil
+	}
+	subjects := memorySessionTaskSubjects(session)
+	summaries := make([]TaskSummarySignal, 0, len(subjects))
+	for _, subject := range subjects {
+		summary, err := s.taskSummarizer.SummarizeTaskEvaluations(ctx, SummarizeTaskEvaluationsInput{
+			Scope:              session.Scope,
+			EvidenceTargetKind: subject.Kind,
+			EvidenceTargetID:   subject.ID,
+		})
+		if err != nil {
+			return nil, err
+		}
+		if summary.ActiveEvaluations == 0 && summary.TotalEvaluations == 0 {
+			continue
+		}
+		summaries = append(summaries, taskSummarySignalFromSummary(summary, subject))
+	}
+	return summaries, nil
+}
+
+func memorySessionTaskSubjects(session MemorySessionRun) []TaskEvidenceLink {
+	subjects := []TaskEvidenceLink{{Kind: TaskEvidenceTargetSession, ID: session.ID}}
+	for _, turn := range session.Turns {
+		subjects = append(subjects, TaskEvidenceLink{Kind: TaskEvidenceTargetTurn, ID: turn.ID})
+		for _, eventID := range turn.OutcomeEventIDs {
+			subjects = append(subjects, TaskEvidenceLink{Kind: TaskEvidenceTargetOutcomeEvent, ID: eventID})
+		}
+		for _, verification := range session.Verifications {
+			if verification.TurnID != turn.ID {
+				continue
+			}
+			subjects = append(subjects, TaskEvidenceLink{Kind: TaskEvidenceTargetVerification, ID: verification.ID})
+		}
+	}
+	return uniqueTaskEvidenceLinks(subjects)
+}
+
+func taskSummarySignalFromSummary(summary TaskEvaluationSummary, subject TaskEvidenceLink) TaskSummarySignal {
+	return TaskSummarySignal{
+		Scope:                  summary.Scope,
+		EvidenceTargetKind:     subject.Kind,
+		EvidenceTargetID:       subject.ID,
+		TaskEvaluationIDs:      append([]string(nil), summary.TaskEvaluationIDs...),
+		TaskVerdictCounts:      copyTaskVerdictCounts(summary.VerdictCounts),
+		TaskContributionCounts: copyTaskContributionCounts(summary.ContributionCounts),
+		QualityFindingCodes:    taskQualityFindingCodes(summary),
+		NextActions:            taskSummaryNextActions(summary),
+		LastTaskEvaluationAt:   summary.LastEvaluationAt,
+		LatestTaskEvaluationID: summary.LastTaskEvaluationID,
+	}
+}
+
+func copyTaskVerdictCounts(input map[TaskEvaluationVerdict]int) map[TaskEvaluationVerdict]int {
+	if len(input) == 0 {
+		return nil
+	}
+	output := make(map[TaskEvaluationVerdict]int, len(input))
+	for key, value := range input {
+		output[key] = value
+	}
+	return output
+}
+
+func copyTaskContributionCounts(input map[TaskContributionCategory]int) map[TaskContributionCategory]int {
+	if len(input) == 0 {
+		return nil
+	}
+	output := make(map[TaskContributionCategory]int, len(input))
+	for key, value := range input {
+		output[key] = value
+	}
+	return output
+}
+
+func uniqueTaskEvidenceLinks(values []TaskEvidenceLink) []TaskEvidenceLink {
+	seen := make(map[string]struct{}, len(values))
+	out := make([]TaskEvidenceLink, 0, len(values))
+	for _, value := range values {
+		if err := value.Validate(); err != nil {
+			continue
+		}
+		key := string(value.Kind) + ":" + value.ID + ":" + value.OpaqueToken
+		if _, ok := seen[key]; ok {
+			continue
+		}
+		seen[key] = struct{}{}
+		out = append(out, value)
+	}
+	return out
 }
 
 func memorySessionFeedbackSubjects(session MemorySessionRun) []UsefulnessFeedbackSubject {
@@ -424,7 +580,7 @@ func uniqueQualityFindingCodes(codes []QualityFindingCode) []QualityFindingCode 
 	return unique
 }
 
-func memorySessionNextActions(session MemorySessionRun, evidence LoopReportEvidence) []string {
+func memorySessionNextActions(session MemorySessionRun, evidence LoopReportEvidence, taskSummaries []TaskSummarySignal) []string {
 	if session.Verdict == ScopeProofVerdictPassed {
 		return []string{"no_action_required"}
 	}
@@ -446,6 +602,20 @@ func memorySessionNextActions(session MemorySessionRun, evidence LoopReportEvide
 	}
 	if len(evidence.ReplayRunIDs) > 0 {
 		actions = append(actions, "inspect_derived_insight_replay")
+	}
+	for _, taskSummary := range taskSummaries {
+		if taskSummary.TaskEvaluationIDs == nil && len(taskSummary.TaskVerdictCounts) == 0 && len(taskSummary.TaskContributionCounts) == 0 {
+			continue
+		}
+		if taskSummary.TaskVerdictCounts[TaskEvaluationVerdictFailed] > 0 || taskSummary.TaskVerdictCounts[TaskEvaluationVerdictPartial] > 0 {
+			actions = append(actions, "review_task_failure")
+		}
+		if taskSummary.TaskContributionCounts[TaskContributionCategoryMemoryMissing] > 0 ||
+			taskSummary.TaskContributionCounts[TaskContributionCategoryMemoryNoisy] > 0 ||
+			taskSummary.TaskContributionCounts[TaskContributionCategoryMemoryStale] > 0 ||
+			taskSummary.TaskContributionCounts[TaskContributionCategoryMemoryIrrelevant] > 0 {
+			actions = append(actions, "open_task_summary")
+		}
 	}
 	actions = uniqueStrings(actions)
 	if len(actions) > 0 {

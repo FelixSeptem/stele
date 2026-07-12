@@ -315,6 +315,77 @@ func TestQualityServiceCreatesFeedbackDerivedFindingsAndRepairRecommendations(t 
 	}
 }
 
+func TestQualityServiceCreatesTaskDerivedFindingsAndRepairRecommendations(t *testing.T) {
+	now := time.Date(2026, 7, 11, 12, 30, 0, 0, time.UTC)
+	scope := Scope{Tenant: "tenant-a", Project: "project-a", Namespace: "namespace-a"}
+	store := &stubQualityStore{
+		createdEvaluation: QualityEvaluationRun{
+			ID:        "eval_2",
+			Scope:     scope,
+			Status:    QualityEvaluationStatusCompleted,
+			Checks:    []QualityEvaluationCheck{QualityEvaluationCheckRetrieval},
+			CreatedAt: now,
+			UpdatedAt: now,
+		},
+	}
+	taskSummaries := &stubQualityTaskSummaries{
+		summary: TaskEvaluationSummary{
+			Scope:             scope,
+			TotalEvaluations:  2,
+			ActiveEvaluations: 2,
+			VerdictCounts: map[TaskEvaluationVerdict]int{
+				TaskEvaluationVerdictFailed:  1,
+				TaskEvaluationVerdictPartial: 1,
+			},
+			ContributionCounts: map[TaskContributionCategory]int{
+				TaskContributionCategoryMemoryMissing: 1,
+				TaskContributionCategoryMemoryNoisy:   1,
+				TaskContributionCategoryHiddenMemory:  1,
+			},
+			TaskEvaluationIDs:    []string{"task_eval_1", "task_eval_2"},
+			LastTaskEvaluationID: "task_eval_2",
+		},
+	}
+	service := NewQualityService(QualityServiceOptions{
+		Store:          store,
+		TaskSummarizer: taskSummaries,
+		Now:            func() time.Time { return now },
+		NewID:          func(prefix string) string { return prefix + "_1" },
+		MaxPlanItems:   10,
+	})
+
+	run, err := service.CreateEvaluation(context.Background(), CreateQualityEvaluationInput{
+		Scope:  scope,
+		Checks: []QualityEvaluationCheck{QualityEvaluationCheckRetrieval},
+		Actor:  "operator-a",
+		Reason: "inspect task signal",
+	})
+	if err != nil {
+		t.Fatalf("CreateEvaluation() error = %v", err)
+	}
+	if run.ID != "eval_2" {
+		t.Fatalf("run id = %q, want eval_2", run.ID)
+	}
+	if len(store.findings) == 0 {
+		t.Fatalf("findings = %+v, want task-derived findings", store.findings)
+	}
+	if !hasEvaluationFindingCode(store.findings, QualityFindingExpectedRecallMissing) || !hasEvaluationFindingCode(store.findings, QualityFindingFeedbackUnsafeOrHidden) {
+		t.Fatalf("findings = %+v, want task-derived codes", store.findings)
+	}
+	plan, err := service.CreateRepairPlan(context.Background(), CreateRepairPlanInput{
+		Scope:           scope,
+		EvaluationRunID: "eval_2",
+		Actor:           "operator-a",
+		Reason:          "review task-derived findings",
+	})
+	if err != nil {
+		t.Fatalf("CreateRepairPlan() error = %v", err)
+	}
+	if len(plan.Actions) == 0 {
+		t.Fatalf("plan = %+v, want repair actions", plan)
+	}
+}
+
 func hasQualityFindingCode(findings []QualityFinding, code QualityFindingCode) bool {
 	for _, finding := range findings {
 		if finding.Code == code {
@@ -354,9 +425,19 @@ type stubQualityFeedbackLister struct {
 	items    []UsefulnessFeedback
 }
 
+type stubQualityTaskSummaries struct {
+	gotInput SummarizeTaskEvaluationsInput
+	summary  TaskEvaluationSummary
+}
+
 func (s *stubQualityFeedbackLister) ListUsefulnessFeedback(ctx context.Context, input ListUsefulnessFeedbackInput) ([]UsefulnessFeedback, error) {
 	s.gotInput = input
 	return append([]UsefulnessFeedback(nil), s.items...), nil
+}
+
+func (s *stubQualityTaskSummaries) SummarizeTaskEvaluations(ctx context.Context, input SummarizeTaskEvaluationsInput) (TaskEvaluationSummary, error) {
+	s.gotInput = input
+	return s.summary, nil
 }
 
 func (s *stubQualityStore) CreateQualityEvaluationRun(ctx context.Context, run QualityEvaluationRun) (QualityEvaluationRun, error) {

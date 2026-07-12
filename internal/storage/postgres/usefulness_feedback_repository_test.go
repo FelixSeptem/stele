@@ -23,6 +23,7 @@ func TestRepositoryCreatesSupersedesAndSummarizesUsefulnessFeedback(t *testing.T
 		Scope:         scope,
 		Type:          memory.UsefulnessFeedbackTypeNoisy,
 		SourceSurface: memory.UsefulnessFeedbackSourceSession,
+		TaskEvaluationID: "task_eval_1",
 		Subjects: []memory.UsefulnessFeedbackSubject{{
 			Kind: memory.UsefulnessFeedbackSubjectMemory,
 			ID:   "mem_1",
@@ -36,8 +37,8 @@ func TestRepositoryCreatesSupersedesAndSummarizesUsefulnessFeedback(t *testing.T
 
 	mock.ExpectBegin()
 	mock.ExpectQuery("INSERT INTO usefulness_feedback").
-		WithArgs(feedback.ID, scope.Tenant, scope.Project, scope.Namespace, feedback.Type, feedback.SourceSurface, feedback.Actor, feedback.Reason, feedback.IdempotencyKey, []byte(`{"session_id":"session_1","turn_id":"turn_1"}`), now).
-		WillReturnRows(usefulnessFeedbackRows().AddRow(feedback.ID, scope.Tenant, scope.Project, scope.Namespace, feedback.Type, feedback.SourceSurface, feedback.Actor, feedback.Reason, feedback.IdempotencyKey, []byte(`{"session_id":"session_1","turn_id":"turn_1"}`), nil, nil, nil, now))
+		WithArgs(feedback.ID, scope.Tenant, scope.Project, scope.Namespace, feedback.Type, feedback.SourceSurface, feedback.TaskEvaluationID, feedback.Actor, feedback.Reason, feedback.IdempotencyKey, []byte(`{"session_id":"session_1","turn_id":"turn_1"}`), now).
+		WillReturnRows(usefulnessFeedbackRows().AddRow(feedback.ID, scope.Tenant, scope.Project, scope.Namespace, feedback.Type, feedback.SourceSurface, feedback.TaskEvaluationID, feedback.Actor, feedback.Reason, feedback.IdempotencyKey, []byte(`{"session_id":"session_1","turn_id":"turn_1"}`), nil, nil, nil, now))
 	mock.ExpectQuery("INSERT INTO usefulness_feedback_subjects").
 		WithArgs(feedback.ID, scope.Tenant, scope.Project, scope.Namespace, memory.UsefulnessFeedbackSubjectMemory, "mem_1", nil, nil, nil).
 		WillReturnRows(usefulnessFeedbackSubjectRows().AddRow(feedback.ID, scope.Tenant, scope.Project, scope.Namespace, memory.UsefulnessFeedbackSubjectMemory, "mem_1", nil, nil, nil))
@@ -53,8 +54,8 @@ func TestRepositoryCreatesSupersedesAndSummarizesUsefulnessFeedback(t *testing.T
 	mock.ExpectQuery("SELECT[\\s\\S]*FROM usefulness_feedback uf").
 		WithArgs(scope.Tenant, scope.Project, scope.Namespace, memory.UsefulnessFeedbackSubjectMemory, "mem_1", "", "", "").
 		WillReturnRows(usefulnessFeedbackRows().
-			AddRow("feedback_1", scope.Tenant, scope.Project, scope.Namespace, memory.UsefulnessFeedbackTypeNoisy, memory.UsefulnessFeedbackSourceSession, "agent-a", "too broad", "idem-1", []byte(`{}`), now.Add(time.Minute), "operator-a", "incorrect signal", now).
-			AddRow("feedback_2", scope.Tenant, scope.Project, scope.Namespace, memory.UsefulnessFeedbackTypeUseful, memory.UsefulnessFeedbackSourceSession, "agent-a", "helped", "idem-2", []byte(`{}`), nil, nil, nil, now.Add(2*time.Minute)))
+			AddRow("feedback_1", scope.Tenant, scope.Project, scope.Namespace, memory.UsefulnessFeedbackTypeNoisy, memory.UsefulnessFeedbackSourceSession, "task_eval_1", "agent-a", "too broad", "idem-1", []byte(`{}`), now.Add(time.Minute), "operator-a", "incorrect signal", now).
+			AddRow("feedback_2", scope.Tenant, scope.Project, scope.Namespace, memory.UsefulnessFeedbackTypeUseful, memory.UsefulnessFeedbackSourceSession, "", "agent-a", "helped", "idem-2", []byte(`{}`), nil, nil, nil, now.Add(2*time.Minute)))
 	mock.ExpectQuery("SELECT[\\s\\S]*FROM usefulness_feedback_subjects").
 		WithArgs([]string{"feedback_1", "feedback_2"}, scope.Tenant, scope.Project, scope.Namespace).
 		WillReturnRows(usefulnessFeedbackSubjectRows().
@@ -88,6 +89,9 @@ func TestRepositoryCreatesSupersedesAndSummarizesUsefulnessFeedback(t *testing.T
 	if summary.TotalActive != 1 || summary.Counts[memory.UsefulnessFeedbackTypeUseful] != 1 || summary.Counts[memory.UsefulnessFeedbackTypeNoisy] != 0 {
 		t.Fatalf("summary = %+v, want only active useful feedback counted", summary)
 	}
+	if created.TaskEvaluationID != "task_eval_1" {
+		t.Fatalf("created.TaskEvaluationID = %q, want task_eval_1", created.TaskEvaluationID)
+	}
 
 	if err := mock.ExpectationsWereMet(); err != nil {
 		t.Fatalf("ExpectationsWereMet() error = %v", err)
@@ -106,13 +110,13 @@ func TestRepositoryReadsAndListsUsefulnessFeedbackWithSubjects(t *testing.T) {
 
 	mock.ExpectQuery("SELECT[\\s\\S]*FROM usefulness_feedback[\\s\\S]*WHERE tenant").
 		WithArgs(scope.Tenant, scope.Project, scope.Namespace, "feedback_1").
-		WillReturnRows(usefulnessFeedbackRows().AddRow("feedback_1", scope.Tenant, scope.Project, scope.Namespace, memory.UsefulnessFeedbackTypeMissingExpected, memory.UsefulnessFeedbackSourceVerification, "agent-a", "expected event missing", "idem-1", []byte(`{"verification_id":"verification_1"}`), nil, nil, nil, now))
+		WillReturnRows(usefulnessFeedbackRows().AddRow("feedback_1", scope.Tenant, scope.Project, scope.Namespace, memory.UsefulnessFeedbackTypeMissingExpected, memory.UsefulnessFeedbackSourceVerification, "", "agent-a", "expected event missing", "idem-1", []byte(`{"verification_id":"verification_1"}`), nil, nil, nil, now))
 	mock.ExpectQuery("SELECT[\\s\\S]*FROM usefulness_feedback_subjects").
 		WithArgs([]string{"feedback_1"}, scope.Tenant, scope.Project, scope.Namespace).
 		WillReturnRows(usefulnessFeedbackSubjectRows().AddRow("feedback_1", scope.Tenant, scope.Project, scope.Namespace, memory.UsefulnessFeedbackSubjectExpectedRecall, nil, memory.ExpectedRecallTargetEvent, "evt_1", nil))
 	mock.ExpectQuery("SELECT[\\s\\S]*FROM usefulness_feedback uf").
 		WithArgs(scope.Tenant, scope.Project, scope.Namespace, string(memory.UsefulnessFeedbackTypeMissingExpected), false, 25).
-		WillReturnRows(usefulnessFeedbackRows().AddRow("feedback_1", scope.Tenant, scope.Project, scope.Namespace, memory.UsefulnessFeedbackTypeMissingExpected, memory.UsefulnessFeedbackSourceVerification, "agent-a", "expected event missing", "idem-1", []byte(`{}`), nil, nil, nil, now))
+		WillReturnRows(usefulnessFeedbackRows().AddRow("feedback_1", scope.Tenant, scope.Project, scope.Namespace, memory.UsefulnessFeedbackTypeMissingExpected, memory.UsefulnessFeedbackSourceVerification, "", "agent-a", "expected event missing", "idem-1", []byte(`{}`), nil, nil, nil, now))
 	mock.ExpectQuery("SELECT[\\s\\S]*FROM usefulness_feedback_subjects").
 		WithArgs([]string{"feedback_1"}, scope.Tenant, scope.Project, scope.Namespace).
 		WillReturnRows(usefulnessFeedbackSubjectRows().AddRow("feedback_1", scope.Tenant, scope.Project, scope.Namespace, memory.UsefulnessFeedbackSubjectExpectedRecall, nil, memory.ExpectedRecallTargetEvent, "evt_1", nil))
@@ -159,6 +163,7 @@ func TestRepositoryCreateUsefulnessFeedbackIsIdempotentWithExistingSubject(t *te
 		Scope:         scope,
 		Type:          memory.UsefulnessFeedbackTypeUseful,
 		SourceSurface: memory.UsefulnessFeedbackSourceSession,
+		TaskEvaluationID: "task_eval_1",
 		Subjects: []memory.UsefulnessFeedbackSubject{{
 			Kind: memory.UsefulnessFeedbackSubjectMemory,
 			ID:   "mem_1",
@@ -171,8 +176,8 @@ func TestRepositoryCreateUsefulnessFeedbackIsIdempotentWithExistingSubject(t *te
 
 	mock.ExpectBegin()
 	mock.ExpectQuery("INSERT INTO usefulness_feedback").
-		WithArgs(feedback.ID, scope.Tenant, scope.Project, scope.Namespace, feedback.Type, feedback.SourceSurface, feedback.Actor, feedback.Reason, feedback.IdempotencyKey, []byte(`{}`), now).
-		WillReturnRows(usefulnessFeedbackRows().AddRow("feedback_existing", scope.Tenant, scope.Project, scope.Namespace, feedback.Type, feedback.SourceSurface, feedback.Actor, feedback.Reason, feedback.IdempotencyKey, []byte(`{}`), nil, nil, nil, now))
+		WithArgs(feedback.ID, scope.Tenant, scope.Project, scope.Namespace, feedback.Type, feedback.SourceSurface, feedback.TaskEvaluationID, feedback.Actor, feedback.Reason, feedback.IdempotencyKey, []byte(`{}`), now).
+		WillReturnRows(usefulnessFeedbackRows().AddRow("feedback_existing", scope.Tenant, scope.Project, scope.Namespace, feedback.Type, feedback.SourceSurface, feedback.TaskEvaluationID, feedback.Actor, feedback.Reason, feedback.IdempotencyKey, []byte(`{}`), nil, nil, nil, now))
 	mock.ExpectQuery("INSERT INTO usefulness_feedback_subjects").
 		WithArgs("feedback_existing", scope.Tenant, scope.Project, scope.Namespace, memory.UsefulnessFeedbackSubjectMemory, "mem_1", nil, nil, nil).
 		WillReturnRows(usefulnessFeedbackSubjectRows())
@@ -232,7 +237,7 @@ func TestRepositorySupersedeUsefulnessFeedbackWritesAuditRecord(t *testing.T) {
 
 func usefulnessFeedbackRows() *pgxmock.Rows {
 	return pgxmock.NewRows([]string{
-		"id", "tenant", "project", "namespace", "feedback_type", "source_surface", "actor", "reason", "idempotency_key", "metadata",
+		"id", "tenant", "project", "namespace", "feedback_type", "source_surface", "task_evaluation_id", "actor", "reason", "idempotency_key", "metadata",
 		"superseded_at", "superseded_by_actor", "superseded_by_reason", "created_at",
 	})
 }

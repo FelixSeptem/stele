@@ -144,3 +144,67 @@ func TestSelfHostingDocsIncludeScopeProofAndMemorySessionLoop(t *testing.T) {
 		}
 	}
 }
+
+func TestSelfHostingDocsIncludeTaskSuccessLoop(t *testing.T) {
+	contentBytes, err := os.ReadFile("self-hosting.md")
+	if err != nil {
+		t.Fatalf("read self-hosting.md: %v", err)
+	}
+	content := string(contentBytes)
+	spec := openapi.SpecYAML()
+
+	for _, want := range []string{
+		"External-agent task success loop",
+		"/v1/task-evaluations",
+		"/v1/task-evaluations/<task-evaluation-id>/report",
+		"/v1/admin/task-evaluations",
+		"/v1/admin/task-evaluations/<task-evaluation-id>",
+		"/v1/admin/task-evaluations/<task-evaluation-id>/supersede",
+		"/v1/admin/task-evaluations/summary",
+		"Opaque caller evidence tokens",
+		"bounded linked ids",
+	} {
+		if !strings.Contains(content, want) {
+			t.Fatalf("self-hosting task success docs missing %q", want)
+		}
+	}
+
+	for _, route := range []string{
+		"/v1/task-evaluations",
+		"/v1/task-evaluations/{evaluation_id}/report",
+		"/v1/admin/task-evaluations",
+		"/v1/admin/task-evaluations/{evaluation_id}",
+		"/v1/admin/task-evaluations/summary",
+		"/v1/admin/task-evaluations/{evaluation_id}/supersede",
+	} {
+		if !strings.Contains(spec, route) {
+			t.Fatalf("OpenAPI spec missing documented task success route %q", route)
+		}
+	}
+}
+
+func TestSelfHostingDocsStateRemainingFeedbackLoopProductGaps(t *testing.T) {
+	contentBytes, err := os.ReadFile("self-hosting.md")
+	if err != nil {
+		t.Fatalf("read self-hosting.md: %v", err)
+	}
+	content := string(contentBytes)
+
+	for _, want := range []string{
+		"Remaining feedback-loop product gaps",
+		"governed ranking rollout policy",
+		"SDK/UI collection surfaces",
+		"external agent runtime integration",
+		"operational assurance",
+		"alert delivery adapters",
+		"advanced scoring calibration",
+	} {
+		if !strings.Contains(content, want) {
+			t.Fatalf("self-hosting remaining product gaps docs missing %q", want)
+		}
+	}
+
+	if strings.Contains(content, "Default feedback-aware ranking rollout. Current behavior is diagnostics-first") {
+		t.Fatalf("self-hosting docs still describe governed ranking rollout as a remaining gap")
+	}
+}

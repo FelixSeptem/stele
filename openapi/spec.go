@@ -414,6 +414,181 @@ paths:
           description: Invalid request
         '401':
           description: Missing or invalid API key
+  /v1/task-evaluations:
+    post:
+      operationId: createTaskEvaluation
+      parameters:
+        - $ref: '#/components/parameters/PublicAPIKey'
+        - $ref: '#/components/parameters/TenantHeader'
+        - $ref: '#/components/parameters/ProjectHeader'
+        - $ref: '#/components/parameters/NamespaceHeader'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/TaskEvaluationCreateRequest'
+      responses:
+        '201':
+          description: Task evaluation recorded as scoped evidence
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/TaskEvaluation'
+        '400':
+          description: Invalid request
+        '401':
+          description: Missing or invalid API key
+  /v1/task-evaluations/{evaluation_id}/report:
+    get:
+      operationId: getTaskEvaluationReport
+      parameters:
+        - in: path
+          name: evaluation_id
+          required: true
+          schema:
+            type: string
+        - $ref: '#/components/parameters/PublicAPIKey'
+        - $ref: '#/components/parameters/TenantHeader'
+        - $ref: '#/components/parameters/ProjectHeader'
+        - $ref: '#/components/parameters/NamespaceHeader'
+      responses:
+        '200':
+          description: Task evaluation report with bounded evidence and next actions
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/TaskEvaluationReport'
+        '401':
+          description: Missing or invalid API key
+        '404':
+          description: Task evaluation not found
+  /v1/admin/task-evaluations:
+    get:
+      operationId: listAdminTaskEvaluations
+      parameters:
+        - $ref: '#/components/parameters/AdminAPIKey'
+        - $ref: '#/components/parameters/TenantHeader'
+        - $ref: '#/components/parameters/ProjectHeader'
+        - $ref: '#/components/parameters/NamespaceHeader'
+        - in: query
+          name: verdict
+          required: false
+          schema:
+            $ref: '#/components/schemas/TaskEvaluationVerdict'
+        - in: query
+          name: contribution_category
+          required: false
+          schema:
+            $ref: '#/components/schemas/TaskContributionCategory'
+        - in: query
+          name: evidence_target_kind
+          required: false
+          schema:
+            $ref: '#/components/schemas/TaskEvidenceTargetKind'
+        - in: query
+          name: evidence_target_id
+          required: false
+          schema:
+            type: string
+        - in: query
+          name: include_superseded
+          required: false
+          schema:
+            type: boolean
+        - in: query
+          name: limit
+          required: false
+          schema:
+            type: integer
+      responses:
+        '200':
+          description: Scoped task evaluations for admin inspection
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/TaskEvaluationListResponse'
+        '401':
+          description: Missing or invalid admin API key
+  /v1/admin/task-evaluations/summary:
+    get:
+      operationId: summarizeAdminTaskEvaluations
+      parameters:
+        - $ref: '#/components/parameters/AdminAPIKey'
+        - $ref: '#/components/parameters/TenantHeader'
+        - $ref: '#/components/parameters/ProjectHeader'
+        - $ref: '#/components/parameters/NamespaceHeader'
+        - in: query
+          name: evidence_target_kind
+          required: false
+          schema:
+            $ref: '#/components/schemas/TaskEvidenceTargetKind'
+        - in: query
+          name: evidence_target_id
+          required: false
+          schema:
+            type: string
+      responses:
+        '200':
+          description: Scoped task summary for admin inspection
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/TaskEvaluationSummary'
+        '401':
+          description: Missing or invalid admin API key
+  /v1/admin/task-evaluations/{evaluation_id}:
+    get:
+      operationId: getAdminTaskEvaluation
+      parameters:
+        - in: path
+          name: evaluation_id
+          required: true
+          schema:
+            type: string
+        - $ref: '#/components/parameters/AdminAPIKey'
+        - $ref: '#/components/parameters/TenantHeader'
+        - $ref: '#/components/parameters/ProjectHeader'
+        - $ref: '#/components/parameters/NamespaceHeader'
+      responses:
+        '200':
+          description: Task evaluation detail
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/TaskEvaluation'
+        '401':
+          description: Missing or invalid admin API key
+        '404':
+          description: Task evaluation not found
+  /v1/admin/task-evaluations/{evaluation_id}/supersede:
+    post:
+      operationId: supersedeAdminTaskEvaluation
+      parameters:
+        - in: path
+          name: evaluation_id
+          required: true
+          schema:
+            type: string
+        - $ref: '#/components/parameters/AdminAPIKey'
+        - $ref: '#/components/parameters/TenantHeader'
+        - $ref: '#/components/parameters/ProjectHeader'
+        - $ref: '#/components/parameters/NamespaceHeader'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/TaskEvaluationSupersedeRequest'
+      responses:
+        '202':
+          description: Task evaluation superseded while preserving history
+        '400':
+          description: Invalid request
+        '401':
+          description: Missing or invalid admin API key
+        '404':
+          description: Task evaluation not found
   /v1/admin/usefulness-feedback:
     get:
       operationId: listAdminUsefulnessFeedback
@@ -2666,6 +2841,8 @@ components:
           $ref: '#/components/schemas/UsefulnessFeedbackType'
         source_surface:
           $ref: '#/components/schemas/UsefulnessFeedbackSourceSurface'
+        task_evaluation_id:
+          type: string
         subjects:
           type: array
           items:
@@ -2702,6 +2879,8 @@ components:
           $ref: '#/components/schemas/UsefulnessFeedbackType'
         source_surface:
           $ref: '#/components/schemas/UsefulnessFeedbackSourceSurface'
+        task_evaluation_id:
+          type: string
         subjects:
           type: array
           items:
@@ -2761,6 +2940,269 @@ components:
         last_feedback_at:
           type: string
           format: date-time
+    TaskEvaluationVerdict:
+      type: string
+      enum:
+        - succeeded
+        - failed
+        - partial
+        - inconclusive
+    TaskContributionCategory:
+      type: string
+      enum:
+        - memory_missing
+        - memory_noisy
+        - memory_stale
+        - memory_irrelevant
+        - hidden_memory
+        - external_tool
+        - agent_runtime
+        - unknown
+    TaskEvidenceTargetKind:
+      type: string
+      enum:
+        - session
+        - turn
+        - raw_event
+        - outcome_event
+        - verification
+        - expected_recall
+        - usefulness_feedback
+        - context_citation
+        - derived_insight
+        - memory
+        - quality_finding
+        - repair_plan
+        - opaque
+    TaskEvidenceLink:
+      type: object
+      required:
+        - kind
+      properties:
+        kind:
+          $ref: '#/components/schemas/TaskEvidenceTargetKind'
+        id:
+          type: string
+        opaque_token:
+          type: string
+        metadata:
+          type: object
+          additionalProperties: true
+    TaskEvaluation:
+      type: object
+      required:
+        - id
+        - scope
+        - objective
+        - success_criteria
+        - verdict
+        - evidence
+        - actor
+        - reason
+        - created_at
+        - updated_at
+      properties:
+        id:
+          type: string
+        scope:
+          $ref: '#/components/schemas/Scope'
+        objective:
+          type: string
+        success_criteria:
+          type: array
+          items:
+            type: string
+        verdict:
+          $ref: '#/components/schemas/TaskEvaluationVerdict'
+        contribution_categories:
+          type: array
+          items:
+            $ref: '#/components/schemas/TaskContributionCategory'
+        evidence:
+          type: array
+          items:
+            $ref: '#/components/schemas/TaskEvidenceLink'
+        actor:
+          type: string
+        reason:
+          type: string
+        idempotency_key:
+          type: string
+        metadata:
+          type: object
+          additionalProperties: true
+        correction_state:
+          type: string
+          enum: [active, superseded]
+        superseded_at:
+          type: string
+          format: date-time
+        superseded_by_task_evaluation_id:
+          type: string
+        superseded_by_actor:
+          type: string
+        superseded_by_reason:
+          type: string
+        created_at:
+          type: string
+          format: date-time
+        updated_at:
+          type: string
+          format: date-time
+    TaskEvaluationCreateRequest:
+      type: object
+      required:
+        - objective
+        - success_criteria
+        - verdict
+        - evidence
+        - actor
+        - reason
+      properties:
+        objective:
+          type: string
+        success_criteria:
+          type: array
+          items:
+            type: string
+        verdict:
+          $ref: '#/components/schemas/TaskEvaluationVerdict'
+        contribution_categories:
+          type: array
+          items:
+            $ref: '#/components/schemas/TaskContributionCategory'
+        evidence:
+          type: array
+          items:
+            $ref: '#/components/schemas/TaskEvidenceLink'
+        actor:
+          type: string
+        reason:
+          type: string
+        idempotency_key:
+          type: string
+        metadata:
+          type: object
+          additionalProperties: true
+    TaskEvaluationListResponse:
+      type: object
+      required:
+        - task_evaluations
+      properties:
+        task_evaluations:
+          type: array
+          items:
+            $ref: '#/components/schemas/TaskEvaluation'
+    TaskEvaluationSummary:
+      type: object
+      required:
+        - scope
+        - total_evaluations
+        - active_evaluations
+        - verdict_counts
+        - contribution_counts
+      properties:
+        scope:
+          $ref: '#/components/schemas/Scope'
+        evidence_target_kind:
+          $ref: '#/components/schemas/TaskEvidenceTargetKind'
+        evidence_target_id:
+          type: string
+        total_evaluations:
+          type: integer
+        active_evaluations:
+          type: integer
+        verdict_counts:
+          type: object
+          additionalProperties:
+            type: integer
+        contribution_counts:
+          type: object
+          additionalProperties:
+            type: integer
+        last_evaluation_at:
+          type: string
+          format: date-time
+    TaskEvaluationReport:
+      type: object
+      required:
+        - evaluation
+        - summary
+      properties:
+        evaluation:
+          $ref: '#/components/schemas/TaskEvaluation'
+        summary:
+          $ref: '#/components/schemas/TaskEvaluationSummary'
+        evidence:
+          type: array
+          items:
+            $ref: '#/components/schemas/TaskEvidenceLink'
+        linked_session_ids:
+          type: array
+          items:
+            type: string
+        linked_turn_ids:
+          type: array
+          items:
+            type: string
+        linked_raw_event_ids:
+          type: array
+          items:
+            type: string
+        linked_outcome_event_ids:
+          type: array
+          items:
+            type: string
+        linked_verification_ids:
+          type: array
+          items:
+            type: string
+        linked_expected_recall_ids:
+          type: array
+          items:
+            type: string
+        linked_feedback_ids:
+          type: array
+          items:
+            type: string
+        linked_context_citation_ids:
+          type: array
+          items:
+            type: string
+        linked_derived_insight_ids:
+          type: array
+          items:
+            type: string
+        linked_memory_ids:
+          type: array
+          items:
+            type: string
+        linked_quality_finding_ids:
+          type: array
+          items:
+            type: string
+        linked_repair_plan_ids:
+          type: array
+          items:
+            type: string
+        memory_contribution_categories:
+          type: array
+          items:
+            $ref: '#/components/schemas/TaskContributionCategory'
+        next_actions:
+          type: array
+          items:
+            type: string
+    TaskEvaluationSupersedeRequest:
+      type: object
+      required:
+        - actor
+        - reason
+      properties:
+        actor:
+          type: string
+        reason:
+          type: string
     DerivedInsightType:
       type: string
       enum:

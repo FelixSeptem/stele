@@ -201,3 +201,42 @@ func (i IngestEventInput) Validate() error {
 type EventIngestor interface {
 	Ingest(ctx context.Context, input IngestEventInput) (RawEvent, error)
 }
+
+type TaskEvidenceTargetKind string
+
+const (
+	TaskEvidenceTargetSession         TaskEvidenceTargetKind = "session"
+	TaskEvidenceTargetTurn            TaskEvidenceTargetKind = "turn"
+	TaskEvidenceTargetRawEvent        TaskEvidenceTargetKind = "raw_event"
+	TaskEvidenceTargetOutcomeEvent     TaskEvidenceTargetKind = "outcome_event"
+	TaskEvidenceTargetVerification     TaskEvidenceTargetKind = "verification"
+	TaskEvidenceTargetExpectedRecall   TaskEvidenceTargetKind = "expected_recall"
+	TaskEvidenceTargetUsefulnessFeedback TaskEvidenceTargetKind = "usefulness_feedback"
+	TaskEvidenceTargetContextCitation  TaskEvidenceTargetKind = "context_citation"
+	TaskEvidenceTargetDerivedInsight   TaskEvidenceTargetKind = "derived_insight"
+	TaskEvidenceTargetMemory           TaskEvidenceTargetKind = "memory"
+	TaskEvidenceTargetQualityFinding   TaskEvidenceTargetKind = "quality_finding"
+	TaskEvidenceTargetRepairPlan       TaskEvidenceTargetKind = "repair_plan"
+	TaskEvidenceTargetOpaque           TaskEvidenceTargetKind = "opaque"
+)
+
+func (k TaskEvidenceTargetKind) Valid() bool {
+	switch k {
+	case TaskEvidenceTargetSession,
+		TaskEvidenceTargetTurn,
+		TaskEvidenceTargetRawEvent,
+		TaskEvidenceTargetOutcomeEvent,
+		TaskEvidenceTargetVerification,
+		TaskEvidenceTargetExpectedRecall,
+		TaskEvidenceTargetUsefulnessFeedback,
+		TaskEvidenceTargetContextCitation,
+		TaskEvidenceTargetDerivedInsight,
+		TaskEvidenceTargetMemory,
+		TaskEvidenceTargetQualityFinding,
+		TaskEvidenceTargetRepairPlan,
+		TaskEvidenceTargetOpaque:
+		return true
+	default:
+		return false
+	}
+}

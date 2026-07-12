@@ -545,6 +545,7 @@ CREATE TABLE IF NOT EXISTS usefulness_feedback (
     namespace text NOT NULL,
     feedback_type text NOT NULL,
     source_surface text NOT NULL,
+    task_evaluation_id text REFERENCES task_evaluations(id) ON DELETE SET NULL,
     actor text NOT NULL,
     reason text NOT NULL,
     idempotency_key text,
@@ -597,6 +598,162 @@ CREATE TABLE IF NOT EXISTS usefulness_feedback_summaries (
     dominant_categories text[] NOT NULL DEFAULT '{}'::text[],
     last_feedback_at timestamptz,
     rebuilt_at timestamptz NOT NULL DEFAULT now()
+);
+
+CREATE TABLE IF NOT EXISTS task_evaluations (
+    id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+    tenant text NOT NULL,
+    project text NOT NULL,
+    namespace text NOT NULL,
+    objective text NOT NULL,
+    success_criteria text[] NOT NULL DEFAULT '{}'::text[],
+    verdict text NOT NULL,
+    contribution_categories text[] NOT NULL DEFAULT '{}'::text[],
+    actor text NOT NULL,
+    reason text NOT NULL,
+    idempotency_key text,
+    metadata jsonb NOT NULL DEFAULT '{}'::jsonb,
+    correction_state text NOT NULL DEFAULT 'active',
+    superseded_at timestamptz,
+    superseded_by_task_evaluation_id uuid,
+    superseded_by_actor text,
+    superseded_by_reason text,
+    created_at timestamptz NOT NULL DEFAULT now(),
+    updated_at timestamptz NOT NULL DEFAULT now()
+);
+
+CREATE TABLE IF NOT EXISTS task_evidence_links (
+    id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+    task_evaluation_id uuid NOT NULL REFERENCES task_evaluations(id) ON DELETE CASCADE,
+    tenant text NOT NULL,
+    project text NOT NULL,
+    namespace text NOT NULL,
+    evidence_kind text NOT NULL,
+    evidence_id text,
+    opaque_token text,
+    metadata jsonb NOT NULL DEFAULT '{}'::jsonb,
+    created_at timestamptz NOT NULL DEFAULT now()
+);
+
+CREATE TABLE IF NOT EXISTS task_evaluation_supersessions (
+    id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+    tenant text NOT NULL,
+    project text NOT NULL,
+    namespace text NOT NULL,
+    task_evaluation_id uuid NOT NULL REFERENCES task_evaluations(id) ON DELETE CASCADE,
+    superseding_task_evaluation_id uuid REFERENCES task_evaluations(id),
+    actor text NOT NULL,
+    reason text NOT NULL,
+    superseded_at timestamptz NOT NULL,
+    created_at timestamptz NOT NULL DEFAULT now()
+);
+
+CREATE TABLE IF NOT EXISTS task_evaluation_summaries (
+    id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+    tenant text NOT NULL,
+    project text NOT NULL,
+    namespace text NOT NULL,
+    subject_kind text NOT NULL,
+    subject_id text,
+    total_evaluations integer NOT NULL DEFAULT 0,
+    active_evaluations integer NOT NULL DEFAULT 0,
+    verdict_counts jsonb NOT NULL DEFAULT '{}'::jsonb,
+    contribution_counts jsonb NOT NULL DEFAULT '{}'::jsonb,
+    last_evaluation_at timestamptz,
+    rebuilt_at timestamptz NOT NULL DEFAULT now()
+);
+
+CREATE TABLE IF NOT EXISTS ranking_rollout_policies (
+    id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+    tenant text NOT NULL,
+    project text NOT NULL,
+    namespace text NOT NULL,
+    status text NOT NULL,
+    mode text NOT NULL,
+    surfaces text[] NOT NULL DEFAULT '{}'::text[],
+    signal_sources text[] NOT NULL DEFAULT '{}'::text[],
+    threshold_status text NOT NULL,
+    evidence_minimum integer NOT NULL DEFAULT 0,
+    actor text NOT NULL,
+    reason text NOT NULL,
+    latest_dry_run_id uuid,
+    latest_dry_run_status text,
+    activated_at timestamptz,
+    disabled_at timestamptz,
+    rolled_back_at timestamptz,
+    created_at timestamptz NOT NULL DEFAULT now(),
+    updated_at timestamptz NOT NULL DEFAULT now()
+);
+
+CREATE TABLE IF NOT EXISTS ranking_rollout_policy_states (
+    policy_id uuid PRIMARY KEY REFERENCES ranking_rollout_policies(id) ON DELETE CASCADE,
+    tenant text NOT NULL,
+    project text NOT NULL,
+    namespace text NOT NULL,
+    status text NOT NULL,
+    actor text NOT NULL,
+    reason text NOT NULL,
+    activated_at timestamptz,
+    disabled_at timestamptz,
+    rolled_back_at timestamptz,
+    updated_at timestamptz NOT NULL DEFAULT now()
+);
+
+CREATE TABLE IF NOT EXISTS ranking_rollout_dry_runs (
+    id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+    policy_id uuid NOT NULL REFERENCES ranking_rollout_policies(id) ON DELETE CASCADE,
+    tenant text NOT NULL,
+    project text NOT NULL,
+    namespace text NOT NULL,
+    surface text NOT NULL,
+    signal_source text NOT NULL,
+    threshold_status text NOT NULL,
+    baseline_rank integer NOT NULL DEFAULT 0,
+    adjusted_rank integer NOT NULL DEFAULT 0,
+    changed_subject_ids text[] NOT NULL DEFAULT '{}'::text[],
+    reason_codes text[] NOT NULL DEFAULT '{}'::text[],
+    signal_categories text[] NOT NULL DEFAULT '{}'::text[],
+    evidence_count integer NOT NULL DEFAULT 0,
+    hidden_evidence_count integer NOT NULL DEFAULT 0,
+    created_at timestamptz NOT NULL DEFAULT now()
+);
+
+CREATE TABLE IF NOT EXISTS ranking_rollout_impact_entries (
+    id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+    dry_run_id uuid NOT NULL REFERENCES ranking_rollout_dry_runs(id) ON DELETE CASCADE,
+    policy_id uuid NOT NULL REFERENCES ranking_rollout_policies(id) ON DELETE CASCADE,
+    tenant text NOT NULL,
+    project text NOT NULL,
+    namespace text NOT NULL,
+    surface text NOT NULL,
+    signal_source text NOT NULL,
+    signal_categories text[] NOT NULL DEFAULT '{}'::text[],
+    subject_kind text NOT NULL,
+    subject_id text,
+    opaque_token text,
+    candidate_priority integer NOT NULL DEFAULT 0,
+    included boolean NOT NULL DEFAULT false,
+    budget_impact integer NOT NULL DEFAULT 0,
+    baseline_rank integer NOT NULL DEFAULT 0,
+    adjusted_rank integer NOT NULL DEFAULT 0,
+    reason_code text NOT NULL,
+    evidence_count integer NOT NULL DEFAULT 0,
+    hidden_evidence boolean NOT NULL DEFAULT false,
+    created_at timestamptz NOT NULL DEFAULT now()
+);
+
+CREATE TABLE IF NOT EXISTS ranking_rollout_rollback_audit (
+    id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+    policy_id uuid NOT NULL REFERENCES ranking_rollout_policies(id) ON DELETE CASCADE,
+    tenant text NOT NULL,
+    project text NOT NULL,
+    namespace text NOT NULL,
+    from_status text NOT NULL,
+    to_status text NOT NULL,
+    actor text NOT NULL,
+    reason text NOT NULL,
+    rolled_back_at timestamptz NOT NULL,
+    created_at timestamptz NOT NULL DEFAULT now()
 );
 
 CREATE INDEX IF NOT EXISTS raw_events_scope_created_at_idx
@@ -780,3 +937,40 @@ CREATE INDEX IF NOT EXISTS usefulness_feedback_supersessions_feedback_idx
 
 CREATE INDEX IF NOT EXISTS usefulness_feedback_active_subject_idx
     ON usefulness_feedback_subjects (tenant, project, namespace, subject_kind, subject_id, expected_recall_kind, expected_recall_id, opaque_token, feedback_id);
+
+CREATE INDEX IF NOT EXISTS task_evaluations_scope_created_at_idx
+    ON task_evaluations (tenant, project, namespace, created_at DESC);
+
+CREATE UNIQUE INDEX IF NOT EXISTS task_evaluations_scope_idempotency_idx
+    ON task_evaluations (tenant, project, namespace, idempotency_key)
+    WHERE idempotency_key IS NOT NULL;
+
+CREATE INDEX IF NOT EXISTS task_evaluations_scope_verdict_created_at_idx
+    ON task_evaluations (tenant, project, namespace, verdict, created_at DESC);
+
+CREATE INDEX IF NOT EXISTS task_evidence_links_task_idx
+    ON task_evidence_links (task_evaluation_id, created_at ASC);
+
+CREATE INDEX IF NOT EXISTS task_evidence_links_scope_kind_idx
+    ON task_evidence_links (tenant, project, namespace, evidence_kind, evidence_id);
+
+CREATE INDEX IF NOT EXISTS task_evaluation_supersessions_scope_created_at_idx
+    ON task_evaluation_supersessions (tenant, project, namespace, superseded_at DESC);
+
+CREATE INDEX IF NOT EXISTS task_evaluation_summaries_scope_subject_idx
+    ON task_evaluation_summaries (tenant, project, namespace, subject_kind, subject_id);
+
+CREATE INDEX IF NOT EXISTS ranking_rollout_policies_scope_status_created_at_idx
+    ON ranking_rollout_policies (tenant, project, namespace, status, created_at DESC);
+
+CREATE INDEX IF NOT EXISTS ranking_rollout_policy_states_scope_status_updated_at_idx
+    ON ranking_rollout_policy_states (tenant, project, namespace, status, updated_at DESC);
+
+CREATE INDEX IF NOT EXISTS ranking_rollout_dry_runs_scope_created_at_idx
+    ON ranking_rollout_dry_runs (tenant, project, namespace, created_at DESC);
+
+CREATE INDEX IF NOT EXISTS ranking_rollout_impact_entries_scope_created_at_idx
+    ON ranking_rollout_impact_entries (tenant, project, namespace, created_at DESC);
+
+CREATE INDEX IF NOT EXISTS ranking_rollout_rollback_audit_scope_created_at_idx
+    ON ranking_rollout_rollback_audit (tenant, project, namespace, created_at DESC);

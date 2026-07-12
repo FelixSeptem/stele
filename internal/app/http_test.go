@@ -586,6 +586,130 @@ func (s *stubUsefulnessFeedbackService) SupersedeUsefulnessFeedback(ctx context.
 	return s.err
 }
 
+type stubTaskEvaluationService struct {
+	gotCreateInput    memory.TaskEvaluation
+	gotReadInput      memory.ReadTaskEvaluationInput
+	gotListInput      memory.ListTaskEvaluationsInput
+	gotSupersedeInput memory.SupersedeTaskEvaluationInput
+	gotSummaryInput   memory.SummarizeTaskEvaluationsInput
+	created           memory.TaskEvaluation
+	items             []memory.TaskEvaluation
+	summary           memory.TaskEvaluationSummary
+	err               error
+	validate          bool
+	createCalls       int
+}
+
+type stubRankingRolloutAdminService struct {
+	gotCreate   memory.RankingRolloutPolicy
+	gotRead     memory.ReadRankingRolloutPolicyInput
+	gotList     memory.ListRankingRolloutPoliciesInput
+	gotDryRun   memory.RecordRankingRolloutDryRunInput
+	gotActivate memory.ActivateRankingRolloutPolicyInput
+	gotDisable  memory.DisableRankingRolloutPolicyInput
+	gotRollback memory.RollbackRankingRolloutPolicyInput
+	gotImpact   memory.ListRankingRolloutPolicyImpactInput
+	policy      memory.RankingRolloutPolicy
+	policies    []memory.RankingRolloutPolicy
+	dryRun      memory.RankingRolloutDryRun
+	impact      []memory.RankingRolloutImpactEntry
+	err         error
+}
+
+func (s *stubRankingRolloutAdminService) CreateRankingRolloutPolicy(ctx context.Context, policy memory.RankingRolloutPolicy) (memory.RankingRolloutPolicy, error) {
+	s.gotCreate = policy
+	return s.policy, s.err
+}
+
+func (s *stubRankingRolloutAdminService) ReadRankingRolloutPolicy(ctx context.Context, input memory.ReadRankingRolloutPolicyInput) (memory.RankingRolloutPolicy, error) {
+	s.gotRead = input
+	return s.policy, s.err
+}
+
+func (s *stubRankingRolloutAdminService) ListRankingRolloutPolicies(ctx context.Context, input memory.ListRankingRolloutPoliciesInput) ([]memory.RankingRolloutPolicy, error) {
+	s.gotList = input
+	return s.policies, s.err
+}
+
+func (s *stubRankingRolloutAdminService) RecordRankingRolloutDryRun(ctx context.Context, input memory.RecordRankingRolloutDryRunInput) (memory.RankingRolloutDryRun, error) {
+	s.gotDryRun = input
+	return s.dryRun, s.err
+}
+
+func (s *stubRankingRolloutAdminService) ActivateRankingRolloutPolicy(ctx context.Context, input memory.ActivateRankingRolloutPolicyInput) (memory.RankingRolloutPolicy, error) {
+	s.gotActivate = input
+	return s.policy, s.err
+}
+
+func (s *stubRankingRolloutAdminService) DisableRankingRolloutPolicy(ctx context.Context, input memory.DisableRankingRolloutPolicyInput) (memory.RankingRolloutPolicy, error) {
+	s.gotDisable = input
+	return s.policy, s.err
+}
+
+func (s *stubRankingRolloutAdminService) RollbackRankingRolloutPolicy(ctx context.Context, input memory.RollbackRankingRolloutPolicyInput) (memory.RankingRolloutPolicy, error) {
+	s.gotRollback = input
+	return s.policy, s.err
+}
+
+func (s *stubRankingRolloutAdminService) ListRankingRolloutPolicyImpact(ctx context.Context, input memory.ListRankingRolloutPolicyImpactInput) ([]memory.RankingRolloutImpactEntry, error) {
+	s.gotImpact = input
+	return s.impact, s.err
+}
+
+func (s *stubTaskEvaluationService) CreateTaskEvaluation(ctx context.Context, evaluation memory.TaskEvaluation) (memory.TaskEvaluation, error) {
+	s.createCalls++
+	s.gotCreateInput = evaluation
+	if s.validate {
+		if err := evaluation.Validate(); err != nil {
+			return memory.TaskEvaluation{}, err
+		}
+	}
+	if s.created.ID == "" {
+		s.created = evaluation
+	}
+	return s.created, s.err
+}
+
+func (s *stubTaskEvaluationService) ReadTaskEvaluation(ctx context.Context, input memory.ReadTaskEvaluationInput) (memory.TaskEvaluation, error) {
+	s.gotReadInput = input
+	if s.validate {
+		if err := input.Validate(); err != nil {
+			return memory.TaskEvaluation{}, err
+		}
+	}
+	return s.created, s.err
+}
+
+func (s *stubTaskEvaluationService) ListTaskEvaluations(ctx context.Context, input memory.ListTaskEvaluationsInput) ([]memory.TaskEvaluation, error) {
+	s.gotListInput = input
+	if s.validate {
+		if err := input.Validate(); err != nil {
+			return nil, err
+		}
+	}
+	return s.items, s.err
+}
+
+func (s *stubTaskEvaluationService) SupersedeTaskEvaluation(ctx context.Context, input memory.SupersedeTaskEvaluationInput) error {
+	s.gotSupersedeInput = input
+	if s.validate {
+		if err := input.Validate(); err != nil {
+			return err
+		}
+	}
+	return s.err
+}
+
+func (s *stubTaskEvaluationService) SummarizeTaskEvaluations(ctx context.Context, input memory.SummarizeTaskEvaluationsInput) (memory.TaskEvaluationSummary, error) {
+	s.gotSummaryInput = input
+	if s.validate {
+		if err := input.Validate(); err != nil {
+			return memory.TaskEvaluationSummary{}, err
+		}
+	}
+	return s.summary, s.err
+}
+
 func (s *stubDerivedInsightReplayAdminService) PlanDerivedInsightReplay(ctx context.Context, input memory.DerivedInsightReplayRequest) (memory.DerivedInsightReplayReport, error) {
 	s.gotPlanInput = input
 	if s.validate {
@@ -3555,10 +3679,11 @@ func TestNewHTTPHandlerServesUsefulnessFeedbackAPI(t *testing.T) {
 	now := time.Date(2026, 7, 11, 12, 30, 0, 0, time.UTC)
 	service := &stubUsefulnessFeedbackService{
 		created: memory.UsefulnessFeedback{
-			ID:            "feedback_1",
-			Scope:         scope,
-			Type:          memory.UsefulnessFeedbackTypeUseful,
-			SourceSurface: memory.UsefulnessFeedbackSourceSession,
+			ID:               "feedback_1",
+			Scope:            scope,
+			Type:             memory.UsefulnessFeedbackTypeUseful,
+			SourceSurface:    memory.UsefulnessFeedbackSourceSession,
+			TaskEvaluationID: "task_eval_1",
 			Subjects: []memory.UsefulnessFeedbackSubject{{
 				Kind: memory.UsefulnessFeedbackSubjectMemory,
 				ID:   "mem_1",
@@ -3568,22 +3693,24 @@ func TestNewHTTPHandlerServesUsefulnessFeedbackAPI(t *testing.T) {
 			CreatedAt: now,
 		},
 		items: []memory.UsefulnessFeedback{{
-			ID:            "feedback_1",
-			Scope:         scope,
-			Type:          memory.UsefulnessFeedbackTypeUseful,
-			SourceSurface: memory.UsefulnessFeedbackSourceSession,
-			Actor:         "agent-a",
-			Reason:        "helped answer",
-			CreatedAt:     now,
+			ID:               "feedback_1",
+			Scope:            scope,
+			Type:             memory.UsefulnessFeedbackTypeUseful,
+			SourceSurface:    memory.UsefulnessFeedbackSourceSession,
+			TaskEvaluationID: "task_eval_1",
+			Actor:            "agent-a",
+			Reason:           "helped answer",
+			CreatedAt:        now,
 		}},
 		read: memory.UsefulnessFeedback{
-			ID:            "feedback_1",
-			Scope:         scope,
-			Type:          memory.UsefulnessFeedbackTypeUseful,
-			SourceSurface: memory.UsefulnessFeedbackSourceSession,
-			Actor:         "agent-a",
-			Reason:        "helped answer",
-			CreatedAt:     now,
+			ID:               "feedback_1",
+			Scope:            scope,
+			Type:             memory.UsefulnessFeedbackTypeUseful,
+			SourceSurface:    memory.UsefulnessFeedbackSourceSession,
+			TaskEvaluationID: "task_eval_1",
+			Actor:            "agent-a",
+			Reason:           "helped answer",
+			CreatedAt:        now,
 		},
 		summary: memory.UsefulnessFeedbackSummary{
 			Subject:          memory.UsefulnessFeedbackSubject{Kind: memory.UsefulnessFeedbackSubjectMemory, ID: "mem_1"},
@@ -3602,14 +3729,14 @@ func TestNewHTTPHandlerServesUsefulnessFeedbackAPI(t *testing.T) {
 		UsefulnessFeedback: service,
 	})
 
-	createReq := httptest.NewRequest(http.MethodPost, "/v1/usefulness-feedback", strings.NewReader(`{"type":"useful","source_surface":"session","subjects":[{"kind":"memory","id":"mem_1"}],"actor":"agent-a","reason":"helped answer","idempotency_key":"idem-1","metadata":{"session_id":"session_1"}}`))
+	createReq := httptest.NewRequest(http.MethodPost, "/v1/usefulness-feedback", strings.NewReader(`{"type":"useful","source_surface":"session","task_evaluation_id":"task_eval_1","subjects":[{"kind":"memory","id":"mem_1"}],"actor":"agent-a","reason":"helped answer","idempotency_key":"idem-1","metadata":{"session_id":"session_1"}}`))
 	setAPIScopeHeaders(createReq)
 	createResp := httptest.NewRecorder()
 	handler.ServeHTTP(createResp, createReq)
 	if createResp.Code != http.StatusCreated {
 		t.Fatalf("create status = %d body=%s, want 201", createResp.Code, createResp.Body.String())
 	}
-	if service.gotCreateInput.Scope != scope || service.gotCreateInput.Type != memory.UsefulnessFeedbackTypeUseful || service.gotCreateInput.Subjects[0].ID != "mem_1" || service.gotCreateInput.IdempotencyKey != "idem-1" {
+	if service.gotCreateInput.Scope != scope || service.gotCreateInput.Type != memory.UsefulnessFeedbackTypeUseful || service.gotCreateInput.Subjects[0].ID != "mem_1" || service.gotCreateInput.TaskEvaluationID != "task_eval_1" || service.gotCreateInput.IdempotencyKey != "idem-1" {
 		t.Fatalf("create input = %+v, want scoped memory feedback", service.gotCreateInput)
 	}
 
@@ -3803,6 +3930,341 @@ func TestNewHTTPHandlerHidesOutOfScopeUsefulnessFeedbackDetails(t *testing.T) {
 	}
 }
 
+func TestNewHTTPHandlerServesTaskEvaluationAPIs(t *testing.T) {
+	scope := memory.Scope{Tenant: "tenant-a", Project: "project-a", Namespace: "namespace-a"}
+	now := time.Date(2026, 7, 12, 9, 0, 0, 0, time.UTC)
+	service := &stubTaskEvaluationService{
+		created: memory.TaskEvaluation{
+			ID:              "task_eval_1",
+			Scope:           scope,
+			Objective:       "validate external task",
+			SuccessCriteria: []string{"report evidence"},
+			Verdict:         memory.TaskEvaluationVerdictSucceeded,
+			Evidence:        []memory.TaskEvidenceLink{{Kind: memory.TaskEvidenceTargetSession, ID: "session_1"}},
+			Actor:           "operator-a",
+			Reason:          "record task outcome",
+			CreatedAt:       now,
+			UpdatedAt:       now,
+		},
+		items: []memory.TaskEvaluation{{
+			ID:              "task_eval_1",
+			Scope:           scope,
+			Objective:       "validate external task",
+			SuccessCriteria: []string{"report evidence"},
+			Verdict:         memory.TaskEvaluationVerdictSucceeded,
+			Evidence:        []memory.TaskEvidenceLink{{Kind: memory.TaskEvidenceTargetSession, ID: "session_1"}},
+			Actor:           "operator-a",
+			Reason:          "record task outcome",
+			CreatedAt:       now,
+			UpdatedAt:       now,
+		}},
+		summary: memory.TaskEvaluationSummary{
+			Scope:             scope,
+			TotalEvaluations:  1,
+			ActiveEvaluations: 1,
+			VerdictCounts: map[memory.TaskEvaluationVerdict]int{
+				memory.TaskEvaluationVerdictSucceeded: 1,
+			},
+			ContributionCounts: map[memory.TaskContributionCategory]int{},
+		},
+		validate: true,
+	}
+	handler := NewHTTPHandler(HTTPDependencies{
+		Readiness:       stubReadinessChecker{},
+		APIKeys:         map[string]struct{}{"test-key": {}},
+		AdminAPIKeys:    map[string]struct{}{"admin-key": {}},
+		TaskEvaluations: service,
+	})
+
+	createReq := httptest.NewRequest(http.MethodPost, "/v1/task-evaluations", strings.NewReader(`{"objective":"validate external task","success_criteria":["report evidence"],"verdict":"succeeded","evidence":[{"kind":"session","id":"session_1"}],"actor":"operator-a","reason":"record task outcome","metadata":{"session_id":"session_1"}}`))
+	setAPIScopeHeaders(createReq)
+	createResp := httptest.NewRecorder()
+	handler.ServeHTTP(createResp, createReq)
+	if createResp.Code != http.StatusCreated {
+		t.Fatalf("create status = %d body=%s, want 201", createResp.Code, createResp.Body.String())
+	}
+	if service.gotCreateInput.Scope != scope || service.gotCreateInput.Objective != "validate external task" || service.gotCreateInput.Verdict != memory.TaskEvaluationVerdictSucceeded {
+		t.Fatalf("create input = %+v, want scoped task evaluation", service.gotCreateInput)
+	}
+
+	reportReq := httptest.NewRequest(http.MethodGet, "/v1/task-evaluations/task_eval_1/report", nil)
+	setAPIScopeHeaders(reportReq)
+	reportResp := httptest.NewRecorder()
+	handler.ServeHTTP(reportResp, reportReq)
+	if reportResp.Code != http.StatusOK {
+		t.Fatalf("report status = %d body=%s, want 200", reportResp.Code, reportResp.Body.String())
+	}
+	if !strings.Contains(reportResp.Body.String(), `"linked_session_ids"`) || !strings.Contains(reportResp.Body.String(), `"evaluation"`) {
+		t.Fatalf("report body = %s, want bounded task report", reportResp.Body.String())
+	}
+
+	adminListReq := httptest.NewRequest(http.MethodGet, "/v1/admin/task-evaluations?verdict=succeeded&limit=25", nil)
+	setAdminScopeHeaders(adminListReq)
+	adminListResp := httptest.NewRecorder()
+	handler.ServeHTTP(adminListResp, adminListReq)
+	if adminListResp.Code != http.StatusOK {
+		t.Fatalf("admin list status = %d body=%s, want 200", adminListResp.Code, adminListResp.Body.String())
+	}
+	if service.gotListInput.Verdict != memory.TaskEvaluationVerdictSucceeded || service.gotListInput.Limit != 25 {
+		t.Fatalf("admin list input = %+v, want verdict filter and limit", service.gotListInput)
+	}
+
+	adminReadReq := httptest.NewRequest(http.MethodGet, "/v1/admin/task-evaluations/task_eval_1", nil)
+	setAdminScopeHeaders(adminReadReq)
+	adminReadResp := httptest.NewRecorder()
+	handler.ServeHTTP(adminReadResp, adminReadReq)
+	if adminReadResp.Code != http.StatusOK {
+		t.Fatalf("admin read status = %d body=%s, want 200", adminReadResp.Code, adminReadResp.Body.String())
+	}
+	if service.gotReadInput.EvaluationID != "task_eval_1" {
+		t.Fatalf("admin read input = %+v, want task_eval_1", service.gotReadInput)
+	}
+
+	adminSupersedeReq := httptest.NewRequest(http.MethodPost, "/v1/admin/task-evaluations/task_eval_1/supersede", strings.NewReader(`{"actor":"operator-b","reason":"corrected verdict"}`))
+	setAdminScopeHeaders(adminSupersedeReq)
+	adminSupersedeResp := httptest.NewRecorder()
+	handler.ServeHTTP(adminSupersedeResp, adminSupersedeReq)
+	if adminSupersedeResp.Code != http.StatusAccepted {
+		t.Fatalf("admin supersede status = %d body=%s, want 202", adminSupersedeResp.Code, adminSupersedeResp.Body.String())
+	}
+	if service.gotSupersedeInput.EvaluationID != "task_eval_1" || service.gotSupersedeInput.Actor != "operator-b" {
+		t.Fatalf("supersede input = %+v, want task_eval_1 operator-b", service.gotSupersedeInput)
+	}
+
+	adminSummaryReq := httptest.NewRequest(http.MethodGet, "/v1/admin/task-evaluations/summary?evidence_target_kind=session&evidence_target_id=session_1", nil)
+	setAdminScopeHeaders(adminSummaryReq)
+	adminSummaryResp := httptest.NewRecorder()
+	handler.ServeHTTP(adminSummaryResp, adminSummaryReq)
+	if adminSummaryResp.Code != http.StatusOK {
+		t.Fatalf("summary status = %d body=%s, want 200", adminSummaryResp.Code, adminSummaryResp.Body.String())
+	}
+	if service.gotSummaryInput.EvidenceTargetKind != memory.TaskEvidenceTargetSession || service.gotSummaryInput.EvidenceTargetID != "session_1" {
+		t.Fatalf("summary input = %+v, want session filter", service.gotSummaryInput)
+	}
+}
+
+func TestNewHTTPHandlerServesRankingRolloutAPIs(t *testing.T) {
+	scope := memory.Scope{Tenant: "tenant-a", Project: "project-a", Namespace: "namespace-a"}
+	now := time.Date(2026, 7, 12, 10, 0, 0, 0, time.UTC)
+	service := &stubRankingRolloutAdminService{
+		policy: memory.RankingRolloutPolicy{
+			ID:              "policy_1",
+			Scope:           scope,
+			Status:          memory.RankingRolloutPolicyStatusDraft,
+			Mode:            memory.RankingRolloutModeDryRun,
+			Surfaces:        []memory.RankingRolloutSurface{memory.RankingRolloutSurfaceSearch},
+			SignalSources:   []memory.RankingRolloutSignalSource{memory.RankingRolloutSignalSourceTaskEvaluations},
+			ThresholdStatus: memory.RankingRolloutThresholdStatusSatisfied,
+			EvidenceMinimum: 1,
+			Actor:           "operator-a",
+			Reason:          "create policy",
+			CreatedAt:       now,
+			UpdatedAt:       now,
+		},
+		policies: []memory.RankingRolloutPolicy{{ID: "policy_1", Scope: scope}},
+		dryRun: memory.RankingRolloutDryRun{
+			ID:                  "dry_run_1",
+			PolicyID:            "policy_1",
+			Scope:               scope,
+			Surface:             memory.RankingRolloutSurfaceSearch,
+			SignalSource:        memory.RankingRolloutSignalSourceTaskEvaluations,
+			ThresholdStatus:     memory.RankingRolloutThresholdStatusSatisfied,
+			BaselineRank:        1,
+			AdjustedRank:        0,
+			ReasonCodes:         []memory.RankingRolloutImpactReasonCode{memory.RankingRolloutImpactReasonCodeBaselineRetained},
+			EvidenceCount:       1,
+			HiddenEvidenceCount: 0,
+			CreatedAt:           now,
+		},
+		impact: []memory.RankingRolloutImpactEntry{{ID: "impact_1", PolicyID: "policy_1", Scope: scope, Surface: memory.RankingRolloutSurfaceSearch, SignalSource: memory.RankingRolloutSignalSourceTaskEvaluations, SubjectKind: "memory", SubjectID: "mem_1", BaselineRank: 1, AdjustedRank: 0, ReasonCode: memory.RankingRolloutImpactReasonCodeSubjectBoosted, EvidenceCount: 1, HiddenEvidence: false, CreatedAt: now}},
+	}
+	handler := NewHTTPHandler(HTTPDependencies{
+		Readiness:      stubReadinessChecker{},
+		AdminAPIKeys:   map[string]struct{}{"admin-key": {}},
+		RankingRollout: service,
+	})
+
+	createReq := httptest.NewRequest(http.MethodPost, "/v1/admin/ranking-rollouts", strings.NewReader(`{"id":"policy_1","status":"draft","mode":"dry_run","surfaces":["search"],"signal_sources":["task_evaluations"],"threshold_status":"satisfied","evidence_minimum":1,"actor":"operator-a","reason":"create policy"}`))
+	setAdminScopeHeaders(createReq)
+	createResp := httptest.NewRecorder()
+	handler.ServeHTTP(createResp, createReq)
+	if createResp.Code != http.StatusCreated {
+		t.Fatalf("create status = %d body=%s, want 201", createResp.Code, createResp.Body.String())
+	}
+
+	listReq := httptest.NewRequest(http.MethodGet, "/v1/admin/ranking-rollouts", nil)
+	setAdminScopeHeaders(listReq)
+	listResp := httptest.NewRecorder()
+	handler.ServeHTTP(listResp, listReq)
+	if listResp.Code != http.StatusOK {
+		t.Fatalf("list status = %d body=%s, want 200", listResp.Code, listResp.Body.String())
+	}
+
+	readReq := httptest.NewRequest(http.MethodGet, "/v1/admin/ranking-rollouts/policy_1", nil)
+	setAdminScopeHeaders(readReq)
+	readResp := httptest.NewRecorder()
+	handler.ServeHTTP(readResp, readReq)
+	if readResp.Code != http.StatusOK {
+		t.Fatalf("read status = %d body=%s, want 200", readResp.Code, readResp.Body.String())
+	}
+
+	dryRunReq := httptest.NewRequest(http.MethodPost, "/v1/admin/ranking-rollouts/policy_1/dry-run", nil)
+	setAdminScopeHeaders(dryRunReq)
+	dryRunResp := httptest.NewRecorder()
+	handler.ServeHTTP(dryRunResp, dryRunReq)
+	if dryRunResp.Code != http.StatusOK {
+		t.Fatalf("dry-run status = %d body=%s, want 200", dryRunResp.Code, dryRunResp.Body.String())
+	}
+
+	activateReq := httptest.NewRequest(http.MethodPost, "/v1/admin/ranking-rollouts/policy_1/activate", strings.NewReader(`{"actor":"operator-b","reason":"activate after dry-run"}`))
+	setAdminScopeHeaders(activateReq)
+	activateResp := httptest.NewRecorder()
+	handler.ServeHTTP(activateResp, activateReq)
+	if activateResp.Code != http.StatusAccepted {
+		t.Fatalf("activate status = %d body=%s, want 202", activateResp.Code, activateResp.Body.String())
+	}
+
+	rollbackReq := httptest.NewRequest(http.MethodPost, "/v1/admin/ranking-rollouts/policy_1/rollback", strings.NewReader(`{"actor":"operator-c","reason":"rollback degraded ranking"}`))
+	setAdminScopeHeaders(rollbackReq)
+	rollbackResp := httptest.NewRecorder()
+	handler.ServeHTTP(rollbackResp, rollbackReq)
+	if rollbackResp.Code != http.StatusAccepted {
+		t.Fatalf("rollback status = %d body=%s, want 202", rollbackResp.Code, rollbackResp.Body.String())
+	}
+
+	impactReq := httptest.NewRequest(http.MethodGet, "/v1/admin/ranking-rollouts/policy_1/impact", nil)
+	setAdminScopeHeaders(impactReq)
+	impactResp := httptest.NewRecorder()
+	handler.ServeHTTP(impactResp, impactReq)
+	if impactResp.Code != http.StatusOK {
+		t.Fatalf("impact status = %d body=%s, want 200", impactResp.Code, impactResp.Body.String())
+	}
+
+	if service.gotCreate.Scope != scope || service.gotCreate.ID != "policy_1" {
+		t.Fatalf("create input = %+v, want scoped create", service.gotCreate)
+	}
+	if service.gotList.Scope != scope || service.gotRead.Scope != scope || service.gotRead.PolicyID != "policy_1" {
+		t.Fatalf("read/list input = %+v %+v, want scoped policy", service.gotList, service.gotRead)
+	}
+	if service.gotDryRun.PolicyID != "policy_1" || service.gotDryRun.Surface != memory.RankingRolloutSurfaceSearch {
+		t.Fatalf("dry-run input = %+v, want search dry-run", service.gotDryRun)
+	}
+	if service.gotActivate.PolicyID != "policy_1" || service.gotRollback.PolicyID != "policy_1" {
+		t.Fatalf("action inputs = %+v %+v, want policy_1", service.gotActivate, service.gotRollback)
+	}
+	if service.gotImpact.PolicyID != "policy_1" || service.gotImpact.Scope != scope {
+		t.Fatalf("impact input = %+v, want scoped impact", service.gotImpact)
+	}
+}
+
+func TestNewHTTPHandlerRejectsInvalidTaskEvaluationVerdict(t *testing.T) {
+	service := &stubTaskEvaluationService{validate: true}
+	handler := NewHTTPHandler(HTTPDependencies{
+		Readiness:       stubReadinessChecker{},
+		APIKeys:         map[string]struct{}{"test-key": {}},
+		TaskEvaluations: service,
+	})
+
+	req := httptest.NewRequest(http.MethodPost, "/v1/task-evaluations", strings.NewReader(`{"objective":"validate","success_criteria":["report evidence"],"verdict":"free_form","evidence":[{"kind":"session","id":"session_1"}],"actor":"operator-a","reason":"record task outcome"}`))
+	setAPIScopeHeaders(req)
+	resp := httptest.NewRecorder()
+	handler.ServeHTTP(resp, req)
+	if resp.Code != http.StatusBadRequest {
+		t.Fatalf("status = %d body=%s, want 400", resp.Code, resp.Body.String())
+	}
+}
+
+func TestNewHTTPHandlerRejectsInvalidTaskEvaluationContributionCategory(t *testing.T) {
+	service := &stubTaskEvaluationService{validate: true}
+	handler := NewHTTPHandler(HTTPDependencies{
+		Readiness:       stubReadinessChecker{},
+		APIKeys:         map[string]struct{}{"test-key": {}},
+		TaskEvaluations: service,
+	})
+
+	req := httptest.NewRequest(http.MethodPost, "/v1/task-evaluations", strings.NewReader(`{"objective":"validate","success_criteria":["report evidence"],"verdict":"succeeded","contribution_categories":["free_form"],"evidence":[{"kind":"session","id":"session_1"}],"actor":"operator-a","reason":"record task outcome"}`))
+	setAPIScopeHeaders(req)
+	resp := httptest.NewRecorder()
+	handler.ServeHTTP(resp, req)
+	if resp.Code != http.StatusBadRequest {
+		t.Fatalf("status = %d body=%s, want 400", resp.Code, resp.Body.String())
+	}
+}
+
+func TestNewHTTPHandlerPassesOpaqueTaskEvaluationEvidence(t *testing.T) {
+	service := &stubTaskEvaluationService{validate: true}
+	handler := NewHTTPHandler(HTTPDependencies{
+		Readiness:       stubReadinessChecker{},
+		APIKeys:         map[string]struct{}{"test-key": {}},
+		TaskEvaluations: service,
+	})
+
+	req := httptest.NewRequest(http.MethodPost, "/v1/task-evaluations", strings.NewReader(`{"objective":"validate","success_criteria":["report evidence"],"verdict":"succeeded","evidence":[{"kind":"opaque","opaque_token":"caller-opaque-evidence"}],"actor":"operator-a","reason":"record task outcome"}`))
+	setAPIScopeHeaders(req)
+	resp := httptest.NewRecorder()
+	handler.ServeHTTP(resp, req)
+	if resp.Code != http.StatusCreated {
+		t.Fatalf("status = %d body=%s, want 201", resp.Code, resp.Body.String())
+	}
+	if service.gotCreateInput.Evidence[0].OpaqueToken != "caller-opaque-evidence" || service.gotCreateInput.Evidence[0].ID != "" {
+		t.Fatalf("create input = %+v, want opaque evidence token preserved", service.gotCreateInput.Evidence[0])
+	}
+}
+
+func TestNewHTTPHandlerRejectsOutOfScopeTaskEvaluationReport(t *testing.T) {
+	service := &stubTaskEvaluationService{err: pgx.ErrNoRows, validate: true}
+	handler := NewHTTPHandler(HTTPDependencies{
+		Readiness:       stubReadinessChecker{},
+		APIKeys:         map[string]struct{}{"test-key": {}},
+		TaskEvaluations: service,
+	})
+
+	req := httptest.NewRequest(http.MethodGet, "/v1/task-evaluations/task_eval_other/report", nil)
+	setAPIScopeHeaders(req)
+	resp := httptest.NewRecorder()
+	handler.ServeHTTP(resp, req)
+	if resp.Code != http.StatusNotFound {
+		t.Fatalf("status = %d body=%s, want 404", resp.Code, resp.Body.String())
+	}
+	if service.gotReadInput.EvaluationID != "task_eval_other" {
+		t.Fatalf("read input = %+v, want task_eval_other", service.gotReadInput)
+	}
+}
+
+func TestNewHTTPHandlerRejectsTaskEvaluationWithoutAPIKey(t *testing.T) {
+	handler := NewHTTPHandler(HTTPDependencies{
+		Readiness:       stubReadinessChecker{},
+		APIKeys:         map[string]struct{}{"test-key": {}},
+		TaskEvaluations: &stubTaskEvaluationService{},
+	})
+
+	req := httptest.NewRequest(http.MethodPost, "/v1/task-evaluations", strings.NewReader(`{"objective":"validate","success_criteria":["report evidence"],"verdict":"succeeded","evidence":[{"kind":"session","id":"session_1"}],"actor":"operator-a","reason":"record task outcome"}`))
+	req.Header.Set("X-Stele-Tenant", "tenant-a")
+	req.Header.Set("X-Stele-Project", "project-a")
+	req.Header.Set("X-Stele-Namespace", "namespace-a")
+	resp := httptest.NewRecorder()
+	handler.ServeHTTP(resp, req)
+	if resp.Code != http.StatusUnauthorized {
+		t.Fatalf("status = %d, want 401", resp.Code)
+	}
+}
+
+func TestNewHTTPHandlerRejectsTaskEvaluationSummaryWithoutAdminKey(t *testing.T) {
+	handler := NewHTTPHandler(HTTPDependencies{
+		Readiness:       stubReadinessChecker{},
+		AdminAPIKeys:    map[string]struct{}{"admin-key": {}},
+		TaskEvaluations: &stubTaskEvaluationService{},
+	})
+
+	req := httptest.NewRequest(http.MethodGet, "/v1/admin/task-evaluations/summary?evidence_target_kind=session", nil)
+	setAPIScopeHeaders(req)
+	resp := httptest.NewRecorder()
+	handler.ServeHTTP(resp, req)
+	if resp.Code != http.StatusUnauthorized {
+		t.Fatalf("status = %d, want 401", resp.Code)
+	}
+}
+
 func TestUsefulnessFeedbackLifecycleLogUsesBoundedFields(t *testing.T) {
 	var out strings.Builder
 	logger := log.New(&out, "", 0)
@@ -3825,6 +4287,62 @@ func TestUsefulnessFeedbackLifecycleLogUsesBoundedFields(t *testing.T) {
 		}
 	}
 	for _, forbidden := range []string{"feedback_id", "memory_id", "session_id", "actor", "reason"} {
+		if strings.Contains(line, forbidden) {
+			t.Fatalf("log = %q, contains high-cardinality field %q", line, forbidden)
+		}
+	}
+}
+
+func TestTaskEvaluationLifecycleLogUsesBoundedFields(t *testing.T) {
+	var out strings.Builder
+	logger := log.New(&out, "", 0)
+
+	recordTaskEvaluationLog(logger, "create", "ok", memory.TaskEvaluationVerdictFailed, memory.TaskContributionCategoryMemoryMissing, memory.TaskEvaluationCorrectionStateActive)
+
+	line := out.String()
+	for _, want := range []string{
+		"component=task_evaluation",
+		"event=lifecycle",
+		"operation=create",
+		"result=ok",
+		"verdict=failed",
+		"contribution_category=memory_missing",
+		"correction_state=active",
+	} {
+		if !strings.Contains(line, want) {
+			t.Fatalf("log = %q, missing %q", line, want)
+		}
+	}
+	for _, forbidden := range []string{"task_id", "evaluation_id", "memory_id", "session_id", "actor", "reason", "tenant", "project", "namespace"} {
+		if strings.Contains(line, forbidden) {
+			t.Fatalf("log = %q, contains high-cardinality field %q", line, forbidden)
+		}
+	}
+}
+
+func TestRankingRolloutLifecycleLogUsesBoundedFields(t *testing.T) {
+	var out strings.Builder
+	logger := log.New(&out, "", 0)
+
+	recordRankingRolloutLog(logger, "dry_run", "ok", memory.RankingRolloutSurfaceSearch, memory.RankingRolloutSignalSourceTaskEvaluations, memory.RankingRolloutThresholdStatusSatisfied, memory.RankingRolloutPolicyStatusDryRun, string(memory.RankingRolloutImpactReasonCodeSubjectBoosted))
+
+	line := out.String()
+	for _, want := range []string{
+		"component=ranking_rollout",
+		"event=lifecycle",
+		"operation=dry_run",
+		"result=ok",
+		"surface=search",
+		"signal_source=task_evaluations",
+		"threshold_status=satisfied",
+		"policy_status=dry_run",
+		"reason_code=subject_boosted",
+	} {
+		if !strings.Contains(line, want) {
+			t.Fatalf("log = %q, missing %q", line, want)
+		}
+	}
+	for _, forbidden := range []string{"policy_id", "task_id", "memory_id", "session_id", "query", "actor", "reason_text", "tenant", "project", "namespace"} {
 		if strings.Contains(line, forbidden) {
 			t.Fatalf("log = %q, contains high-cardinality field %q", line, forbidden)
 		}

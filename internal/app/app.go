@@ -408,6 +408,8 @@ func buildAPIRuntime(ctx context.Context, cfg config.Config, deps apiRuntimeDepe
 		Citations:            repo,
 		Insights:             repo,
 		UsefulnessSummarizer: repo,
+		TaskEvaluationSummarizer: repo,
+		RankingRolloutPolicyReader: repo,
 	}, deps.observer)
 	httpDeps := httpDependenciesFromConfigWithIngestor(cfg, ingestor)
 	httpDeps.Readiness = runtimeReadinessChecker(config.ModeAPI, pool, embeddingRuntime, false, deps.observer)
@@ -418,6 +420,8 @@ func buildAPIRuntime(ctx context.Context, cfg config.Config, deps apiRuntimeDepe
 		RecordCutoverItemState(ctx context.Context, event telemetry.CutoverItemStateEvent)
 		RecordInsightFeedback(ctx context.Context, event telemetry.InsightFeedbackEvent)
 		RecordUsefulnessFeedback(ctx context.Context, event telemetry.UsefulnessFeedbackEvent)
+		RecordTaskEvaluation(ctx context.Context, event telemetry.TaskEvaluationEvent)
+		RecordRankingRollout(ctx context.Context, event telemetry.RankingRolloutEvent)
 	}); ok {
 		httpDeps.Metrics = metrics
 	}
@@ -471,6 +475,7 @@ func buildAPIRuntime(ctx context.Context, cfg config.Config, deps apiRuntimeDepe
 		Now:                  time.Now,
 		NewID:                newQualityID,
 	})
+	httpDeps.TaskEvaluations = repo
 	httpDeps.MemoryHistoryRead = memoryHistoryReaderFunc(func(ctx context.Context, scope memory.Scope, memoryID string) (memory.MemoryHistory, error) {
 		return repo.ReadMemoryHistory(ctx, scope, memoryID, true)
 	})
@@ -560,6 +565,8 @@ func buildWorkerRuntime(ctx context.Context, cfg config.Config, deps workerRunti
 		Citations:            repo,
 		Insights:             repo,
 		UsefulnessSummarizer: repo,
+		TaskEvaluationSummarizer: repo,
+		RankingRolloutPolicyReader: repo,
 	}, deps.observer)
 
 	worker := jobs.GovernanceWorker{

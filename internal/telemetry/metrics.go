@@ -57,6 +57,24 @@ type UsefulnessFeedbackEvent struct {
 	Decision      string
 }
 
+type TaskEvaluationEvent struct {
+	Operation            string
+	Result               string
+	Verdict              string
+	ContributionCategory string
+	CorrectionState      string
+}
+
+type RankingRolloutEvent struct {
+	Operation       string
+	Result          string
+	Surface         string
+	SignalSource    string
+	ThresholdStatus string
+	PolicyStatus    string
+	ReasonCode      string
+}
+
 type DerivedInsightReplayEvent struct {
 	Mode        string
 	Result      string
@@ -259,6 +277,34 @@ func (o *MetricsObserver) RecordUsefulnessFeedback(ctx context.Context, event Us
 	}, 1)
 }
 
+func (o *MetricsObserver) RecordTaskEvaluation(ctx context.Context, event TaskEvaluationEvent) {
+	if o == nil {
+		return
+	}
+	o.addCounter("stele_task_evaluation_total", map[string]string{
+		"operation":             labelOrUnknown(event.Operation),
+		"result":                labelOrUnknown(event.Result),
+		"verdict":               labelOrUnknown(event.Verdict),
+		"contribution_category": labelOrUnknown(event.ContributionCategory),
+		"correction_state":      labelOrUnknown(event.CorrectionState),
+	}, 1)
+}
+
+func (o *MetricsObserver) RecordRankingRollout(ctx context.Context, event RankingRolloutEvent) {
+	if o == nil {
+		return
+	}
+	o.addCounter("stele_ranking_rollout_total", map[string]string{
+		"operation":        labelOrUnknown(event.Operation),
+		"result":           labelOrUnknown(event.Result),
+		"surface":          labelOrUnknown(event.Surface),
+		"signal_source":    labelOrUnknown(event.SignalSource),
+		"threshold_status": labelOrUnknown(event.ThresholdStatus),
+		"policy_status":    labelOrUnknown(event.PolicyStatus),
+		"reason_code":      labelOrUnknown(event.ReasonCode),
+	}, 1)
+}
+
 func (o *MetricsObserver) RecordDerivedInsightReplay(ctx context.Context, event DerivedInsightReplayEvent) {
 	if o == nil {
 		return
@@ -389,6 +435,8 @@ func (o *MetricsObserver) RenderPrometheus() string {
 	writeMetricFamilyHeader(&builder, "stele_embedding_cutover_wave_dispatched_total", "counter", "Embedding cutover items dispatched by scheduler waves.")
 	writeMetricFamilyHeader(&builder, "stele_insight_feedback_total", "counter", "Derived insight feedback operations and policy decisions.")
 	writeMetricFamilyHeader(&builder, "stele_usefulness_feedback_total", "counter", "Usefulness feedback lifecycle operations by bounded categories.")
+	writeMetricFamilyHeader(&builder, "stele_task_evaluation_total", "counter", "Task evaluation lifecycle operations by bounded categories.")
+	writeMetricFamilyHeader(&builder, "stele_ranking_rollout_total", "counter", "Ranking rollout lifecycle and impact operations by bounded categories.")
 	writeMetricFamilyHeader(&builder, "stele_derived_insight_replay_total", "counter", "Derived insight replay outcomes by low-cardinality categories.")
 	writeMetricFamilyHeader(&builder, "stele_quality_evaluation_total", "counter", "Memory quality evaluation outcomes.")
 	writeMetricFamilyHeader(&builder, "stele_quality_repair_actions_total", "counter", "Memory quality repair action outcomes.")

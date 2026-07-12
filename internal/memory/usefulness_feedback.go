@@ -198,6 +198,7 @@ type UsefulnessFeedback struct {
 	Scope              Scope                           `json:"scope"`
 	Type               UsefulnessFeedbackType          `json:"type"`
 	SourceSurface      UsefulnessFeedbackSourceSurface `json:"source_surface"`
+	TaskEvaluationID   string                          `json:"task_evaluation_id,omitempty"`
 	Subjects           []UsefulnessFeedbackSubject     `json:"subjects"`
 	Actor              string                          `json:"actor"`
 	Reason             string                          `json:"reason"`
@@ -221,6 +222,9 @@ func (f UsefulnessFeedback) Validate() error {
 	}
 	if !f.SourceSurface.Valid() {
 		return fmt.Errorf("usefulness feedback source surface %q is invalid", f.SourceSurface)
+	}
+	if strings.TrimSpace(f.TaskEvaluationID) != "" && len(strings.TrimSpace(f.TaskEvaluationID)) > maxTaskEvaluationEvidenceIDLength {
+		return fmt.Errorf("task evaluation id must be at most %d bytes", maxTaskEvaluationEvidenceIDLength)
 	}
 	if len(f.Subjects) == 0 {
 		return fmt.Errorf("at least one usefulness feedback subject is required")
@@ -368,6 +372,10 @@ type UsefulnessFeedbackSummary struct {
 	NegativeCount    int                            `json:"negative_count"`
 	NeedsReviewCount int                            `json:"needs_review_count"`
 	EffectiveQuality UsefulnessQuality              `json:"effective_quality"`
+	TaskEvaluationIDs []string                      `json:"task_evaluation_ids,omitempty"`
+	TaskVerdictCounts map[TaskEvaluationVerdict]int `json:"task_verdict_counts,omitempty"`
+	TaskContributionCounts map[TaskContributionCategory]int `json:"task_contribution_counts,omitempty"`
+	LastTaskEvaluationAt time.Time                  `json:"last_task_evaluation_at,omitempty"`
 	LastFeedbackAt   time.Time                      `json:"last_feedback_at,omitempty"`
 }
 
@@ -391,6 +399,12 @@ func SummarizeUsefulnessFeedback(subject UsefulnessFeedbackSubject, records []Us
 		}
 		summary.Counts[record.Type]++
 		summary.TotalActive++
+		if trimmed := strings.TrimSpace(record.TaskEvaluationID); trimmed != "" {
+			summary.TaskEvaluationIDs = append(summary.TaskEvaluationIDs, trimmed)
+			if record.CreatedAt.After(summary.LastTaskEvaluationAt) {
+				summary.LastTaskEvaluationAt = record.CreatedAt
+			}
+		}
 		if record.Type == UsefulnessFeedbackTypeUseful {
 			summary.PositiveCount++
 		}
@@ -404,6 +418,7 @@ func SummarizeUsefulnessFeedback(subject UsefulnessFeedbackSubject, records []Us
 			summary.LastFeedbackAt = record.CreatedAt
 		}
 	}
+	summary.TaskEvaluationIDs = uniqueStrings(summary.TaskEvaluationIDs)
 	summary.EffectiveQuality = effectiveUsefulnessQuality(summary)
 	return summary
 }

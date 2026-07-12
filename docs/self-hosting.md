@@ -869,15 +869,73 @@ curl http://localhost:8080/v1/memory-sessions/<session-id>/report \
 
 The session report exposes bounded feedback summaries, verification attempts, quality evaluation ids, quality finding ids and codes, repair plan ids, and next actions. It does not expose hidden memory content or out-of-scope evidence through public report fields.
 
+### External-agent task success loop
+
+Use this loop when an external agent integration needs to record task-level success evidence and inspect bounded reports. Stele stores caller-provided verdicts and evidence; it does not run the task or infer success.
+
+1. Record a task evaluation after the external run completes:
+
+```bash
+curl -X POST http://localhost:8080/v1/task-evaluations \
+  -H 'Content-Type: application/json' \
+  -H 'X-API-Key: dev-public-key' \
+  -H 'X-Stele-Tenant: tenant-a' \
+  -H 'X-Stele-Project: project-a' \
+  -H 'X-Stele-Namespace: namespace-a' \
+  -d '{"objective":"validate memory recall","success_criteria":["return only scoped memory"],"verdict":"partial","contribution_categories":["memory_missing","hidden_memory"],"evidence":[{"kind":"session","id":"session_1"},{"kind":"expected_recall","id":"mem_expected_1"},{"kind":"opaque","opaque_token":"caller-opaque-evidence"}],"actor":"agent-a","reason":"record external task outcome","idempotency_key":"task_eval_1"}'
+```
+
+2. Read the bounded task report to inspect linked evidence and next actions:
+
+```bash
+curl http://localhost:8080/v1/task-evaluations/<task-evaluation-id>/report \
+  -H 'X-API-Key: dev-public-key' \
+  -H 'X-Stele-Tenant: tenant-a' \
+  -H 'X-Stele-Project: project-a' \
+  -H 'X-Stele-Namespace: namespace-a'
+```
+
+3. Inspect or correct task evaluations through the admin boundary:
+
+```bash
+curl 'http://localhost:8080/v1/admin/task-evaluations?verdict=partial&limit=25' \
+  -H 'X-API-Key: dev-admin-key' \
+  -H 'X-Stele-Tenant: tenant-a' \
+  -H 'X-Stele-Project: project-a' \
+  -H 'X-Stele-Namespace: namespace-a'
+
+curl http://localhost:8080/v1/admin/task-evaluations/<task-evaluation-id> \
+  -H 'X-API-Key: dev-admin-key' \
+  -H 'X-Stele-Tenant: tenant-a' \
+  -H 'X-Stele-Project: project-a' \
+  -H 'X-Stele-Namespace: namespace-a'
+
+curl -X POST http://localhost:8080/v1/admin/task-evaluations/<task-evaluation-id>/supersede \
+  -H 'Content-Type: application/json' \
+  -H 'X-API-Key: dev-admin-key' \
+  -H 'X-Stele-Tenant: tenant-a' \
+  -H 'X-Stele-Project: project-a' \
+  -H 'X-Stele-Namespace: namespace-a' \
+  -d '{"actor":"operator-a","reason":"corrected verdict"}'
+
+curl 'http://localhost:8080/v1/admin/task-evaluations/summary?evidence_target_kind=session&evidence_target_id=session_1' \
+  -H 'X-API-Key: dev-admin-key' \
+  -H 'X-Stele-Tenant: tenant-a' \
+  -H 'X-Stele-Project: project-a' \
+  -H 'X-Stele-Namespace: namespace-a'
+```
+
+Task reports expose only bounded linked ids, evidence categories, and next actions. Opaque caller evidence tokens are stored for audit purposes but are not treated as internal Stele identifiers.
+
 ### Remaining feedback-loop product gaps
 
-This repository now closes the service-side feedback loop, but several product surfaces remain intentionally outside this proposal:
+This repository now closes the service-side task-success and governed ranking rollout loop: external task evaluations can feed scoped summaries, ranking policies can be dry-run, activated, inspected, disabled, and rolled back, and default search/context ranking changes only through a governed ranking rollout policy. Several product surfaces remain intentionally outside this proposal:
 
-- SDK and UI collection surfaces for callers to attach feedback subjects without hand-building JSON.
-- External agent runtime integration that decides when to call session, outcome, verification, and feedback routes.
-- Default feedback-aware ranking rollout. Current behavior is diagnostics-first and per-request opt-in through `feedback_aware_ranking`.
-- Task-success evaluation harnesses that compare agent outcomes against task-level success criteria beyond memory recall usefulness.
-- Alert routing for repeated negative feedback, unsafe feedback, or repair verification failures.
+- SDK/UI collection surfaces for callers to attach sessions, feedback subjects, task evidence, and rollout inspection without hand-building JSON.
+- External agent runtime integration that decides when to call session, outcome, verification, task evaluation, feedback, and ranking rollout routes.
+- operational assurance for production rollout operations, including capacity/load proof, backup/restore proof, SLOs, runbooks, and disaster recovery drills.
+- alert delivery adapters for repeated negative feedback, unsafe feedback, insufficient rollout evidence, degraded task-success trends, or repair verification failures.
+- advanced scoring calibration, including adaptive weights, traffic splitting, long-term memory usefulness scoring, and offline evaluation harnesses beyond the conservative bounded signals implemented here.
 - End-user prompt orchestration and model invocation, which remain outside Stele's service boundary.
 
 ## Memory Management Surface
@@ -951,6 +1009,15 @@ Privileged memory quality and repair routes:
 - `GET /v1/admin/memory-quality/repair-plans/{repair_plan_id}`
 - `POST /v1/admin/memory-quality/repair-plans/{repair_plan_id}:approve`
 - `POST /v1/admin/memory-quality/repair-plans/{repair_plan_id}:verify`
+
+Task success inspection routes:
+
+- `POST /v1/task-evaluations`
+- `GET /v1/task-evaluations/{evaluation_id}/report`
+- `GET /v1/admin/task-evaluations`
+- `GET /v1/admin/task-evaluations/{evaluation_id}`
+- `GET /v1/admin/task-evaluations/summary`
+- `POST /v1/admin/task-evaluations/{evaluation_id}/supersede`
 
 Privileged manual mutation and lifecycle actions require:
 

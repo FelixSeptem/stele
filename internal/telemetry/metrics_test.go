@@ -163,6 +163,43 @@ func TestMetricsObserverExportsUsefulnessFeedbackSignalsWithoutHighCardinalityLa
 	}
 }
 
+func TestMetricsObserverExportsTaskEvaluationAndRankingRolloutSignalsWithoutHighCardinalityLabels(t *testing.T) {
+	observer := NewMetricsObserver()
+	ctx := context.Background()
+
+	observer.RecordTaskEvaluation(ctx, TaskEvaluationEvent{
+		Operation:            "create",
+		Result:               "ok",
+		Verdict:              "failed",
+		ContributionCategory: "memory_missing",
+		CorrectionState:      "active",
+	})
+	observer.RecordRankingRollout(ctx, RankingRolloutEvent{
+		Operation:       "dry_run",
+		Result:          "ok",
+		Surface:         "search",
+		SignalSource:    "task_evaluations",
+		ThresholdStatus: "satisfied",
+		PolicyStatus:    "dry_run",
+		ReasonCode:      "subject_boosted",
+	})
+
+	metrics := observer.RenderPrometheus()
+	for _, want := range []string{
+		`stele_task_evaluation_total{contribution_category="memory_missing",correction_state="active",operation="create",result="ok",verdict="failed"} 1`,
+		`stele_ranking_rollout_total{operation="dry_run",policy_status="dry_run",reason_code="subject_boosted",result="ok",signal_source="task_evaluations",surface="search",threshold_status="satisfied"} 1`,
+	} {
+		if !strings.Contains(metrics, want) {
+			t.Fatalf("metrics missing %q\n%s", want, metrics)
+		}
+	}
+	for _, forbidden := range []string{"tenant", "project", "namespace", "memory_id", "event_id", "session_id", "task_id", "policy_id", "query", "actor", "reason_text"} {
+		if strings.Contains(metrics, forbidden) {
+			t.Fatalf("metrics contain high-cardinality label %q\n%s", forbidden, metrics)
+		}
+	}
+}
+
 func TestMetricsObserverExportsDerivedInsightReplaySignalsWithoutHighCardinalityLabels(t *testing.T) {
 	observer := NewMetricsObserver()
 	ctx := context.Background()

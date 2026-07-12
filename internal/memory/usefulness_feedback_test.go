@@ -98,6 +98,49 @@ func TestUsefulnessFeedbackValidateBoundsCallerProvidedFields(t *testing.T) {
 	}
 }
 
+func TestUsefulnessFeedbackValidateAllowsTaskEvaluationReference(t *testing.T) {
+	feedback := validUsefulnessFeedback()
+	feedback.TaskEvaluationID = "task_eval_1"
+
+	if err := feedback.Validate(); err != nil {
+		t.Fatalf("Validate() task evaluation reference error = %v", err)
+	}
+
+	feedback.TaskEvaluationID = strings.Repeat("t", 513)
+	if err := feedback.Validate(); err == nil {
+		t.Fatal("Validate() error = nil, want task evaluation id bound error")
+	}
+}
+
+func TestSummarizeUsefulnessFeedbackIncludesTaskEvaluationReferences(t *testing.T) {
+	now := time.Date(2026, 7, 11, 10, 5, 0, 0, time.UTC)
+	subject := UsefulnessFeedbackSubject{Kind: UsefulnessFeedbackSubjectMemory, ID: "mem_1"}
+
+	summary := SummarizeUsefulnessFeedback(subject, []UsefulnessFeedback{
+		{
+			ID:               "feedback_1",
+			Type:             UsefulnessFeedbackTypeNoisy,
+			Subjects:         []UsefulnessFeedbackSubject{subject},
+			TaskEvaluationID: "task_eval_1",
+			CreatedAt:        now,
+		},
+		{
+			ID:               "feedback_2",
+			Type:             UsefulnessFeedbackTypeUseful,
+			Subjects:         []UsefulnessFeedbackSubject{subject},
+			TaskEvaluationID: "task_eval_2",
+			CreatedAt:        now.Add(time.Minute),
+		},
+	})
+
+	if len(summary.TaskEvaluationIDs) != 2 {
+		t.Fatalf("summary.TaskEvaluationIDs = %+v, want two task references", summary.TaskEvaluationIDs)
+	}
+	if summary.LastTaskEvaluationAt != now.Add(time.Minute) {
+		t.Fatalf("summary.LastTaskEvaluationAt = %v, want latest task reference timestamp", summary.LastTaskEvaluationAt)
+	}
+}
+
 func TestSummarizeUsefulnessFeedbackExcludesSupersededRecords(t *testing.T) {
 	now := time.Date(2026, 7, 11, 10, 0, 0, 0, time.UTC)
 	subject := UsefulnessFeedbackSubject{Kind: UsefulnessFeedbackSubjectMemory, ID: "mem_1"}

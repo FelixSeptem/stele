@@ -2,6 +2,7 @@ package retrieval
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"sort"
 	"strings"
@@ -9,6 +10,7 @@ import (
 
 	"github.com/FelixSeptem/stele/internal/memory"
 	"github.com/FelixSeptem/stele/internal/telemetry"
+	"github.com/jackc/pgx/v5"
 )
 
 type SearchInput struct {
@@ -16,6 +18,8 @@ type SearchInput struct {
 	Query                      string
 	QueryEmbedding             []float32
 	Classes                    []memory.MemoryClass
+	rankingSurface             memory.RankingRolloutSurface
+	rankingPolicyDisabled      bool
 	TimeFrom                   time.Time
 	TimeTo                     time.Time
 	TopK                       int
@@ -155,6 +159,18 @@ type UsefulnessSummarizer interface {
 	SummarizeUsefulnessFeedback(ctx context.Context, input memory.SummarizeUsefulnessFeedbackInput) (memory.UsefulnessFeedbackSummary, error)
 }
 
+type TaskEvaluationSummarizer interface {
+	SummarizeTaskEvaluations(ctx context.Context, input memory.SummarizeTaskEvaluationsInput) (memory.TaskEvaluationSummary, error)
+}
+
+type RankingRolloutPolicyReader interface {
+	ReadActiveRankingRolloutPolicy(ctx context.Context, input memory.ReadActiveRankingRolloutPolicyInput) (memory.RankingRolloutPolicy, error)
+}
+
+type rankingRolloutMetricObserver interface {
+	RecordRankingRollout(ctx context.Context, event telemetry.RankingRolloutEvent)
+}
+
 type MemorySearcher interface {
 	Search(ctx context.Context, input SearchInput) (SearchResult, error)
 }
@@ -164,22 +180,26 @@ type ContextAssembler interface {
 }
 
 type ServiceDependencies struct {
-	Lexical              LexicalSearcher
-	Semantic             SemanticSearcher
-	Relations            RelationSearcher
-	Citations            CitationLister
-	Insights             DerivedInsightLister
-	UsefulnessSummarizer UsefulnessSummarizer
+	Lexical                    LexicalSearcher
+	Semantic                   SemanticSearcher
+	Relations                  RelationSearcher
+	Citations                  CitationLister
+	Insights                   DerivedInsightLister
+	UsefulnessSummarizer       UsefulnessSummarizer
+	TaskEvaluationSummarizer   TaskEvaluationSummarizer
+	RankingRolloutPolicyReader RankingRolloutPolicyReader
 }
 
 type Service struct {
-	lexical              LexicalSearcher
-	semantic             SemanticSearcher
-	relations            RelationSearcher
-	citations            CitationLister
-	insights             DerivedInsightLister
-	usefulnessSummarizer UsefulnessSummarizer
-	observer             telemetry.Observer
+	lexical                    LexicalSearcher
+	semantic                   SemanticSearcher
+	relations                  RelationSearcher
+	citations                  CitationLister
+	insights                   DerivedInsightLister
+	usefulnessSummarizer       UsefulnessSummarizer
+	taskEvaluationSummarizer   TaskEvaluationSummarizer
+	rankingRolloutPolicyReader RankingRolloutPolicyReader
+	observer                   telemetry.Observer
 }
 
 func NewService(deps ServiceDependencies, observers ...telemetry.Observer) *Service {
@@ -192,13 +212,15 @@ func NewService(deps ServiceDependencies, observers ...telemetry.Observer) *Serv
 	}
 
 	return &Service{
-		lexical:              deps.Lexical,
-		semantic:             deps.Semantic,
-		relations:            deps.Relations,
-		citations:            deps.Citations,
-		insights:             deps.Insights,
-		usefulnessSummarizer: deps.UsefulnessSummarizer,
-		observer:             observer,
+		lexical:                    deps.Lexical,
+		semantic:                   deps.Semantic,
+		relations:                  deps.Relations,
+		citations:                  deps.Citations,
+		insights:                   deps.Insights,
+		usefulnessSummarizer:       deps.UsefulnessSummarizer,
+		taskEvaluationSummarizer:   deps.TaskEvaluationSummarizer,
+		rankingRolloutPolicyReader: deps.RankingRolloutPolicyReader,
+		observer:                   observer,
 	}
 }
 
@@ -232,6 +254,10 @@ func (s *Service) Search(ctx context.Context, input SearchInput) (result SearchR
 
 	if err := input.Validate(); err != nil {
 		return SearchResult{}, err
+	}
+	surface := input.rankingSurface
+	if surface == "" {
+		surface = memory.RankingRolloutSurfaceSearch
 	}
 
 	merged := map[string]ScoredMemory{}
@@ -317,13 +343,23 @@ func (s *Service) Search(ctx context.Context, input SearchInput) (result SearchR
 	if err != nil {
 		return SearchResult{}, err
 	}
-	if input.FeedbackAwareRanking {
-		sort.Slice(scored, func(i, j int) bool {
-			if scored[i].Score.Overall == scored[j].Score.Overall {
-				return scored[i].Memory.ModifiedAt.After(scored[j].Memory.ModifiedAt)
-			}
-			return scored[i].Score.Overall > scored[j].Score.Overall
-		})
+
+	if !input.rankingPolicyDisabled {
+		adjusted, policyDiagnostics, err := s.applyRankingRolloutPolicy(ctx, input.Scope, surface, input.FeedbackAwareRanking, scored)
+		if err != nil {
+			return SearchResult{}, err
+		}
+		if len(policyDiagnostics) > 0 {
+			diagnostics = append(diagnostics, policyDiagnostics...)
+		}
+		if adjusted {
+			sort.Slice(scored, func(i, j int) bool {
+				if scored[i].Score.Overall == scored[j].Score.Overall {
+					return scored[i].Memory.ModifiedAt.After(scored[j].Memory.ModifiedAt)
+				}
+				return scored[i].Score.Overall > scored[j].Score.Overall
+			})
+		}
 	}
 
 	if input.TopK > 0 && len(scored) > input.TopK {
@@ -346,6 +382,190 @@ func (s *Service) Search(ctx context.Context, input SearchInput) (result SearchR
 
 	result = SearchResult{Hits: scored, Diagnostics: diagnostics}
 	return result, nil
+}
+
+func (s *Service) applyRankingRolloutPolicy(ctx context.Context, scope memory.Scope, surface memory.RankingRolloutSurface, feedbackAwareRanking bool, scored []SearchHit) (bool, []ContextDiagnostic, error) {
+	if s.rankingRolloutPolicyReader == nil {
+		if feedbackAwareRanking {
+			applyFeedbackAwareRankingHint(scored, s.usefulnessSummarizer, ctx, scope)
+			return true, []ContextDiagnostic{{Section: "search_feedback", Status: "ranking_hint_applied", Reason: "explicit per-request feedback-aware ranking hint applied"}}, nil
+		}
+		return false, nil, nil
+	}
+
+	policy, err := s.rankingRolloutPolicyReader.ReadActiveRankingRolloutPolicy(ctx, memory.ReadActiveRankingRolloutPolicyInput{
+		Scope:   scope,
+		Surface: surface,
+	})
+	if err != nil {
+		if errors.Is(err, pgx.ErrNoRows) {
+			if feedbackAwareRanking {
+				applyFeedbackAwareRankingHint(scored, s.usefulnessSummarizer, ctx, scope)
+				s.recordRankingRolloutPolicyEvaluation(ctx, "request_hint", surface, memory.RankingRolloutPolicy{}, "no_active_policy")
+				return true, []ContextDiagnostic{{Section: "search_feedback", Status: "request_hint_applied", Reason: "explicit per-request feedback-aware ranking hint applied"}}, nil
+			}
+			s.recordRankingRolloutPolicyEvaluation(ctx, "not_applied", surface, memory.RankingRolloutPolicy{}, "no_active_policy")
+			return false, nil, nil
+		}
+		return false, nil, err
+	}
+
+	applied := policy.Status == memory.RankingRolloutPolicyStatusActiveForScope && policy.Mode == memory.RankingRolloutModeActiveForScope
+	if applied {
+		for i := range scored {
+			adjustment, err := s.rankingRolloutAdjustmentForHit(ctx, scope, policy, scored[i].Memory.ID)
+			if err != nil {
+				return false, nil, err
+			}
+			scored[i].Score.Overall += adjustment
+		}
+		s.recordRankingRolloutPolicyEvaluation(ctx, "applied", surface, policy, "active_policy")
+		return true, []ContextDiagnostic{{Section: "search_feedback", Status: "ranking_policy_applied", Reason: "active scoped ranking rollout policy applied"}}, nil
+	}
+
+	if feedbackAwareRanking {
+		applyFeedbackAwareRankingHint(scored, s.usefulnessSummarizer, ctx, scope)
+		s.recordRankingRolloutPolicyEvaluation(ctx, "request_hint", surface, policy, "ineligible_policy")
+		return true, []ContextDiagnostic{{Section: "search_feedback", Status: "request_hint_applied", Reason: "explicit per-request feedback-aware ranking hint applied"}}, nil
+	}
+
+	s.recordRankingRolloutPolicyEvaluation(ctx, "not_applied", surface, policy, "ineligible_policy")
+	return false, []ContextDiagnostic{{Section: "search_feedback", Status: "ranking_policy_skipped", Reason: "active scoped ranking rollout policy is not eligible for default ranking"}}, nil
+}
+
+func (s *Service) recordRankingRolloutPolicyEvaluation(ctx context.Context, result string, surface memory.RankingRolloutSurface, policy memory.RankingRolloutPolicy, reasonCode string) {
+	observer, ok := s.observer.(rankingRolloutMetricObserver)
+	if !ok || observer == nil {
+		return
+	}
+	observer.RecordRankingRollout(ctx, telemetry.RankingRolloutEvent{
+		Operation:       "policy_evaluation",
+		Result:          result,
+		Surface:         string(surface),
+		SignalSource:    string(firstRankingRolloutSignalSource(policy.SignalSources)),
+		ThresholdStatus: string(policy.ThresholdStatus),
+		PolicyStatus:    string(policy.Status),
+		ReasonCode:      reasonCode,
+	})
+}
+
+func (s *Service) rankingRolloutAdjustmentForHit(ctx context.Context, scope memory.Scope, policy memory.RankingRolloutPolicy, memoryID string) (float64, error) {
+	if policy.ThresholdStatus == memory.RankingRolloutThresholdStatusBlocked {
+		return 0, nil
+	}
+	adjustment := 0.0
+	if rankingRolloutPolicyUsesSignal(policy, memory.RankingRolloutSignalSourceUsefulnessFeedback) {
+		summary, err := s.usefulnessSummaryForHit(ctx, scope, memoryID)
+		if err != nil {
+			return 0, err
+		}
+		if rankingRolloutEvidenceSatisfied(policy, summary.TotalActive) {
+			adjustment += feedbackRankingAdjustment(summary)
+		}
+	}
+	if rankingRolloutPolicyUsesSignal(policy, memory.RankingRolloutSignalSourceTaskEvaluations) && s.taskEvaluationSummarizer != nil {
+		summary, err := s.taskEvaluationSummarizer.SummarizeTaskEvaluations(ctx, memory.SummarizeTaskEvaluationsInput{
+			Scope:              scope,
+			EvidenceTargetKind: memory.TaskEvidenceTargetMemory,
+			EvidenceTargetID:   memoryID,
+		})
+		if err != nil {
+			return 0, err
+		}
+		if rankingRolloutEvidenceSatisfied(policy, summary.ActiveEvaluations) {
+			adjustment += taskEvaluationRankingAdjustment(summary)
+		}
+	}
+	return adjustment, nil
+}
+
+func (s *Service) usefulnessSummaryForHit(ctx context.Context, scope memory.Scope, memoryID string) (memory.UsefulnessFeedbackSummary, error) {
+	if s.usefulnessSummarizer == nil {
+		return memory.UsefulnessFeedbackSummary{}, nil
+	}
+	return s.usefulnessSummarizer.SummarizeUsefulnessFeedback(ctx, memory.SummarizeUsefulnessFeedbackInput{
+		Scope: scope,
+		Subject: memory.UsefulnessFeedbackSubject{
+			Kind: memory.UsefulnessFeedbackSubjectMemory,
+			ID:   memoryID,
+		},
+	})
+}
+
+func applyFeedbackAwareRankingHint(scored []SearchHit, summarizer UsefulnessSummarizer, ctx context.Context, scope memory.Scope) {
+	if summarizer == nil {
+		return
+	}
+	for i := range scored {
+		summary, err := summarizer.SummarizeUsefulnessFeedback(ctx, memory.SummarizeUsefulnessFeedbackInput{
+			Scope: scope,
+			Subject: memory.UsefulnessFeedbackSubject{
+				Kind: memory.UsefulnessFeedbackSubjectMemory,
+				ID:   scored[i].Memory.ID,
+			},
+		})
+		if err != nil {
+			continue
+		}
+		scored[i].Score.Overall += feedbackRankingAdjustment(summary)
+	}
+}
+
+func rankingRolloutAdjustment(policy memory.RankingRolloutPolicy, summary memory.UsefulnessFeedbackSummary) float64 {
+	adjustment := feedbackRankingAdjustment(summary)
+	if policy.Mode == memory.RankingRolloutModeDiagnosticsOnly || policy.Mode == memory.RankingRolloutModeDryRun {
+		return adjustment
+	}
+	switch policy.ThresholdStatus {
+	case memory.RankingRolloutThresholdStatusSatisfied:
+		return adjustment
+	case memory.RankingRolloutThresholdStatusBlocked:
+		return 0
+	case memory.RankingRolloutThresholdStatusInsufficient:
+		if summary.TotalActive >= policy.EvidenceMinimum && policy.EvidenceMinimum > 0 {
+			return adjustment
+		}
+		return 0
+	default:
+		return 0
+	}
+}
+
+func taskEvaluationRankingAdjustment(summary memory.TaskEvaluationSummary) float64 {
+	adjustment := 0.0
+	adjustment += float64(summary.VerdictCounts[memory.TaskEvaluationVerdictSucceeded]) * 0.05
+	adjustment -= float64(summary.VerdictCounts[memory.TaskEvaluationVerdictFailed]) * 0.25
+	adjustment -= float64(summary.VerdictCounts[memory.TaskEvaluationVerdictPartial]) * 0.15
+	adjustment -= float64(summary.VerdictCounts[memory.TaskEvaluationVerdictInconclusive]) * 0.20
+	adjustment -= float64(summary.ContributionCounts[memory.TaskContributionCategoryMemoryNoisy]) * 0.10
+	adjustment -= float64(summary.ContributionCounts[memory.TaskContributionCategoryMemoryStale]) * 0.10
+	adjustment -= float64(summary.ContributionCounts[memory.TaskContributionCategoryMemoryIrrelevant]) * 0.10
+	adjustment -= float64(summary.ContributionCounts[memory.TaskContributionCategoryMemoryMissing]) * 0.10
+	adjustment -= float64(summary.ContributionCounts[memory.TaskContributionCategoryHiddenMemory]) * 0.35
+	return adjustment
+}
+
+func rankingRolloutPolicyUsesSignal(policy memory.RankingRolloutPolicy, source memory.RankingRolloutSignalSource) bool {
+	for _, value := range policy.SignalSources {
+		if value == source {
+			return true
+		}
+	}
+	return false
+}
+
+func firstRankingRolloutSignalSource(sources []memory.RankingRolloutSignalSource) memory.RankingRolloutSignalSource {
+	if len(sources) == 0 {
+		return ""
+	}
+	return sources[0]
+}
+
+func rankingRolloutEvidenceSatisfied(policy memory.RankingRolloutPolicy, count int) bool {
+	if policy.EvidenceMinimum <= 0 {
+		return count > 0
+	}
+	return count >= policy.EvidenceMinimum
 }
 
 func (s *Service) applyUsefulnessFeedbackSignals(ctx context.Context, input SearchInput, scored []SearchHit) ([]ContextDiagnostic, error) {
@@ -453,10 +673,23 @@ func (s *Service) AssembleContext(ctx context.Context, input AssembleContextInpu
 		IncludeSummaries:           true,
 		IncludeRelations:           input.IncludeRelations,
 		IncludeFeedbackDiagnostics: input.IncludeDiagnostics && input.IncludeFeedbackDiagnostics,
-		FeedbackAwareRanking:       input.FeedbackAwareRanking,
+		FeedbackAwareRanking:       false,
+		rankingPolicyDisabled:      true,
 	})
 	if err != nil {
 		return AssembledContext{}, err
+	}
+	adjusted, policyDiagnostics, err := s.applyRankingRolloutPolicy(ctx, input.Scope, memory.RankingRolloutSurfaceContext, input.FeedbackAwareRanking, result.Hits)
+	if err != nil {
+		return AssembledContext{}, err
+	}
+	if adjusted {
+		sort.Slice(result.Hits, func(i, j int) bool {
+			if result.Hits[i].Score.Overall == result.Hits[j].Score.Overall {
+				return result.Hits[i].Memory.ModifiedAt.After(result.Hits[j].Memory.ModifiedAt)
+			}
+			return result.Hits[i].Score.Overall > result.Hits[j].Score.Overall
+		})
 	}
 
 	output = AssembledContext{
@@ -471,6 +704,7 @@ func (s *Service) AssembleContext(ctx context.Context, input AssembleContextInpu
 	}
 	if input.IncludeDiagnostics {
 		output.Diagnostics = append(output.Diagnostics, result.Diagnostics...)
+		output.Diagnostics = append(output.Diagnostics, policyDiagnostics...)
 	}
 
 	profiles := make([]SearchHit, 0)

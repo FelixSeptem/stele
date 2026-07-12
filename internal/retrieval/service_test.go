@@ -94,8 +94,40 @@ func (s stubRetrievalUsefulnessSummarizer) SummarizeUsefulnessFeedback(ctx conte
 	return memory.UsefulnessFeedbackSummary{Subject: input.Subject, EffectiveQuality: memory.UsefulnessQualityUnknown}, nil
 }
 
+type stubRetrievalTaskSummarizer struct {
+	summaries map[string]memory.TaskEvaluationSummary
+}
+
+func (s stubRetrievalTaskSummarizer) SummarizeTaskEvaluations(ctx context.Context, input memory.SummarizeTaskEvaluationsInput) (memory.TaskEvaluationSummary, error) {
+	if summary, ok := s.summaries[input.EvidenceTargetID]; ok {
+		return summary, nil
+	}
+	return memory.TaskEvaluationSummary{
+		Scope:              input.Scope.Normalized(),
+		EvidenceTargetKind: input.EvidenceTargetKind,
+		EvidenceTargetID:   input.EvidenceTargetID,
+		VerdictCounts:      map[memory.TaskEvaluationVerdict]int{},
+		ContributionCounts: map[memory.TaskContributionCategory]int{},
+	}, nil
+}
+
+type stubRankingRolloutPolicyReader struct {
+	policy memory.RankingRolloutPolicy
+	err    error
+	inputs []memory.ReadActiveRankingRolloutPolicyInput
+}
+
+func (s *stubRankingRolloutPolicyReader) ReadActiveRankingRolloutPolicy(ctx context.Context, input memory.ReadActiveRankingRolloutPolicyInput) (memory.RankingRolloutPolicy, error) {
+	s.inputs = append(s.inputs, input)
+	if s.err != nil {
+		return memory.RankingRolloutPolicy{}, s.err
+	}
+	return s.policy, nil
+}
+
 type stubRetrievalObserver struct {
-	operations []telemetry.OperationEvent
+	operations      []telemetry.OperationEvent
+	rankingRollouts []telemetry.RankingRolloutEvent
 }
 
 func (s *stubRetrievalObserver) RecordOperation(ctx context.Context, event telemetry.OperationEvent) {
@@ -103,6 +135,10 @@ func (s *stubRetrievalObserver) RecordOperation(ctx context.Context, event telem
 }
 
 func (s *stubRetrievalObserver) RecordBacklog(ctx context.Context, event telemetry.BacklogEvent) {}
+
+func (s *stubRetrievalObserver) RecordRankingRollout(ctx context.Context, event telemetry.RankingRolloutEvent) {
+	s.rankingRollouts = append(s.rankingRollouts, event)
+}
 
 func TestServiceSearchMergesRankedHitsAcrossSources(t *testing.T) {
 	now := time.Date(2026, 6, 6, 11, 0, 0, 0, time.UTC)
@@ -286,6 +322,90 @@ func TestServiceSearchAddsFeedbackDiagnosticsWithoutChangingDefaultRanking(t *te
 	}
 }
 
+func TestServiceSearchReadsActiveRankingPolicyWhenConfigured(t *testing.T) {
+	scope := memory.Scope{Tenant: "tenant-a", Project: "project-a", Namespace: "namespace-a"}
+	policyReader := &stubRankingRolloutPolicyReader{}
+	service := NewService(ServiceDependencies{
+		Lexical: &stubLexicalSource{
+			hits: []ScoredMemory{
+				{Memory: memory.CanonicalMemory{ID: "mem_1", Scope: scope, Class: memory.MemoryClassProfile, State: memory.MemoryStateActive, ModifiedAt: time.Date(2026, 7, 12, 9, 0, 0, 0, time.UTC)}, LexicalScore: 1},
+			},
+		},
+		RankingRolloutPolicyReader: policyReader,
+	})
+
+	_, err := service.Search(context.Background(), SearchInput{Scope: scope, Query: "profile", TopK: 1})
+	if err != nil {
+		t.Fatalf("Search() error = %v", err)
+	}
+
+	if len(policyReader.inputs) != 1 {
+		t.Fatalf("policy reader calls = %d, want 1", len(policyReader.inputs))
+	}
+	if policyReader.inputs[0].Surface != memory.RankingRolloutSurfaceSearch {
+		t.Fatalf("policy surface = %q, want search", policyReader.inputs[0].Surface)
+	}
+}
+
+func TestServiceSearchAppliesActiveTaskEvaluationRankingPolicyWithEvidenceThreshold(t *testing.T) {
+	scope := memory.Scope{Tenant: "tenant-a", Project: "project-a", Namespace: "namespace-a"}
+	now := time.Date(2026, 7, 12, 11, 0, 0, 0, time.UTC)
+	observer := &stubRetrievalObserver{}
+	policy := memory.RankingRolloutPolicy{
+		ID:              "policy_1",
+		Scope:           scope,
+		Status:          memory.RankingRolloutPolicyStatusActiveForScope,
+		Mode:            memory.RankingRolloutModeActiveForScope,
+		Surfaces:        []memory.RankingRolloutSurface{memory.RankingRolloutSurfaceSearch},
+		SignalSources:   []memory.RankingRolloutSignalSource{memory.RankingRolloutSignalSourceTaskEvaluations},
+		ThresholdStatus: memory.RankingRolloutThresholdStatusSatisfied,
+		EvidenceMinimum: 2,
+	}
+	service := NewService(ServiceDependencies{
+		Lexical: &stubLexicalSource{hits: []ScoredMemory{
+			{Memory: memory.CanonicalMemory{ID: "mem_single_failure", Scope: scope, Class: memory.MemoryClassProfile, State: memory.MemoryStateActive, ModifiedAt: now}, LexicalScore: 0.95},
+			{Memory: memory.CanonicalMemory{ID: "mem_success", Scope: scope, Class: memory.MemoryClassProfile, State: memory.MemoryStateActive, ModifiedAt: now.Add(-time.Minute)}, LexicalScore: 0.90},
+		}},
+		TaskEvaluationSummarizer: stubRetrievalTaskSummarizer{summaries: map[string]memory.TaskEvaluationSummary{
+			"mem_single_failure": {
+				Scope:              scope,
+				EvidenceTargetKind: memory.TaskEvidenceTargetMemory,
+				EvidenceTargetID:   "mem_single_failure",
+				ActiveEvaluations:  1,
+				VerdictCounts:      map[memory.TaskEvaluationVerdict]int{memory.TaskEvaluationVerdictFailed: 1},
+				ContributionCounts: map[memory.TaskContributionCategory]int{},
+			},
+			"mem_success": {
+				Scope:              scope,
+				EvidenceTargetKind: memory.TaskEvidenceTargetMemory,
+				EvidenceTargetID:   "mem_success",
+				ActiveEvaluations:  2,
+				VerdictCounts:      map[memory.TaskEvaluationVerdict]int{memory.TaskEvaluationVerdictSucceeded: 2},
+				ContributionCounts: map[memory.TaskContributionCategory]int{},
+			},
+		}},
+		RankingRolloutPolicyReader: &stubRankingRolloutPolicyReader{policy: policy},
+	}, observer)
+
+	result, err := service.Search(context.Background(), SearchInput{Scope: scope, Query: "profile", TopK: 2})
+	if err != nil {
+		t.Fatalf("Search() error = %v", err)
+	}
+	if result.Hits[0].Memory.ID != "mem_success" {
+		t.Fatalf("hits = %+v, want sufficient task-success evidence to rerank mem_success first while single failure is below threshold", result.Hits)
+	}
+	if !hasContextDiagnostic(result.Diagnostics, "search_feedback", "ranking_policy_applied") {
+		t.Fatalf("diagnostics = %+v, want ranking policy applied", result.Diagnostics)
+	}
+	if len(observer.rankingRollouts) != 1 {
+		t.Fatalf("ranking rollout metrics = %+v, want one policy evaluation event", observer.rankingRollouts)
+	}
+	got := observer.rankingRollouts[0]
+	if got.Operation != "policy_evaluation" || got.Result != "applied" || got.Surface != "search" || got.SignalSource != "task_evaluations" || got.ThresholdStatus != "satisfied" || got.PolicyStatus != "active_for_scope" || got.ReasonCode != "active_policy" {
+		t.Fatalf("ranking rollout metric = %+v, want bounded policy evaluation labels", got)
+	}
+}
+
 func TestServiceAssembleContextUsesFeedbackDiagnosticsOnlyWhenRequested(t *testing.T) {
 	now := time.Date(2026, 7, 11, 22, 30, 0, 0, time.UTC)
 	scope := memory.Scope{Tenant: "tenant-a", Project: "project-a", Namespace: "namespace-a"}
@@ -346,6 +466,120 @@ func TestServiceAssembleContextUsesFeedbackDiagnosticsOnlyWhenRequested(t *testi
 	}
 	if !hasContextDiagnostic(feedbackContext.Diagnostics, "search_feedback", "negative_signal") || !hasContextDiagnostic(feedbackContext.Diagnostics, "search_feedback", "ranking_hint_applied") {
 		t.Fatalf("feedback diagnostics = %+v, want feedback diagnostics and ranking hint", feedbackContext.Diagnostics)
+	}
+}
+
+func TestServiceAssembleContextAppliesActiveTaskEvaluationRankingPolicyWithinBudget(t *testing.T) {
+	now := time.Date(2026, 7, 12, 12, 0, 0, 0, time.UTC)
+	scope := memory.Scope{Tenant: "tenant-a", Project: "project-a", Namespace: "namespace-a"}
+	policyReader := &stubRankingRolloutPolicyReader{policy: memory.RankingRolloutPolicy{
+		ID:              "policy_1",
+		Scope:           scope,
+		Status:          memory.RankingRolloutPolicyStatusActiveForScope,
+		Mode:            memory.RankingRolloutModeActiveForScope,
+		Surfaces:        []memory.RankingRolloutSurface{memory.RankingRolloutSurfaceContext},
+		SignalSources:   []memory.RankingRolloutSignalSource{memory.RankingRolloutSignalSourceTaskEvaluations},
+		ThresholdStatus: memory.RankingRolloutThresholdStatusSatisfied,
+		EvidenceMinimum: 2,
+	}}
+	service := NewService(ServiceDependencies{
+		Lexical: &stubLexicalSource{hits: []ScoredMemory{
+			{Memory: memory.CanonicalMemory{ID: "mem_failed", Scope: scope, Class: memory.MemoryClassProfile, State: memory.MemoryStateActive, ModifiedAt: now}, LexicalScore: 0.95},
+			{Memory: memory.CanonicalMemory{ID: "mem_succeeded", Scope: scope, Class: memory.MemoryClassProfile, State: memory.MemoryStateActive, ModifiedAt: now.Add(-time.Minute)}, LexicalScore: 0.90},
+		}},
+		TaskEvaluationSummarizer: stubRetrievalTaskSummarizer{summaries: map[string]memory.TaskEvaluationSummary{
+			"mem_failed": {
+				Scope:              scope,
+				EvidenceTargetKind: memory.TaskEvidenceTargetMemory,
+				EvidenceTargetID:   "mem_failed",
+				ActiveEvaluations:  2,
+				VerdictCounts:      map[memory.TaskEvaluationVerdict]int{memory.TaskEvaluationVerdictFailed: 2},
+				ContributionCounts: map[memory.TaskContributionCategory]int{memory.TaskContributionCategoryMemoryIrrelevant: 2},
+			},
+			"mem_succeeded": {
+				Scope:              scope,
+				EvidenceTargetKind: memory.TaskEvidenceTargetMemory,
+				EvidenceTargetID:   "mem_succeeded",
+				ActiveEvaluations:  2,
+				VerdictCounts:      map[memory.TaskEvaluationVerdict]int{memory.TaskEvaluationVerdictSucceeded: 2},
+				ContributionCounts: map[memory.TaskContributionCategory]int{},
+			},
+		}},
+		RankingRolloutPolicyReader: policyReader,
+	})
+
+	contextResult, err := service.AssembleContext(context.Background(), AssembleContextInput{
+		Scope:              scope,
+		Query:              "profile",
+		Budget:             1,
+		IncludeDiagnostics: true,
+	})
+	if err != nil {
+		t.Fatalf("AssembleContext() error = %v", err)
+	}
+	if len(policyReader.inputs) != 1 || policyReader.inputs[0].Surface != memory.RankingRolloutSurfaceContext {
+		t.Fatalf("policy reads = %+v, want context surface lookup", policyReader.inputs)
+	}
+	if len(contextResult.Profile) != 1 || contextResult.Profile[0].Memory.ID != "mem_succeeded" {
+		t.Fatalf("profile = %+v, want active context policy to fit succeeded memory within budget", contextResult.Profile)
+	}
+	if !hasContextDiagnostic(contextResult.Diagnostics, "search_feedback", "ranking_policy_applied") {
+		t.Fatalf("diagnostics = %+v, want active policy diagnostic", contextResult.Diagnostics)
+	}
+}
+
+func TestServiceAssembleContextPreservesBaselineAfterRankingPolicyRollback(t *testing.T) {
+	now := time.Date(2026, 7, 12, 12, 30, 0, 0, time.UTC)
+	scope := memory.Scope{Tenant: "tenant-a", Project: "project-a", Namespace: "namespace-a"}
+	service := NewService(ServiceDependencies{
+		Lexical: &stubLexicalSource{hits: []ScoredMemory{
+			{Memory: memory.CanonicalMemory{ID: "mem_failed", Scope: scope, Class: memory.MemoryClassProfile, State: memory.MemoryStateActive, ModifiedAt: now}, LexicalScore: 0.95},
+			{Memory: memory.CanonicalMemory{ID: "mem_succeeded", Scope: scope, Class: memory.MemoryClassProfile, State: memory.MemoryStateActive, ModifiedAt: now.Add(-time.Minute)}, LexicalScore: 0.90},
+		}},
+		TaskEvaluationSummarizer: stubRetrievalTaskSummarizer{summaries: map[string]memory.TaskEvaluationSummary{
+			"mem_failed": {
+				Scope:              scope,
+				EvidenceTargetKind: memory.TaskEvidenceTargetMemory,
+				EvidenceTargetID:   "mem_failed",
+				ActiveEvaluations:  2,
+				VerdictCounts:      map[memory.TaskEvaluationVerdict]int{memory.TaskEvaluationVerdictFailed: 2},
+				ContributionCounts: map[memory.TaskContributionCategory]int{memory.TaskContributionCategoryMemoryIrrelevant: 2},
+			},
+			"mem_succeeded": {
+				Scope:              scope,
+				EvidenceTargetKind: memory.TaskEvidenceTargetMemory,
+				EvidenceTargetID:   "mem_succeeded",
+				ActiveEvaluations:  2,
+				VerdictCounts:      map[memory.TaskEvaluationVerdict]int{memory.TaskEvaluationVerdictSucceeded: 2},
+				ContributionCounts: map[memory.TaskContributionCategory]int{},
+			},
+		}},
+		RankingRolloutPolicyReader: &stubRankingRolloutPolicyReader{policy: memory.RankingRolloutPolicy{
+			ID:              "policy_1",
+			Scope:           scope,
+			Status:          memory.RankingRolloutPolicyStatusRolledBack,
+			Mode:            memory.RankingRolloutModeDiagnosticsOnly,
+			Surfaces:        []memory.RankingRolloutSurface{memory.RankingRolloutSurfaceContext},
+			SignalSources:   []memory.RankingRolloutSignalSource{memory.RankingRolloutSignalSourceTaskEvaluations},
+			ThresholdStatus: memory.RankingRolloutThresholdStatusSatisfied,
+			EvidenceMinimum: 2,
+		}},
+	})
+
+	contextResult, err := service.AssembleContext(context.Background(), AssembleContextInput{
+		Scope:              scope,
+		Query:              "profile",
+		Budget:             1,
+		IncludeDiagnostics: true,
+	})
+	if err != nil {
+		t.Fatalf("AssembleContext() error = %v", err)
+	}
+	if len(contextResult.Profile) != 1 || contextResult.Profile[0].Memory.ID != "mem_failed" {
+		t.Fatalf("profile = %+v, want rolled-back policy to preserve baseline ranking", contextResult.Profile)
+	}
+	if !hasContextDiagnostic(contextResult.Diagnostics, "search_feedback", "ranking_policy_skipped") {
+		t.Fatalf("diagnostics = %+v, want skipped policy diagnostic", contextResult.Diagnostics)
 	}
 }
 

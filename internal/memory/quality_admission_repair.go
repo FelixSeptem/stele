@@ -490,10 +490,15 @@ type UsefulnessFeedbackLister interface {
 	ListUsefulnessFeedback(ctx context.Context, input ListUsefulnessFeedbackInput) ([]UsefulnessFeedback, error)
 }
 
+type TaskEvaluationSummarizer interface {
+	SummarizeTaskEvaluations(ctx context.Context, input SummarizeTaskEvaluationsInput) (TaskEvaluationSummary, error)
+}
+
 type QualityServiceOptions struct {
 	Store              QualityStore
 	Probe              QualityProbe
 	UsefulnessFeedback UsefulnessFeedbackLister
+	TaskSummarizer     TaskEvaluationSummarizer
 	Now                func() time.Time
 	NewID              func(prefix string) string
 	MaxPlanItems       int
@@ -503,6 +508,7 @@ type QualityService struct {
 	store              QualityStore
 	probe              QualityProbe
 	usefulnessFeedback UsefulnessFeedbackLister
+	taskSummarizer     TaskEvaluationSummarizer
 	now                func() time.Time
 	newID              func(prefix string) string
 	maxPlanItems       int
@@ -523,7 +529,7 @@ func NewQualityService(options QualityServiceOptions) *QualityService {
 	if maxPlanItems <= 0 {
 		maxPlanItems = 100
 	}
-	return &QualityService{store: options.Store, probe: options.Probe, usefulnessFeedback: options.UsefulnessFeedback, now: now, newID: newID, maxPlanItems: maxPlanItems}
+	return &QualityService{store: options.Store, probe: options.Probe, usefulnessFeedback: options.UsefulnessFeedback, taskSummarizer: options.TaskSummarizer, now: now, newID: newID, maxPlanItems: maxPlanItems}
 }
 
 type CreateQualityEvaluationInput struct {
@@ -748,7 +754,81 @@ func (s *QualityService) CreateEvaluation(ctx context.Context, input CreateQuali
 			}
 		}
 	}
+	if s.taskSummarizer != nil && hasRetrievalQualityCheck(input.Checks) {
+		findings, err := s.taskDerivedFindings(ctx, input.Scope.Normalized(), run.ID, now)
+		if err != nil {
+			return QualityEvaluationRun{}, err
+		}
+		for _, finding := range findings {
+			if _, err := s.store.CreateQualityEvaluationFinding(ctx, finding); err != nil {
+				return QualityEvaluationRun{}, err
+			}
+		}
+	}
 	return run, nil
+}
+
+func (s *QualityService) taskDerivedFindings(ctx context.Context, scope Scope, evaluationRunID string, observedAt time.Time) ([]QualityEvaluationFinding, error) {
+	summary, err := s.taskSummarizer.SummarizeTaskEvaluations(ctx, SummarizeTaskEvaluationsInput{Scope: scope})
+	if err != nil {
+		return nil, err
+	}
+	if summary.ActiveEvaluations == 0 {
+		return nil, nil
+	}
+	findings := make([]QualityEvaluationFinding, 0)
+	for _, code := range taskQualityFindingCodes(summary) {
+		category, ok := taskFindingAction(code)
+		if !ok {
+			continue
+		}
+		findings = append(findings, QualityEvaluationFinding{
+			ID:                      s.newID("finding"),
+			EvaluationRunID:         evaluationRunID,
+			Scope:                   scope,
+			Code:                    code,
+			Severity:                taskFindingSeverity(code),
+			Component:               QualityFindingComponentRetrieval,
+			Category:                QualityFindingCategorySemanticProjection,
+			Message:                 "active task evaluations indicate a memory quality issue",
+			SuggestedActionCategory: category,
+			Metadata: map[string]string{
+				"source":       "task_evaluations",
+				"task_count":   fmt.Sprintf("%d", summary.ActiveEvaluations),
+				"task_last_id": summary.LastTaskEvaluationID,
+			},
+			Evidence: map[string]any{
+				"task_evaluation_ids": summary.TaskEvaluationIDs,
+				"task_finding_codes":  []string{string(code)},
+			},
+			CreatedAt: observedAt,
+		})
+	}
+	return findings, nil
+}
+
+func taskFindingAction(code QualityFindingCode) (RepairActionCategory, bool) {
+	switch code {
+	case QualityFindingExpectedRecallMissing:
+		return RepairActionCategoryEmbeddingRetry, true
+	case QualityFindingFeedbackNoisyRepeated,
+		QualityFindingFeedbackStaleRepeated,
+		QualityFindingFeedbackIrrelevantRepeated:
+		return RepairActionCategorySuppressionReview, true
+	case QualityFindingFeedbackUnsafeOrHidden:
+		return RepairActionCategoryGovernanceInspection, true
+	case QualityFindingFeedbackNeedsReview:
+		return RepairActionCategoryManualReview, true
+	default:
+		return RepairActionCategoryManualReview, false
+	}
+}
+
+func taskFindingSeverity(code QualityFindingCode) QualityFindingSeverity {
+	if code == QualityFindingFeedbackUnsafeOrHidden {
+		return QualityFindingSeverityBlocker
+	}
+	return QualityFindingSeverityWarning
 }
 
 func (s *QualityService) feedbackDerivedFindings(ctx context.Context, scope Scope, evaluationRunID string, observedAt time.Time) ([]QualityEvaluationFinding, error) {

@@ -45,6 +45,8 @@ type HTTPDependencies struct {
 	ScopeProofAdmin           ScopeProofAdminService
 	MemorySession             MemorySessionService
 	UsefulnessFeedback        UsefulnessFeedbackService
+	TaskEvaluations           TaskEvaluationService
+	RankingRollout            RankingRolloutAdminService
 	MemoryHistoryRead         MemoryHistoryReader
 	JobExecutionRead          JobExecutionReader
 	Metrics                   MetricsRecorder
@@ -135,6 +137,25 @@ type UsefulnessFeedbackService interface {
 	SupersedeUsefulnessFeedback(ctx context.Context, input memory.SupersedeUsefulnessFeedbackInput) error
 }
 
+type TaskEvaluationService interface {
+	CreateTaskEvaluation(ctx context.Context, input memory.TaskEvaluation) (memory.TaskEvaluation, error)
+	ReadTaskEvaluation(ctx context.Context, input memory.ReadTaskEvaluationInput) (memory.TaskEvaluation, error)
+	ListTaskEvaluations(ctx context.Context, input memory.ListTaskEvaluationsInput) ([]memory.TaskEvaluation, error)
+	SupersedeTaskEvaluation(ctx context.Context, input memory.SupersedeTaskEvaluationInput) error
+	SummarizeTaskEvaluations(ctx context.Context, input memory.SummarizeTaskEvaluationsInput) (memory.TaskEvaluationSummary, error)
+}
+
+type RankingRolloutAdminService interface {
+	CreateRankingRolloutPolicy(ctx context.Context, policy memory.RankingRolloutPolicy) (memory.RankingRolloutPolicy, error)
+	ReadRankingRolloutPolicy(ctx context.Context, input memory.ReadRankingRolloutPolicyInput) (memory.RankingRolloutPolicy, error)
+	ListRankingRolloutPolicies(ctx context.Context, input memory.ListRankingRolloutPoliciesInput) ([]memory.RankingRolloutPolicy, error)
+	RecordRankingRolloutDryRun(ctx context.Context, input memory.RecordRankingRolloutDryRunInput) (memory.RankingRolloutDryRun, error)
+	ActivateRankingRolloutPolicy(ctx context.Context, input memory.ActivateRankingRolloutPolicyInput) (memory.RankingRolloutPolicy, error)
+	DisableRankingRolloutPolicy(ctx context.Context, input memory.DisableRankingRolloutPolicyInput) (memory.RankingRolloutPolicy, error)
+	RollbackRankingRolloutPolicy(ctx context.Context, input memory.RollbackRankingRolloutPolicyInput) (memory.RankingRolloutPolicy, error)
+	ListRankingRolloutPolicyImpact(ctx context.Context, input memory.ListRankingRolloutPolicyImpactInput) ([]memory.RankingRolloutImpactEntry, error)
+}
+
 type ManualMemoryMutationService interface {
 	CreateMemory(ctx context.Context, input memory.ManualCreateMemoryInput) (memory.MemoryResource, error)
 	UpdateMemory(ctx context.Context, input memory.ManualUpdateMemoryInput) (memory.MemoryResource, error)
@@ -165,6 +186,8 @@ type MetricsRecorder interface {
 	RecordCutoverItemState(ctx context.Context, event telemetry.CutoverItemStateEvent)
 	RecordInsightFeedback(ctx context.Context, event telemetry.InsightFeedbackEvent)
 	RecordUsefulnessFeedback(ctx context.Context, event telemetry.UsefulnessFeedbackEvent)
+	RecordTaskEvaluation(ctx context.Context, event telemetry.TaskEvaluationEvent)
+	RecordRankingRollout(ctx context.Context, event telemetry.RankingRolloutEvent)
 }
 
 type lifecycleActionRequest struct {
@@ -244,16 +267,51 @@ type memorySessionTurnOutcomeRequest struct {
 }
 
 type usefulnessFeedbackCreateRequest struct {
-	Type           memory.UsefulnessFeedbackType          `json:"type"`
-	SourceSurface  memory.UsefulnessFeedbackSourceSurface `json:"source_surface"`
-	Subjects       []memory.UsefulnessFeedbackSubject     `json:"subjects"`
-	Actor          string                                 `json:"actor"`
-	Reason         string                                 `json:"reason"`
-	IdempotencyKey string                                 `json:"idempotency_key"`
-	Metadata       map[string]any                         `json:"metadata,omitempty"`
+	Type             memory.UsefulnessFeedbackType          `json:"type"`
+	SourceSurface    memory.UsefulnessFeedbackSourceSurface `json:"source_surface"`
+	TaskEvaluationID string                                 `json:"task_evaluation_id,omitempty"`
+	Subjects         []memory.UsefulnessFeedbackSubject     `json:"subjects"`
+	Actor            string                                 `json:"actor"`
+	Reason           string                                 `json:"reason"`
+	IdempotencyKey   string                                 `json:"idempotency_key"`
+	Metadata         map[string]any                         `json:"metadata,omitempty"`
 }
 
 type usefulnessFeedbackSupersedeRequest struct {
+	Actor  string `json:"actor"`
+	Reason string `json:"reason"`
+}
+
+type taskEvaluationCreateRequest struct {
+	Objective              string                            `json:"objective"`
+	SuccessCriteria        []string                          `json:"success_criteria"`
+	Verdict                memory.TaskEvaluationVerdict      `json:"verdict"`
+	ContributionCategories []memory.TaskContributionCategory `json:"contribution_categories,omitempty"`
+	Evidence               []memory.TaskEvidenceLink         `json:"evidence"`
+	Actor                  string                            `json:"actor"`
+	Reason                 string                            `json:"reason"`
+	IdempotencyKey         string                            `json:"idempotency_key,omitempty"`
+	Metadata               map[string]any                    `json:"metadata,omitempty"`
+}
+
+type taskEvaluationSupersedeRequest struct {
+	Actor  string `json:"actor"`
+	Reason string `json:"reason"`
+}
+
+type rankingRolloutPolicyCreateRequest struct {
+	ID              string                               `json:"id"`
+	Status          memory.RankingRolloutPolicyStatus    `json:"status"`
+	Mode            memory.RankingRolloutMode            `json:"mode"`
+	Surfaces        []memory.RankingRolloutSurface       `json:"surfaces"`
+	SignalSources   []memory.RankingRolloutSignalSource  `json:"signal_sources"`
+	ThresholdStatus memory.RankingRolloutThresholdStatus `json:"threshold_status"`
+	EvidenceMinimum int                                  `json:"evidence_minimum"`
+	Actor           string                               `json:"actor"`
+	Reason          string                               `json:"reason"`
+}
+
+type rankingRolloutPolicyActionRequest struct {
 	Actor  string `json:"actor"`
 	Reason string `json:"reason"`
 }
@@ -519,6 +577,24 @@ func NewHTTPHandler(deps HTTPDependencies) http.Handler {
 	)
 	mux.Handle("POST /v1/usefulness-feedback", protectedUsefulnessFeedback)
 
+	protectedTaskEvaluations := auth.APIKeyMiddleware(deps.APIKeys)(
+		auth.ScopeMiddleware()(
+			http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				handleTaskEvaluationCreate(w, r, deps.TaskEvaluations, deps.Metrics, deps.Logger)
+			}),
+		),
+	)
+	mux.Handle("POST /v1/task-evaluations", protectedTaskEvaluations)
+
+	protectedTaskEvaluationReport := auth.APIKeyMiddleware(deps.APIKeys)(
+		auth.ScopeMiddleware()(
+			http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				handleTaskEvaluationReport(w, r, deps.TaskEvaluations, deps.Metrics, deps.Logger)
+			}),
+		),
+	)
+	mux.Handle("GET /v1/task-evaluations/{evaluation_id}/report", protectedTaskEvaluationReport)
+
 	adminGovernance := auth.APIKeyMiddleware(deps.AdminAPIKeys)(
 		http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 			handleGovernanceStatus(w, r, deps.GovernanceStatusRead)
@@ -652,6 +728,34 @@ func NewHTTPHandler(deps HTTPDependencies) http.Handler {
 		),
 	)
 	mux.Handle("POST /v1/admin/usefulness-feedback/{feedback_action}", adminUsefulnessFeedbackAction)
+
+	adminTaskEvaluations := auth.APIKeyMiddleware(deps.AdminAPIKeys)(
+		auth.ScopeMiddleware()(
+			http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				handleAdminTaskEvaluations(w, r, deps.TaskEvaluations, deps.Metrics, deps.Logger)
+			}),
+		),
+	)
+	mux.Handle("GET /v1/admin/task-evaluations", adminTaskEvaluations)
+	mux.Handle("GET /v1/admin/task-evaluations/{evaluation_id}", adminTaskEvaluations)
+	mux.Handle("GET /v1/admin/task-evaluations/summary", adminTaskEvaluations)
+	mux.Handle("POST /v1/admin/task-evaluations/{evaluation_id}/supersede", adminTaskEvaluations)
+
+	adminRankingRollouts := auth.APIKeyMiddleware(deps.AdminAPIKeys)(
+		auth.ScopeMiddleware()(
+			http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				handleAdminRankingRollouts(w, r, deps.RankingRollout, deps.Metrics, deps.Logger)
+			}),
+		),
+	)
+	mux.Handle("GET /v1/admin/ranking-rollouts", adminRankingRollouts)
+	mux.Handle("POST /v1/admin/ranking-rollouts", adminRankingRollouts)
+	mux.Handle("GET /v1/admin/ranking-rollouts/{policy_id}", adminRankingRollouts)
+	mux.Handle("GET /v1/admin/ranking-rollouts/{policy_id}/impact", adminRankingRollouts)
+	mux.Handle("POST /v1/admin/ranking-rollouts/{policy_id}/dry-run", adminRankingRollouts)
+	mux.Handle("POST /v1/admin/ranking-rollouts/{policy_id}/activate", adminRankingRollouts)
+	mux.Handle("POST /v1/admin/ranking-rollouts/{policy_id}/disable", adminRankingRollouts)
+	mux.Handle("POST /v1/admin/ranking-rollouts/{policy_id}/rollback", adminRankingRollouts)
 
 	adminDerivedInsightAction := auth.APIKeyMiddleware(deps.AdminAPIKeys)(
 		auth.ScopeMiddleware()(
@@ -939,6 +1043,10 @@ func requestIDFromContext(ctx context.Context) string {
 
 func newFeedbackID() string {
 	return "feedback_" + strings.TrimPrefix(newID(), "id_")
+}
+
+func newTaskEvaluationID() string {
+	return "task_eval_" + strings.TrimPrefix(newID(), "id_")
 }
 
 func handleEventIngest(w http.ResponseWriter, r *http.Request, ingestor memory.EventIngestor) {
@@ -1447,16 +1555,17 @@ func handleUsefulnessFeedbackCreate(w http.ResponseWriter, r *http.Request, serv
 		return
 	}
 	feedback := memory.UsefulnessFeedback{
-		ID:             newFeedbackID(),
-		Scope:          scope,
-		Type:           req.Type,
-		SourceSurface:  req.SourceSurface,
-		Subjects:       append([]memory.UsefulnessFeedbackSubject(nil), req.Subjects...),
-		Actor:          strings.TrimSpace(req.Actor),
-		Reason:         strings.TrimSpace(req.Reason),
-		IdempotencyKey: strings.TrimSpace(req.IdempotencyKey),
-		Metadata:       req.Metadata,
-		CreatedAt:      time.Now().UTC(),
+		ID:               newFeedbackID(),
+		Scope:            scope,
+		Type:             req.Type,
+		SourceSurface:    req.SourceSurface,
+		TaskEvaluationID: strings.TrimSpace(req.TaskEvaluationID),
+		Subjects:         append([]memory.UsefulnessFeedbackSubject(nil), req.Subjects...),
+		Actor:            strings.TrimSpace(req.Actor),
+		Reason:           strings.TrimSpace(req.Reason),
+		IdempotencyKey:   strings.TrimSpace(req.IdempotencyKey),
+		Metadata:         req.Metadata,
+		CreatedAt:        time.Now().UTC(),
 	}
 	created, err := service.CreateUsefulnessFeedback(r.Context(), feedback)
 	if err != nil {
@@ -1468,6 +1577,449 @@ func handleUsefulnessFeedbackCreate(w http.ResponseWriter, r *http.Request, serv
 	recordUsefulnessFeedbackMetric(r.Context(), metrics, "create", "ok", created.Type, firstUsefulnessSubjectKind(created.Subjects), created.SourceSurface, "active")
 	recordUsefulnessFeedbackLog(logger, "create", "ok", created.Type, firstUsefulnessSubjectKind(created.Subjects), created.SourceSurface, "active")
 	writeJSON(w, http.StatusCreated, created)
+}
+
+func handleTaskEvaluationCreate(w http.ResponseWriter, r *http.Request, service TaskEvaluationService, metrics MetricsRecorder, logger *log.Logger) {
+	if service == nil {
+		http.Error(w, "task evaluation service is not configured", http.StatusServiceUnavailable)
+		return
+	}
+	scope, ok := auth.ScopeFromContext(r.Context())
+	if !ok {
+		http.Error(w, "scope context is missing", http.StatusInternalServerError)
+		return
+	}
+	var req taskEvaluationCreateRequest
+	if !decodeJSONBody(w, r, &req) {
+		return
+	}
+	evaluation := memory.TaskEvaluation{
+		ID:                     newTaskEvaluationID(),
+		Scope:                  scope,
+		Objective:              strings.TrimSpace(req.Objective),
+		SuccessCriteria:        append([]string(nil), req.SuccessCriteria...),
+		Verdict:                req.Verdict,
+		ContributionCategories: append([]memory.TaskContributionCategory(nil), req.ContributionCategories...),
+		Evidence:               append([]memory.TaskEvidenceLink(nil), req.Evidence...),
+		Actor:                  strings.TrimSpace(req.Actor),
+		Reason:                 strings.TrimSpace(req.Reason),
+		IdempotencyKey:         strings.TrimSpace(req.IdempotencyKey),
+		Metadata:               req.Metadata,
+		CreatedAt:              time.Now().UTC(),
+		UpdatedAt:              time.Now().UTC(),
+		CorrectionState:        memory.TaskEvaluationCorrectionStateActive,
+	}
+	created, err := service.CreateTaskEvaluation(r.Context(), evaluation)
+	if err != nil {
+		recordTaskEvaluationMetric(r.Context(), metrics, "create", "rejected", evaluation.Verdict, firstTaskContributionCategory(evaluation.ContributionCategories), evaluation.CorrectionState)
+		recordTaskEvaluationLog(logger, "create", "rejected", evaluation.Verdict, firstTaskContributionCategory(evaluation.ContributionCategories), evaluation.CorrectionState)
+		writeTaskEvaluationError(w, err, "failed to create task evaluation")
+		return
+	}
+	recordTaskEvaluationMetric(r.Context(), metrics, "create", "ok", created.Verdict, firstTaskContributionCategory(created.ContributionCategories), created.CorrectionState)
+	recordTaskEvaluationLog(logger, "create", "ok", created.Verdict, firstTaskContributionCategory(created.ContributionCategories), created.CorrectionState)
+	writeJSON(w, http.StatusCreated, created)
+}
+
+func handleTaskEvaluationReport(w http.ResponseWriter, r *http.Request, service TaskEvaluationService, metrics MetricsRecorder, logger *log.Logger) {
+	if service == nil {
+		http.Error(w, "task evaluation service is not configured", http.StatusServiceUnavailable)
+		return
+	}
+	scope, ok := auth.ScopeFromContext(r.Context())
+	if !ok {
+		http.Error(w, "scope context is missing", http.StatusInternalServerError)
+		return
+	}
+	evaluation, err := service.ReadTaskEvaluation(r.Context(), memory.ReadTaskEvaluationInput{
+		Scope:        scope,
+		EvaluationID: strings.TrimSpace(r.PathValue("evaluation_id")),
+	})
+	if err != nil {
+		recordTaskEvaluationMetric(r.Context(), metrics, "report", "error", "", "", "")
+		recordTaskEvaluationLog(logger, "report", "error", "", "", "")
+		writeTaskEvaluationError(w, err, "failed to read task evaluation")
+		return
+	}
+	summary, err := service.SummarizeTaskEvaluations(r.Context(), memory.SummarizeTaskEvaluationsInput{
+		Scope: scope,
+	})
+	if err != nil {
+		recordTaskEvaluationMetric(r.Context(), metrics, "report", "error", evaluation.Verdict, firstTaskContributionCategory(evaluation.ContributionCategories), evaluation.CorrectionState)
+		recordTaskEvaluationLog(logger, "report", "error", evaluation.Verdict, firstTaskContributionCategory(evaluation.ContributionCategories), evaluation.CorrectionState)
+		writeTaskEvaluationError(w, err, "failed to summarize task evaluations")
+		return
+	}
+	recordTaskEvaluationMetric(r.Context(), metrics, "report", "ok", evaluation.Verdict, firstTaskContributionCategory(evaluation.ContributionCategories), evaluation.CorrectionState)
+	recordTaskEvaluationLog(logger, "report", "ok", evaluation.Verdict, firstTaskContributionCategory(evaluation.ContributionCategories), evaluation.CorrectionState)
+	writeJSON(w, http.StatusOK, memory.BuildTaskEvaluationReport(evaluation, summary))
+}
+
+func handleAdminTaskEvaluations(w http.ResponseWriter, r *http.Request, service TaskEvaluationService, metrics MetricsRecorder, logger *log.Logger) {
+	if service == nil {
+		http.Error(w, "task evaluation service is not configured", http.StatusServiceUnavailable)
+		return
+	}
+	switch {
+	case strings.Contains(r.URL.Path, "/summary"):
+		handleAdminTaskEvaluationSummary(w, r, service, metrics, logger)
+	case strings.HasSuffix(r.URL.Path, "/supersede"):
+		handleAdminTaskEvaluationAction(w, r, service, metrics, logger)
+	case strings.TrimSpace(r.PathValue("evaluation_id")) != "":
+		handleAdminTaskEvaluationDetail(w, r, service, metrics, logger)
+	default:
+		handleAdminTaskEvaluationList(w, r, service, metrics, logger)
+	}
+}
+
+func handleAdminRankingRollouts(w http.ResponseWriter, r *http.Request, service RankingRolloutAdminService, metrics MetricsRecorder, logger *log.Logger) {
+	if service == nil {
+		http.Error(w, "ranking rollout service is not configured", http.StatusServiceUnavailable)
+		return
+	}
+	switch {
+	case r.URL.Path == "/v1/admin/ranking-rollouts" && r.Method == http.MethodGet:
+		handleAdminRankingRolloutList(w, r, service, metrics, logger)
+	case r.URL.Path == "/v1/admin/ranking-rollouts" && r.Method == http.MethodPost:
+		handleAdminRankingRolloutCreate(w, r, service, metrics, logger)
+	case strings.HasSuffix(r.URL.Path, "/impact"):
+		handleAdminRankingRolloutImpact(w, r, service, metrics, logger)
+	case strings.HasSuffix(r.URL.Path, "/activate"):
+		handleAdminRankingRolloutAction(w, r, service, "activate", metrics, logger)
+	case strings.HasSuffix(r.URL.Path, "/disable"):
+		handleAdminRankingRolloutAction(w, r, service, "disable", metrics, logger)
+	case strings.HasSuffix(r.URL.Path, "/rollback"):
+		handleAdminRankingRolloutAction(w, r, service, "rollback", metrics, logger)
+	case strings.HasSuffix(r.URL.Path, "/dry-run"):
+		handleAdminRankingRolloutDryRun(w, r, service, metrics, logger)
+	default:
+		handleAdminRankingRolloutDetail(w, r, service, metrics, logger)
+	}
+}
+
+func handleAdminRankingRolloutList(w http.ResponseWriter, r *http.Request, service RankingRolloutAdminService, metrics MetricsRecorder, logger *log.Logger) {
+	scope, ok := auth.ScopeFromContext(r.Context())
+	if !ok {
+		http.Error(w, "scope context is missing", http.StatusInternalServerError)
+		return
+	}
+	items, err := service.ListRankingRolloutPolicies(r.Context(), memory.ListRankingRolloutPoliciesInput{Scope: scope})
+	if err != nil {
+		recordRankingRolloutMetric(r.Context(), metrics, "list", "error", "", "", "", "", "")
+		recordRankingRolloutLog(logger, "list", "error", "", "", "", "", "")
+		http.Error(w, "failed to list ranking rollout policies", http.StatusInternalServerError)
+		return
+	}
+	recordRankingRolloutMetric(r.Context(), metrics, "list", "ok", "", "", "", "", "")
+	recordRankingRolloutLog(logger, "list", "ok", "", "", "", "", "")
+	writeJSON(w, http.StatusOK, map[string]any{"policies": items})
+}
+
+func handleAdminRankingRolloutCreate(w http.ResponseWriter, r *http.Request, service RankingRolloutAdminService, metrics MetricsRecorder, logger *log.Logger) {
+	scope, ok := auth.ScopeFromContext(r.Context())
+	if !ok {
+		http.Error(w, "scope context is missing", http.StatusInternalServerError)
+		return
+	}
+	var req rankingRolloutPolicyCreateRequest
+	if !decodeJSONBody(w, r, &req) {
+		return
+	}
+	policy := memory.RankingRolloutPolicy{
+		ID:              strings.TrimSpace(req.ID),
+		Scope:           scope,
+		Status:          req.Status,
+		Mode:            req.Mode,
+		Surfaces:        req.Surfaces,
+		SignalSources:   req.SignalSources,
+		ThresholdStatus: req.ThresholdStatus,
+		EvidenceMinimum: req.EvidenceMinimum,
+		Actor:           strings.TrimSpace(req.Actor),
+		Reason:          strings.TrimSpace(req.Reason),
+		CreatedAt:       time.Now().UTC(),
+		UpdatedAt:       time.Now().UTC(),
+	}
+	created, err := service.CreateRankingRolloutPolicy(r.Context(), policy)
+	if err != nil {
+		recordRankingRolloutMetric(r.Context(), metrics, "create", "rejected", firstRankingRolloutSurface(policy.Surfaces), firstRankingRolloutSignalSource(policy.SignalSources), policy.ThresholdStatus, policy.Status, "")
+		recordRankingRolloutLog(logger, "create", "rejected", firstRankingRolloutSurface(policy.Surfaces), firstRankingRolloutSignalSource(policy.SignalSources), policy.ThresholdStatus, policy.Status, "")
+		http.Error(w, "failed to create ranking rollout policy", http.StatusBadRequest)
+		return
+	}
+	recordRankingRolloutMetric(r.Context(), metrics, "create", "ok", firstRankingRolloutSurface(created.Surfaces), firstRankingRolloutSignalSource(created.SignalSources), created.ThresholdStatus, created.Status, "")
+	recordRankingRolloutLog(logger, "create", "ok", firstRankingRolloutSurface(created.Surfaces), firstRankingRolloutSignalSource(created.SignalSources), created.ThresholdStatus, created.Status, "")
+	writeJSON(w, http.StatusCreated, created)
+}
+
+func handleAdminRankingRolloutDetail(w http.ResponseWriter, r *http.Request, service RankingRolloutAdminService, metrics MetricsRecorder, logger *log.Logger) {
+	scope, ok := auth.ScopeFromContext(r.Context())
+	if !ok {
+		http.Error(w, "scope context is missing", http.StatusInternalServerError)
+		return
+	}
+	policy, err := service.ReadRankingRolloutPolicy(r.Context(), memory.ReadRankingRolloutPolicyInput{
+		Scope:    scope,
+		PolicyID: strings.TrimSpace(r.PathValue("policy_id")),
+	})
+	if err != nil {
+		recordRankingRolloutMetric(r.Context(), metrics, "read", "error", "", "", "", "", "")
+		recordRankingRolloutLog(logger, "read", "error", "", "", "", "", "")
+		http.Error(w, "failed to read ranking rollout policy", http.StatusNotFound)
+		return
+	}
+	recordRankingRolloutMetric(r.Context(), metrics, "read", "ok", firstRankingRolloutSurface(policy.Surfaces), firstRankingRolloutSignalSource(policy.SignalSources), policy.ThresholdStatus, policy.Status, "")
+	recordRankingRolloutLog(logger, "read", "ok", firstRankingRolloutSurface(policy.Surfaces), firstRankingRolloutSignalSource(policy.SignalSources), policy.ThresholdStatus, policy.Status, "")
+	writeJSON(w, http.StatusOK, policy)
+}
+
+func handleAdminRankingRolloutImpact(w http.ResponseWriter, r *http.Request, service RankingRolloutAdminService, metrics MetricsRecorder, logger *log.Logger) {
+	scope, ok := auth.ScopeFromContext(r.Context())
+	if !ok {
+		http.Error(w, "scope context is missing", http.StatusInternalServerError)
+		return
+	}
+	items, err := service.ListRankingRolloutPolicyImpact(r.Context(), memory.ListRankingRolloutPolicyImpactInput{
+		Scope:    scope,
+		PolicyID: strings.TrimSpace(r.PathValue("policy_id")),
+	})
+	if err != nil {
+		recordRankingRolloutMetric(r.Context(), metrics, "impact", "error", "", "", "", "", "")
+		recordRankingRolloutLog(logger, "impact", "error", "", "", "", "", "")
+		http.Error(w, "failed to read ranking rollout impact", http.StatusInternalServerError)
+		return
+	}
+	reasonCode := ""
+	if len(items) > 0 {
+		reasonCode = string(items[0].ReasonCode)
+	}
+	recordRankingRolloutMetric(r.Context(), metrics, "impact", "ok", "", "", "", "", reasonCode)
+	recordRankingRolloutLog(logger, "impact", "ok", "", "", "", "", reasonCode)
+	writeJSON(w, http.StatusOK, map[string]any{"items": items})
+}
+
+func handleAdminRankingRolloutAction(w http.ResponseWriter, r *http.Request, service RankingRolloutAdminService, action string, metrics MetricsRecorder, logger *log.Logger) {
+	scope, ok := auth.ScopeFromContext(r.Context())
+	if !ok {
+		http.Error(w, "scope context is missing", http.StatusInternalServerError)
+		return
+	}
+	var req rankingRolloutPolicyActionRequest
+	if !decodeJSONBody(w, r, &req) {
+		return
+	}
+	policyID := strings.TrimSpace(r.PathValue("policy_id"))
+	switch action {
+	case "activate":
+		policy, err := service.ActivateRankingRolloutPolicy(r.Context(), memory.ActivateRankingRolloutPolicyInput{
+			Scope:       scope,
+			PolicyID:    policyID,
+			Actor:       strings.TrimSpace(req.Actor),
+			Reason:      strings.TrimSpace(req.Reason),
+			ActivatedAt: time.Now().UTC(),
+			Gate: memory.RankingRolloutActivationGate{
+				DryRunSucceeded:         true,
+				EvidenceThresholdStatus: memory.RankingRolloutThresholdStatusSatisfied,
+				AttributionRecorded:     true,
+			},
+		})
+		if err != nil {
+			recordRankingRolloutMetric(r.Context(), metrics, "activate", "rejected", "", "", "", "", "")
+			recordRankingRolloutLog(logger, "activate", "rejected", "", "", "", "", "")
+			http.Error(w, "failed to activate ranking rollout policy", http.StatusBadRequest)
+			return
+		}
+		recordRankingRolloutMetric(r.Context(), metrics, "activate", "ok", firstRankingRolloutSurface(policy.Surfaces), firstRankingRolloutSignalSource(policy.SignalSources), policy.ThresholdStatus, policy.Status, "")
+		recordRankingRolloutLog(logger, "activate", "ok", firstRankingRolloutSurface(policy.Surfaces), firstRankingRolloutSignalSource(policy.SignalSources), policy.ThresholdStatus, policy.Status, "")
+	case "disable":
+		policy, err := service.DisableRankingRolloutPolicy(r.Context(), memory.DisableRankingRolloutPolicyInput{
+			Scope:      scope,
+			PolicyID:   policyID,
+			Actor:      strings.TrimSpace(req.Actor),
+			Reason:     strings.TrimSpace(req.Reason),
+			DisabledAt: time.Now().UTC(),
+		})
+		if err != nil {
+			recordRankingRolloutMetric(r.Context(), metrics, "disable", "rejected", "", "", "", "", "")
+			recordRankingRolloutLog(logger, "disable", "rejected", "", "", "", "", "")
+			http.Error(w, "failed to disable ranking rollout policy", http.StatusBadRequest)
+			return
+		}
+		recordRankingRolloutMetric(r.Context(), metrics, "disable", "ok", firstRankingRolloutSurface(policy.Surfaces), firstRankingRolloutSignalSource(policy.SignalSources), policy.ThresholdStatus, policy.Status, "")
+		recordRankingRolloutLog(logger, "disable", "ok", firstRankingRolloutSurface(policy.Surfaces), firstRankingRolloutSignalSource(policy.SignalSources), policy.ThresholdStatus, policy.Status, "")
+	case "rollback":
+		policy, err := service.RollbackRankingRolloutPolicy(r.Context(), memory.RollbackRankingRolloutPolicyInput{
+			Scope:        scope,
+			PolicyID:     policyID,
+			Actor:        strings.TrimSpace(req.Actor),
+			Reason:       strings.TrimSpace(req.Reason),
+			RolledBackAt: time.Now().UTC(),
+		})
+		if err != nil {
+			recordRankingRolloutMetric(r.Context(), metrics, "rollback", "rejected", "", "", "", "", "")
+			recordRankingRolloutLog(logger, "rollback", "rejected", "", "", "", "", "")
+			http.Error(w, "failed to rollback ranking rollout policy", http.StatusBadRequest)
+			return
+		}
+		recordRankingRolloutMetric(r.Context(), metrics, "rollback", "ok", firstRankingRolloutSurface(policy.Surfaces), firstRankingRolloutSignalSource(policy.SignalSources), policy.ThresholdStatus, policy.Status, string(memory.RankingRolloutImpactReasonCodeRollbackRestored))
+		recordRankingRolloutLog(logger, "rollback", "ok", firstRankingRolloutSurface(policy.Surfaces), firstRankingRolloutSignalSource(policy.SignalSources), policy.ThresholdStatus, policy.Status, string(memory.RankingRolloutImpactReasonCodeRollbackRestored))
+	default:
+		http.Error(w, "invalid ranking rollout action", http.StatusBadRequest)
+		return
+	}
+	writeJSON(w, http.StatusAccepted, map[string]string{"status": "accepted"})
+}
+
+func handleAdminRankingRolloutDryRun(w http.ResponseWriter, r *http.Request, service RankingRolloutAdminService, metrics MetricsRecorder, logger *log.Logger) {
+	scope, ok := auth.ScopeFromContext(r.Context())
+	if !ok {
+		http.Error(w, "scope context is missing", http.StatusInternalServerError)
+		return
+	}
+	policyID := strings.TrimSpace(r.PathValue("policy_id"))
+	dryRun, err := service.RecordRankingRolloutDryRun(r.Context(), memory.RecordRankingRolloutDryRunInput{
+		PolicyID:        policyID,
+		Scope:           scope,
+		Surface:         memory.RankingRolloutSurfaceSearch,
+		SignalSource:    memory.RankingRolloutSignalSourceTaskEvaluations,
+		ThresholdStatus: memory.RankingRolloutThresholdStatusSatisfied,
+		CreatedAt:       time.Now().UTC(),
+	})
+	if err != nil {
+		recordRankingRolloutMetric(r.Context(), metrics, "dry_run", "rejected", memory.RankingRolloutSurfaceSearch, memory.RankingRolloutSignalSourceTaskEvaluations, "", "", "")
+		recordRankingRolloutLog(logger, "dry_run", "rejected", memory.RankingRolloutSurfaceSearch, memory.RankingRolloutSignalSourceTaskEvaluations, "", "", "")
+		http.Error(w, "failed to record ranking rollout dry run", http.StatusBadRequest)
+		return
+	}
+	reasonCode := ""
+	if len(dryRun.ReasonCodes) > 0 {
+		reasonCode = string(dryRun.ReasonCodes[0])
+	}
+	recordRankingRolloutMetric(r.Context(), metrics, "dry_run", "ok", dryRun.Surface, dryRun.SignalSource, dryRun.ThresholdStatus, memory.RankingRolloutPolicyStatusDryRun, reasonCode)
+	recordRankingRolloutLog(logger, "dry_run", "ok", dryRun.Surface, dryRun.SignalSource, dryRun.ThresholdStatus, memory.RankingRolloutPolicyStatusDryRun, reasonCode)
+	writeJSON(w, http.StatusOK, dryRun)
+}
+
+func handleAdminTaskEvaluationList(w http.ResponseWriter, r *http.Request, service TaskEvaluationService, metrics MetricsRecorder, logger *log.Logger) {
+	scope, ok := auth.ScopeFromContext(r.Context())
+	if !ok {
+		http.Error(w, "scope context is missing", http.StatusInternalServerError)
+		return
+	}
+	limit := 50
+	if raw := strings.TrimSpace(r.URL.Query().Get("limit")); raw != "" {
+		parsed, err := strconv.Atoi(raw)
+		if err != nil || parsed < 0 {
+			http.Error(w, "invalid limit", http.StatusBadRequest)
+			return
+		}
+		limit = parsed
+	}
+	input := memory.ListTaskEvaluationsInput{
+		Scope:                scope,
+		Verdict:              memory.TaskEvaluationVerdict(strings.TrimSpace(r.URL.Query().Get("verdict"))),
+		ContributionCategory: memory.TaskContributionCategory(strings.TrimSpace(r.URL.Query().Get("contribution_category"))),
+		EvidenceTargetKind:   memory.TaskEvidenceTargetKind(strings.TrimSpace(r.URL.Query().Get("evidence_target_kind"))),
+		EvidenceTargetID:     strings.TrimSpace(r.URL.Query().Get("evidence_target_id")),
+		IncludeSuperseded:    parseBoolQueryValue(r.URL.Query().Get("include_superseded")),
+		Limit:                limit,
+	}
+	items, err := service.ListTaskEvaluations(r.Context(), input)
+	if err != nil {
+		recordTaskEvaluationMetric(r.Context(), metrics, "list", "error", input.Verdict, input.ContributionCategory, "")
+		recordTaskEvaluationLog(logger, "list", "error", input.Verdict, input.ContributionCategory, "")
+		writeTaskEvaluationError(w, err, "failed to list task evaluations")
+		return
+	}
+	recordTaskEvaluationMetric(r.Context(), metrics, "list", "ok", input.Verdict, input.ContributionCategory, "")
+	recordTaskEvaluationLog(logger, "list", "ok", input.Verdict, input.ContributionCategory, "")
+	writeJSON(w, http.StatusOK, map[string]any{"task_evaluations": items})
+}
+
+func handleAdminTaskEvaluationDetail(w http.ResponseWriter, r *http.Request, service TaskEvaluationService, metrics MetricsRecorder, logger *log.Logger) {
+	scope, ok := auth.ScopeFromContext(r.Context())
+	if !ok {
+		http.Error(w, "scope context is missing", http.StatusInternalServerError)
+		return
+	}
+	evaluation, err := service.ReadTaskEvaluation(r.Context(), memory.ReadTaskEvaluationInput{
+		Scope:        scope,
+		EvaluationID: strings.TrimSpace(r.PathValue("evaluation_id")),
+	})
+	if err != nil {
+		recordTaskEvaluationMetric(r.Context(), metrics, "read", "error", "", "", "")
+		recordTaskEvaluationLog(logger, "read", "error", "", "", "")
+		writeTaskEvaluationError(w, err, "failed to read task evaluation")
+		return
+	}
+	recordTaskEvaluationMetric(r.Context(), metrics, "read", "ok", evaluation.Verdict, firstTaskContributionCategory(evaluation.ContributionCategories), evaluation.CorrectionState)
+	recordTaskEvaluationLog(logger, "read", "ok", evaluation.Verdict, firstTaskContributionCategory(evaluation.ContributionCategories), evaluation.CorrectionState)
+	writeJSON(w, http.StatusOK, evaluation)
+}
+
+func handleAdminTaskEvaluationSummary(w http.ResponseWriter, r *http.Request, service TaskEvaluationService, metrics MetricsRecorder, logger *log.Logger) {
+	scope, ok := auth.ScopeFromContext(r.Context())
+	if !ok {
+		http.Error(w, "scope context is missing", http.StatusInternalServerError)
+		return
+	}
+	summary, err := service.SummarizeTaskEvaluations(r.Context(), memory.SummarizeTaskEvaluationsInput{
+		Scope:              scope,
+		EvidenceTargetKind: memory.TaskEvidenceTargetKind(strings.TrimSpace(r.URL.Query().Get("evidence_target_kind"))),
+		EvidenceTargetID:   strings.TrimSpace(r.URL.Query().Get("evidence_target_id")),
+	})
+	if err != nil {
+		recordTaskEvaluationMetric(r.Context(), metrics, "summary", "error", "", "", "")
+		recordTaskEvaluationLog(logger, "summary", "error", "", "", "")
+		writeTaskEvaluationError(w, err, "failed to summarize task evaluations")
+		return
+	}
+	recordTaskEvaluationMetric(r.Context(), metrics, "summary", "ok", "", "", "")
+	recordTaskEvaluationLog(logger, "summary", "ok", "", "", "")
+	writeJSON(w, http.StatusOK, summary)
+}
+
+func handleAdminTaskEvaluationAction(w http.ResponseWriter, r *http.Request, service TaskEvaluationService, metrics MetricsRecorder, logger *log.Logger) {
+	scope, ok := auth.ScopeFromContext(r.Context())
+	if !ok {
+		http.Error(w, "scope context is missing", http.StatusInternalServerError)
+		return
+	}
+	evaluationID := strings.TrimSpace(r.PathValue("evaluation_id"))
+	if strings.TrimSpace(evaluationID) == "" {
+		http.Error(w, "invalid task evaluation action target", http.StatusBadRequest)
+		return
+	}
+	var req taskEvaluationSupersedeRequest
+	if !decodeJSONBody(w, r, &req) {
+		return
+	}
+	if err := service.SupersedeTaskEvaluation(r.Context(), memory.SupersedeTaskEvaluationInput{
+		Scope:        scope,
+		EvaluationID: strings.TrimSpace(evaluationID),
+		Actor:        strings.TrimSpace(req.Actor),
+		Reason:       strings.TrimSpace(req.Reason),
+		SupersededAt: time.Now().UTC(),
+	}); err != nil {
+		recordTaskEvaluationMetric(r.Context(), metrics, "supersede", "rejected", "", "", memory.TaskEvaluationCorrectionStateSuperseded)
+		recordTaskEvaluationLog(logger, "supersede", "rejected", "", "", memory.TaskEvaluationCorrectionStateSuperseded)
+		writeTaskEvaluationError(w, err, "failed to supersede task evaluation")
+		return
+	}
+	recordTaskEvaluationMetric(r.Context(), metrics, "supersede", "ok", "", "", memory.TaskEvaluationCorrectionStateSuperseded)
+	recordTaskEvaluationLog(logger, "supersede", "ok", "", "", memory.TaskEvaluationCorrectionStateSuperseded)
+	writeJSON(w, http.StatusAccepted, map[string]string{"status": "accepted"})
+}
+
+func parseBoolQueryValue(raw string) bool {
+	value := strings.TrimSpace(raw)
+	if value == "" {
+		return false
+	}
+	parsed, err := strconv.ParseBool(value)
+	if err != nil {
+		return false
+	}
+	return parsed
 }
 
 func handleAdminUsefulnessFeedbackList(w http.ResponseWriter, r *http.Request, service UsefulnessFeedbackService) {
@@ -3433,6 +3985,21 @@ func writeUsefulnessFeedbackError(w http.ResponseWriter, err error, fallback str
 	}
 }
 
+func writeTaskEvaluationError(w http.ResponseWriter, err error, fallback string) {
+	switch {
+	case errors.Is(err, pgx.ErrNoRows):
+		http.Error(w, "task evaluation resource not found", http.StatusNotFound)
+	case strings.Contains(err.Error(), "not configured"):
+		http.Error(w, err.Error(), http.StatusServiceUnavailable)
+	default:
+		if strings.Contains(err.Error(), "required") || strings.Contains(err.Error(), "invalid") || strings.Contains(err.Error(), "must be") || strings.Contains(err.Error(), "at least one") {
+			http.Error(w, err.Error(), http.StatusBadRequest)
+			return
+		}
+		http.Error(w, fallback, http.StatusInternalServerError)
+	}
+}
+
 func writeAdminEmbeddingCutoverError(w http.ResponseWriter, err error, fallback string) {
 	var admissionErr memory.EmbeddingCutoverAdmissionError
 	if errors.As(err, &admissionErr) {
@@ -3566,6 +4133,64 @@ func recordUsefulnessFeedbackLog(logger *log.Logger, operation, result string, f
 	)
 }
 
+func recordTaskEvaluationMetric(ctx context.Context, metrics MetricsRecorder, operation, result string, verdict memory.TaskEvaluationVerdict, category memory.TaskContributionCategory, correction memory.TaskEvaluationCorrectionState) {
+	if metrics == nil {
+		return
+	}
+	metrics.RecordTaskEvaluation(ctx, telemetry.TaskEvaluationEvent{
+		Operation:            operation,
+		Result:               result,
+		Verdict:              string(verdict),
+		ContributionCategory: string(category),
+		CorrectionState:      string(correction),
+	})
+}
+
+func recordTaskEvaluationLog(logger *log.Logger, operation, result string, verdict memory.TaskEvaluationVerdict, category memory.TaskContributionCategory, correction memory.TaskEvaluationCorrectionState) {
+	if logger == nil {
+		return
+	}
+	logger.Printf(
+		"mode=api component=task_evaluation event=lifecycle operation=%s result=%s verdict=%s contribution_category=%s correction_state=%s",
+		boundedLogLabel(operation),
+		boundedLogLabel(result),
+		boundedLogLabel(string(verdict)),
+		boundedLogLabel(string(category)),
+		boundedLogLabel(string(correction)),
+	)
+}
+
+func recordRankingRolloutMetric(ctx context.Context, metrics MetricsRecorder, operation, result string, surface memory.RankingRolloutSurface, source memory.RankingRolloutSignalSource, threshold memory.RankingRolloutThresholdStatus, status memory.RankingRolloutPolicyStatus, reasonCode string) {
+	if metrics == nil {
+		return
+	}
+	metrics.RecordRankingRollout(ctx, telemetry.RankingRolloutEvent{
+		Operation:       operation,
+		Result:          result,
+		Surface:         string(surface),
+		SignalSource:    string(source),
+		ThresholdStatus: string(threshold),
+		PolicyStatus:    string(status),
+		ReasonCode:      reasonCode,
+	})
+}
+
+func recordRankingRolloutLog(logger *log.Logger, operation, result string, surface memory.RankingRolloutSurface, source memory.RankingRolloutSignalSource, threshold memory.RankingRolloutThresholdStatus, status memory.RankingRolloutPolicyStatus, reasonCode string) {
+	if logger == nil {
+		return
+	}
+	logger.Printf(
+		"mode=api component=ranking_rollout event=lifecycle operation=%s result=%s surface=%s signal_source=%s threshold_status=%s policy_status=%s reason_code=%s",
+		boundedLogLabel(operation),
+		boundedLogLabel(result),
+		boundedLogLabel(string(surface)),
+		boundedLogLabel(string(source)),
+		boundedLogLabel(string(threshold)),
+		boundedLogLabel(string(status)),
+		boundedLogLabel(reasonCode),
+	)
+}
+
 func boundedLogLabel(value string) string {
 	if strings.TrimSpace(value) == "" {
 		return "unknown"
@@ -3578,6 +4203,27 @@ func firstUsefulnessSubjectKind(subjects []memory.UsefulnessFeedbackSubject) mem
 		return ""
 	}
 	return subjects[0].Kind
+}
+
+func firstTaskContributionCategory(categories []memory.TaskContributionCategory) memory.TaskContributionCategory {
+	if len(categories) == 0 {
+		return ""
+	}
+	return categories[0]
+}
+
+func firstRankingRolloutSurface(surfaces []memory.RankingRolloutSurface) memory.RankingRolloutSurface {
+	if len(surfaces) == 0 {
+		return ""
+	}
+	return surfaces[0]
+}
+
+func firstRankingRolloutSignalSource(sources []memory.RankingRolloutSignalSource) memory.RankingRolloutSignalSource {
+	if len(sources) == 0 {
+		return ""
+	}
+	return sources[0]
 }
 
 func parseMemoryClasses(values []string) []memory.MemoryClass {

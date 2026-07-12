@@ -282,6 +282,36 @@ func TestSpecYAMLIncludesUsefulnessFeedbackSessionAndDiagnosticsContracts(t *tes
 	}
 }
 
+func TestSpecYAMLIncludesTaskEvaluationContracts(t *testing.T) {
+	for _, want := range []string{
+		"/v1/task-evaluations",
+		"/v1/task-evaluations/{evaluation_id}/report",
+		"/v1/admin/task-evaluations",
+		"/v1/admin/task-evaluations/{evaluation_id}",
+		"/v1/admin/task-evaluations/summary",
+		"/v1/admin/task-evaluations/{evaluation_id}/supersede",
+		"TaskEvaluation",
+		"TaskEvaluationCreateRequest",
+		"TaskEvaluationListResponse",
+		"TaskEvaluationReport",
+		"TaskEvaluationSupersedeRequest",
+		"TaskEvaluationSummary",
+		"TaskEvaluationVerdict",
+		"TaskContributionCategory",
+		"TaskEvidenceTargetKind",
+		"linked_raw_event_ids",
+		"linked_outcome_event_ids",
+		"linked_expected_recall_ids",
+		"linked_context_citation_ids",
+		"memory_contribution_categories",
+		"next_actions",
+	} {
+		if !strings.Contains(SpecYAML(), want) {
+			t.Fatalf("SpecYAML() missing %q", want)
+		}
+	}
+}
+
 func TestSpecYAMLIncludesEmbeddingRecoveryRoutesAndSchemas(t *testing.T) {
 	for _, want := range []string{
 		"/v1/admin/embedding/rebuilds/{memory_id}:retry",

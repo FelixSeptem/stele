@@ -215,6 +215,56 @@ func TestMemorySessionReportIncludesAuthorizedFeedbackSummaries(t *testing.T) {
 	}
 }
 
+func TestMemorySessionReportIncludesTaskSummariesAndTaskNextActions(t *testing.T) {
+	scope := Scope{Tenant: "tenant-a", Project: "project-a", Namespace: "namespace-a"}
+	store := &stubMemorySessionStore{
+		sessions: []MemorySessionRun{{
+			ID:      "session_1",
+			Scope:   scope,
+			Status:  MemorySessionStatusFailed,
+			Verdict: ScopeProofVerdictFailed,
+			Turns: []MemorySessionTurn{{
+				ID:              "turn_1",
+				SessionID:       "session_1",
+				Scope:           scope,
+				OutcomeEventIDs: []string{"evt_1"},
+			}},
+		}},
+	}
+	taskSummaries := &stubTaskSummaryReader{
+		summaries: map[string]TaskEvaluationSummary{
+			"session:session_1": {
+				Scope:             scope,
+				TotalEvaluations:  1,
+				ActiveEvaluations: 1,
+				VerdictCounts: map[TaskEvaluationVerdict]int{
+					TaskEvaluationVerdictFailed: 1,
+				},
+				ContributionCounts: map[TaskContributionCategory]int{
+					TaskContributionCategoryMemoryMissing: 1,
+				},
+				TaskEvaluationIDs:    []string{"task_eval_1"},
+				LastTaskEvaluationID: "task_eval_1",
+			},
+		},
+	}
+	service := NewMemorySessionService(MemorySessionServiceOptions{Store: store, TaskSummarizer: taskSummaries})
+
+	report, err := service.ReadSessionReport(context.Background(), ReadMemorySessionRunInput{Scope: scope, SessionID: "session_1"})
+	if err != nil {
+		t.Fatalf("ReadSessionReport() error = %v", err)
+	}
+	if len(report.TaskEvaluationSummaries) != 1 {
+		t.Fatalf("task summaries = %+v, want session summary", report.TaskEvaluationSummaries)
+	}
+	if report.TaskEvaluationSummaries[0].LatestTaskEvaluationID != "task_eval_1" {
+		t.Fatalf("task summary = %+v, want latest task id", report.TaskEvaluationSummaries[0])
+	}
+	if !containsString(report.NextActions, "review_task_failure") || !containsString(report.NextActions, "open_task_summary") {
+		t.Fatalf("next actions = %+v, want task-derived actions", report.NextActions)
+	}
+}
+
 func TestMemorySessionServicePropagatesTurnAndOutcomeIdempotencyKeys(t *testing.T) {
 	now := time.Date(2026, 7, 11, 21, 0, 0, 0, time.UTC)
 	scope := Scope{Tenant: "tenant-a", Project: "project-a", Namespace: "namespace-a"}
@@ -397,6 +447,11 @@ type stubUsefulnessSummaryReader struct {
 	summaries map[string]UsefulnessFeedbackSummary
 }
 
+type stubTaskSummaryReader struct {
+	gotInputs []SummarizeTaskEvaluationsInput
+	summaries map[string]TaskEvaluationSummary
+}
+
 type stubMemorySessionOutcomeIngestor struct {
 	eventID  string
 	gotInput IngestEventInput
@@ -433,6 +488,15 @@ func (s *stubUsefulnessSummaryReader) SummarizeUsefulnessFeedback(ctx context.Co
 		return summary, nil
 	}
 	return UsefulnessFeedbackSummary{Subject: input.Subject, EffectiveQuality: UsefulnessQualityUnknown}, nil
+}
+
+func (s *stubTaskSummaryReader) SummarizeTaskEvaluations(ctx context.Context, input SummarizeTaskEvaluationsInput) (TaskEvaluationSummary, error) {
+	s.gotInputs = append(s.gotInputs, input)
+	key := string(input.EvidenceTargetKind) + ":" + input.EvidenceTargetID
+	if summary, ok := s.summaries[key]; ok {
+		return summary, nil
+	}
+	return TaskEvaluationSummary{Scope: input.Scope.Normalized(), VerdictCounts: map[TaskEvaluationVerdict]int{}, ContributionCounts: map[TaskContributionCategory]int{}}, nil
 }
 
 func usefulnessFeedbackSummaryTestKey(subject UsefulnessFeedbackSubject) string {

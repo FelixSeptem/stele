@@ -27,14 +27,14 @@ func (r *Repository) CreateUsefulnessFeedback(ctx context.Context, feedback memo
 
 	const feedbackQuery = `
 INSERT INTO usefulness_feedback (
-	id, tenant, project, namespace, feedback_type, source_surface, actor, reason,
+	id, tenant, project, namespace, feedback_type, source_surface, task_evaluation_id, actor, reason,
 	idempotency_key, metadata, created_at
 )
-VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)
+VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12)
 ON CONFLICT (tenant, project, namespace, idempotency_key)
 WHERE idempotency_key IS NOT NULL
 DO UPDATE SET idempotency_key = EXCLUDED.idempotency_key
-RETURNING id, tenant, project, namespace, feedback_type, source_surface, actor, reason,
+RETURNING id, tenant, project, namespace, feedback_type, source_surface, task_evaluation_id, actor, reason,
 	idempotency_key, metadata, superseded_at, superseded_by_actor, superseded_by_reason, created_at
 `
 	created, err := scanUsefulnessFeedback(tx.QueryRow(
@@ -46,6 +46,7 @@ RETURNING id, tenant, project, namespace, feedback_type, source_surface, actor, 
 		feedback.Scope.Namespace,
 		feedback.Type,
 		feedback.SourceSurface,
+		nullableString(strings.TrimSpace(feedback.TaskEvaluationID)),
 		feedback.Actor,
 		feedback.Reason,
 		nullableString(feedback.IdempotencyKey),
@@ -149,7 +150,7 @@ func (r *Repository) ReadUsefulnessFeedback(ctx context.Context, input memory.Re
 		return memory.UsefulnessFeedback{}, err
 	}
 	const query = `
-SELECT id, tenant, project, namespace, feedback_type, source_surface, actor, reason,
+SELECT id, tenant, project, namespace, feedback_type, source_surface, task_evaluation_id, actor, reason,
 	idempotency_key, metadata, superseded_at, superseded_by_actor, superseded_by_reason, created_at
 FROM usefulness_feedback
 WHERE tenant = $1
@@ -180,7 +181,7 @@ func (r *Repository) ListUsefulnessFeedback(ctx context.Context, input memory.Li
 		return r.listUsefulnessFeedbackForSubjectWithFilters(ctx, input.Scope, input.Subject, input.Type, input.IncludeSuperseded, limit)
 	}
 	const query = `
-SELECT id, tenant, project, namespace, feedback_type, source_surface, actor, reason,
+SELECT id, tenant, project, namespace, feedback_type, source_surface, task_evaluation_id, actor, reason,
 	idempotency_key, metadata, superseded_at, superseded_by_actor, superseded_by_reason, created_at
 FROM usefulness_feedback uf
 WHERE uf.tenant = $1
@@ -232,7 +233,7 @@ func (r *Repository) SummarizeUsefulnessFeedback(ctx context.Context, input memo
 func (r *Repository) listUsefulnessFeedbackForSubjectWithFilters(ctx context.Context, scope memory.Scope, subject memory.UsefulnessFeedbackSubject, feedbackType memory.UsefulnessFeedbackType, includeSuperseded bool, limit int) ([]memory.UsefulnessFeedback, error) {
 	subjectID, expectedKind, expectedID, opaqueToken := usefulnessFeedbackSubjectStorage(subject)
 	const query = `
-SELECT uf.id, uf.tenant, uf.project, uf.namespace, uf.feedback_type, uf.source_surface, uf.actor, uf.reason,
+SELECT uf.id, uf.tenant, uf.project, uf.namespace, uf.feedback_type, uf.source_surface, uf.task_evaluation_id, uf.actor, uf.reason,
 	uf.idempotency_key, uf.metadata, uf.superseded_at, uf.superseded_by_actor, uf.superseded_by_reason, uf.created_at
 FROM usefulness_feedback uf
 JOIN usefulness_feedback_subjects ufs
@@ -288,7 +289,7 @@ LIMIT $11
 func (r *Repository) listUsefulnessFeedbackForSubject(ctx context.Context, scope memory.Scope, subject memory.UsefulnessFeedbackSubject) ([]memory.UsefulnessFeedback, error) {
 	subjectID, expectedKind, expectedID, opaqueToken := usefulnessFeedbackSubjectStorage(subject)
 	const query = `
-SELECT uf.id, uf.tenant, uf.project, uf.namespace, uf.feedback_type, uf.source_surface, uf.actor, uf.reason,
+SELECT uf.id, uf.tenant, uf.project, uf.namespace, uf.feedback_type, uf.source_surface, uf.task_evaluation_id, uf.actor, uf.reason,
 	uf.idempotency_key, uf.metadata, uf.superseded_at, uf.superseded_by_actor, uf.superseded_by_reason, uf.created_at
 FROM usefulness_feedback uf
 JOIN usefulness_feedback_subjects ufs
@@ -444,6 +445,7 @@ func scanUsefulnessFeedback(scanner provenanceScanner) (memory.UsefulnessFeedbac
 		&feedback.Scope.Namespace,
 		&feedback.Type,
 		&feedback.SourceSurface,
+		&feedback.TaskEvaluationID,
 		&feedback.Actor,
 		&feedback.Reason,
 		&idempotencyKey,
@@ -458,6 +460,7 @@ func scanUsefulnessFeedback(scanner provenanceScanner) (memory.UsefulnessFeedbac
 	if idempotencyKey.Valid {
 		feedback.IdempotencyKey = idempotencyKey.String
 	}
+	feedback.TaskEvaluationID = strings.TrimSpace(feedback.TaskEvaluationID)
 	feedback.Metadata = map[string]any{}
 	if len(metadata) > 0 {
 		if err := json.Unmarshal(metadata, &feedback.Metadata); err != nil {
