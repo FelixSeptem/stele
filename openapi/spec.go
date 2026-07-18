@@ -734,6 +734,559 @@ paths:
           description: Feedback superseded while preserving audit history
         '404':
           description: Feedback not found or not visible
+  /v1/admin/assurance/health-evaluations:
+    get:
+      operationId: listAdminAssuranceHealthEvaluations
+      parameters:
+        - $ref: '#/components/parameters/AdminAPIKey'
+        - $ref: '#/components/parameters/TenantHeader'
+        - $ref: '#/components/parameters/ProjectHeader'
+        - $ref: '#/components/parameters/NamespaceHeader'
+      responses:
+        '200':
+          description: Scoped health evaluations for admin inspection
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HealthEvaluationListResponse'
+        '401':
+          description: Missing or invalid admin API key
+    post:
+      operationId: createAdminAssuranceHealthEvaluation
+      parameters:
+        - $ref: '#/components/parameters/AdminAPIKey'
+        - $ref: '#/components/parameters/TenantHeader'
+        - $ref: '#/components/parameters/ProjectHeader'
+        - $ref: '#/components/parameters/NamespaceHeader'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/HealthEvaluationCreateRequest'
+      responses:
+        '201':
+          description: Health evaluation created without mutating source evidence
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HealthEvaluation'
+        '400':
+          description: Invalid request
+        '401':
+          description: Missing or invalid admin API key
+  /v1/admin/assurance/health-evaluations/{health_evaluation_id}:
+    get:
+      operationId: getAdminAssuranceHealthEvaluation
+      parameters:
+        - in: path
+          name: health_evaluation_id
+          required: true
+          schema:
+            type: string
+        - $ref: '#/components/parameters/AdminAPIKey'
+        - $ref: '#/components/parameters/TenantHeader'
+        - $ref: '#/components/parameters/ProjectHeader'
+        - $ref: '#/components/parameters/NamespaceHeader'
+      responses:
+        '200':
+          description: Health evaluation detail
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HealthEvaluation'
+        '401':
+          description: Missing or invalid admin API key
+        '404':
+          description: Health evaluation not found or outside scope
+  /v1/admin/assurance/incidents:
+    get:
+      operationId: listAdminAssuranceIncidents
+      parameters:
+        - $ref: '#/components/parameters/AdminAPIKey'
+        - $ref: '#/components/parameters/TenantHeader'
+        - $ref: '#/components/parameters/ProjectHeader'
+        - $ref: '#/components/parameters/NamespaceHeader'
+        - in: query
+          name: status
+          required: false
+          schema:
+            $ref: '#/components/schemas/IncidentStatus'
+        - in: query
+          name: limit
+          required: false
+          schema:
+            type: integer
+      responses:
+        '200':
+          description: Scoped incidents for admin inspection
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/IncidentListResponse'
+        '401':
+          description: Missing or invalid admin API key
+  /v1/admin/assurance/incidents/{incident_id}:
+    get:
+      operationId: getAdminAssuranceIncident
+      parameters:
+        - in: path
+          name: incident_id
+          required: true
+          schema:
+            type: string
+        - $ref: '#/components/parameters/AdminAPIKey'
+        - $ref: '#/components/parameters/TenantHeader'
+        - $ref: '#/components/parameters/ProjectHeader'
+        - $ref: '#/components/parameters/NamespaceHeader'
+      responses:
+        '200':
+          description: Incident detail with runbook hints and bounded evidence references
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Incident'
+        '401':
+          description: Missing or invalid admin API key
+        '404':
+          description: Incident not found or outside scope
+  /v1/admin/assurance/incidents/{incident_id}/{incident_action}:
+    post:
+      operationId: applyAdminAssuranceIncidentAction
+      parameters:
+        - in: path
+          name: incident_id
+          required: true
+          schema:
+            type: string
+        - in: path
+          name: incident_action
+          required: true
+          schema:
+            $ref: '#/components/schemas/IncidentAction'
+        - $ref: '#/components/parameters/AdminAPIKey'
+        - $ref: '#/components/parameters/TenantHeader'
+        - $ref: '#/components/parameters/ProjectHeader'
+        - $ref: '#/components/parameters/NamespaceHeader'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/IncidentActionRequest'
+      responses:
+        '202':
+          description: Incident transition recorded with audit attribution
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Incident'
+        '400':
+          description: Invalid request
+        '401':
+          description: Missing or invalid admin API key
+        '404':
+          description: Incident not found or outside scope
+  /v1/admin/assurance/alert-candidates:
+    get:
+      operationId: listAdminAssuranceAlertCandidates
+      parameters:
+        - $ref: '#/components/parameters/AdminAPIKey'
+        - $ref: '#/components/parameters/TenantHeader'
+        - $ref: '#/components/parameters/ProjectHeader'
+        - $ref: '#/components/parameters/NamespaceHeader'
+      responses:
+        '200':
+          description: Scoped alert candidates with redacted delivery target information
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/AlertCandidateListResponse'
+        '401':
+          description: Missing or invalid admin API key
+  /v1/admin/assurance/alert-candidates/{alert_candidate_id}:
+    get:
+      operationId: getAdminAssuranceAlertCandidate
+      parameters:
+        - in: path
+          name: alert_candidate_id
+          required: true
+          schema:
+            type: string
+        - $ref: '#/components/parameters/AdminAPIKey'
+        - $ref: '#/components/parameters/TenantHeader'
+        - $ref: '#/components/parameters/ProjectHeader'
+        - $ref: '#/components/parameters/NamespaceHeader'
+      responses:
+        '200':
+          description: Alert candidate detail with redacted delivery target fields
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/AlertCandidate'
+        '401':
+          description: Missing or invalid admin API key
+        '404':
+          description: Alert candidate not found or outside scope
+  /v1/admin/assurance/alert-candidates/{alert_candidate_id}/delivery-attempts:
+    get:
+      operationId: listAdminAssuranceAlertDeliveryAttempts
+      parameters:
+        - in: path
+          name: alert_candidate_id
+          required: true
+          schema:
+            type: string
+        - $ref: '#/components/parameters/AdminAPIKey'
+        - $ref: '#/components/parameters/TenantHeader'
+        - $ref: '#/components/parameters/ProjectHeader'
+        - $ref: '#/components/parameters/NamespaceHeader'
+      responses:
+        '200':
+          description: Alert delivery attempts without webhook URLs, headers, tokens, or recipients; redacted delivery target metadata only
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/AlertDeliveryAttemptListResponse'
+        '401':
+          description: Missing or invalid admin API key
+        '404':
+          description: Alert candidate not found or outside scope
+  /v1/admin/assurance/conformance-profiles:
+    get:
+      operationId: listAdminAssuranceConformanceProfiles
+      parameters:
+        - $ref: '#/components/parameters/AdminAPIKey'
+        - $ref: '#/components/parameters/TenantHeader'
+        - $ref: '#/components/parameters/ProjectHeader'
+        - $ref: '#/components/parameters/NamespaceHeader'
+        - in: query
+          name: status
+          required: false
+          schema:
+            $ref: '#/components/schemas/ConformanceProfileStatus'
+      responses:
+        '200':
+          description: Scoped conformance profiles
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ConformanceProfileListResponse'
+        '401':
+          description: Missing or invalid admin API key
+    post:
+      operationId: createAdminAssuranceConformanceProfile
+      parameters:
+        - $ref: '#/components/parameters/AdminAPIKey'
+        - $ref: '#/components/parameters/TenantHeader'
+        - $ref: '#/components/parameters/ProjectHeader'
+        - $ref: '#/components/parameters/NamespaceHeader'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/ConformanceProfileRequest'
+      responses:
+        '201':
+          description: Conformance profile created
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ConformanceProfile'
+        '400':
+          description: Invalid request
+        '401':
+          description: Missing or invalid admin API key
+  /v1/admin/assurance/conformance-profiles/{conformance_profile_id}:
+    get:
+      operationId: getAdminAssuranceConformanceProfile
+      parameters:
+        - in: path
+          name: conformance_profile_id
+          required: true
+          schema:
+            type: string
+        - $ref: '#/components/parameters/AdminAPIKey'
+        - $ref: '#/components/parameters/TenantHeader'
+        - $ref: '#/components/parameters/ProjectHeader'
+        - $ref: '#/components/parameters/NamespaceHeader'
+      responses:
+        '200':
+          description: Conformance profile detail
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ConformanceProfile'
+        '401':
+          description: Missing or invalid admin API key
+        '404':
+          description: Conformance profile not found or outside scope
+    patch:
+      operationId: updateAdminAssuranceConformanceProfile
+      parameters:
+        - in: path
+          name: conformance_profile_id
+          required: true
+          schema:
+            type: string
+        - $ref: '#/components/parameters/AdminAPIKey'
+        - $ref: '#/components/parameters/TenantHeader'
+        - $ref: '#/components/parameters/ProjectHeader'
+        - $ref: '#/components/parameters/NamespaceHeader'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/ConformanceProfileRequest'
+      responses:
+        '200':
+          description: Conformance profile updated
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ConformanceProfile'
+        '400':
+          description: Invalid request
+        '401':
+          description: Missing or invalid admin API key
+        '404':
+          description: Conformance profile not found or outside scope
+  /v1/admin/assurance/conformance-profiles/{conformance_profile_id}/disable:
+    post:
+      operationId: disableAdminAssuranceConformanceProfile
+      parameters:
+        - in: path
+          name: conformance_profile_id
+          required: true
+          schema:
+            type: string
+        - $ref: '#/components/parameters/AdminAPIKey'
+        - $ref: '#/components/parameters/TenantHeader'
+        - $ref: '#/components/parameters/ProjectHeader'
+        - $ref: '#/components/parameters/NamespaceHeader'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/IncidentActionRequest'
+      responses:
+        '202':
+          description: Conformance profile disabled
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ConformanceProfile'
+        '400':
+          description: Invalid request
+        '401':
+          description: Missing or invalid admin API key
+        '404':
+          description: Conformance profile not found or outside scope
+  /v1/admin/assurance/conformance-runs:
+    get:
+      operationId: listAdminAssuranceConformanceRuns
+      parameters:
+        - $ref: '#/components/parameters/AdminAPIKey'
+        - $ref: '#/components/parameters/TenantHeader'
+        - $ref: '#/components/parameters/ProjectHeader'
+        - $ref: '#/components/parameters/NamespaceHeader'
+        - in: query
+          name: profile_id
+          required: false
+          schema:
+            type: string
+      responses:
+        '200':
+          description: Scoped conformance runs
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ConformanceRunListResponse'
+        '401':
+          description: Missing or invalid admin API key
+    post:
+      operationId: createAdminAssuranceConformanceRun
+      parameters:
+        - $ref: '#/components/parameters/AdminAPIKey'
+        - $ref: '#/components/parameters/TenantHeader'
+        - $ref: '#/components/parameters/ProjectHeader'
+        - $ref: '#/components/parameters/NamespaceHeader'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/ConformanceRunCreateRequest'
+      responses:
+        '201':
+          description: Conformance run created with bounded diagnostics
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ConformanceRunCreateResponse'
+        '400':
+          description: Invalid request
+        '401':
+          description: Missing or invalid admin API key
+        '404':
+          description: Profile not found or outside scope
+  /v1/admin/assurance/conformance-runs/{conformance_run_id}:
+    get:
+      operationId: getAdminAssuranceConformanceRun
+      parameters:
+        - in: path
+          name: conformance_run_id
+          required: true
+          schema:
+            type: string
+        - $ref: '#/components/parameters/AdminAPIKey'
+        - $ref: '#/components/parameters/TenantHeader'
+        - $ref: '#/components/parameters/ProjectHeader'
+        - $ref: '#/components/parameters/NamespaceHeader'
+      responses:
+        '200':
+          description: Conformance run detail
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ConformanceRun'
+        '401':
+          description: Missing or invalid admin API key
+        '404':
+          description: Conformance run not found or outside scope
+  /v1/admin/assurance/readiness-reports:
+    get:
+      operationId: listAdminAssuranceReadinessReports
+      parameters:
+        - $ref: '#/components/parameters/AdminAPIKey'
+        - $ref: '#/components/parameters/TenantHeader'
+        - $ref: '#/components/parameters/ProjectHeader'
+        - $ref: '#/components/parameters/NamespaceHeader'
+      responses:
+        '200':
+          description: Scoped readiness reports
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ReadinessReportListResponse'
+        '401':
+          description: Missing or invalid admin API key
+    post:
+      operationId: createAdminAssuranceReadinessReport
+      parameters:
+        - $ref: '#/components/parameters/AdminAPIKey'
+        - $ref: '#/components/parameters/TenantHeader'
+        - $ref: '#/components/parameters/ProjectHeader'
+        - $ref: '#/components/parameters/NamespaceHeader'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/ReadinessReportCreateRequest'
+      responses:
+        '201':
+          description: Scope readiness report created
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ReadinessReport'
+        '400':
+          description: Invalid request
+        '401':
+          description: Missing or invalid admin API key
+  /v1/admin/assurance/readiness-reports/{readiness_report_id}:
+    get:
+      operationId: getAdminAssuranceReadinessReport
+      parameters:
+        - in: path
+          name: readiness_report_id
+          required: true
+          schema:
+            type: string
+        - $ref: '#/components/parameters/AdminAPIKey'
+        - $ref: '#/components/parameters/TenantHeader'
+        - $ref: '#/components/parameters/ProjectHeader'
+        - $ref: '#/components/parameters/NamespaceHeader'
+      responses:
+        '200':
+          description: Readiness report detail
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ReadinessReport'
+        '401':
+          description: Missing or invalid admin API key
+        '404':
+          description: Readiness report not found or outside scope
+  /v1/admin/assurance/recovery-verifications:
+    get:
+      operationId: listAdminAssuranceRecoveryVerifications
+      parameters:
+        - $ref: '#/components/parameters/AdminAPIKey'
+        - $ref: '#/components/parameters/TenantHeader'
+        - $ref: '#/components/parameters/ProjectHeader'
+        - $ref: '#/components/parameters/NamespaceHeader'
+      responses:
+        '200':
+          description: Scoped recovery verifications
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/RecoveryVerificationListResponse'
+        '401':
+          description: Missing or invalid admin API key
+    post:
+      operationId: createAdminAssuranceRecoveryVerification
+      parameters:
+        - $ref: '#/components/parameters/AdminAPIKey'
+        - $ref: '#/components/parameters/TenantHeader'
+        - $ref: '#/components/parameters/ProjectHeader'
+        - $ref: '#/components/parameters/NamespaceHeader'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/RecoveryVerificationCreateRequest'
+      responses:
+        '201':
+          description: Recovery verification created
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/RecoveryVerification'
+        '400':
+          description: Invalid request
+        '401':
+          description: Missing or invalid admin API key
+  /v1/admin/assurance/recovery-verifications/{recovery_verification_id}:
+    get:
+      operationId: getAdminAssuranceRecoveryVerification
+      parameters:
+        - in: path
+          name: recovery_verification_id
+          required: true
+          schema:
+            type: string
+        - $ref: '#/components/parameters/AdminAPIKey'
+        - $ref: '#/components/parameters/TenantHeader'
+        - $ref: '#/components/parameters/ProjectHeader'
+        - $ref: '#/components/parameters/NamespaceHeader'
+      responses:
+        '200':
+          description: Recovery verification detail
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/RecoveryVerification'
+        '401':
+          description: Missing or invalid admin API key
+        '404':
+          description: Recovery verification not found or outside scope
   /v1/admin/jobs/governance/status:
     get:
       operationId: getAdminGovernanceStatus
@@ -2349,6 +2902,542 @@ components:
           type: string
         namespace:
           type: string
+    HealthStatus:
+      type: string
+      enum: [healthy, degraded, unhealthy, unknown, stale]
+    ReadinessStatus:
+      type: string
+      enum: [ready, degraded, unknown, blocked]
+    Severity:
+      type: string
+      enum: [info, warning, critical]
+    HealthComponent:
+      type: string
+      enum: [runtime, backlog, dependency, proof, session, feedback, task, repair, ranking_rollout, conformance, capacity_load, backup_restore]
+    ReasonCategory:
+      type: string
+      enum: [runtime_ready, backlog_pressure, capacity_within_thresholds, capacity_threshold_exceeded, backup_restore_fresh, backup_restore_stale, conformance_missing_evidence, unknown]
+    IncidentStatus:
+      type: string
+      enum: [open, acknowledged, suppressed, resolved]
+    IncidentAction:
+      type: string
+      enum: [acknowledge, suppress, resolve, reopen, verify]
+    AlertAdapterKind:
+      type: string
+      enum: [disabled, stdout, webhook]
+    AlertDeliveryResult:
+      type: string
+      enum: [disabled, skipped, success, retry, failed]
+    ConformanceProfileStatus:
+      type: string
+      enum: [active, disabled]
+    ConformanceResult:
+      type: string
+      enum: [passed, degraded, failed, unknown]
+    ExpectedEvidenceKind:
+      type: string
+      enum: [session, context, outcome, verification, usefulness_feedback, task_evaluation, proof, repair, ranking_rollout]
+    MissingEvidenceCategory:
+      type: string
+      enum: [session_without_outcome, turn_without_context, verification_missing, feedback_without_subject, task_evaluation_missing_evidence, repair_without_verification, rollout_without_dry_run, out_of_scope, stale, opaque_only, contradictory, hidden]
+    RecoveryVerificationTarget:
+      type: string
+      enum: [incident, alert_candidate, conformance_run, repair_result, ranking_rollback, proof_run, session_verification, capacity_load_proof, backup_restore_proof]
+    RunbookHintCategory:
+      type: string
+      enum: [review_backlog, review_repair, review_conformance_profile, review_capacity_proof, review_backup_restore_proof, review_alert_delivery]
+    HealthObservation:
+      type: object
+      properties:
+        status:
+          $ref: '#/components/schemas/HealthStatus'
+        severity:
+          $ref: '#/components/schemas/Severity'
+        reason:
+          $ref: '#/components/schemas/ReasonCategory'
+        observed_at:
+          type: string
+          format: date-time
+        fresh_through:
+          type: string
+          format: date-time
+        evidence:
+          type: object
+          additionalProperties: true
+    HealthEvaluationCreateRequest:
+      type: object
+      properties:
+        runtime_readiness:
+          $ref: '#/components/schemas/HealthObservation'
+        backlog_state:
+          $ref: '#/components/schemas/HealthObservation'
+        embedding_health:
+          $ref: '#/components/schemas/HealthObservation'
+        proof_session_verdict:
+          $ref: '#/components/schemas/HealthObservation'
+        usefulness_feedback:
+          $ref: '#/components/schemas/HealthObservation'
+        task_evaluation_summary:
+          $ref: '#/components/schemas/HealthObservation'
+        repair_status:
+          $ref: '#/components/schemas/HealthObservation'
+        ranking_rollout_state:
+          $ref: '#/components/schemas/HealthObservation'
+        conformance_status:
+          $ref: '#/components/schemas/HealthObservation'
+        capacity_load_proof:
+          $ref: '#/components/schemas/HealthObservation'
+        backup_restore_proof:
+          $ref: '#/components/schemas/HealthObservation'
+    HealthComponentSummary:
+      type: object
+      properties:
+        id:
+          type: string
+        evaluation_id:
+          type: string
+        scope:
+          $ref: '#/components/schemas/Scope'
+        component:
+          $ref: '#/components/schemas/HealthComponent'
+        status:
+          $ref: '#/components/schemas/HealthStatus'
+        severity:
+          $ref: '#/components/schemas/Severity'
+        reason:
+          $ref: '#/components/schemas/ReasonCategory'
+        observed_at:
+          type: string
+          format: date-time
+        fresh_through:
+          type: string
+          format: date-time
+        evidence:
+          type: object
+          additionalProperties: true
+    HealthEvaluation:
+      type: object
+      properties:
+        id:
+          type: string
+        scope:
+          $ref: '#/components/schemas/Scope'
+        status:
+          $ref: '#/components/schemas/HealthStatus'
+        severity:
+          $ref: '#/components/schemas/Severity'
+        reason:
+          $ref: '#/components/schemas/ReasonCategory'
+        components:
+          type: array
+          items:
+            $ref: '#/components/schemas/HealthComponentSummary'
+        created_at:
+          type: string
+          format: date-time
+    HealthEvaluationListResponse:
+      type: object
+      required:
+        - health_evaluations
+      properties:
+        health_evaluations:
+          type: array
+          items:
+            $ref: '#/components/schemas/HealthEvaluation'
+    Incident:
+      type: object
+      properties:
+        id:
+          type: string
+        scope:
+          $ref: '#/components/schemas/Scope'
+        status:
+          $ref: '#/components/schemas/IncidentStatus'
+        severity:
+          $ref: '#/components/schemas/Severity'
+        component:
+          $ref: '#/components/schemas/HealthComponent'
+        reason:
+          $ref: '#/components/schemas/ReasonCategory'
+        deduplication_key:
+          type: string
+        latest_evaluation_id:
+          type: string
+        runbook_hints:
+          type: array
+          items:
+            $ref: '#/components/schemas/RunbookHintCategory'
+        metadata:
+          type: object
+          additionalProperties: true
+        opened_at:
+          type: string
+          format: date-time
+        updated_at:
+          type: string
+          format: date-time
+        resolved_at:
+          type: string
+          format: date-time
+    IncidentListResponse:
+      type: object
+      required:
+        - incidents
+      properties:
+        incidents:
+          type: array
+          items:
+            $ref: '#/components/schemas/Incident'
+    IncidentActionRequest:
+      type: object
+      required:
+        - actor
+        - reason
+      properties:
+        actor:
+          type: string
+        reason:
+          type: string
+        suppress_until:
+          type: string
+          format: date-time
+    AlertCandidate:
+      type: object
+      description: Alert candidate detail with redacted delivery target configuration.
+      properties:
+        id:
+          type: string
+        scope:
+          $ref: '#/components/schemas/Scope'
+        incident_id:
+          type: string
+        evaluation_id:
+          type: string
+        severity:
+          $ref: '#/components/schemas/Severity'
+        component:
+          $ref: '#/components/schemas/HealthComponent'
+        reason:
+          $ref: '#/components/schemas/ReasonCategory'
+        deduplication_key:
+          type: string
+        delivery_policy:
+          type: string
+        payload:
+          type: object
+          additionalProperties: true
+        created_at:
+          type: string
+          format: date-time
+        next_attempt_at:
+          type: string
+          format: date-time
+        suppressed_until:
+          type: string
+          format: date-time
+    AlertCandidateListResponse:
+      type: object
+      required:
+        - alert_candidates
+      properties:
+        alert_candidates:
+          type: array
+          items:
+            $ref: '#/components/schemas/AlertCandidate'
+    AlertDeliveryAttempt:
+      type: object
+      description: Delivery attempt result without webhook URLs, headers, tokens, recipients, or other secret delivery target fields.
+      properties:
+        id:
+          type: string
+        alert_candidate_id:
+          type: string
+        scope:
+          $ref: '#/components/schemas/Scope'
+        adapter:
+          $ref: '#/components/schemas/AlertAdapterKind'
+        result:
+          $ref: '#/components/schemas/AlertDeliveryResult'
+        failure_category:
+          type: string
+        attempt:
+          type: integer
+        worker_id:
+          type: string
+        lease_until:
+          type: string
+          format: date-time
+        next_attempt_at:
+          type: string
+          format: date-time
+        payload_hash:
+          type: string
+        attempted_at:
+          type: string
+          format: date-time
+        completed_at:
+          type: string
+          format: date-time
+    AlertDeliveryAttemptListResponse:
+      type: object
+      required:
+        - delivery_attempts
+      properties:
+        delivery_attempts:
+          type: array
+          items:
+            $ref: '#/components/schemas/AlertDeliveryAttempt'
+    ExpectedEvidence:
+      type: object
+      required:
+        - kind
+        - minimum_count
+        - freshness_window
+      properties:
+        kind:
+          $ref: '#/components/schemas/ExpectedEvidenceKind'
+        minimum_count:
+          type: integer
+        freshness_window:
+          type: string
+          description: Go duration string such as 24h.
+    ConformanceProfileRequest:
+      type: object
+      required:
+        - expected_evidence
+        - actor
+        - reason
+      properties:
+        expected_evidence:
+          type: array
+          items:
+            $ref: '#/components/schemas/ExpectedEvidence'
+        actor:
+          type: string
+        reason:
+          type: string
+    ConformanceProfile:
+      type: object
+      properties:
+        id:
+          type: string
+        scope:
+          $ref: '#/components/schemas/Scope'
+        status:
+          $ref: '#/components/schemas/ConformanceProfileStatus'
+        expected_evidence:
+          type: array
+          items:
+            $ref: '#/components/schemas/ExpectedEvidence'
+        actor:
+          type: string
+        reason:
+          type: string
+        created_at:
+          type: string
+          format: date-time
+        updated_at:
+          type: string
+          format: date-time
+        disabled_at:
+          type: string
+          format: date-time
+    ConformanceProfileListResponse:
+      type: object
+      required:
+        - conformance_profiles
+      properties:
+        conformance_profiles:
+          type: array
+          items:
+            $ref: '#/components/schemas/ConformanceProfile'
+    ConformanceRun:
+      type: object
+      properties:
+        id:
+          type: string
+        profile_id:
+          type: string
+        scope:
+          $ref: '#/components/schemas/Scope'
+        result:
+          $ref: '#/components/schemas/ConformanceResult'
+        evidence_counts:
+          type: object
+          additionalProperties: true
+        started_at:
+          type: string
+          format: date-time
+        finished_at:
+          type: string
+          format: date-time
+        created_at:
+          type: string
+          format: date-time
+    MissingEvidenceDiagnostic:
+      type: object
+      properties:
+        id:
+          type: string
+        conformance_run_id:
+          type: string
+        scope:
+          $ref: '#/components/schemas/Scope'
+        evidence_kind:
+          $ref: '#/components/schemas/ExpectedEvidenceKind'
+        category:
+          $ref: '#/components/schemas/MissingEvidenceCategory'
+        readiness_impact:
+          $ref: '#/components/schemas/ReadinessStatus'
+        metadata:
+          type: object
+          additionalProperties: true
+        created_at:
+          type: string
+          format: date-time
+    ConformanceRunCreateRequest:
+      type: object
+      required:
+        - profile_id
+      properties:
+        profile_id:
+          type: string
+        dry_run:
+          type: boolean
+    ConformanceRunCreateResponse:
+      type: object
+      required:
+        - run
+        - diagnostics
+      properties:
+        run:
+          $ref: '#/components/schemas/ConformanceRun'
+        diagnostics:
+          type: array
+          items:
+            $ref: '#/components/schemas/MissingEvidenceDiagnostic'
+    ConformanceRunListResponse:
+      type: object
+      required:
+        - conformance_runs
+      properties:
+        conformance_runs:
+          type: array
+          items:
+            $ref: '#/components/schemas/ConformanceRun'
+    ReadinessReportCreateRequest:
+      type: object
+      properties:
+        health_evaluation_id:
+          type: string
+        conformance_run_id:
+          type: string
+    ReadinessReport:
+      type: object
+      properties:
+        id:
+          type: string
+        scope:
+          $ref: '#/components/schemas/Scope'
+        status:
+          $ref: '#/components/schemas/ReadinessStatus'
+        health_evaluation_id:
+          type: string
+        conformance_run_id:
+          type: string
+        component_summary:
+          type: object
+          additionalProperties: true
+        recommended_actions:
+          type: array
+          items:
+            $ref: '#/components/schemas/RunbookHintCategory'
+        generated_at:
+          type: string
+          format: date-time
+        created_at:
+          type: string
+          format: date-time
+    ReadinessReportListResponse:
+      type: object
+      required:
+        - readiness_reports
+      properties:
+        readiness_reports:
+          type: array
+          items:
+            $ref: '#/components/schemas/ReadinessReport'
+    RecoveryVerificationCreateRequest:
+      type: object
+      required:
+        - target
+        - target_id
+        - status
+        - result_category
+        - actor
+        - reason
+      properties:
+        target:
+          $ref: '#/components/schemas/RecoveryVerificationTarget'
+        target_id:
+          type: string
+        status:
+          $ref: '#/components/schemas/HealthStatus'
+        checked_surfaces:
+          type: array
+          items:
+            type: string
+        result_category:
+          type: string
+        linked_evidence:
+          type: object
+          additionalProperties: true
+        actor:
+          type: string
+        reason:
+          type: string
+    RecoveryVerification:
+      type: object
+      properties:
+        id:
+          type: string
+        scope:
+          $ref: '#/components/schemas/Scope'
+        target:
+          $ref: '#/components/schemas/RecoveryVerificationTarget'
+        target_id:
+          type: string
+        status:
+          $ref: '#/components/schemas/HealthStatus'
+        checked_surfaces:
+          type: array
+          items:
+            type: string
+        result_category:
+          type: string
+        linked_evidence:
+          type: object
+          additionalProperties: true
+        actor:
+          type: string
+        reason:
+          type: string
+        created_at:
+          type: string
+          format: date-time
+        verified_at:
+          type: string
+          format: date-time
+    RecoveryVerificationListResponse:
+      type: object
+      required:
+        - recovery_verifications
+      properties:
+        recovery_verifications:
+          type: array
+          items:
+            $ref: '#/components/schemas/RecoveryVerification'
     ScopeProofStatus:
       type: string
       enum: [pending, running, completed, failed, manual_review]

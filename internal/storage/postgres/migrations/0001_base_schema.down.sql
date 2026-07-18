@@ -1,3 +1,16 @@
+DROP TABLE IF EXISTS assurance_retention_runs;
+DROP TABLE IF EXISTS assurance_recovery_verifications;
+DROP TABLE IF EXISTS assurance_readiness_reports;
+DROP TABLE IF EXISTS assurance_operational_proofs;
+DROP TABLE IF EXISTS assurance_missing_evidence_diagnostics;
+DROP TABLE IF EXISTS assurance_conformance_runs;
+DROP TABLE IF EXISTS assurance_conformance_profiles;
+DROP TABLE IF EXISTS assurance_alert_delivery_attempts;
+DROP TABLE IF EXISTS assurance_alert_candidates;
+DROP TABLE IF EXISTS assurance_incident_transitions;
+DROP TABLE IF EXISTS assurance_incidents;
+DROP TABLE IF EXISTS assurance_health_components;
+DROP TABLE IF EXISTS assurance_health_evaluations;
 DROP TABLE IF EXISTS deletion_markers;
 DROP TABLE IF EXISTS vector_revisions;
 DROP TABLE IF EXISTS embedding_rebuilds;

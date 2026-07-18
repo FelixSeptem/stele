@@ -7,6 +7,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/FelixSeptem/stele/internal/assurance"
 	"github.com/FelixSeptem/stele/internal/embedding"
 	"github.com/FelixSeptem/stele/internal/governance"
 	"github.com/FelixSeptem/stele/internal/insights"
@@ -192,6 +193,143 @@ func (s *stubJobExecutionCleaner) DeleteJobExecutionsBefore(ctx context.Context,
 	s.calls++
 	s.gotCutoff = cutoff
 	return s.deleted, s.err
+}
+
+type stubAssuranceSchedulerService struct {
+	healthInputs      []assurance.HealthEvaluationInput
+	alertInputs       []assurance.AlertCandidateGenerationInput
+	readinessInputs   []assurance.ReadinessReportInput
+	conformanceInputs []assurance.ConformanceRunInput
+	retentionRuns     []assurance.RetentionRun
+	profiles          []assurance.ConformanceProfile
+	latestEvaluation  assurance.HealthEvaluation
+	healthErr         error
+	alertErr          error
+	readinessErr      error
+	conformanceErr    error
+	profileErr        error
+	retentionErr      error
+}
+
+func (s *stubAssuranceSchedulerService) CreateHealthEvaluation(ctx context.Context, input assurance.HealthEvaluationInput) (assurance.HealthEvaluation, error) {
+	s.healthInputs = append(s.healthInputs, input)
+	if s.healthErr != nil {
+		return assurance.HealthEvaluation{}, s.healthErr
+	}
+	evaluation := s.latestEvaluation
+	if evaluation.ID == "" {
+		evaluation = assurance.HealthEvaluation{
+			ID:        "health_1",
+			Scope:     input.Scope,
+			Status:    assurance.HealthStatusHealthy,
+			Severity:  assurance.SeverityInfo,
+			Reason:    assurance.ReasonRuntimeReady,
+			CreatedAt: input.ObservedAt,
+		}
+	}
+	return evaluation, nil
+}
+
+func (s *stubAssuranceSchedulerService) GenerateAlertCandidates(ctx context.Context, input assurance.AlertCandidateGenerationInput) ([]assurance.AlertCandidate, error) {
+	s.alertInputs = append(s.alertInputs, input)
+	if s.alertErr != nil {
+		return nil, s.alertErr
+	}
+	return []assurance.AlertCandidate{{ID: "alert_1", Scope: input.Scope, Severity: assurance.SeverityWarning, Component: assurance.ComponentBacklog, Reason: assurance.ReasonBacklogPressure, DeduplicationKey: "alert_1", DeliveryPolicy: input.DeliveryPolicy, CreatedAt: input.CreatedAt}}, nil
+}
+
+func (s *stubAssuranceSchedulerService) CreateReadinessReport(ctx context.Context, input assurance.ReadinessReportInput) (assurance.ReadinessReport, error) {
+	s.readinessInputs = append(s.readinessInputs, input)
+	if s.readinessErr != nil {
+		return assurance.ReadinessReport{}, s.readinessErr
+	}
+	return assurance.ReadinessReport{ID: "readiness_1", Scope: input.Scope, Status: assurance.ReadinessStatusReady, GeneratedAt: input.GeneratedAt, CreatedAt: input.GeneratedAt}, nil
+}
+
+func (s *stubAssuranceSchedulerService) ListConformanceProfiles(ctx context.Context, input assurance.ListConformanceProfilesInput) ([]assurance.ConformanceProfile, error) {
+	if s.profileErr != nil {
+		return nil, s.profileErr
+	}
+	return s.profiles, nil
+}
+
+func (s *stubAssuranceSchedulerService) RunConformance(ctx context.Context, input assurance.ConformanceRunInput) (assurance.ConformanceRun, []assurance.MissingEvidenceDiagnostic, error) {
+	s.conformanceInputs = append(s.conformanceInputs, input)
+	if s.conformanceErr != nil {
+		return assurance.ConformanceRun{}, nil, s.conformanceErr
+	}
+	return assurance.ConformanceRun{ID: "run_1", Scope: input.Scope, ProfileID: input.ProfileID, Result: assurance.ConformanceResultPassed, StartedAt: input.StartedAt, CreatedAt: input.StartedAt}, nil, nil
+}
+
+func (s *stubAssuranceSchedulerService) CreateRetentionRun(ctx context.Context, run assurance.RetentionRun) (assurance.RetentionRun, error) {
+	s.retentionRuns = append(s.retentionRuns, run)
+	if s.retentionErr != nil {
+		return assurance.RetentionRun{}, s.retentionErr
+	}
+	return run, nil
+}
+
+type stubAssuranceAlertDeliveryStore struct {
+	gotClaim assurance.ClaimAlertCandidatesForDeliveryInput
+	claims   []assurance.AlertDeliveryClaim
+	err      error
+}
+
+func (s *stubAssuranceAlertDeliveryStore) ClaimAlertCandidatesForDelivery(ctx context.Context, input assurance.ClaimAlertCandidatesForDeliveryInput) ([]assurance.AlertDeliveryClaim, error) {
+	s.gotClaim = input
+	if s.err != nil {
+		return nil, s.err
+	}
+	return append([]assurance.AlertDeliveryClaim(nil), s.claims...), nil
+}
+
+type stubAssuranceDeliveryService struct {
+	inputs []assurance.AlertDeliveryInput
+	err    error
+}
+
+func (s *stubAssuranceDeliveryService) DeliverAlertCandidate(ctx context.Context, input assurance.AlertDeliveryInput) ([]assurance.AlertDeliveryAttempt, error) {
+	s.inputs = append(s.inputs, input)
+	if s.err != nil {
+		return nil, s.err
+	}
+	return []assurance.AlertDeliveryAttempt{{
+		ID:               "attempt_1",
+		AlertCandidateID: input.Candidate.ID,
+		Scope:            input.Scope,
+		Adapter:          input.Config.Mode,
+		Result:           assurance.AlertDeliveryResultDisabled,
+		Attempt:          1,
+		WorkerID:         input.WorkerID,
+		AttemptedAt:      input.Now,
+		CompletedAt:      input.Now,
+	}}, nil
+}
+
+type leaseAwareAssuranceAlertDeliveryStore struct {
+	candidate  assurance.AlertCandidate
+	claimed    bool
+	leaseUntil time.Time
+	completed  bool
+}
+
+func (s *leaseAwareAssuranceAlertDeliveryStore) ClaimAlertCandidatesForDelivery(ctx context.Context, input assurance.ClaimAlertCandidatesForDeliveryInput) ([]assurance.AlertDeliveryClaim, error) {
+	if s.completed {
+		return nil, nil
+	}
+	if s.claimed && input.Now.Before(s.leaseUntil) {
+		return nil, nil
+	}
+	s.claimed = true
+	s.completed = true
+	s.leaseUntil = input.Now.Add(input.LeaseDuration)
+	return []assurance.AlertDeliveryClaim{{
+		Candidate:  s.candidate,
+		Attempt:    1,
+		WorkerID:   input.WorkerID,
+		ClaimedAt:  input.Now,
+		LeaseUntil: s.leaseUntil,
+	}}, nil
 }
 
 type stubEmbeddingProvider struct {
@@ -684,6 +822,286 @@ func TestJobExecutionCleanupJobRunDeletesOldExecutions(t *testing.T) {
 
 	if !cleaner.gotCutoff.Equal(now.Add(-24 * time.Hour)) {
 		t.Fatalf("cutoff = %v, want %v", cleaner.gotCutoff, now.Add(-24*time.Hour))
+	}
+}
+
+func TestAssuranceEvaluationJobRunCreatesHealthAlertsAndReadiness(t *testing.T) {
+	scope := memory.Scope{Tenant: "tenant-a", Project: "project-a", Namespace: "namespace-a"}
+	now := time.Date(2026, 7, 13, 8, 0, 0, 0, time.UTC)
+	service := &stubAssuranceSchedulerService{}
+	executions := &stubExecutionStore{beginStarted: true}
+
+	job := AssuranceEvaluationJob{
+		Scope:               scope,
+		Service:             service,
+		ExecutionStore:      executions,
+		TriggerSource:       "scheduler",
+		Cadence:             time.Hour,
+		AlertDeliveryPolicy: "default",
+		AlertDeduplication:  30 * time.Minute,
+		Now:                 func() time.Time { return now },
+	}
+
+	processed, err := job.Run(context.Background())
+	if err != nil {
+		t.Fatalf("Run() error = %v", err)
+	}
+	if processed != 3 {
+		t.Fatalf("processed = %d, want health evaluation, alert generation, readiness report", processed)
+	}
+	if len(service.healthInputs) != 1 || service.healthInputs[0].Scope != scope || !service.healthInputs[0].ObservedAt.Equal(now) {
+		t.Fatalf("health inputs = %+v, want scoped observed evaluation", service.healthInputs)
+	}
+	if len(service.alertInputs) != 1 || service.alertInputs[0].DeliveryPolicy != "default" || service.alertInputs[0].DeduplicationWindow != 30*time.Minute {
+		t.Fatalf("alert inputs = %+v, want default policy and dedupe window", service.alertInputs)
+	}
+	if len(service.readinessInputs) != 1 || service.readinessInputs[0].Scope != scope {
+		t.Fatalf("readiness inputs = %+v, want scoped readiness", service.readinessInputs)
+	}
+	if executions.lastBegin.JobName != "assurance_evaluation" || executions.completeCalls != 1 {
+		t.Fatalf("execution begin/complete = %+v/%d, want durable assurance execution", executions.lastBegin, executions.completeCalls)
+	}
+}
+
+func TestAssuranceEvaluationJobRunSkipsDuplicateExecutionWindow(t *testing.T) {
+	scope := memory.Scope{Tenant: "tenant-a", Project: "project-a", Namespace: "namespace-a"}
+	now := time.Date(2026, 7, 13, 8, 30, 0, 0, time.UTC)
+	service := &stubAssuranceSchedulerService{}
+	executions := &stubExecutionStore{beginStarted: false}
+
+	job := AssuranceEvaluationJob{
+		Scope:          scope,
+		Service:        service,
+		ExecutionStore: executions,
+		Cadence:        time.Hour,
+		Now:            func() time.Time { return now },
+	}
+
+	processed, err := job.Run(context.Background())
+	if err != nil {
+		t.Fatalf("Run() error = %v", err)
+	}
+	if processed != 0 {
+		t.Fatalf("processed = %d, want 0 for duplicate window", processed)
+	}
+	if len(service.healthInputs) != 0 || len(service.alertInputs) != 0 || len(service.readinessInputs) != 0 {
+		t.Fatalf("service calls health/alert/readiness = %d/%d/%d, want no duplicate execution", len(service.healthInputs), len(service.alertInputs), len(service.readinessInputs))
+	}
+	if executions.beginCalls != 1 || executions.completeCalls != 0 || executions.failCalls != 0 {
+		t.Fatalf("execution calls begin/complete/fail = %d/%d/%d, want begin only", executions.beginCalls, executions.completeCalls, executions.failCalls)
+	}
+}
+
+func TestConformanceRunJobRunExecutesActiveProfiles(t *testing.T) {
+	scope := memory.Scope{Tenant: "tenant-a", Project: "project-a", Namespace: "namespace-a"}
+	now := time.Date(2026, 7, 13, 9, 0, 0, 0, time.UTC)
+	service := &stubAssuranceSchedulerService{
+		profiles: []assurance.ConformanceProfile{
+			{ID: "profile_1", Scope: scope, Status: assurance.ConformanceProfileStatusActive, ExpectedEvidence: []assurance.ExpectedEvidence{{Kind: assurance.ExpectedEvidenceSession, MinimumCount: 1, FreshnessWindow: time.Hour}}, Actor: "admin-a", Reason: "scheduled", CreatedAt: now, UpdatedAt: now},
+			{ID: "profile_disabled", Scope: scope, Status: assurance.ConformanceProfileStatusDisabled, ExpectedEvidence: []assurance.ExpectedEvidence{{Kind: assurance.ExpectedEvidenceSession, MinimumCount: 1, FreshnessWindow: time.Hour}}, Actor: "admin-a", Reason: "disabled", CreatedAt: now, UpdatedAt: now},
+		},
+	}
+	executions := &stubExecutionStore{beginStarted: true}
+
+	job := ConformanceRunJob{
+		Scope:          scope,
+		Service:        service,
+		ExecutionStore: executions,
+		TriggerSource:  "scheduler",
+		Cadence:        2 * time.Hour,
+		Now:            func() time.Time { return now },
+		Limit:          10,
+	}
+
+	processed, err := job.Run(context.Background())
+	if err != nil {
+		t.Fatalf("Run() error = %v", err)
+	}
+	if processed != 1 {
+		t.Fatalf("processed = %d, want one active profile run", processed)
+	}
+	if len(service.conformanceInputs) != 1 || service.conformanceInputs[0].ProfileID != "profile_1" {
+		t.Fatalf("conformance inputs = %+v, want active profile_1 only", service.conformanceInputs)
+	}
+	if executions.lastBegin.JobName != "conformance_run" || executions.completeCalls != 1 {
+		t.Fatalf("execution begin/complete = %+v/%d, want durable conformance execution", executions.lastBegin, executions.completeCalls)
+	}
+}
+
+func TestAssuranceRetentionJobRunRecordsCleanupEligibility(t *testing.T) {
+	scope := memory.Scope{Tenant: "tenant-a", Project: "project-a", Namespace: "namespace-a"}
+	now := time.Date(2026, 7, 13, 10, 0, 0, 0, time.UTC)
+	service := &stubAssuranceSchedulerService{}
+	executions := &stubExecutionStore{beginStarted: true}
+
+	job := AssuranceRetentionJob{
+		Scope:                scope,
+		Service:              service,
+		ExecutionStore:       executions,
+		TriggerSource:        "scheduler",
+		Cadence:              6 * time.Hour,
+		HistoryRetention:     7 * 24 * time.Hour,
+		ConformanceRetention: 14 * 24 * time.Hour,
+		Now:                  func() time.Time { return now },
+	}
+
+	processed, err := job.Run(context.Background())
+	if err != nil {
+		t.Fatalf("Run() error = %v", err)
+	}
+	if processed != 2 {
+		t.Fatalf("processed = %d, want diagnostic and conformance retention records", processed)
+	}
+	if len(service.retentionRuns) != 2 {
+		t.Fatalf("retention runs = %d, want 2", len(service.retentionRuns))
+	}
+	if service.retentionRuns[0].RecordCategory != assurance.RetentionClassDiagnostic || !service.retentionRuns[0].Cutoff.Equal(now.Add(-7*24*time.Hour)) {
+		t.Fatalf("diagnostic retention run = %+v, want 7d cutoff", service.retentionRuns[0])
+	}
+	if service.retentionRuns[1].RecordCategory != assurance.RetentionClassAudit || !service.retentionRuns[1].Cutoff.Equal(now.Add(-14*24*time.Hour)) {
+		t.Fatalf("conformance retention run = %+v, want 14d cutoff", service.retentionRuns[1])
+	}
+}
+
+func TestAssuranceRetentionJobRunSkipsDuplicateExecutionWindow(t *testing.T) {
+	scope := memory.Scope{Tenant: "tenant-a", Project: "project-a", Namespace: "namespace-a"}
+	now := time.Date(2026, 7, 13, 10, 30, 0, 0, time.UTC)
+	service := &stubAssuranceSchedulerService{}
+	executions := &stubExecutionStore{beginStarted: false}
+
+	job := AssuranceRetentionJob{
+		Scope:          scope,
+		Service:        service,
+		ExecutionStore: executions,
+		Cadence:        6 * time.Hour,
+		Now:            func() time.Time { return now },
+	}
+
+	processed, err := job.Run(context.Background())
+	if err != nil {
+		t.Fatalf("Run() error = %v", err)
+	}
+	if processed != 0 {
+		t.Fatalf("processed = %d, want 0 for duplicate cleanup window", processed)
+	}
+	if len(service.retentionRuns) != 0 {
+		t.Fatalf("retention runs = %d, want no duplicate cleanup records", len(service.retentionRuns))
+	}
+	if executions.beginCalls != 1 || executions.completeCalls != 0 || executions.failCalls != 0 {
+		t.Fatalf("execution calls begin/complete/fail = %d/%d/%d, want begin only", executions.beginCalls, executions.completeCalls, executions.failCalls)
+	}
+}
+
+func TestAssuranceAlertDeliveryWorkerRunOnceClaimsAndDeliversAlerts(t *testing.T) {
+	scope := memory.Scope{Tenant: "tenant-a", Project: "project-a", Namespace: "namespace-a"}
+	now := time.Date(2026, 7, 13, 11, 0, 0, 0, time.UTC)
+	candidate := assurance.AlertCandidate{
+		ID:               "alert_1",
+		Scope:            scope,
+		IncidentID:       "incident_1",
+		Severity:         assurance.SeverityCritical,
+		Component:        assurance.ComponentBackupRestore,
+		Reason:           assurance.ReasonBackupRestoreStale,
+		DeduplicationKey: "incident:incident_1:backup_restore:backup_restore_stale",
+		DeliveryPolicy:   "default",
+		Payload:          map[string]any{"component": "backup_restore"},
+		CreatedAt:        now.Add(-time.Hour),
+		NextAttemptAt:    now.Add(-time.Minute),
+	}
+	service := &stubAssuranceDeliveryService{}
+	store := &stubAssuranceAlertDeliveryStore{
+		claims: []assurance.AlertDeliveryClaim{
+			{
+				Candidate:  candidate,
+				Attempt:    2,
+				WorkerID:   "worker-a",
+				ClaimedAt:  now,
+				LeaseUntil: now.Add(2 * time.Minute),
+			},
+		},
+	}
+
+	worker := AssuranceAlertDeliveryWorker{
+		Store:         store,
+		Service:       service,
+		Scope:         scope,
+		WorkerID:      "worker-a",
+		BatchSize:     4,
+		LeaseDuration: 2 * time.Minute,
+		MaxAttempts:   5,
+		RetryBackoff:  30 * time.Second,
+		Config:        assurance.AlertDeliveryConfig{Mode: assurance.AlertAdapterDisabled},
+		Now:           func() time.Time { return now },
+	}
+
+	processed, err := worker.RunOnce(context.Background())
+	if err != nil {
+		t.Fatalf("RunOnce() error = %v", err)
+	}
+	if processed != 1 {
+		t.Fatalf("processed = %d, want one delivered alert", processed)
+	}
+	if store.gotClaim.Scope != scope || store.gotClaim.WorkerID != "worker-a" || store.gotClaim.Limit != 4 {
+		t.Fatalf("claim input = %+v, want scoped worker claim", store.gotClaim)
+	}
+	if store.gotClaim.LeaseDuration != 2*time.Minute || store.gotClaim.MaxAttempts != 5 || !store.gotClaim.Now.Equal(now) {
+		t.Fatalf("claim timing = %+v, want durable lease claim at now", store.gotClaim)
+	}
+	if len(service.inputs) != 1 {
+		t.Fatalf("delivery inputs = %d, want 1", len(service.inputs))
+	}
+	input := service.inputs[0]
+	if input.Candidate.ID != "alert_1" || input.WorkerID != "worker-a" || input.MaxAttempts != 5 || input.RetryBackoff != 30*time.Second {
+		t.Fatalf("delivery input = %+v, want claimed alert with retry config", input)
+	}
+}
+
+func TestAssuranceAlertDeliveryWorkerRunOnceRespectsClaimLeaseAndSuccessDedup(t *testing.T) {
+	scope := memory.Scope{Tenant: "tenant-a", Project: "project-a", Namespace: "namespace-a"}
+	now := time.Date(2026, 7, 13, 11, 30, 0, 0, time.UTC)
+	store := &leaseAwareAssuranceAlertDeliveryStore{
+		candidate: assurance.AlertCandidate{
+			ID:               "alert_lease",
+			Scope:            scope,
+			Severity:         assurance.SeverityCritical,
+			Component:        assurance.ComponentRuntime,
+			Reason:           assurance.ReasonRuntimeReady,
+			DeduplicationKey: "runtime",
+			DeliveryPolicy:   "default",
+			Payload:          map[string]any{"component": "runtime"},
+			CreatedAt:        now.Add(-time.Hour),
+			NextAttemptAt:    now.Add(-time.Minute),
+		},
+	}
+	service := &stubAssuranceDeliveryService{}
+	worker := AssuranceAlertDeliveryWorker{
+		Store:         store,
+		Service:       service,
+		Scope:         scope,
+		WorkerID:      "worker-a",
+		BatchSize:     1,
+		LeaseDuration: 5 * time.Minute,
+		MaxAttempts:   3,
+		Config:        assurance.AlertDeliveryConfig{Mode: assurance.AlertAdapterDisabled},
+		Now:           func() time.Time { return now },
+	}
+
+	processed, err := worker.RunOnce(context.Background())
+	if err != nil {
+		t.Fatalf("first RunOnce() error = %v", err)
+	}
+	if processed != 1 {
+		t.Fatalf("first processed = %d, want 1", processed)
+	}
+	processed, err = worker.RunOnce(context.Background())
+	if err != nil {
+		t.Fatalf("second RunOnce() error = %v", err)
+	}
+	if processed != 0 {
+		t.Fatalf("second processed = %d, want 0 while lease or success claim suppresses duplicate", processed)
+	}
+	if len(service.inputs) != 1 {
+		t.Fatalf("delivery calls = %d, want one lease-safe delivery", len(service.inputs))
 	}
 }
 

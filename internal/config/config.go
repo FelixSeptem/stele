@@ -6,6 +6,8 @@ import (
 	"strconv"
 	"strings"
 	"time"
+
+	"github.com/FelixSeptem/stele/internal/assurance"
 )
 
 type Mode string
@@ -23,6 +25,7 @@ type Config struct {
 	Auth        AuthConfig
 	Embedding   EmbeddingConfig
 	Jobs        JobConfig
+	Assurance   AssuranceConfig
 }
 
 type AuthConfig struct {
@@ -69,6 +72,20 @@ type JobConfig struct {
 	GovernanceRetryBackoff           time.Duration
 	GovernanceLeaseRenewPeriod       time.Duration
 	MaintenanceScopeBatchLimit       int
+}
+
+type AssuranceConfig struct {
+	Cadence                  time.Duration
+	ConformanceCadence       time.Duration
+	HistoryRetention         time.Duration
+	ConformanceRetention     time.Duration
+	IncidentFreshnessWindow  time.Duration
+	CapacityMaxBacklog       int
+	CapacityMaxWorkerLatency time.Duration
+	BackupRestoreFreshness   time.Duration
+	Alert                    assurance.AlertDeliveryConfig
+	AlertMaxAttempts         int
+	AlertRetryBackoff        time.Duration
 }
 
 func LoadFromEnv() (Config, error) {
@@ -144,6 +161,80 @@ func LoadFromEnv() (Config, error) {
 	if err != nil {
 		return Config{}, err
 	}
+	assuranceCadence, err := loadDurationWithDefault("STELE_JOBS_ASSURANCE_INTERVAL", maintenanceInterval)
+	if err != nil {
+		return Config{}, err
+	}
+	conformanceCadence, err := loadDurationWithDefault("STELE_JOBS_CONFORMANCE_INTERVAL", maintenanceInterval)
+	if err != nil {
+		return Config{}, err
+	}
+	assuranceRetention, err := loadDurationWithDefault("STELE_JOBS_ASSURANCE_RETENTION", 7*24*time.Hour)
+	if err != nil {
+		return Config{}, err
+	}
+	conformanceRetention, err := loadDurationWithDefault("STELE_JOBS_CONFORMANCE_RETENTION", 14*24*time.Hour)
+	if err != nil {
+		return Config{}, err
+	}
+	incidentFreshnessWindow, err := loadDurationWithDefault("STELE_ASSURANCE_INCIDENT_FRESHNESS", 30*time.Minute)
+	if err != nil {
+		return Config{}, err
+	}
+	capacityMaxBacklog, err := loadIntWithDefault("STELE_ASSURANCE_CAPACITY_MAX_BACKLOG", 1000)
+	if err != nil {
+		return Config{}, err
+	}
+	capacityMaxWorkerLatency, err := loadDurationWithDefault("STELE_ASSURANCE_CAPACITY_MAX_WORKER_LATENCY", 2*time.Minute)
+	if err != nil {
+		return Config{}, err
+	}
+	backupRestoreFreshness, err := loadDurationWithDefault("STELE_ASSURANCE_BACKUP_RESTORE_FRESHNESS", 30*24*time.Hour)
+	if err != nil {
+		return Config{}, err
+	}
+	alertTimeout, err := loadDurationWithDefault("STELE_ALERT_DELIVERY_TIMEOUT", 10*time.Second)
+	if err != nil {
+		return Config{}, err
+	}
+	alertMaxPayloadBytes, err := loadIntWithDefault("STELE_ALERT_MAX_PAYLOAD_BYTES", 64*1024)
+	if err != nil {
+		return Config{}, err
+	}
+	alertMaxAttempts, err := loadIntWithDefault("STELE_ALERT_MAX_ATTEMPTS", 5)
+	if err != nil {
+		return Config{}, err
+	}
+	alertRetryBackoff, err := loadDurationWithDefault("STELE_ALERT_RETRY_BACKOFF", 30*time.Second)
+	if err != nil {
+		return Config{}, err
+	}
+	alertConfig := assurance.AlertDeliveryConfig{
+		Mode:               assurance.AlertAdapterKind(getEnvOrDefault("STELE_ALERT_DELIVERY_MODE", string(assurance.AlertAdapterDisabled))),
+		WebhookURL:         strings.TrimSpace(os.Getenv("STELE_ALERT_WEBHOOK_URL")),
+		WebhookHeaders:     loadHeaderMap("STELE_ALERT_WEBHOOK_HEADERS"),
+		AllowInsecureLocal: loadBoolEnv("STELE_ALERT_WEBHOOK_ALLOW_INSECURE_LOCAL"),
+		Timeout:            alertTimeout,
+		MaxPayloadBytes:    alertMaxPayloadBytes,
+	}
+	if err := alertConfig.Validate(); err != nil {
+		return Config{}, err
+	}
+	if assuranceCadence <= 0 || conformanceCadence <= 0 {
+		return Config{}, fmt.Errorf("assurance and conformance cadence must be greater than zero")
+	}
+	if assuranceRetention < time.Hour || conformanceRetention < time.Hour {
+		return Config{}, fmt.Errorf("assurance and conformance retention must be at least 1h")
+	}
+	if incidentFreshnessWindow <= 0 || backupRestoreFreshness < time.Hour {
+		return Config{}, fmt.Errorf("assurance freshness windows are invalid")
+	}
+	if capacityMaxBacklog < 0 || capacityMaxWorkerLatency < time.Second {
+		return Config{}, fmt.Errorf("assurance capacity thresholds are invalid")
+	}
+	if alertMaxAttempts <= 0 || alertRetryBackoff < time.Second {
+		return Config{}, fmt.Errorf("alert retry settings are invalid")
+	}
 	defaultEmbeddingDimensions, err := loadIntWithDefault("STELE_EMBEDDING_DEFAULT_DIMENSIONS", 0)
 	if err != nil {
 		return Config{}, err
@@ -195,6 +286,19 @@ func LoadFromEnv() (Config, error) {
 			GovernanceRetryBackoff:           governanceRetryBackoff,
 			GovernanceLeaseRenewPeriod:       governanceLeaseRenewPeriod,
 			MaintenanceScopeBatchLimit:       maintenanceScopeBatchLimit,
+		},
+		Assurance: AssuranceConfig{
+			Cadence:                  assuranceCadence,
+			ConformanceCadence:       conformanceCadence,
+			HistoryRetention:         assuranceRetention,
+			ConformanceRetention:     conformanceRetention,
+			IncidentFreshnessWindow:  incidentFreshnessWindow,
+			CapacityMaxBacklog:       capacityMaxBacklog,
+			CapacityMaxWorkerLatency: capacityMaxWorkerLatency,
+			BackupRestoreFreshness:   backupRestoreFreshness,
+			Alert:                    alertConfig,
+			AlertMaxAttempts:         alertMaxAttempts,
+			AlertRetryBackoff:        alertRetryBackoff,
 		},
 	}, nil
 }
@@ -251,6 +355,31 @@ func loadIntWithDefault(key string, fallback int) (int, error) {
 	}
 
 	return value, nil
+}
+
+func loadBoolEnv(key string) bool {
+	raw := strings.TrimSpace(strings.ToLower(os.Getenv(key)))
+	return raw == "1" || raw == "true" || raw == "yes"
+}
+
+func loadHeaderMap(key string) map[string]string {
+	raw := strings.TrimSpace(os.Getenv(key))
+	if raw == "" {
+		return nil
+	}
+	headers := make(map[string]string)
+	for _, entry := range strings.Split(raw, ",") {
+		name, value, ok := strings.Cut(entry, "=")
+		if !ok {
+			continue
+		}
+		name = strings.TrimSpace(name)
+		value = strings.TrimSpace(value)
+		if name != "" {
+			headers[name] = value
+		}
+	}
+	return headers
 }
 
 func loadEmbeddingClassRoutes(key string) (map[string]EmbeddingRouteConfig, error) {

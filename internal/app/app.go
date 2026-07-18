@@ -8,6 +8,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/FelixSeptem/stele/internal/assurance"
 	"github.com/FelixSeptem/stele/internal/auth"
 	"github.com/FelixSeptem/stele/internal/config"
 	"github.com/FelixSeptem/stele/internal/embedding"
@@ -402,13 +403,13 @@ func buildAPIRuntime(ctx context.Context, cfg config.Config, deps apiRuntimeDepe
 		NewVersionID: newID,
 	}
 	retrievalService := retrieval.NewService(retrieval.ServiceDependencies{
-		Lexical:              repo,
-		Semantic:             repo,
-		Relations:            repo,
-		Citations:            repo,
-		Insights:             repo,
-		UsefulnessSummarizer: repo,
-		TaskEvaluationSummarizer: repo,
+		Lexical:                    repo,
+		Semantic:                   repo,
+		Relations:                  repo,
+		Citations:                  repo,
+		Insights:                   repo,
+		UsefulnessSummarizer:       repo,
+		TaskEvaluationSummarizer:   repo,
 		RankingRolloutPolicyReader: repo,
 	}, deps.observer)
 	httpDeps := httpDependenciesFromConfigWithIngestor(cfg, ingestor)
@@ -453,6 +454,13 @@ func buildAPIRuntime(ctx context.Context, cfg config.Config, deps apiRuntimeDepe
 		replayService.Observer = observer
 	}
 	httpDeps.DerivedInsightReplayAdmin = replayService
+	httpDeps.AssuranceAdmin = assurance.NewService(assurance.ServiceOptions{
+		Store:    repo,
+		Now:      time.Now,
+		NewID:    newQualityID,
+		Observer: deps.observer,
+		Logger:   httpDeps.Logger,
+	})
 	qualityService := memory.NewQualityService(memory.QualityServiceOptions{
 		Store:              repo,
 		Probe:              retrievalQualityProbe{Searcher: retrievalService, Assembler: retrievalService},
@@ -559,13 +567,13 @@ func buildWorkerRuntime(ctx context.Context, cfg config.Config, deps workerRunti
 	}
 	ingestor := memory.NewService(repo, now, deps.observer)
 	retrievalService := retrieval.NewService(retrieval.ServiceDependencies{
-		Lexical:              repo,
-		Semantic:             repo,
-		Relations:            repo,
-		Citations:            repo,
-		Insights:             repo,
-		UsefulnessSummarizer: repo,
-		TaskEvaluationSummarizer: repo,
+		Lexical:                    repo,
+		Semantic:                   repo,
+		Relations:                  repo,
+		Citations:                  repo,
+		Insights:                   repo,
+		UsefulnessSummarizer:       repo,
+		TaskEvaluationSummarizer:   repo,
 		RankingRolloutPolicyReader: repo,
 	}, deps.observer)
 
@@ -648,10 +656,29 @@ func buildWorkerRuntime(ctx context.Context, cfg config.Config, deps workerRunti
 		Now:           now,
 		Observer:      deps.observer,
 	}
+	assuranceService := assurance.NewService(assurance.ServiceOptions{
+		Store:    repo,
+		Now:      now,
+		NewID:    newQualityID,
+		Observer: deps.observer,
+	})
+	alertDeliveryWorker := jobs.AssuranceAlertDeliveryWorker{
+		Store:         repo,
+		Service:       assuranceService,
+		Scope:         scope,
+		WorkerID:      "stele-assurance-alert-delivery-worker",
+		BatchSize:     16,
+		LeaseDuration: governanceWorkerLeaseDuration,
+		MaxAttempts:   cfg.Assurance.AlertMaxAttempts,
+		RetryBackoff:  cfg.Assurance.AlertRetryBackoff,
+		Config:        cfg.Assurance.Alert,
+		Now:           now,
+		Observer:      deps.observer,
+	}
 	workers := []jobs.LoopWorker{worker}
 	if err := scope.Validate(); err == nil {
 		workers = append(workers, repairWorker)
-		workers = append(workers, proofWorker, sessionVerificationWorker)
+		workers = append(workers, proofWorker, sessionVerificationWorker, alertDeliveryWorker)
 	}
 
 	return workerRuntime{
@@ -717,6 +744,12 @@ func buildSchedulerRuntime(ctx context.Context, cfg config.Config, deps schedule
 	}); ok {
 		replayService.Observer = observer
 	}
+	assuranceService := assurance.NewService(assurance.ServiceOptions{
+		Store:    repo,
+		Now:      now,
+		NewID:    newQualityID,
+		Observer: deps.observer,
+	})
 	summary := governance.SummaryProcessor{
 		Source:         repo,
 		Repository:     repo,
@@ -743,7 +776,10 @@ func buildSchedulerRuntime(ctx context.Context, cfg config.Config, deps schedule
 	cleanupInterval := firstPositiveDuration(cfg.Jobs.CleanupInterval, cfg.Jobs.MaintenanceInterval, 15*time.Minute)
 	derivedInsightInterval := firstPositiveDuration(cfg.Jobs.DerivedInsightDerivationInterval, cfg.Jobs.MaintenanceInterval, 15*time.Minute)
 	embeddingInterval := firstPositiveDuration(cfg.Jobs.MaintenanceInterval, 15*time.Minute)
-	schedulerInterval := minPositiveDuration(summaryInterval, retentionInterval, cleanupInterval, derivedInsightInterval, embeddingInterval, cfg.Jobs.MaintenanceInterval, 15*time.Minute)
+	assuranceInterval := firstPositiveDuration(cfg.Assurance.Cadence, cfg.Jobs.MaintenanceInterval, 15*time.Minute)
+	conformanceInterval := firstPositiveDuration(cfg.Assurance.ConformanceCadence, cfg.Jobs.MaintenanceInterval, 15*time.Minute)
+	assuranceRetentionInterval := firstPositiveDuration(cfg.Jobs.CleanupInterval, cfg.Jobs.MaintenanceInterval, 15*time.Minute)
+	schedulerInterval := minPositiveDuration(summaryInterval, retentionInterval, cleanupInterval, derivedInsightInterval, embeddingInterval, assuranceInterval, conformanceInterval, assuranceRetentionInterval, cfg.Jobs.MaintenanceInterval, 15*time.Minute)
 
 	scheduler := jobs.MaintenanceScheduler{
 		Jobs: []jobs.MaintenanceJob{
@@ -836,6 +872,60 @@ func buildSchedulerRuntime(ctx context.Context, cfg config.Config, deps schedule
 						Cadence:        derivedInsightInterval,
 						Now:            now,
 						Limit:          cfg.Jobs.DerivedInsightBatchSize,
+					}
+				},
+			},
+			jobs.ScopeDispatchJob{
+				NameValue:       "assurance_evaluation_dispatch",
+				ScopeSource:     repo,
+				ScopeBatchLimit: cfg.Jobs.MaintenanceScopeBatchLimit,
+				FallbackScope:   scope,
+				Dispatch: func(scope memory.Scope) jobs.MaintenanceJob {
+					return jobs.AssuranceEvaluationJob{
+						Scope:               scope,
+						Service:             assuranceService,
+						ExecutionStore:      repo,
+						TriggerSource:       "scheduler",
+						Cadence:             assuranceInterval,
+						AlertDeliveryPolicy: string(cfg.Assurance.Alert.Mode),
+						AlertDeduplication:  cfg.Assurance.IncidentFreshnessWindow,
+						Now:                 now,
+					}
+				},
+			},
+			jobs.ScopeDispatchJob{
+				NameValue:       "conformance_run_dispatch",
+				ScopeSource:     repo,
+				ScopeBatchLimit: cfg.Jobs.MaintenanceScopeBatchLimit,
+				FallbackScope:   scope,
+				Dispatch: func(scope memory.Scope) jobs.MaintenanceJob {
+					return jobs.ConformanceRunJob{
+						Scope:          scope,
+						Service:        assuranceService,
+						ExecutionStore: repo,
+						TriggerSource:  "scheduler",
+						Cadence:        conformanceInterval,
+						Now:            now,
+						Limit:          cfg.Jobs.DerivedInsightBatchSize,
+					}
+				},
+			},
+			jobs.ScopeDispatchJob{
+				NameValue:       "assurance_retention_dispatch",
+				ScopeSource:     repo,
+				ScopeBatchLimit: cfg.Jobs.MaintenanceScopeBatchLimit,
+				FallbackScope:   scope,
+				Dispatch: func(scope memory.Scope) jobs.MaintenanceJob {
+					return jobs.AssuranceRetentionJob{
+						Scope:                scope,
+						Service:              assuranceService,
+						ExecutionStore:       repo,
+						TriggerSource:        "scheduler",
+						Cadence:              assuranceRetentionInterval,
+						HistoryRetention:     cfg.Assurance.HistoryRetention,
+						ConformanceRetention: cfg.Assurance.ConformanceRetention,
+						Now:                  now,
+						NewRunID:             newQualityID,
 					}
 				},
 			},

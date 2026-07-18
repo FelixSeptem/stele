@@ -12,6 +12,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/FelixSeptem/stele/internal/assurance"
 	"github.com/FelixSeptem/stele/internal/auth"
 	"github.com/FelixSeptem/stele/internal/governance"
 	"github.com/FelixSeptem/stele/internal/jobs"
@@ -47,6 +48,7 @@ type HTTPDependencies struct {
 	UsefulnessFeedback        UsefulnessFeedbackService
 	TaskEvaluations           TaskEvaluationService
 	RankingRollout            RankingRolloutAdminService
+	AssuranceAdmin            AssuranceAdminService
 	MemoryHistoryRead         MemoryHistoryReader
 	JobExecutionRead          JobExecutionReader
 	Metrics                   MetricsRecorder
@@ -154,6 +156,32 @@ type RankingRolloutAdminService interface {
 	DisableRankingRolloutPolicy(ctx context.Context, input memory.DisableRankingRolloutPolicyInput) (memory.RankingRolloutPolicy, error)
 	RollbackRankingRolloutPolicy(ctx context.Context, input memory.RollbackRankingRolloutPolicyInput) (memory.RankingRolloutPolicy, error)
 	ListRankingRolloutPolicyImpact(ctx context.Context, input memory.ListRankingRolloutPolicyImpactInput) ([]memory.RankingRolloutImpactEntry, error)
+}
+
+type AssuranceAdminService interface {
+	CreateHealthEvaluation(ctx context.Context, input assurance.HealthEvaluationInput) (assurance.HealthEvaluation, error)
+	ListHealthEvaluations(ctx context.Context, scope memory.Scope) ([]assurance.HealthEvaluation, error)
+	ReadHealthEvaluation(ctx context.Context, input assurance.ReadHealthEvaluationInput) (assurance.HealthEvaluation, error)
+	ListIncidents(ctx context.Context, input assurance.ListIncidentsInput) ([]assurance.Incident, error)
+	ReadIncident(ctx context.Context, input assurance.ReadIncidentInput) (assurance.Incident, error)
+	ApplyIncidentAction(ctx context.Context, input assurance.IncidentActionInput) (assurance.Incident, error)
+	ListAlertCandidates(ctx context.Context, scope memory.Scope) ([]assurance.AlertCandidate, error)
+	ReadAlertCandidate(ctx context.Context, input assurance.ReadAlertCandidateInput) (assurance.AlertCandidate, error)
+	ListAlertDeliveryAttempts(ctx context.Context, input assurance.ListAlertDeliveryAttemptsInput) ([]assurance.AlertDeliveryAttempt, error)
+	CreateConformanceProfile(ctx context.Context, profile assurance.ConformanceProfile) (assurance.ConformanceProfile, error)
+	ListConformanceProfiles(ctx context.Context, input assurance.ListConformanceProfilesInput) ([]assurance.ConformanceProfile, error)
+	ReadConformanceProfile(ctx context.Context, input assurance.ReadConformanceProfileInput) (assurance.ConformanceProfile, error)
+	UpdateConformanceProfile(ctx context.Context, input assurance.UpdateConformanceProfileInput) (assurance.ConformanceProfile, error)
+	DisableConformanceProfile(ctx context.Context, input assurance.DisableConformanceProfileInput) (assurance.ConformanceProfile, error)
+	RunConformance(ctx context.Context, input assurance.ConformanceRunInput) (assurance.ConformanceRun, []assurance.MissingEvidenceDiagnostic, error)
+	ListConformanceRuns(ctx context.Context, input assurance.ListConformanceRunsInput) ([]assurance.ConformanceRun, error)
+	ReadConformanceRun(ctx context.Context, input assurance.ReadConformanceRunInput) (assurance.ConformanceRun, error)
+	CreateReadinessReport(ctx context.Context, input assurance.ReadinessReportInput) (assurance.ReadinessReport, error)
+	ListReadinessReports(ctx context.Context, scope memory.Scope) ([]assurance.ReadinessReport, error)
+	ReadReadinessReport(ctx context.Context, input assurance.ReadReadinessReportInput) (assurance.ReadinessReport, error)
+	CreateRecoveryVerification(ctx context.Context, input assurance.RecoveryVerificationInput) (assurance.RecoveryVerification, error)
+	ListRecoveryVerifications(ctx context.Context, scope memory.Scope) ([]assurance.RecoveryVerification, error)
+	ReadRecoveryVerification(ctx context.Context, input assurance.ReadRecoveryVerificationInput) (assurance.RecoveryVerification, error)
 }
 
 type ManualMemoryMutationService interface {
@@ -314,6 +342,64 @@ type rankingRolloutPolicyCreateRequest struct {
 type rankingRolloutPolicyActionRequest struct {
 	Actor  string `json:"actor"`
 	Reason string `json:"reason"`
+}
+
+type assuranceHealthEvaluationCreateRequest struct {
+	EvaluationID          string                      `json:"evaluation_id,omitempty"`
+	ObservedAt            string                      `json:"observed_at,omitempty"`
+	RuntimeReadiness      assurance.HealthObservation `json:"runtime_readiness,omitempty"`
+	BacklogState          assurance.HealthObservation `json:"backlog_state,omitempty"`
+	EmbeddingHealth       assurance.HealthObservation `json:"embedding_health,omitempty"`
+	ProofSessionVerdict   assurance.HealthObservation `json:"proof_session_verdict,omitempty"`
+	UsefulnessFeedback    assurance.HealthObservation `json:"usefulness_feedback,omitempty"`
+	TaskEvaluationSummary assurance.HealthObservation `json:"task_evaluation_summary,omitempty"`
+	RepairStatus          assurance.HealthObservation `json:"repair_status,omitempty"`
+	RankingRolloutState   assurance.HealthObservation `json:"ranking_rollout_state,omitempty"`
+	ConformanceStatus     assurance.HealthObservation `json:"conformance_status,omitempty"`
+	CapacityLoadProof     assurance.HealthObservation `json:"capacity_load_proof,omitempty"`
+	BackupRestoreProof    assurance.HealthObservation `json:"backup_restore_proof,omitempty"`
+}
+
+type assuranceIncidentActionRequest struct {
+	Actor  string `json:"actor"`
+	Reason string `json:"reason"`
+}
+
+type assuranceConformanceProfileRequest struct {
+	ID               string                         `json:"id,omitempty"`
+	ExpectedEvidence []assuranceExpectedEvidenceDTO `json:"expected_evidence"`
+	Actor            string                         `json:"actor"`
+	Reason           string                         `json:"reason"`
+}
+
+type assuranceExpectedEvidenceDTO struct {
+	Kind            assurance.ExpectedEvidenceKind `json:"kind"`
+	MinimumCount    int                            `json:"minimum_count"`
+	FreshnessWindow string                         `json:"freshness_window"`
+}
+
+type assuranceConformanceRunCreateRequest struct {
+	ProfileID string `json:"profile_id"`
+	RunID     string `json:"run_id,omitempty"`
+	StartedAt string `json:"started_at,omitempty"`
+}
+
+type assuranceReadinessReportCreateRequest struct {
+	ReportID    string `json:"report_id,omitempty"`
+	GeneratedAt string `json:"generated_at,omitempty"`
+}
+
+type assuranceRecoveryVerificationCreateRequest struct {
+	RecordID        string                               `json:"record_id,omitempty"`
+	Target          assurance.RecoveryVerificationTarget `json:"target"`
+	TargetID        string                               `json:"target_id"`
+	Status          assurance.HealthStatus               `json:"status"`
+	CheckedSurfaces []string                             `json:"checked_surfaces,omitempty"`
+	ResultCategory  string                               `json:"result_category"`
+	LinkedEvidence  map[string]any                       `json:"linked_evidence,omitempty"`
+	Actor           string                               `json:"actor"`
+	Reason          string                               `json:"reason"`
+	VerifiedAt      string                               `json:"verified_at,omitempty"`
 }
 
 type memorySessionVerificationRequest struct {
@@ -756,6 +842,37 @@ func NewHTTPHandler(deps HTTPDependencies) http.Handler {
 	mux.Handle("POST /v1/admin/ranking-rollouts/{policy_id}/activate", adminRankingRollouts)
 	mux.Handle("POST /v1/admin/ranking-rollouts/{policy_id}/disable", adminRankingRollouts)
 	mux.Handle("POST /v1/admin/ranking-rollouts/{policy_id}/rollback", adminRankingRollouts)
+
+	adminAssurance := auth.APIKeyMiddleware(deps.AdminAPIKeys)(
+		auth.ScopeMiddleware()(
+			http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				handleAdminAssurance(w, r, deps.AssuranceAdmin)
+			}),
+		),
+	)
+	mux.Handle("GET /v1/admin/assurance/health-evaluations", adminAssurance)
+	mux.Handle("POST /v1/admin/assurance/health-evaluations", adminAssurance)
+	mux.Handle("GET /v1/admin/assurance/health-evaluations/{health_evaluation_id}", adminAssurance)
+	mux.Handle("GET /v1/admin/assurance/incidents", adminAssurance)
+	mux.Handle("GET /v1/admin/assurance/incidents/{incident_id}", adminAssurance)
+	mux.Handle("POST /v1/admin/assurance/incidents/{incident_id}/{incident_action}", adminAssurance)
+	mux.Handle("GET /v1/admin/assurance/alert-candidates", adminAssurance)
+	mux.Handle("GET /v1/admin/assurance/alert-candidates/{alert_candidate_id}", adminAssurance)
+	mux.Handle("GET /v1/admin/assurance/alert-candidates/{alert_candidate_id}/delivery-attempts", adminAssurance)
+	mux.Handle("GET /v1/admin/assurance/conformance-profiles", adminAssurance)
+	mux.Handle("POST /v1/admin/assurance/conformance-profiles", adminAssurance)
+	mux.Handle("GET /v1/admin/assurance/conformance-profiles/{conformance_profile_id}", adminAssurance)
+	mux.Handle("PATCH /v1/admin/assurance/conformance-profiles/{conformance_profile_id}", adminAssurance)
+	mux.Handle("POST /v1/admin/assurance/conformance-profiles/{conformance_profile_id}/disable", adminAssurance)
+	mux.Handle("GET /v1/admin/assurance/conformance-runs", adminAssurance)
+	mux.Handle("POST /v1/admin/assurance/conformance-runs", adminAssurance)
+	mux.Handle("GET /v1/admin/assurance/conformance-runs/{conformance_run_id}", adminAssurance)
+	mux.Handle("GET /v1/admin/assurance/readiness-reports", adminAssurance)
+	mux.Handle("POST /v1/admin/assurance/readiness-reports", adminAssurance)
+	mux.Handle("GET /v1/admin/assurance/readiness-reports/{readiness_report_id}", adminAssurance)
+	mux.Handle("GET /v1/admin/assurance/recovery-verifications", adminAssurance)
+	mux.Handle("POST /v1/admin/assurance/recovery-verifications", adminAssurance)
+	mux.Handle("GET /v1/admin/assurance/recovery-verifications/{recovery_verification_id}", adminAssurance)
 
 	adminDerivedInsightAction := auth.APIKeyMiddleware(deps.AdminAPIKeys)(
 		auth.ScopeMiddleware()(
@@ -1695,6 +1812,435 @@ func handleAdminRankingRollouts(w http.ResponseWriter, r *http.Request, service 
 	default:
 		handleAdminRankingRolloutDetail(w, r, service, metrics, logger)
 	}
+}
+
+func handleAdminAssurance(w http.ResponseWriter, r *http.Request, service AssuranceAdminService) {
+	if service == nil {
+		http.Error(w, "assurance admin service is not configured", http.StatusServiceUnavailable)
+		return
+	}
+	scope, ok := auth.ScopeFromContext(r.Context())
+	if !ok {
+		http.Error(w, "scope context is missing", http.StatusInternalServerError)
+		return
+	}
+
+	path := r.URL.Path
+	switch {
+	case path == "/v1/admin/assurance/health-evaluations" && r.Method == http.MethodPost:
+		handleAdminAssuranceHealthCreate(w, r, service, scope)
+	case path == "/v1/admin/assurance/health-evaluations" && r.Method == http.MethodGet:
+		items, err := service.ListHealthEvaluations(r.Context(), scope)
+		if err != nil {
+			writeAdminAssuranceError(w, err, "failed to list health evaluations")
+			return
+		}
+		writeJSON(w, http.StatusOK, map[string]any{"health_evaluations": items})
+	case strings.HasPrefix(path, "/v1/admin/assurance/health-evaluations/") && r.Method == http.MethodGet:
+		item, err := service.ReadHealthEvaluation(r.Context(), assurance.ReadHealthEvaluationInput{
+			Scope:        scope,
+			EvaluationID: strings.TrimSpace(r.PathValue("health_evaluation_id")),
+		})
+		if err != nil {
+			writeAdminAssuranceError(w, err, "failed to read health evaluation")
+			return
+		}
+		writeJSON(w, http.StatusOK, item)
+	case path == "/v1/admin/assurance/incidents" && r.Method == http.MethodGet:
+		limit, err := parseOptionalLimit(r, 50)
+		if err != nil {
+			http.Error(w, "invalid limit", http.StatusBadRequest)
+			return
+		}
+		items, err := service.ListIncidents(r.Context(), assurance.ListIncidentsInput{
+			Scope:  scope,
+			Status: assurance.IncidentStatus(strings.TrimSpace(r.URL.Query().Get("status"))),
+			Limit:  limit,
+		})
+		if err != nil {
+			writeAdminAssuranceError(w, err, "failed to list incidents")
+			return
+		}
+		writeJSON(w, http.StatusOK, map[string]any{"incidents": items})
+	case strings.HasPrefix(path, "/v1/admin/assurance/incidents/") && r.PathValue("incident_action") != "" && r.Method == http.MethodPost:
+		handleAdminAssuranceIncidentAction(w, r, service, scope)
+	case strings.HasPrefix(path, "/v1/admin/assurance/incidents/") && r.Method == http.MethodGet:
+		item, err := service.ReadIncident(r.Context(), assurance.ReadIncidentInput{
+			Scope:      scope,
+			IncidentID: strings.TrimSpace(r.PathValue("incident_id")),
+		})
+		if err != nil {
+			writeAdminAssuranceError(w, err, "failed to read incident")
+			return
+		}
+		writeJSON(w, http.StatusOK, item)
+	case path == "/v1/admin/assurance/alert-candidates" && r.Method == http.MethodGet:
+		items, err := service.ListAlertCandidates(r.Context(), scope)
+		if err != nil {
+			writeAdminAssuranceError(w, err, "failed to list alert candidates")
+			return
+		}
+		writeJSON(w, http.StatusOK, map[string]any{"alert_candidates": items})
+	case strings.HasSuffix(path, "/delivery-attempts") && r.Method == http.MethodGet:
+		items, err := service.ListAlertDeliveryAttempts(r.Context(), assurance.ListAlertDeliveryAttemptsInput{
+			Scope:            scope,
+			AlertCandidateID: strings.TrimSpace(r.PathValue("alert_candidate_id")),
+		})
+		if err != nil {
+			writeAdminAssuranceError(w, err, "failed to list alert delivery attempts")
+			return
+		}
+		writeJSON(w, http.StatusOK, map[string]any{"delivery_attempts": items})
+	case strings.HasPrefix(path, "/v1/admin/assurance/alert-candidates/") && r.Method == http.MethodGet:
+		item, err := service.ReadAlertCandidate(r.Context(), assurance.ReadAlertCandidateInput{
+			Scope:            scope,
+			AlertCandidateID: strings.TrimSpace(r.PathValue("alert_candidate_id")),
+		})
+		if err != nil {
+			writeAdminAssuranceError(w, err, "failed to read alert candidate")
+			return
+		}
+		writeJSON(w, http.StatusOK, item)
+	case path == "/v1/admin/assurance/conformance-profiles" && r.Method == http.MethodPost:
+		handleAdminAssuranceConformanceProfileCreate(w, r, service, scope)
+	case path == "/v1/admin/assurance/conformance-profiles" && r.Method == http.MethodGet:
+		items, err := service.ListConformanceProfiles(r.Context(), assurance.ListConformanceProfilesInput{
+			Scope:  scope,
+			Status: assurance.ConformanceProfileStatus(strings.TrimSpace(r.URL.Query().Get("status"))),
+		})
+		if err != nil {
+			writeAdminAssuranceError(w, err, "failed to list conformance profiles")
+			return
+		}
+		writeJSON(w, http.StatusOK, map[string]any{"conformance_profiles": items})
+	case strings.HasSuffix(path, "/disable") && r.Method == http.MethodPost:
+		handleAdminAssuranceConformanceProfileDisable(w, r, service, scope)
+	case strings.HasPrefix(path, "/v1/admin/assurance/conformance-profiles/") && r.Method == http.MethodPatch:
+		handleAdminAssuranceConformanceProfileUpdate(w, r, service, scope)
+	case strings.HasPrefix(path, "/v1/admin/assurance/conformance-profiles/") && r.Method == http.MethodGet:
+		item, err := service.ReadConformanceProfile(r.Context(), assurance.ReadConformanceProfileInput{
+			Scope:     scope,
+			ProfileID: strings.TrimSpace(r.PathValue("conformance_profile_id")),
+		})
+		if err != nil {
+			writeAdminAssuranceError(w, err, "failed to read conformance profile")
+			return
+		}
+		writeJSON(w, http.StatusOK, item)
+	case path == "/v1/admin/assurance/conformance-runs" && r.Method == http.MethodPost:
+		handleAdminAssuranceConformanceRunCreate(w, r, service, scope)
+	case path == "/v1/admin/assurance/conformance-runs" && r.Method == http.MethodGet:
+		items, err := service.ListConformanceRuns(r.Context(), assurance.ListConformanceRunsInput{
+			Scope:     scope,
+			ProfileID: strings.TrimSpace(r.URL.Query().Get("profile_id")),
+		})
+		if err != nil {
+			writeAdminAssuranceError(w, err, "failed to list conformance runs")
+			return
+		}
+		writeJSON(w, http.StatusOK, map[string]any{"conformance_runs": items})
+	case strings.HasPrefix(path, "/v1/admin/assurance/conformance-runs/") && r.Method == http.MethodGet:
+		item, err := service.ReadConformanceRun(r.Context(), assurance.ReadConformanceRunInput{
+			Scope: scope,
+			RunID: strings.TrimSpace(r.PathValue("conformance_run_id")),
+		})
+		if err != nil {
+			writeAdminAssuranceError(w, err, "failed to read conformance run")
+			return
+		}
+		writeJSON(w, http.StatusOK, item)
+	case path == "/v1/admin/assurance/readiness-reports" && r.Method == http.MethodPost:
+		handleAdminAssuranceReadinessCreate(w, r, service, scope)
+	case path == "/v1/admin/assurance/readiness-reports" && r.Method == http.MethodGet:
+		items, err := service.ListReadinessReports(r.Context(), scope)
+		if err != nil {
+			writeAdminAssuranceError(w, err, "failed to list readiness reports")
+			return
+		}
+		writeJSON(w, http.StatusOK, map[string]any{"readiness_reports": items})
+	case strings.HasPrefix(path, "/v1/admin/assurance/readiness-reports/") && r.Method == http.MethodGet:
+		item, err := service.ReadReadinessReport(r.Context(), assurance.ReadReadinessReportInput{
+			Scope:    scope,
+			ReportID: strings.TrimSpace(r.PathValue("readiness_report_id")),
+		})
+		if err != nil {
+			writeAdminAssuranceError(w, err, "failed to read readiness report")
+			return
+		}
+		writeJSON(w, http.StatusOK, item)
+	case path == "/v1/admin/assurance/recovery-verifications" && r.Method == http.MethodPost:
+		handleAdminAssuranceRecoveryCreate(w, r, service, scope)
+	case path == "/v1/admin/assurance/recovery-verifications" && r.Method == http.MethodGet:
+		items, err := service.ListRecoveryVerifications(r.Context(), scope)
+		if err != nil {
+			writeAdminAssuranceError(w, err, "failed to list recovery verifications")
+			return
+		}
+		writeJSON(w, http.StatusOK, map[string]any{"recovery_verifications": items})
+	case strings.HasPrefix(path, "/v1/admin/assurance/recovery-verifications/") && r.Method == http.MethodGet:
+		item, err := service.ReadRecoveryVerification(r.Context(), assurance.ReadRecoveryVerificationInput{
+			Scope:    scope,
+			RecordID: strings.TrimSpace(r.PathValue("recovery_verification_id")),
+		})
+		if err != nil {
+			writeAdminAssuranceError(w, err, "failed to read recovery verification")
+			return
+		}
+		writeJSON(w, http.StatusOK, item)
+	default:
+		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+	}
+}
+
+func handleAdminAssuranceHealthCreate(w http.ResponseWriter, r *http.Request, service AssuranceAdminService, scope memory.Scope) {
+	var req assuranceHealthEvaluationCreateRequest
+	if !decodeJSONBody(w, r, &req) {
+		return
+	}
+	observedAt, err := parseOptionalRFC3339(req.ObservedAt)
+	if err != nil {
+		http.Error(w, "invalid observed_at", http.StatusBadRequest)
+		return
+	}
+	item, err := service.CreateHealthEvaluation(r.Context(), assurance.HealthEvaluationInput{
+		Scope:                 scope,
+		EvaluationID:          strings.TrimSpace(req.EvaluationID),
+		ObservedAt:            observedAt,
+		RuntimeReadiness:      normalizeHealthObservation(req.RuntimeReadiness),
+		BacklogState:          normalizeHealthObservation(req.BacklogState),
+		EmbeddingHealth:       normalizeHealthObservation(req.EmbeddingHealth),
+		ProofSessionVerdict:   normalizeHealthObservation(req.ProofSessionVerdict),
+		UsefulnessFeedback:    normalizeHealthObservation(req.UsefulnessFeedback),
+		TaskEvaluationSummary: normalizeHealthObservation(req.TaskEvaluationSummary),
+		RepairStatus:          normalizeHealthObservation(req.RepairStatus),
+		RankingRolloutState:   normalizeHealthObservation(req.RankingRolloutState),
+		ConformanceStatus:     normalizeHealthObservation(req.ConformanceStatus),
+		CapacityLoadProof:     normalizeHealthObservation(req.CapacityLoadProof),
+		BackupRestoreProof:    normalizeHealthObservation(req.BackupRestoreProof),
+	})
+	if err != nil {
+		writeAdminAssuranceError(w, err, "failed to create health evaluation")
+		return
+	}
+	writeJSON(w, http.StatusCreated, item)
+}
+
+func handleAdminAssuranceIncidentAction(w http.ResponseWriter, r *http.Request, service AssuranceAdminService, scope memory.Scope) {
+	var req assuranceIncidentActionRequest
+	if !decodeJSONBody(w, r, &req) {
+		return
+	}
+	item, err := service.ApplyIncidentAction(r.Context(), assurance.IncidentActionInput{
+		Scope:      scope,
+		IncidentID: strings.TrimSpace(r.PathValue("incident_id")),
+		Action:     assurance.IncidentAction(strings.TrimSpace(r.PathValue("incident_action"))),
+		Actor:      strings.TrimSpace(req.Actor),
+		Reason:     strings.TrimSpace(req.Reason),
+		OccurredAt: time.Now().UTC(),
+	})
+	if err != nil {
+		writeAdminAssuranceError(w, err, "failed to apply incident action")
+		return
+	}
+	writeJSON(w, http.StatusAccepted, item)
+}
+
+func handleAdminAssuranceConformanceProfileCreate(w http.ResponseWriter, r *http.Request, service AssuranceAdminService, scope memory.Scope) {
+	var req assuranceConformanceProfileRequest
+	if !decodeJSONBody(w, r, &req) {
+		return
+	}
+	expected, err := expectedEvidenceFromRequest(req.ExpectedEvidence)
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusBadRequest)
+		return
+	}
+	now := time.Now().UTC()
+	item, err := service.CreateConformanceProfile(r.Context(), assurance.ConformanceProfile{
+		ID:               strings.TrimSpace(req.ID),
+		Scope:            scope,
+		Status:           assurance.ConformanceProfileStatusActive,
+		ExpectedEvidence: expected,
+		Actor:            strings.TrimSpace(req.Actor),
+		Reason:           strings.TrimSpace(req.Reason),
+		CreatedAt:        now,
+		UpdatedAt:        now,
+	})
+	if err != nil {
+		writeAdminAssuranceError(w, err, "failed to create conformance profile")
+		return
+	}
+	writeJSON(w, http.StatusCreated, item)
+}
+
+func handleAdminAssuranceConformanceProfileUpdate(w http.ResponseWriter, r *http.Request, service AssuranceAdminService, scope memory.Scope) {
+	var req assuranceConformanceProfileRequest
+	if !decodeJSONBody(w, r, &req) {
+		return
+	}
+	expected, err := expectedEvidenceFromRequest(req.ExpectedEvidence)
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusBadRequest)
+		return
+	}
+	item, err := service.UpdateConformanceProfile(r.Context(), assurance.UpdateConformanceProfileInput{
+		Scope:            scope,
+		ProfileID:        strings.TrimSpace(r.PathValue("conformance_profile_id")),
+		ExpectedEvidence: expected,
+		Actor:            strings.TrimSpace(req.Actor),
+		Reason:           strings.TrimSpace(req.Reason),
+		UpdatedAt:        time.Now().UTC(),
+	})
+	if err != nil {
+		writeAdminAssuranceError(w, err, "failed to update conformance profile")
+		return
+	}
+	writeJSON(w, http.StatusOK, item)
+}
+
+func handleAdminAssuranceConformanceProfileDisable(w http.ResponseWriter, r *http.Request, service AssuranceAdminService, scope memory.Scope) {
+	var req assuranceIncidentActionRequest
+	if !decodeJSONBody(w, r, &req) {
+		return
+	}
+	item, err := service.DisableConformanceProfile(r.Context(), assurance.DisableConformanceProfileInput{
+		Scope:      scope,
+		ProfileID:  strings.TrimSpace(r.PathValue("conformance_profile_id")),
+		Actor:      strings.TrimSpace(req.Actor),
+		Reason:     strings.TrimSpace(req.Reason),
+		DisabledAt: time.Now().UTC(),
+	})
+	if err != nil {
+		writeAdminAssuranceError(w, err, "failed to disable conformance profile")
+		return
+	}
+	writeJSON(w, http.StatusAccepted, item)
+}
+
+func handleAdminAssuranceConformanceRunCreate(w http.ResponseWriter, r *http.Request, service AssuranceAdminService, scope memory.Scope) {
+	var req assuranceConformanceRunCreateRequest
+	if !decodeJSONBody(w, r, &req) {
+		return
+	}
+	startedAt, err := parseOptionalRFC3339(req.StartedAt)
+	if err != nil {
+		http.Error(w, "invalid started_at", http.StatusBadRequest)
+		return
+	}
+	if startedAt.IsZero() {
+		startedAt = time.Now().UTC()
+	}
+	run, diagnostics, err := service.RunConformance(r.Context(), assurance.ConformanceRunInput{
+		Scope:     scope,
+		ProfileID: strings.TrimSpace(req.ProfileID),
+		RunID:     strings.TrimSpace(req.RunID),
+		StartedAt: startedAt,
+	})
+	if err != nil {
+		writeAdminAssuranceError(w, err, "failed to create conformance run")
+		return
+	}
+	writeJSON(w, http.StatusCreated, map[string]any{"run": run, "diagnostics": diagnostics})
+}
+
+func handleAdminAssuranceReadinessCreate(w http.ResponseWriter, r *http.Request, service AssuranceAdminService, scope memory.Scope) {
+	var req assuranceReadinessReportCreateRequest
+	if !decodeJSONBody(w, r, &req) {
+		return
+	}
+	generatedAt, err := parseOptionalRFC3339(req.GeneratedAt)
+	if err != nil {
+		http.Error(w, "invalid generated_at", http.StatusBadRequest)
+		return
+	}
+	if generatedAt.IsZero() {
+		generatedAt = time.Now().UTC()
+	}
+	item, err := service.CreateReadinessReport(r.Context(), assurance.ReadinessReportInput{
+		Scope:       scope,
+		ReportID:    strings.TrimSpace(req.ReportID),
+		GeneratedAt: generatedAt,
+	})
+	if err != nil {
+		writeAdminAssuranceError(w, err, "failed to create readiness report")
+		return
+	}
+	writeJSON(w, http.StatusCreated, item)
+}
+
+func handleAdminAssuranceRecoveryCreate(w http.ResponseWriter, r *http.Request, service AssuranceAdminService, scope memory.Scope) {
+	var req assuranceRecoveryVerificationCreateRequest
+	if !decodeJSONBody(w, r, &req) {
+		return
+	}
+	verifiedAt, err := parseOptionalRFC3339(req.VerifiedAt)
+	if err != nil {
+		http.Error(w, "invalid verified_at", http.StatusBadRequest)
+		return
+	}
+	item, err := service.CreateRecoveryVerification(r.Context(), assurance.RecoveryVerificationInput{
+		Scope:           scope,
+		RecordID:        strings.TrimSpace(req.RecordID),
+		Target:          req.Target,
+		TargetID:        strings.TrimSpace(req.TargetID),
+		Status:          req.Status,
+		CheckedSurfaces: append([]string(nil), req.CheckedSurfaces...),
+		ResultCategory:  strings.TrimSpace(req.ResultCategory),
+		LinkedEvidence:  req.LinkedEvidence,
+		Actor:           strings.TrimSpace(req.Actor),
+		Reason:          strings.TrimSpace(req.Reason),
+		VerifiedAt:      verifiedAt,
+	})
+	if err != nil {
+		writeAdminAssuranceError(w, err, "failed to create recovery verification")
+		return
+	}
+	writeJSON(w, http.StatusCreated, item)
+}
+
+func expectedEvidenceFromRequest(input []assuranceExpectedEvidenceDTO) ([]assurance.ExpectedEvidence, error) {
+	expected := make([]assurance.ExpectedEvidence, 0, len(input))
+	for _, item := range input {
+		window, err := time.ParseDuration(strings.TrimSpace(item.FreshnessWindow))
+		if err != nil {
+			return nil, fmt.Errorf("freshness_window is invalid")
+		}
+		expected = append(expected, assurance.ExpectedEvidence{
+			Kind:            item.Kind,
+			MinimumCount:    item.MinimumCount,
+			FreshnessWindow: window,
+		})
+	}
+	return expected, nil
+}
+
+func normalizeHealthObservation(input assurance.HealthObservation) assurance.HealthObservation {
+	if input.ObservedAt.IsZero() {
+		input.ObservedAt = time.Now().UTC()
+	}
+	if input.FreshThrough.IsZero() {
+		input.FreshThrough = input.ObservedAt
+	}
+	return input
+}
+
+func parseOptionalRFC3339(raw string) (time.Time, error) {
+	if strings.TrimSpace(raw) == "" {
+		return time.Time{}, nil
+	}
+	return time.Parse(time.RFC3339, strings.TrimSpace(raw))
+}
+
+func parseOptionalLimit(r *http.Request, fallback int) (int, error) {
+	raw := strings.TrimSpace(r.URL.Query().Get("limit"))
+	if raw == "" {
+		return fallback, nil
+	}
+	parsed, err := strconv.Atoi(raw)
+	if err != nil || parsed < 0 {
+		return 0, fmt.Errorf("invalid limit")
+	}
+	return parsed, nil
 }
 
 func handleAdminRankingRolloutList(w http.ResponseWriter, r *http.Request, service RankingRolloutAdminService, metrics MetricsRecorder, logger *log.Logger) {
@@ -3948,6 +4494,19 @@ func writeAdminScopeProofError(w http.ResponseWriter, err error, fallback string
 		http.Error(w, "scope proof resource not found", http.StatusNotFound)
 	default:
 		if strings.Contains(err.Error(), "required") || strings.Contains(err.Error(), "invalid") || strings.Contains(err.Error(), "must be") {
+			http.Error(w, err.Error(), http.StatusBadRequest)
+			return
+		}
+		http.Error(w, fallback, http.StatusInternalServerError)
+	}
+}
+
+func writeAdminAssuranceError(w http.ResponseWriter, err error, fallback string) {
+	switch {
+	case errors.Is(err, pgx.ErrNoRows):
+		http.Error(w, "assurance resource not found", http.StatusNotFound)
+	default:
+		if strings.Contains(err.Error(), "required") || strings.Contains(err.Error(), "invalid") || strings.Contains(err.Error(), "must be") || strings.Contains(err.Error(), "must not") || strings.Contains(err.Error(), "exceeds") || strings.Contains(err.Error(), "not active") {
 			http.Error(w, err.Error(), http.StatusBadRequest)
 			return
 		}

@@ -287,3 +287,99 @@ func TestMetricsObserverExportsScopeProofAndSessionSignalsWithoutHighCardinality
 		}
 	}
 }
+
+func TestMetricsObserverExportsAssuranceConformanceSignalsWithoutHighCardinalityLabels(t *testing.T) {
+	observer := NewMetricsObserver()
+	ctx := context.Background()
+
+	observer.RecordAssuranceHealthEvaluation(ctx, AssuranceHealthEvaluationEvent{
+		Operation:        "create",
+		Result:           "ok",
+		Status:           "unhealthy",
+		Component:        "capacity_load",
+		Severity:         "critical",
+		OperationalProof: "capacity_load",
+		ReasonCategory:   "capacity_threshold_exceeded",
+	})
+	observer.RecordAssuranceIncidentLifecycle(ctx, AssuranceIncidentLifecycleEvent{
+		Operation:      "open",
+		Result:         "ok",
+		Status:         "open",
+		Component:      "backlog",
+		Severity:       "warning",
+		ReasonCategory: "backlog_pressure",
+	})
+	observer.RecordAssuranceAlertCandidate(ctx, AssuranceAlertCandidateEvent{
+		Operation:      "generate",
+		Result:         "ok",
+		Status:         "queued",
+		Component:      "backup_restore",
+		Severity:       "critical",
+		ReasonCategory: "backup_restore_stale",
+	})
+	observer.RecordAssuranceAlertDelivery(ctx, AssuranceAlertDeliveryEvent{
+		Adapter:         "webhook",
+		Result:          "retry",
+		Severity:        "critical",
+		Component:       "backup_restore",
+		FailureCategory: "request_failed",
+	})
+	observer.RecordAssuranceCleanup(ctx, AssuranceCleanupEvent{
+		RecordCategory:  "diagnostic",
+		Result:          "ok",
+		DeletedCategory: "some",
+	})
+	observer.RecordConformanceRun(ctx, ConformanceRunEvent{
+		Result:                  "degraded",
+		ProfileStatus:           "active",
+		EvidenceCategory:        "session",
+		MissingEvidenceCategory: "session_without_outcome",
+		ReadinessImpact:         "degraded",
+	})
+	observer.RecordMissingEvidenceDiagnostic(ctx, MissingEvidenceDiagnosticEvent{
+		EvidenceCategory:        "session",
+		MissingEvidenceCategory: "session_without_outcome",
+		ReadinessImpact:         "degraded",
+	})
+	observer.RecordOperationalProof(ctx, OperationalProofEvent{
+		Target:         "capacity_load",
+		Status:         "unhealthy",
+		Severity:       "critical",
+		ReasonCategory: "capacity_threshold_exceeded",
+	})
+	observer.RecordReadinessReport(ctx, ReadinessReportEvent{
+		ReadinessStatus:           "degraded",
+		RuntimeCategory:           "healthy",
+		ConformanceCategory:       "degraded",
+		IncidentCategory:          "active",
+		RecommendedActionCategory: "review_conformance_profile",
+	})
+	observer.RecordRecoveryVerification(ctx, RecoveryVerificationEvent{
+		Target:         "incident",
+		Status:         "healthy",
+		ResultCategory: "recovered",
+	})
+
+	metrics := observer.RenderPrometheus()
+	for _, want := range []string{
+		`stele_assurance_health_evaluations_total{component="capacity_load",operation="create",operational_proof="capacity_load",reason_category="capacity_threshold_exceeded",result="ok",severity="critical",status="unhealthy"} 1`,
+		`stele_assurance_incidents_total{component="backlog",operation="open",reason_category="backlog_pressure",result="ok",severity="warning",status="open"} 1`,
+		`stele_assurance_alert_candidates_total{component="backup_restore",operation="generate",reason_category="backup_restore_stale",result="ok",severity="critical",status="queued"} 1`,
+		`stele_assurance_alert_delivery_total{adapter="webhook",component="backup_restore",failure_category="request_failed",result="retry",severity="critical"} 1`,
+		`stele_assurance_cleanup_total{deleted_category="some",record_category="diagnostic",result="ok"} 1`,
+		`stele_conformance_runs_total{evidence_category="session",missing_evidence_category="session_without_outcome",profile_status="active",readiness_impact="degraded",result="degraded"} 1`,
+		`stele_conformance_missing_evidence_total{evidence_category="session",missing_evidence_category="session_without_outcome",readiness_impact="degraded"} 1`,
+		`stele_operational_proofs_total{reason_category="capacity_threshold_exceeded",severity="critical",status="unhealthy",target="capacity_load"} 1`,
+		`stele_readiness_reports_total{conformance_category="degraded",incident_category="active",readiness_status="degraded",recommended_action_category="review_conformance_profile",runtime_category="healthy"} 1`,
+		`stele_recovery_verifications_total{result_category="recovered",status="healthy",target="incident"} 1`,
+	} {
+		if !strings.Contains(metrics, want) {
+			t.Fatalf("metrics missing %q\n%s", want, metrics)
+		}
+	}
+	for _, forbidden := range []string{"tenant", "project", "namespace", "evaluation_id", "incident_id", "alert_id", "run_id", "proof_id", "actor", "reason_text", "query", "webhook_url", "webhook_host", "recipient"} {
+		if strings.Contains(metrics, forbidden) {
+			t.Fatalf("metrics contain high-cardinality label %q\n%s", forbidden, metrics)
+		}
+	}
+}

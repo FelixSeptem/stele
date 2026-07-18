@@ -8,6 +8,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/FelixSeptem/stele/internal/assurance"
 	"github.com/FelixSeptem/stele/internal/embedding"
 	"github.com/FelixSeptem/stele/internal/governance"
 	"github.com/FelixSeptem/stele/internal/insights"
@@ -107,6 +108,28 @@ type RepairActionWorker struct {
 	LeaseDuration time.Duration
 	MaxAttempts   int
 	RetryBackoff  time.Duration
+	Now           func() time.Time
+	Observer      telemetry.Observer
+}
+
+type AssuranceAlertDeliveryStore interface {
+	ClaimAlertCandidatesForDelivery(ctx context.Context, input assurance.ClaimAlertCandidatesForDeliveryInput) ([]assurance.AlertDeliveryClaim, error)
+}
+
+type AssuranceAlertDeliveryService interface {
+	DeliverAlertCandidate(ctx context.Context, input assurance.AlertDeliveryInput) ([]assurance.AlertDeliveryAttempt, error)
+}
+
+type AssuranceAlertDeliveryWorker struct {
+	Store         AssuranceAlertDeliveryStore
+	Service       AssuranceAlertDeliveryService
+	Scope         memory.Scope
+	WorkerID      string
+	BatchSize     int
+	LeaseDuration time.Duration
+	MaxAttempts   int
+	RetryBackoff  time.Duration
+	Config        assurance.AlertDeliveryConfig
 	Now           func() time.Time
 	Observer      telemetry.Observer
 }
@@ -692,6 +715,112 @@ func labelOrUnknownString(value string) string {
 		return "unknown"
 	}
 	return value
+}
+
+func (w AssuranceAlertDeliveryWorker) RunOnce(ctx context.Context) (processed int, err error) {
+	started := time.Now()
+	if w.Store == nil {
+		return 0, fmt.Errorf("assurance alert delivery store is required")
+	}
+	if w.Service == nil {
+		return 0, fmt.Errorf("assurance alert delivery service is required")
+	}
+	now := w.nowUTC()
+	defer func() {
+		w.recordOperation(ctx, "assurance_alert_delivery_worker", "alert_delivery", started, now, processed, err)
+	}()
+	claims, err := w.Store.ClaimAlertCandidatesForDelivery(ctx, assurance.ClaimAlertCandidatesForDeliveryInput{
+		Scope:         w.Scope,
+		WorkerID:      w.workerID(),
+		Now:           now,
+		LeaseDuration: w.leaseDuration(),
+		Limit:         w.batchSize(),
+		MaxAttempts:   w.maxAttempts(),
+	})
+	if err != nil {
+		return 0, err
+	}
+	for _, claim := range claims {
+		if _, err := w.Service.DeliverAlertCandidate(ctx, assurance.AlertDeliveryInput{
+			Scope:        claim.Candidate.Scope,
+			Candidate:    claim.Candidate,
+			Config:       w.Config,
+			MaxAttempts:  w.maxAttempts(),
+			RetryBackoff: w.retryBackoff(),
+			WorkerID:     claim.WorkerID,
+			Now:          now,
+		}); err != nil {
+			return processed, err
+		}
+		processed++
+	}
+	return processed, nil
+}
+
+func (w AssuranceAlertDeliveryWorker) nowUTC() time.Time {
+	now := time.Now
+	if w.Now != nil {
+		now = w.Now
+	}
+	return now().UTC()
+}
+
+func (w AssuranceAlertDeliveryWorker) workerID() string {
+	if strings.TrimSpace(w.WorkerID) != "" {
+		return strings.TrimSpace(w.WorkerID)
+	}
+	return "stele-assurance-alert-delivery-worker"
+}
+
+func (w AssuranceAlertDeliveryWorker) batchSize() int {
+	if w.BatchSize > 0 {
+		return w.BatchSize
+	}
+	return 10
+}
+
+func (w AssuranceAlertDeliveryWorker) leaseDuration() time.Duration {
+	if w.LeaseDuration > 0 {
+		return w.LeaseDuration
+	}
+	return time.Minute
+}
+
+func (w AssuranceAlertDeliveryWorker) maxAttempts() int {
+	if w.MaxAttempts > 0 {
+		return w.MaxAttempts
+	}
+	return 5
+}
+
+func (w AssuranceAlertDeliveryWorker) retryBackoff() time.Duration {
+	if w.RetryBackoff > 0 {
+		return w.RetryBackoff
+	}
+	return w.leaseDuration()
+}
+
+func (w AssuranceAlertDeliveryWorker) recordOperation(ctx context.Context, component, operation string, started time.Time, observedAt time.Time, processed int, err error) {
+	if w.Observer == nil {
+		return
+	}
+	status := "ok"
+	errorMessage := ""
+	if err != nil {
+		status = "error"
+		processed = 0
+		errorMessage = err.Error()
+	}
+	w.Observer.RecordOperation(ctx, telemetry.OperationEvent{
+		Mode:       "worker",
+		Component:  component,
+		Operation:  operation,
+		Status:     status,
+		Count:      processed,
+		Duration:   time.Since(started),
+		Error:      errorMessage,
+		ObservedAt: observedAt,
+	})
 }
 
 func (w RepairActionWorker) RunOnce(ctx context.Context) (processed int, err error) {
@@ -1325,6 +1454,21 @@ type jobExecutionCleaner interface {
 	DeleteJobExecutionsBefore(ctx context.Context, cutoff time.Time) (int, error)
 }
 
+type assuranceEvaluationService interface {
+	CreateHealthEvaluation(ctx context.Context, input assurance.HealthEvaluationInput) (assurance.HealthEvaluation, error)
+	GenerateAlertCandidates(ctx context.Context, input assurance.AlertCandidateGenerationInput) ([]assurance.AlertCandidate, error)
+	CreateReadinessReport(ctx context.Context, input assurance.ReadinessReportInput) (assurance.ReadinessReport, error)
+}
+
+type conformanceRunService interface {
+	ListConformanceProfiles(ctx context.Context, input assurance.ListConformanceProfilesInput) ([]assurance.ConformanceProfile, error)
+	RunConformance(ctx context.Context, input assurance.ConformanceRunInput) (assurance.ConformanceRun, []assurance.MissingEvidenceDiagnostic, error)
+}
+
+type assuranceRetentionService interface {
+	CreateRetentionRun(ctx context.Context, run assurance.RetentionRun) (assurance.RetentionRun, error)
+}
+
 type embeddingProviderResolver interface {
 	ResolveProvider(name string) (embedding.Provider, error)
 }
@@ -1561,6 +1705,295 @@ func (j JobExecutionCleanupJob) triggerSource() string {
 		return j.TriggerSource
 	}
 
+	return "scheduler"
+}
+
+type AssuranceEvaluationJob struct {
+	Scope               memory.Scope
+	Service             assuranceEvaluationService
+	ExecutionStore      ExecutionStore
+	TriggerSource       string
+	Cadence             time.Duration
+	AlertDeliveryPolicy string
+	AlertDeduplication  time.Duration
+	Now                 func() time.Time
+}
+
+func (j AssuranceEvaluationJob) Name() string {
+	return "assurance_evaluation"
+}
+
+func (j AssuranceEvaluationJob) Run(ctx context.Context) (int, error) {
+	if err := j.Scope.Validate(); err != nil {
+		return 0, err
+	}
+	if j.Service == nil {
+		return 0, fmt.Errorf("assurance evaluation service is required")
+	}
+
+	now := time.Now
+	if j.Now != nil {
+		now = j.Now
+	}
+	current := now().UTC()
+	runWindow := scheduledRunWindow(current, j.Cadence)
+
+	started, idempotencyKey, err := beginScheduledExecution(ctx, j.ExecutionStore, j.Name(), j.Scope, j.triggerSource(), runWindow)
+	if err != nil {
+		return 0, err
+	}
+	if !started {
+		return 0, nil
+	}
+
+	processed := 0
+	evaluation, err := j.Service.CreateHealthEvaluation(ctx, assurance.HealthEvaluationInput{
+		Scope:      j.Scope,
+		ObservedAt: current,
+		RuntimeReadiness: assurance.HealthObservation{
+			Status:     assurance.HealthStatusHealthy,
+			Severity:   assurance.SeverityInfo,
+			Reason:     assurance.ReasonRuntimeReady,
+			ObservedAt: current,
+			Evidence: map[string]any{
+				"source": "scheduler",
+			},
+		},
+	})
+	if err != nil {
+		return processed, j.fail(ctx, idempotencyKey, current, err)
+	}
+	processed++
+
+	deliveryPolicy := strings.TrimSpace(j.AlertDeliveryPolicy)
+	if deliveryPolicy == "" {
+		deliveryPolicy = "default"
+	}
+	if _, err := j.Service.GenerateAlertCandidates(ctx, assurance.AlertCandidateGenerationInput{
+		Scope:               j.Scope,
+		Evaluation:          evaluation,
+		DeliveryPolicy:      deliveryPolicy,
+		DeduplicationWindow: j.AlertDeduplication,
+		CreatedAt:           current,
+	}); err != nil {
+		return processed, j.fail(ctx, idempotencyKey, current, err)
+	}
+	processed++
+
+	if _, err := j.Service.CreateReadinessReport(ctx, assurance.ReadinessReportInput{
+		Scope:       j.Scope,
+		GeneratedAt: current,
+	}); err != nil {
+		return processed, j.fail(ctx, idempotencyKey, current, err)
+	}
+	processed++
+
+	if err := completeScheduledExecution(ctx, j.ExecutionStore, idempotencyKey, current, processed); err != nil {
+		return processed, err
+	}
+
+	return processed, nil
+}
+
+func (j AssuranceEvaluationJob) fail(ctx context.Context, idempotencyKey string, finishedAt time.Time, cause error) error {
+	if err := failScheduledExecution(ctx, j.ExecutionStore, idempotencyKey, finishedAt, cause); err != nil {
+		return err
+	}
+	return cause
+}
+
+func (j AssuranceEvaluationJob) triggerSource() string {
+	if j.TriggerSource != "" {
+		return j.TriggerSource
+	}
+	return "scheduler"
+}
+
+type ConformanceRunJob struct {
+	Scope          memory.Scope
+	Service        conformanceRunService
+	ExecutionStore ExecutionStore
+	TriggerSource  string
+	Cadence        time.Duration
+	Now            func() time.Time
+	Limit          int
+}
+
+func (j ConformanceRunJob) Name() string {
+	return "conformance_run"
+}
+
+func (j ConformanceRunJob) Run(ctx context.Context) (int, error) {
+	if err := j.Scope.Validate(); err != nil {
+		return 0, err
+	}
+	if j.Service == nil {
+		return 0, fmt.Errorf("conformance run service is required")
+	}
+
+	now := time.Now
+	if j.Now != nil {
+		now = j.Now
+	}
+	current := now().UTC()
+	runWindow := scheduledRunWindow(current, j.Cadence)
+
+	started, idempotencyKey, err := beginScheduledExecution(ctx, j.ExecutionStore, j.Name(), j.Scope, j.triggerSource(), runWindow)
+	if err != nil {
+		return 0, err
+	}
+	if !started {
+		return 0, nil
+	}
+
+	profiles, err := j.Service.ListConformanceProfiles(ctx, assurance.ListConformanceProfilesInput{
+		Scope:  j.Scope,
+		Status: assurance.ConformanceProfileStatusActive,
+	})
+	if err != nil {
+		return 0, j.fail(ctx, idempotencyKey, current, err)
+	}
+
+	limit := j.Limit
+	if limit <= 0 {
+		limit = 20
+	}
+	processed := 0
+	for _, profile := range profiles {
+		if profile.Status != assurance.ConformanceProfileStatusActive {
+			continue
+		}
+		if processed >= limit {
+			break
+		}
+		if _, _, err := j.Service.RunConformance(ctx, assurance.ConformanceRunInput{
+			Scope:     j.Scope,
+			ProfileID: profile.ID,
+			StartedAt: current,
+		}); err != nil {
+			return processed, j.fail(ctx, idempotencyKey, current, err)
+		}
+		processed++
+	}
+
+	if err := completeScheduledExecution(ctx, j.ExecutionStore, idempotencyKey, current, processed); err != nil {
+		return processed, err
+	}
+
+	return processed, nil
+}
+
+func (j ConformanceRunJob) fail(ctx context.Context, idempotencyKey string, finishedAt time.Time, cause error) error {
+	if err := failScheduledExecution(ctx, j.ExecutionStore, idempotencyKey, finishedAt, cause); err != nil {
+		return err
+	}
+	return cause
+}
+
+func (j ConformanceRunJob) triggerSource() string {
+	if j.TriggerSource != "" {
+		return j.TriggerSource
+	}
+	return "scheduler"
+}
+
+type AssuranceRetentionJob struct {
+	Scope                memory.Scope
+	Service              assuranceRetentionService
+	ExecutionStore       ExecutionStore
+	TriggerSource        string
+	Cadence              time.Duration
+	HistoryRetention     time.Duration
+	ConformanceRetention time.Duration
+	Now                  func() time.Time
+	NewRunID             func(prefix string) string
+}
+
+func (j AssuranceRetentionJob) Name() string {
+	return "assurance_retention"
+}
+
+func (j AssuranceRetentionJob) Run(ctx context.Context) (int, error) {
+	if err := j.Scope.Validate(); err != nil {
+		return 0, err
+	}
+	if j.Service == nil {
+		return 0, fmt.Errorf("assurance retention service is required")
+	}
+
+	now := time.Now
+	if j.Now != nil {
+		now = j.Now
+	}
+	current := now().UTC()
+	runWindow := scheduledRunWindow(current, j.Cadence)
+
+	started, idempotencyKey, err := beginScheduledExecution(ctx, j.ExecutionStore, j.Name(), j.Scope, j.triggerSource(), runWindow)
+	if err != nil {
+		return 0, err
+	}
+	if !started {
+		return 0, nil
+	}
+
+	historyRetention := j.HistoryRetention
+	if historyRetention <= 0 {
+		historyRetention = 7 * 24 * time.Hour
+	}
+	conformanceRetention := j.ConformanceRetention
+	if conformanceRetention <= 0 {
+		conformanceRetention = historyRetention
+	}
+
+	processed := 0
+	for _, spec := range []struct {
+		prefix   string
+		class    assurance.RetentionClass
+		retained time.Duration
+	}{
+		{prefix: "assurance_retention_diagnostic", class: assurance.RetentionClassDiagnostic, retained: historyRetention},
+		{prefix: "assurance_retention_conformance", class: assurance.RetentionClassAudit, retained: conformanceRetention},
+	} {
+		if _, err := j.Service.CreateRetentionRun(ctx, assurance.RetentionRun{
+			ID:             j.newRunID(spec.prefix),
+			Scope:          j.Scope,
+			RecordCategory: spec.class,
+			Cutoff:         current.Add(-spec.retained),
+			DeletedCount:   0,
+			Status:         assurance.HealthStatusHealthy,
+			StartedAt:      current,
+			FinishedAt:     current,
+		}); err != nil {
+			return processed, j.fail(ctx, idempotencyKey, current, err)
+		}
+		processed++
+	}
+
+	if err := completeScheduledExecution(ctx, j.ExecutionStore, idempotencyKey, current, processed); err != nil {
+		return processed, err
+	}
+
+	return processed, nil
+}
+
+func (j AssuranceRetentionJob) newRunID(prefix string) string {
+	if j.NewRunID != nil {
+		return j.NewRunID(prefix)
+	}
+	return fmt.Sprintf("%s_%d", prefix, time.Now().UnixNano())
+}
+
+func (j AssuranceRetentionJob) fail(ctx context.Context, idempotencyKey string, finishedAt time.Time, cause error) error {
+	if err := failScheduledExecution(ctx, j.ExecutionStore, idempotencyKey, finishedAt, cause); err != nil {
+		return err
+	}
+	return cause
+}
+
+func (j AssuranceRetentionJob) triggerSource() string {
+	if j.TriggerSource != "" {
+		return j.TriggerSource
+	}
 	return "scheduler"
 }
 

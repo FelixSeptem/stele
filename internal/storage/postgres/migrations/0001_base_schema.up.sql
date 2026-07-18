@@ -756,6 +756,199 @@ CREATE TABLE IF NOT EXISTS ranking_rollout_rollback_audit (
     created_at timestamptz NOT NULL DEFAULT now()
 );
 
+CREATE TABLE IF NOT EXISTS assurance_health_evaluations (
+    id text PRIMARY KEY,
+    tenant text NOT NULL,
+    project text NOT NULL,
+    namespace text NOT NULL,
+    status text NOT NULL,
+    severity text NOT NULL,
+    reason text,
+    created_at timestamptz NOT NULL DEFAULT now()
+);
+
+CREATE TABLE IF NOT EXISTS assurance_health_components (
+    id text PRIMARY KEY,
+    evaluation_id text NOT NULL REFERENCES assurance_health_evaluations(id) ON DELETE CASCADE,
+    tenant text NOT NULL,
+    project text NOT NULL,
+    namespace text NOT NULL,
+    component text NOT NULL,
+    status text NOT NULL,
+    severity text NOT NULL,
+    reason text,
+    observed_at timestamptz NOT NULL,
+    fresh_through timestamptz,
+    evidence jsonb NOT NULL DEFAULT '{}'::jsonb
+);
+
+CREATE TABLE IF NOT EXISTS assurance_incidents (
+    id text PRIMARY KEY,
+    tenant text NOT NULL,
+    project text NOT NULL,
+    namespace text NOT NULL,
+    status text NOT NULL,
+    severity text NOT NULL,
+    component text NOT NULL,
+    reason text NOT NULL,
+    deduplication_key text NOT NULL,
+    opened_at timestamptz NOT NULL,
+    updated_at timestamptz NOT NULL,
+    resolved_at timestamptz,
+    latest_evaluation_id text REFERENCES assurance_health_evaluations(id),
+    runbook_hints text[] NOT NULL DEFAULT '{}'::text[],
+    metadata jsonb NOT NULL DEFAULT '{}'::jsonb
+);
+
+CREATE TABLE IF NOT EXISTS assurance_incident_transitions (
+    id text PRIMARY KEY,
+    incident_id text NOT NULL REFERENCES assurance_incidents(id) ON DELETE CASCADE,
+    tenant text NOT NULL,
+    project text NOT NULL,
+    namespace text NOT NULL,
+    from_status text,
+    to_status text NOT NULL,
+    action text NOT NULL,
+    actor text NOT NULL,
+    reason text NOT NULL,
+    occurred_at timestamptz NOT NULL
+);
+
+CREATE TABLE IF NOT EXISTS assurance_alert_candidates (
+    id text PRIMARY KEY,
+    tenant text NOT NULL,
+    project text NOT NULL,
+    namespace text NOT NULL,
+    incident_id text REFERENCES assurance_incidents(id) ON DELETE SET NULL,
+    evaluation_id text REFERENCES assurance_health_evaluations(id) ON DELETE SET NULL,
+    severity text NOT NULL,
+    component text NOT NULL,
+    reason text NOT NULL,
+    deduplication_key text NOT NULL,
+    delivery_policy text NOT NULL,
+    payload jsonb NOT NULL DEFAULT '{}'::jsonb,
+    created_at timestamptz NOT NULL DEFAULT now(),
+    next_attempt_at timestamptz,
+    suppressed_until timestamptz
+);
+
+CREATE TABLE IF NOT EXISTS assurance_alert_delivery_attempts (
+    id text PRIMARY KEY,
+    alert_candidate_id text NOT NULL REFERENCES assurance_alert_candidates(id) ON DELETE CASCADE,
+    tenant text NOT NULL,
+    project text NOT NULL,
+    namespace text NOT NULL,
+    adapter_kind text NOT NULL,
+    result text NOT NULL,
+    failure_category text,
+    attempt integer NOT NULL DEFAULT 0,
+    worker_id text,
+    lease_until timestamptz,
+    next_attempt_at timestamptz,
+    payload_hash text,
+    attempted_at timestamptz NOT NULL,
+    completed_at timestamptz
+);
+
+CREATE TABLE IF NOT EXISTS assurance_conformance_profiles (
+    id text PRIMARY KEY,
+    tenant text NOT NULL,
+    project text NOT NULL,
+    namespace text NOT NULL,
+    status text NOT NULL,
+    expected_evidence jsonb NOT NULL DEFAULT '[]'::jsonb,
+    actor text NOT NULL,
+    reason text NOT NULL,
+    created_at timestamptz NOT NULL DEFAULT now(),
+    updated_at timestamptz NOT NULL DEFAULT now(),
+    disabled_at timestamptz
+);
+
+CREATE TABLE IF NOT EXISTS assurance_conformance_runs (
+    id text PRIMARY KEY,
+    profile_id text NOT NULL REFERENCES assurance_conformance_profiles(id),
+    tenant text NOT NULL,
+    project text NOT NULL,
+    namespace text NOT NULL,
+    result text NOT NULL,
+    evidence_counts jsonb NOT NULL DEFAULT '{}'::jsonb,
+    started_at timestamptz NOT NULL,
+    finished_at timestamptz,
+    created_at timestamptz NOT NULL DEFAULT now()
+);
+
+CREATE TABLE IF NOT EXISTS assurance_missing_evidence_diagnostics (
+    id text PRIMARY KEY,
+    conformance_run_id text NOT NULL REFERENCES assurance_conformance_runs(id) ON DELETE CASCADE,
+    tenant text NOT NULL,
+    project text NOT NULL,
+    namespace text NOT NULL,
+    evidence_kind text NOT NULL,
+    category text NOT NULL,
+    readiness_impact text NOT NULL,
+    metadata jsonb NOT NULL DEFAULT '{}'::jsonb,
+    created_at timestamptz NOT NULL DEFAULT now()
+);
+
+CREATE TABLE IF NOT EXISTS assurance_operational_proofs (
+    id text PRIMARY KEY,
+    tenant text NOT NULL,
+    project text NOT NULL,
+    namespace text NOT NULL,
+    target text NOT NULL,
+    status text NOT NULL,
+    severity text NOT NULL,
+    reason text NOT NULL,
+    observed_at timestamptz NOT NULL,
+    fresh_through timestamptz,
+    evidence jsonb NOT NULL DEFAULT '{}'::jsonb,
+    created_at timestamptz NOT NULL DEFAULT now()
+);
+
+CREATE TABLE IF NOT EXISTS assurance_readiness_reports (
+    id text PRIMARY KEY,
+    tenant text NOT NULL,
+    project text NOT NULL,
+    namespace text NOT NULL,
+    status text NOT NULL,
+    health_evaluation_id text REFERENCES assurance_health_evaluations(id) ON DELETE SET NULL,
+    conformance_run_id text REFERENCES assurance_conformance_runs(id) ON DELETE SET NULL,
+    component_summary jsonb NOT NULL DEFAULT '{}'::jsonb,
+    recommended_actions text[] NOT NULL DEFAULT '{}'::text[],
+    generated_at timestamptz NOT NULL,
+    created_at timestamptz NOT NULL DEFAULT now()
+);
+
+CREATE TABLE IF NOT EXISTS assurance_recovery_verifications (
+    id text PRIMARY KEY,
+    tenant text NOT NULL,
+    project text NOT NULL,
+    namespace text NOT NULL,
+    target_kind text NOT NULL,
+    target_id text NOT NULL,
+    status text NOT NULL,
+    checked_surfaces text[] NOT NULL DEFAULT '{}'::text[],
+    result_category text NOT NULL,
+    linked_evidence jsonb NOT NULL DEFAULT '{}'::jsonb,
+    actor text NOT NULL,
+    reason text NOT NULL,
+    created_at timestamptz NOT NULL DEFAULT now(),
+    verified_at timestamptz
+);
+
+CREATE TABLE IF NOT EXISTS assurance_retention_runs (
+    id text PRIMARY KEY,
+    tenant text NOT NULL,
+    project text NOT NULL,
+    namespace text NOT NULL,
+    record_category text NOT NULL,
+    cutoff timestamptz NOT NULL,
+    deleted_count integer NOT NULL DEFAULT 0,
+    status text NOT NULL,
+    started_at timestamptz NOT NULL,
+    finished_at timestamptz
+);
+
 CREATE INDEX IF NOT EXISTS raw_events_scope_created_at_idx
     ON raw_events (tenant, project, namespace, created_at DESC);
 
@@ -974,3 +1167,45 @@ CREATE INDEX IF NOT EXISTS ranking_rollout_impact_entries_scope_created_at_idx
 
 CREATE INDEX IF NOT EXISTS ranking_rollout_rollback_audit_scope_created_at_idx
     ON ranking_rollout_rollback_audit (tenant, project, namespace, created_at DESC);
+
+CREATE INDEX IF NOT EXISTS assurance_health_evaluations_scope_created_at_idx
+    ON assurance_health_evaluations (tenant, project, namespace, created_at DESC);
+
+CREATE INDEX IF NOT EXISTS assurance_health_components_scope_component_idx
+    ON assurance_health_components (tenant, project, namespace, component, observed_at DESC);
+
+CREATE INDEX IF NOT EXISTS assurance_incidents_scope_status_updated_at_idx
+    ON assurance_incidents (tenant, project, namespace, status, updated_at DESC);
+
+CREATE UNIQUE INDEX IF NOT EXISTS assurance_incidents_scope_dedup_idx
+    ON assurance_incidents (tenant, project, namespace, deduplication_key);
+
+CREATE INDEX IF NOT EXISTS assurance_incident_transitions_incident_idx
+    ON assurance_incident_transitions (incident_id, occurred_at DESC);
+
+CREATE INDEX IF NOT EXISTS assurance_alert_candidates_scope_next_attempt_idx
+    ON assurance_alert_candidates (tenant, project, namespace, next_attempt_at, created_at DESC);
+
+CREATE INDEX IF NOT EXISTS assurance_alert_delivery_attempts_scope_next_attempt_idx
+    ON assurance_alert_delivery_attempts (tenant, project, namespace, next_attempt_at, attempted_at DESC);
+
+CREATE INDEX IF NOT EXISTS assurance_conformance_profiles_scope_status_idx
+    ON assurance_conformance_profiles (tenant, project, namespace, status, updated_at DESC);
+
+CREATE INDEX IF NOT EXISTS assurance_conformance_runs_scope_created_at_idx
+    ON assurance_conformance_runs (tenant, project, namespace, created_at DESC);
+
+CREATE INDEX IF NOT EXISTS assurance_missing_evidence_diagnostics_run_idx
+    ON assurance_missing_evidence_diagnostics (conformance_run_id, created_at ASC);
+
+CREATE INDEX IF NOT EXISTS assurance_operational_proofs_scope_target_observed_idx
+    ON assurance_operational_proofs (tenant, project, namespace, target, observed_at DESC);
+
+CREATE INDEX IF NOT EXISTS assurance_readiness_reports_scope_generated_at_idx
+    ON assurance_readiness_reports (tenant, project, namespace, generated_at DESC);
+
+CREATE INDEX IF NOT EXISTS assurance_recovery_verifications_scope_target_idx
+    ON assurance_recovery_verifications (tenant, project, namespace, target_kind, target_id, created_at DESC);
+
+CREATE INDEX IF NOT EXISTS assurance_retention_runs_scope_category_started_idx
+    ON assurance_retention_runs (tenant, project, namespace, record_category, started_at DESC);

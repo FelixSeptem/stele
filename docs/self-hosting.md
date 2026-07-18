@@ -391,7 +391,109 @@ curl http://localhost:8080/metrics | grep 'stele_memory_session_verifications_to
 
 This closes the service-side loop: `scope proof -> session context -> external agent turn -> turn outcome ingestion -> governance -> retrieval/context verification -> quality/repair recommendation -> rerun proof/session`.
 
-Remaining product gaps after this service loop are explicit: SDK/UI onboarding, external agent runtime integration, alert routing, capacity/load proof, backup/restore proof, and long-term memory usefulness scoring remain outside the service-owned scope.
+### Production-readiness assurance and conformance loop
+
+Use this loop after the smoke, scope proof, and memory session checks when an operator needs a durable answer to whether one tenant/project/namespace is ready for production. The routes are admin-only and must use the same scope headers throughout.
+
+1. Run a health evaluation. The request can include service-owned capacity/load proof and operator-supplied backup/restore proof evidence; Stele stores bounded categories and counters, not raw deployment secrets or external backup payloads.
+
+```bash
+curl -X POST http://localhost:8080/v1/admin/assurance/health-evaluations \
+  -H 'Content-Type: application/json' \
+  -H 'X-API-Key: dev-admin-key' \
+  -H 'X-Stele-Tenant: tenant-a' \
+  -H 'X-Stele-Project: project-a' \
+  -H 'X-Stele-Namespace: namespace-a' \
+  -d '{"capacity_load_proof":{"status":"healthy","severity":"info","reason":"capacity_within_thresholds","evidence":{"backlog_depth":0,"worker_latency_ms":120}},"backup_restore_proof":{"status":"healthy","severity":"info","reason":"backup_restore_fresh","evidence":{"marker":"restore-check-2026-07-13"}}}'
+```
+
+2. Define the external-agent integration evidence contract. Conformance profiles state what Stele evidence an external agent is expected to leave behind; Stele does not execute the agent, invoke models, build prompts, or generate final answers.
+
+```bash
+curl -X POST http://localhost:8080/v1/admin/assurance/conformance-profiles \
+  -H 'Content-Type: application/json' \
+  -H 'X-API-Key: dev-admin-key' \
+  -H 'X-Stele-Tenant: tenant-a' \
+  -H 'X-Stele-Project: project-a' \
+  -H 'X-Stele-Namespace: namespace-a' \
+  -d '{"expected_evidence":[{"kind":"session","minimum_count":1,"freshness_window":"24h"},{"kind":"context","minimum_count":1,"freshness_window":"24h"},{"kind":"outcome","minimum_count":1,"freshness_window":"24h"},{"kind":"verification","minimum_count":1,"freshness_window":"24h"},{"kind":"usefulness_feedback","minimum_count":1,"freshness_window":"24h"},{"kind":"task_evaluation","minimum_count":1,"freshness_window":"24h"},{"kind":"proof","minimum_count":1,"freshness_window":"24h"}],"actor":"operator-a","reason":"production readiness evidence chain"}'
+```
+
+3. Run conformance and inspect missing-evidence diagnostics. Missing evidence uses stable categories such as `session_without_outcome`, `turn_without_context`, `verification_missing`, `feedback_without_subject`, `task_evaluation_missing_evidence`, `repair_without_verification`, or `rollout_without_dry_run`.
+
+```bash
+curl -X POST http://localhost:8080/v1/admin/assurance/conformance-runs \
+  -H 'Content-Type: application/json' \
+  -H 'X-API-Key: dev-admin-key' \
+  -H 'X-Stele-Tenant: tenant-a' \
+  -H 'X-Stele-Project: project-a' \
+  -H 'X-Stele-Namespace: namespace-a' \
+  -d '{"profile_id":"<conformance-profile-id>"}'
+
+curl 'http://localhost:8080/v1/admin/assurance/conformance-runs?profile_id=<conformance-profile-id>' \
+  -H 'X-API-Key: dev-admin-key' \
+  -H 'X-Stele-Tenant: tenant-a' \
+  -H 'X-Stele-Project: project-a' \
+  -H 'X-Stele-Namespace: namespace-a'
+```
+
+4. Generate and inspect the scope readiness report. Readiness combines latest health evaluation, conformance run, capacity/load proof, backup/restore proof, active incident counters, alert candidate counters, and recommended admin surfaces.
+
+```bash
+curl -X POST http://localhost:8080/v1/admin/assurance/readiness-reports \
+  -H 'Content-Type: application/json' \
+  -H 'X-API-Key: dev-admin-key' \
+  -H 'X-Stele-Tenant: tenant-a' \
+  -H 'X-Stele-Project: project-a' \
+  -H 'X-Stele-Namespace: namespace-a' \
+  -d '{}'
+
+curl 'http://localhost:8080/v1/admin/assurance/readiness-reports' \
+  -H 'X-API-Key: dev-admin-key' \
+  -H 'X-Stele-Tenant: tenant-a' \
+  -H 'X-Stele-Project: project-a' \
+  -H 'X-Stele-Namespace: namespace-a'
+```
+
+5. Review incidents and alert candidates. Incidents preserve append-only operational degradation history. Alert delivery adapters are intentionally limited to `disabled`, `stdout`, and generic `webhook`; webhook delivery is HTTPS-by-default, uses unsafe target rejection, bounds timeout and payload size, redacts configured secrets, and does not add vendor-specific alert behavior.
+
+```bash
+curl 'http://localhost:8080/v1/admin/assurance/incidents' \
+  -H 'X-API-Key: dev-admin-key' \
+  -H 'X-Stele-Tenant: tenant-a' \
+  -H 'X-Stele-Project: project-a' \
+  -H 'X-Stele-Namespace: namespace-a'
+
+curl 'http://localhost:8080/v1/admin/assurance/alert-candidates' \
+  -H 'X-API-Key: dev-admin-key' \
+  -H 'X-Stele-Tenant: tenant-a' \
+  -H 'X-Stele-Project: project-a' \
+  -H 'X-Stele-Namespace: namespace-a'
+
+curl 'http://localhost:8080/v1/admin/assurance/alert-candidates/<alert-candidate-id>/delivery-attempts' \
+  -H 'X-API-Key: dev-admin-key' \
+  -H 'X-Stele-Tenant: tenant-a' \
+  -H 'X-Stele-Project: project-a' \
+  -H 'X-Stele-Namespace: namespace-a'
+```
+
+6. Remediate through the recommended runbook hints, then verify recovery. Recovery verification links the remediation evidence to an incident, alert candidate, conformance run, repair result, ranking rollback, proof run, session verification, capacity/load proof, or backup/restore proof without overwriting prior history.
+
+```bash
+curl -X POST http://localhost:8080/v1/admin/assurance/recovery-verifications \
+  -H 'Content-Type: application/json' \
+  -H 'X-API-Key: dev-admin-key' \
+  -H 'X-Stele-Tenant: tenant-a' \
+  -H 'X-Stele-Project: project-a' \
+  -H 'X-Stele-Namespace: namespace-a' \
+  -d '{"target":"incident","target_id":"<incident-id>","status":"healthy","result_category":"recovered","checked_surfaces":["readiness","conformance","capacity_load"],"actor":"operator-a","reason":"verified after remediation"}'
+```
+
+7. Scrape assurance metrics and logs. Metrics use series such as `stele_assurance_health_evaluations_total`, `stele_assurance_incidents_total`, `stele_assurance_alert_candidates_total`, `stele_assurance_alert_delivery_total`, `stele_assurance_cleanup_total`, `stele_conformance_runs_total`, `stele_conformance_missing_evidence_total`, `stele_operational_proofs_total`, `stele_readiness_reports_total`, and `stele_recovery_verifications_total`. Structured lifecycle logs use `component=assurance event=lifecycle` and `component=conformance event=lifecycle`.
+
+Metrics and lifecycle logs intentionally exclude tenant, project, namespace, record ids, actor, reason text, query text, webhook URL, and recipient fields. Use the admin inspection routes above for scoped record details.
+
+Remaining product gaps after this service loop are explicit: SDK/UI onboarding, external agent runtime integration, vendor-specific alert routing, hosted incident management, and adaptive scoring calibration remain outside the service-owned scope.
 
 ### Baseline startup
 
@@ -933,10 +1035,20 @@ This repository now closes the service-side task-success and governed ranking ro
 
 - SDK/UI collection surfaces for callers to attach sessions, feedback subjects, task evidence, and rollout inspection without hand-building JSON.
 - External agent runtime integration that decides when to call session, outcome, verification, task evaluation, feedback, and ranking rollout routes.
-- operational assurance for production rollout operations, including capacity/load proof, backup/restore proof, SLOs, runbooks, and disaster recovery drills.
-- alert delivery adapters for repeated negative feedback, unsafe feedback, insufficient rollout evidence, degraded task-success trends, or repair verification failures.
+- Hosted incident management and vendor-specific alert integrations beyond the generic self-hosted webhook adapter.
 - advanced scoring calibration, including adaptive weights, traffic splitting, long-term memory usefulness scoring, and offline evaluation harnesses beyond the conservative bounded signals implemented here.
 - End-user prompt orchestration and model invocation, which remain outside Stele's service boundary.
+
+### Remaining assurance product gaps
+
+The assurance and conformance loop is service-owned and self-host friendly, but it deliberately stops at durable diagnostics, admin inspection, generic alert delivery, and recovery verification. Remaining product gaps are outside this repository boundary:
+
+- SDK/UI collection surfaces that guide callers through session, context, outcome, verification, usefulness feedback, task evaluation, proof, repair, and ranking rollout evidence capture.
+- external agent runtime implementation, including agent execution, tool orchestration, and deciding when to write each evidence record.
+- vendor-specific alert integrations for Slack, PagerDuty, email providers, ticketing systems, or hosted incident-management products.
+- hosted incident management workflows such as escalation policies, on-call schedules, paging, acknowledgement ownership, and post-incident review tooling.
+- adaptive scoring calibration, including online learning, traffic splitting, long-term memory usefulness scoring, and offline evaluation harnesses.
+- model invocation, prompt orchestration, and final-answer generation, which remain outside Stele's service boundary.
 
 ## Memory Management Surface
 

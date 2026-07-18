@@ -135,6 +135,83 @@ type MemorySessionVerificationEvent struct {
 	FailureCategory string
 }
 
+type AssuranceHealthEvaluationEvent struct {
+	Operation        string
+	Result           string
+	Status           string
+	Component        string
+	Severity         string
+	OperationalProof string
+	ReasonCategory   string
+}
+
+type AssuranceIncidentLifecycleEvent struct {
+	Operation      string
+	Result         string
+	Status         string
+	Component      string
+	Severity       string
+	ReasonCategory string
+}
+
+type AssuranceAlertCandidateEvent struct {
+	Operation      string
+	Result         string
+	Status         string
+	Component      string
+	Severity       string
+	ReasonCategory string
+}
+
+type AssuranceAlertDeliveryEvent struct {
+	Adapter         string
+	Result          string
+	Severity        string
+	Component       string
+	FailureCategory string
+}
+
+type AssuranceCleanupEvent struct {
+	RecordCategory  string
+	Result          string
+	DeletedCategory string
+}
+
+type ConformanceRunEvent struct {
+	Result                  string
+	ProfileStatus           string
+	EvidenceCategory        string
+	MissingEvidenceCategory string
+	ReadinessImpact         string
+}
+
+type MissingEvidenceDiagnosticEvent struct {
+	EvidenceCategory        string
+	MissingEvidenceCategory string
+	ReadinessImpact         string
+}
+
+type OperationalProofEvent struct {
+	Target         string
+	Status         string
+	Severity       string
+	ReasonCategory string
+}
+
+type ReadinessReportEvent struct {
+	ReadinessStatus           string
+	RuntimeCategory           string
+	ConformanceCategory       string
+	IncidentCategory          string
+	RecommendedActionCategory string
+}
+
+type RecoveryVerificationEvent struct {
+	Target         string
+	Status         string
+	ResultCategory string
+}
+
 type MetricsObserver struct {
 	mu       sync.Mutex
 	counters map[string]float64
@@ -413,6 +490,133 @@ func (o *MetricsObserver) RecordMemorySessionVerification(ctx context.Context, e
 	}, 1)
 }
 
+func (o *MetricsObserver) RecordAssuranceHealthEvaluation(ctx context.Context, event AssuranceHealthEvaluationEvent) {
+	if o == nil {
+		return
+	}
+	o.addCounter("stele_assurance_health_evaluations_total", map[string]string{
+		"operation":         labelOrUnknown(event.Operation),
+		"result":            labelOrUnknown(event.Result),
+		"status":            labelOrUnknown(event.Status),
+		"component":         labelOrUnknown(event.Component),
+		"severity":          labelOrUnknown(event.Severity),
+		"operational_proof": labelOrUnknown(event.OperationalProof),
+		"reason_category":   labelOrUnknown(event.ReasonCategory),
+	}, 1)
+}
+
+func (o *MetricsObserver) RecordAssuranceIncidentLifecycle(ctx context.Context, event AssuranceIncidentLifecycleEvent) {
+	if o == nil {
+		return
+	}
+	o.addCounter("stele_assurance_incidents_total", map[string]string{
+		"operation":       labelOrUnknown(event.Operation),
+		"result":          labelOrUnknown(event.Result),
+		"status":          labelOrUnknown(event.Status),
+		"component":       labelOrUnknown(event.Component),
+		"severity":        labelOrUnknown(event.Severity),
+		"reason_category": labelOrUnknown(event.ReasonCategory),
+	}, 1)
+}
+
+func (o *MetricsObserver) RecordAssuranceAlertCandidate(ctx context.Context, event AssuranceAlertCandidateEvent) {
+	if o == nil {
+		return
+	}
+	o.addCounter("stele_assurance_alert_candidates_total", map[string]string{
+		"operation":       labelOrUnknown(event.Operation),
+		"result":          labelOrUnknown(event.Result),
+		"status":          labelOrUnknown(event.Status),
+		"component":       labelOrUnknown(event.Component),
+		"severity":        labelOrUnknown(event.Severity),
+		"reason_category": labelOrUnknown(event.ReasonCategory),
+	}, 1)
+}
+
+func (o *MetricsObserver) RecordAssuranceAlertDelivery(ctx context.Context, event AssuranceAlertDeliveryEvent) {
+	if o == nil {
+		return
+	}
+	o.addCounter("stele_assurance_alert_delivery_total", map[string]string{
+		"adapter":          labelOrUnknown(event.Adapter),
+		"result":           labelOrUnknown(event.Result),
+		"severity":         labelOrUnknown(event.Severity),
+		"component":        labelOrUnknown(event.Component),
+		"failure_category": labelOrUnknown(event.FailureCategory),
+	}, 1)
+}
+
+func (o *MetricsObserver) RecordAssuranceCleanup(ctx context.Context, event AssuranceCleanupEvent) {
+	if o == nil {
+		return
+	}
+	o.addCounter("stele_assurance_cleanup_total", map[string]string{
+		"record_category":  labelOrUnknown(event.RecordCategory),
+		"result":           labelOrUnknown(event.Result),
+		"deleted_category": labelOrUnknown(event.DeletedCategory),
+	}, 1)
+}
+
+func (o *MetricsObserver) RecordConformanceRun(ctx context.Context, event ConformanceRunEvent) {
+	if o == nil {
+		return
+	}
+	o.addCounter("stele_conformance_runs_total", map[string]string{
+		"result":                    labelOrUnknown(event.Result),
+		"profile_status":            labelOrUnknown(event.ProfileStatus),
+		"evidence_category":         labelOrUnknown(event.EvidenceCategory),
+		"missing_evidence_category": labelOrUnknown(event.MissingEvidenceCategory),
+		"readiness_impact":          labelOrUnknown(event.ReadinessImpact),
+	}, 1)
+}
+
+func (o *MetricsObserver) RecordMissingEvidenceDiagnostic(ctx context.Context, event MissingEvidenceDiagnosticEvent) {
+	if o == nil {
+		return
+	}
+	o.addCounter("stele_conformance_missing_evidence_total", map[string]string{
+		"evidence_category":         labelOrUnknown(event.EvidenceCategory),
+		"missing_evidence_category": labelOrUnknown(event.MissingEvidenceCategory),
+		"readiness_impact":          labelOrUnknown(event.ReadinessImpact),
+	}, 1)
+}
+
+func (o *MetricsObserver) RecordOperationalProof(ctx context.Context, event OperationalProofEvent) {
+	if o == nil {
+		return
+	}
+	o.addCounter("stele_operational_proofs_total", map[string]string{
+		"target":          labelOrUnknown(event.Target),
+		"status":          labelOrUnknown(event.Status),
+		"severity":        labelOrUnknown(event.Severity),
+		"reason_category": labelOrUnknown(event.ReasonCategory),
+	}, 1)
+}
+
+func (o *MetricsObserver) RecordReadinessReport(ctx context.Context, event ReadinessReportEvent) {
+	if o == nil {
+		return
+	}
+	o.addCounter("stele_readiness_reports_total", map[string]string{
+		"readiness_status":            labelOrUnknown(event.ReadinessStatus),
+		"runtime_category":            labelOrUnknown(event.RuntimeCategory),
+		"conformance_category":        labelOrUnknown(event.ConformanceCategory),
+		"incident_category":           labelOrUnknown(event.IncidentCategory),
+		"recommended_action_category": labelOrUnknown(event.RecommendedActionCategory),
+	}, 1)
+}
+
+func (o *MetricsObserver) RecordRecoveryVerification(ctx context.Context, event RecoveryVerificationEvent) {
+	if o == nil {
+		return
+	}
+	o.addCounter("stele_recovery_verifications_total", map[string]string{
+		"target":          labelOrUnknown(event.Target),
+		"status":          labelOrUnknown(event.Status),
+		"result_category": labelOrUnknown(event.ResultCategory),
+	}, 1)
+}
+
 func (o *MetricsObserver) RenderPrometheus() string {
 	if o == nil {
 		return ""
@@ -446,6 +650,16 @@ func (o *MetricsObserver) RenderPrometheus() string {
 	writeMetricFamilyHeader(&builder, "stele_memory_session_runs_total", "counter", "Memory session run outcomes by bounded categories.")
 	writeMetricFamilyHeader(&builder, "stele_memory_session_turns_total", "counter", "Memory session turn outcomes by bounded categories.")
 	writeMetricFamilyHeader(&builder, "stele_memory_session_verifications_total", "counter", "Memory session verification outcomes by bounded categories.")
+	writeMetricFamilyHeader(&builder, "stele_assurance_health_evaluations_total", "counter", "Assurance health evaluation outcomes by bounded categories.")
+	writeMetricFamilyHeader(&builder, "stele_assurance_incidents_total", "counter", "Assurance incident lifecycle outcomes by bounded categories.")
+	writeMetricFamilyHeader(&builder, "stele_assurance_alert_candidates_total", "counter", "Assurance alert candidate generation outcomes by bounded categories.")
+	writeMetricFamilyHeader(&builder, "stele_assurance_alert_delivery_total", "counter", "Assurance alert delivery outcomes by bounded categories.")
+	writeMetricFamilyHeader(&builder, "stele_assurance_cleanup_total", "counter", "Assurance and conformance cleanup outcomes by bounded categories.")
+	writeMetricFamilyHeader(&builder, "stele_conformance_runs_total", "counter", "Conformance run outcomes by bounded categories.")
+	writeMetricFamilyHeader(&builder, "stele_conformance_missing_evidence_total", "counter", "Conformance missing evidence diagnostics by bounded categories.")
+	writeMetricFamilyHeader(&builder, "stele_operational_proofs_total", "counter", "Operational proof outcomes by bounded categories.")
+	writeMetricFamilyHeader(&builder, "stele_readiness_reports_total", "counter", "Readiness report outcomes by bounded categories.")
+	writeMetricFamilyHeader(&builder, "stele_recovery_verifications_total", "counter", "Recovery verification outcomes by bounded categories.")
 
 	writeMetricMap(&builder, o.counters)
 	writeMetricMap(&builder, o.gauges)

@@ -330,6 +330,10 @@ func TestBuildAPIRuntimeUsesConfiguredDependencies(t *testing.T) {
 		t.Fatal("UsefulnessFeedback = nil, want configured usefulness feedback service")
 	}
 
+	if gotDeps.AssuranceAdmin == nil {
+		t.Fatal("AssuranceAdmin = nil, want configured assurance admin service")
+	}
+
 	if gotDeps.Readiness == nil {
 		t.Fatal("Readiness = nil, want readiness checker")
 	}
@@ -521,12 +525,21 @@ func TestBuildWorkerRuntimeWiresDurableRetrySettings(t *testing.T) {
 	cfg := config.Config{
 		Mode:        config.ModeWorker,
 		PostgresDSN: "postgres://runtime",
+		Auth: config.AuthConfig{
+			DefaultTenant:    "tenant-a",
+			DefaultProject:   "project-a",
+			DefaultNamespace: "namespace-a",
+		},
 		Jobs: config.JobConfig{
 			WorkerPollInterval:         7 * time.Second,
 			WorkerErrorBackoff:         11 * time.Second,
 			GovernanceMaxAttempts:      7,
 			GovernanceRetryBackoff:     45 * time.Second,
 			GovernanceLeaseRenewPeriod: 20 * time.Second,
+		},
+		Assurance: config.AssuranceConfig{
+			AlertMaxAttempts:  4,
+			AlertRetryBackoff: 2 * time.Minute,
 		},
 	}
 
@@ -554,13 +567,23 @@ func TestBuildWorkerRuntimeWiresDurableRetrySettings(t *testing.T) {
 	if !ok {
 		t.Fatalf("poller.Worker type = %T, want jobs.GovernanceWorker in worker graph", poller.Worker)
 	}
+	alertWorker, ok := findAssuranceAlertDeliveryWorker(poller.Worker)
+	if !ok {
+		t.Fatalf("poller.Worker type = %T, want jobs.AssuranceAlertDeliveryWorker in worker graph", poller.Worker)
+	}
 
 	if worker.MaxAttempts != 7 {
 		t.Fatalf("MaxAttempts = %d, want 7", worker.MaxAttempts)
 	}
+	if alertWorker.MaxAttempts != 4 {
+		t.Fatalf("alert MaxAttempts = %d, want 4", alertWorker.MaxAttempts)
+	}
 
 	if worker.RetryBackoff != 45*time.Second {
 		t.Fatalf("RetryBackoff = %v, want 45s", worker.RetryBackoff)
+	}
+	if alertWorker.RetryBackoff != 2*time.Minute {
+		t.Fatalf("alert RetryBackoff = %v, want 2m", alertWorker.RetryBackoff)
 	}
 
 	if worker.LeaseRenewInterval != 20*time.Second {
@@ -590,6 +613,22 @@ func findGovernanceWorker(worker jobs.LoopWorker) (jobs.GovernanceWorker, bool) 
 		}
 	}
 	return jobs.GovernanceWorker{}, false
+}
+
+func findAssuranceAlertDeliveryWorker(worker jobs.LoopWorker) (jobs.AssuranceAlertDeliveryWorker, bool) {
+	if alertWorker, ok := worker.(jobs.AssuranceAlertDeliveryWorker); ok {
+		return alertWorker, true
+	}
+	composite, ok := worker.(jobs.CompositeWorker)
+	if !ok {
+		return jobs.AssuranceAlertDeliveryWorker{}, false
+	}
+	for _, child := range composite.Workers {
+		if alertWorker, ok := child.(jobs.AssuranceAlertDeliveryWorker); ok {
+			return alertWorker, true
+		}
+	}
+	return jobs.AssuranceAlertDeliveryWorker{}, false
 }
 
 func TestBuildSchedulerRuntimeAssemblesMaintenanceScheduler(t *testing.T) {
@@ -641,8 +680,8 @@ func TestBuildSchedulerRuntimeAssemblesMaintenanceScheduler(t *testing.T) {
 		t.Fatalf("runtime scheduler type = %T, want jobs.MaintenanceScheduler", runtime.scheduler)
 	}
 
-	if len(scheduler.Jobs) != 6 {
-		t.Fatalf("len(scheduler.Jobs) = %d, want 6", len(scheduler.Jobs))
+	if len(scheduler.Jobs) != 9 {
+		t.Fatalf("len(scheduler.Jobs) = %d, want 9", len(scheduler.Jobs))
 	}
 }
 
@@ -669,6 +708,12 @@ func TestBuildSchedulerRuntimeAssemblesScopeDispatchJobs(t *testing.T) {
 			DerivedInsightBatchSize:          55,
 			DerivedInsightMinimumEvidence:    3,
 		},
+		Assurance: config.AssuranceConfig{
+			Cadence:              90 * time.Second,
+			ConformanceCadence:   3 * time.Minute,
+			HistoryRetention:     7 * 24 * time.Hour,
+			ConformanceRetention: 14 * 24 * time.Hour,
+		},
 	}
 
 	runtime, err := buildSchedulerRuntime(context.Background(), cfg, schedulerRuntimeDependencies{
@@ -691,8 +736,8 @@ func TestBuildSchedulerRuntimeAssemblesScopeDispatchJobs(t *testing.T) {
 		t.Fatalf("runtime scheduler type = %T, want jobs.MaintenanceScheduler", runtime.scheduler)
 	}
 
-	if len(scheduler.Jobs) != 6 {
-		t.Fatalf("len(scheduler.Jobs) = %d, want 6", len(scheduler.Jobs))
+	if len(scheduler.Jobs) != 9 {
+		t.Fatalf("len(scheduler.Jobs) = %d, want 9", len(scheduler.Jobs))
 	}
 
 	dispatchA, ok := scheduler.Jobs[0].(jobs.ScopeDispatchJob)
@@ -720,12 +765,27 @@ func TestBuildSchedulerRuntimeAssemblesScopeDispatchJobs(t *testing.T) {
 		t.Fatalf("scheduler.Jobs[4] type = %T, want jobs.ScopeDispatchJob", scheduler.Jobs[4])
 	}
 
-	if dispatchA.ScopeBatchLimit != 25 || dispatchB.ScopeBatchLimit != 25 || dispatchC.ScopeBatchLimit != 25 || dispatchD.ScopeBatchLimit != 25 || dispatchE.ScopeBatchLimit != 25 {
-		t.Fatalf("scope batch limits = (%d, %d, %d, %d, %d), want 25", dispatchA.ScopeBatchLimit, dispatchB.ScopeBatchLimit, dispatchC.ScopeBatchLimit, dispatchD.ScopeBatchLimit, dispatchE.ScopeBatchLimit)
+	dispatchF, ok := scheduler.Jobs[5].(jobs.ScopeDispatchJob)
+	if !ok {
+		t.Fatalf("scheduler.Jobs[5] type = %T, want jobs.ScopeDispatchJob", scheduler.Jobs[5])
 	}
 
-	if dispatchA.FallbackScope.Namespace != "namespace-a" || dispatchB.FallbackScope.Namespace != "namespace-a" || dispatchC.FallbackScope.Namespace != "namespace-a" || dispatchD.FallbackScope.Namespace != "namespace-a" || dispatchE.FallbackScope.Namespace != "namespace-a" {
-		t.Fatalf("fallback scopes = (%+v, %+v, %+v, %+v, %+v), want default namespace", dispatchA.FallbackScope, dispatchB.FallbackScope, dispatchC.FallbackScope, dispatchD.FallbackScope, dispatchE.FallbackScope)
+	dispatchG, ok := scheduler.Jobs[6].(jobs.ScopeDispatchJob)
+	if !ok {
+		t.Fatalf("scheduler.Jobs[6] type = %T, want jobs.ScopeDispatchJob", scheduler.Jobs[6])
+	}
+
+	dispatchH, ok := scheduler.Jobs[7].(jobs.ScopeDispatchJob)
+	if !ok {
+		t.Fatalf("scheduler.Jobs[7] type = %T, want jobs.ScopeDispatchJob", scheduler.Jobs[7])
+	}
+
+	if dispatchA.ScopeBatchLimit != 25 || dispatchB.ScopeBatchLimit != 25 || dispatchC.ScopeBatchLimit != 25 || dispatchD.ScopeBatchLimit != 25 || dispatchE.ScopeBatchLimit != 25 || dispatchF.ScopeBatchLimit != 25 || dispatchG.ScopeBatchLimit != 25 || dispatchH.ScopeBatchLimit != 25 {
+		t.Fatalf("scope batch limits = (%d, %d, %d, %d, %d, %d, %d, %d), want 25", dispatchA.ScopeBatchLimit, dispatchB.ScopeBatchLimit, dispatchC.ScopeBatchLimit, dispatchD.ScopeBatchLimit, dispatchE.ScopeBatchLimit, dispatchF.ScopeBatchLimit, dispatchG.ScopeBatchLimit, dispatchH.ScopeBatchLimit)
+	}
+
+	if dispatchA.FallbackScope.Namespace != "namespace-a" || dispatchB.FallbackScope.Namespace != "namespace-a" || dispatchC.FallbackScope.Namespace != "namespace-a" || dispatchD.FallbackScope.Namespace != "namespace-a" || dispatchE.FallbackScope.Namespace != "namespace-a" || dispatchF.FallbackScope.Namespace != "namespace-a" || dispatchG.FallbackScope.Namespace != "namespace-a" || dispatchH.FallbackScope.Namespace != "namespace-a" {
+		t.Fatalf("fallback scopes = (%+v, %+v, %+v, %+v, %+v, %+v, %+v, %+v), want default namespace", dispatchA.FallbackScope, dispatchB.FallbackScope, dispatchC.FallbackScope, dispatchD.FallbackScope, dispatchE.FallbackScope, dispatchF.FallbackScope, dispatchG.FallbackScope, dispatchH.FallbackScope)
 	}
 
 	if dispatchA.NameValue != "embedding_rebuild_dispatch" {
@@ -766,8 +826,41 @@ func TestBuildSchedulerRuntimeAssemblesScopeDispatchJobs(t *testing.T) {
 		t.Fatalf("replay job cadence/limit = %v/%d, want 45s/55", replayJob.Cadence, replayJob.Limit)
 	}
 
-	if _, ok := scheduler.Jobs[5].(jobs.JobExecutionCleanupJob); !ok {
-		t.Fatalf("scheduler.Jobs[5] type = %T, want jobs.JobExecutionCleanupJob", scheduler.Jobs[5])
+	if dispatchF.NameValue != "assurance_evaluation_dispatch" {
+		t.Fatalf("scheduler.Jobs[5].NameValue = %q, want assurance_evaluation_dispatch", dispatchF.NameValue)
+	}
+	assuranceJob, ok := dispatchF.Dispatch(dispatchF.FallbackScope).(jobs.AssuranceEvaluationJob)
+	if !ok {
+		t.Fatalf("dispatchF.Dispatch(...) type = %T, want jobs.AssuranceEvaluationJob", dispatchF.Dispatch(dispatchF.FallbackScope))
+	}
+	if assuranceJob.Cadence != 90*time.Second {
+		t.Fatalf("assurance job cadence = %v, want 90s", assuranceJob.Cadence)
+	}
+
+	if dispatchG.NameValue != "conformance_run_dispatch" {
+		t.Fatalf("scheduler.Jobs[6].NameValue = %q, want conformance_run_dispatch", dispatchG.NameValue)
+	}
+	conformanceJob, ok := dispatchG.Dispatch(dispatchG.FallbackScope).(jobs.ConformanceRunJob)
+	if !ok {
+		t.Fatalf("dispatchG.Dispatch(...) type = %T, want jobs.ConformanceRunJob", dispatchG.Dispatch(dispatchG.FallbackScope))
+	}
+	if conformanceJob.Cadence != 3*time.Minute {
+		t.Fatalf("conformance job cadence = %v, want 3m", conformanceJob.Cadence)
+	}
+
+	if dispatchH.NameValue != "assurance_retention_dispatch" {
+		t.Fatalf("scheduler.Jobs[7].NameValue = %q, want assurance_retention_dispatch", dispatchH.NameValue)
+	}
+	retentionJob, ok := dispatchH.Dispatch(dispatchH.FallbackScope).(jobs.AssuranceRetentionJob)
+	if !ok {
+		t.Fatalf("dispatchH.Dispatch(...) type = %T, want jobs.AssuranceRetentionJob", dispatchH.Dispatch(dispatchH.FallbackScope))
+	}
+	if retentionJob.HistoryRetention != 7*24*time.Hour || retentionJob.ConformanceRetention != 14*24*time.Hour {
+		t.Fatalf("assurance retention windows = %v/%v, want 7d/14d", retentionJob.HistoryRetention, retentionJob.ConformanceRetention)
+	}
+
+	if _, ok := scheduler.Jobs[8].(jobs.JobExecutionCleanupJob); !ok {
+		t.Fatalf("scheduler.Jobs[8] type = %T, want jobs.JobExecutionCleanupJob", scheduler.Jobs[8])
 	}
 }
 

@@ -312,6 +312,99 @@ func TestSpecYAMLIncludesTaskEvaluationContracts(t *testing.T) {
 	}
 }
 
+func TestSpecYAMLIncludesAssuranceAdminRoutesAndSchemas(t *testing.T) {
+	spec := SpecYAML()
+	for _, want := range []string{
+		"/v1/admin/assurance/health-evaluations",
+		"/v1/admin/assurance/health-evaluations/{health_evaluation_id}",
+		"/v1/admin/assurance/incidents",
+		"/v1/admin/assurance/incidents/{incident_id}",
+		"/v1/admin/assurance/incidents/{incident_id}/{incident_action}",
+		"/v1/admin/assurance/alert-candidates",
+		"/v1/admin/assurance/alert-candidates/{alert_candidate_id}",
+		"/v1/admin/assurance/alert-candidates/{alert_candidate_id}/delivery-attempts",
+		"/v1/admin/assurance/conformance-profiles",
+		"/v1/admin/assurance/conformance-profiles/{conformance_profile_id}",
+		"/v1/admin/assurance/conformance-profiles/{conformance_profile_id}/disable",
+		"/v1/admin/assurance/conformance-runs",
+		"/v1/admin/assurance/conformance-runs/{conformance_run_id}",
+		"/v1/admin/assurance/readiness-reports",
+		"/v1/admin/assurance/readiness-reports/{readiness_report_id}",
+		"/v1/admin/assurance/recovery-verifications",
+		"/v1/admin/assurance/recovery-verifications/{recovery_verification_id}",
+		"HealthEvaluation",
+		"HealthComponentSummary",
+		"Incident",
+		"IncidentActionRequest",
+		"AlertCandidate",
+		"AlertDeliveryAttempt",
+		"ConformanceProfile",
+		"ConformanceRun",
+		"MissingEvidenceDiagnostic",
+		"ReadinessReport",
+		"RecoveryVerification",
+		"ExpectedEvidenceKind",
+		"RecoveryVerificationTarget",
+		"redacted delivery target",
+	} {
+		if !strings.Contains(spec, want) {
+			t.Fatalf("SpecYAML() missing assurance contract %q", want)
+		}
+	}
+}
+
+func TestSpecYAMLAssuranceAdminOperationsRequireAdminAuthAndScope(t *testing.T) {
+	loader := openapi3.NewLoader()
+	doc, err := loader.LoadFromData([]byte(SpecYAML()))
+	if err != nil {
+		t.Fatalf("LoadFromData() error = %v", err)
+	}
+
+	for _, path := range []string{
+		"/v1/admin/assurance/health-evaluations",
+		"/v1/admin/assurance/health-evaluations/{health_evaluation_id}",
+		"/v1/admin/assurance/incidents",
+		"/v1/admin/assurance/incidents/{incident_id}",
+		"/v1/admin/assurance/incidents/{incident_id}/{incident_action}",
+		"/v1/admin/assurance/alert-candidates",
+		"/v1/admin/assurance/alert-candidates/{alert_candidate_id}",
+		"/v1/admin/assurance/alert-candidates/{alert_candidate_id}/delivery-attempts",
+		"/v1/admin/assurance/conformance-profiles",
+		"/v1/admin/assurance/conformance-profiles/{conformance_profile_id}",
+		"/v1/admin/assurance/conformance-profiles/{conformance_profile_id}/disable",
+		"/v1/admin/assurance/conformance-runs",
+		"/v1/admin/assurance/conformance-runs/{conformance_run_id}",
+		"/v1/admin/assurance/readiness-reports",
+		"/v1/admin/assurance/readiness-reports/{readiness_report_id}",
+		"/v1/admin/assurance/recovery-verifications",
+		"/v1/admin/assurance/recovery-verifications/{recovery_verification_id}",
+	} {
+		item := doc.Paths.Value(path)
+		if item == nil {
+			t.Fatalf("OpenAPI path %q missing", path)
+		}
+		for method, operation := range item.Operations() {
+			refs := map[string]bool{}
+			for _, param := range operation.Parameters {
+				refs[param.Ref] = true
+			}
+			for _, ref := range []string{
+				"#/components/parameters/AdminAPIKey",
+				"#/components/parameters/TenantHeader",
+				"#/components/parameters/ProjectHeader",
+				"#/components/parameters/NamespaceHeader",
+			} {
+				if !refs[ref] {
+					t.Fatalf("%s %s missing parameter ref %s", method, path, ref)
+				}
+			}
+			if refs["#/components/parameters/PublicAPIKey"] {
+				t.Fatalf("%s %s uses public API key", method, path)
+			}
+		}
+	}
+}
+
 func TestSpecYAMLIncludesEmbeddingRecoveryRoutesAndSchemas(t *testing.T) {
 	for _, want := range []string{
 		"/v1/admin/embedding/rebuilds/{memory_id}:retry",

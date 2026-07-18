@@ -12,6 +12,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/FelixSeptem/stele/internal/assurance"
 	"github.com/FelixSeptem/stele/internal/diagnostics"
 	"github.com/FelixSeptem/stele/internal/governance"
 	"github.com/FelixSeptem/stele/internal/jobs"
@@ -614,6 +615,180 @@ type stubRankingRolloutAdminService struct {
 	dryRun      memory.RankingRolloutDryRun
 	impact      []memory.RankingRolloutImpactEntry
 	err         error
+}
+
+type stubAssuranceAdminService struct {
+	gotHealthCreate        assurance.HealthEvaluationInput
+	gotHealthRead          assurance.ReadHealthEvaluationInput
+	gotIncidentList        assurance.ListIncidentsInput
+	gotIncidentRead        assurance.ReadIncidentInput
+	gotIncidentAction      assurance.IncidentActionInput
+	gotAlertRead           assurance.ReadAlertCandidateInput
+	gotAlertAttempts       assurance.ListAlertDeliveryAttemptsInput
+	gotProfileCreate       assurance.ConformanceProfile
+	gotProfileList         assurance.ListConformanceProfilesInput
+	gotProfileRead         assurance.ReadConformanceProfileInput
+	gotProfileUpdate       assurance.UpdateConformanceProfileInput
+	gotProfileDisable      assurance.DisableConformanceProfileInput
+	gotRunCreate           assurance.ConformanceRunInput
+	gotRunList             assurance.ListConformanceRunsInput
+	gotRunRead             assurance.ReadConformanceRunInput
+	gotReadinessCreate     assurance.ReadinessReportInput
+	gotReadinessRead       assurance.ReadReadinessReportInput
+	gotRecoveryCreate      assurance.RecoveryVerificationInput
+	gotRecoveryRead        assurance.ReadRecoveryVerificationInput
+	healthEvaluation       assurance.HealthEvaluation
+	healthEvaluations      []assurance.HealthEvaluation
+	incident               assurance.Incident
+	incidents              []assurance.Incident
+	alertCandidate         assurance.AlertCandidate
+	alertCandidates        []assurance.AlertCandidate
+	alertAttempts          []assurance.AlertDeliveryAttempt
+	conformanceProfile     assurance.ConformanceProfile
+	conformanceProfiles    []assurance.ConformanceProfile
+	conformanceRun         assurance.ConformanceRun
+	conformanceRuns        []assurance.ConformanceRun
+	conformanceDiagnostics []assurance.MissingEvidenceDiagnostic
+	readinessReport        assurance.ReadinessReport
+	readinessReports       []assurance.ReadinessReport
+	recoveryVerification   assurance.RecoveryVerification
+	recoveryVerifications  []assurance.RecoveryVerification
+	err                    error
+}
+
+func (s *stubAssuranceAdminService) CreateHealthEvaluation(ctx context.Context, input assurance.HealthEvaluationInput) (assurance.HealthEvaluation, error) {
+	s.gotHealthCreate = input
+	return s.healthEvaluation, s.err
+}
+
+func (s *stubAssuranceAdminService) ListHealthEvaluations(ctx context.Context, scope memory.Scope) ([]assurance.HealthEvaluation, error) {
+	if s.err != nil {
+		return nil, s.err
+	}
+	return s.healthEvaluations, nil
+}
+
+func (s *stubAssuranceAdminService) ReadHealthEvaluation(ctx context.Context, input assurance.ReadHealthEvaluationInput) (assurance.HealthEvaluation, error) {
+	s.gotHealthRead = input
+	return s.healthEvaluation, s.err
+}
+
+func (s *stubAssuranceAdminService) ListIncidents(ctx context.Context, input assurance.ListIncidentsInput) ([]assurance.Incident, error) {
+	s.gotIncidentList = input
+	if s.err != nil {
+		return nil, s.err
+	}
+	return s.incidents, nil
+}
+
+func (s *stubAssuranceAdminService) ReadIncident(ctx context.Context, input assurance.ReadIncidentInput) (assurance.Incident, error) {
+	s.gotIncidentRead = input
+	return s.incident, s.err
+}
+
+func (s *stubAssuranceAdminService) ApplyIncidentAction(ctx context.Context, input assurance.IncidentActionInput) (assurance.Incident, error) {
+	s.gotIncidentAction = input
+	return s.incident, s.err
+}
+
+func (s *stubAssuranceAdminService) ListAlertCandidates(ctx context.Context, scope memory.Scope) ([]assurance.AlertCandidate, error) {
+	if s.err != nil {
+		return nil, s.err
+	}
+	return s.alertCandidates, nil
+}
+
+func (s *stubAssuranceAdminService) ReadAlertCandidate(ctx context.Context, input assurance.ReadAlertCandidateInput) (assurance.AlertCandidate, error) {
+	s.gotAlertRead = input
+	return s.alertCandidate, s.err
+}
+
+func (s *stubAssuranceAdminService) ListAlertDeliveryAttempts(ctx context.Context, input assurance.ListAlertDeliveryAttemptsInput) ([]assurance.AlertDeliveryAttempt, error) {
+	s.gotAlertAttempts = input
+	if s.err != nil {
+		return nil, s.err
+	}
+	return s.alertAttempts, nil
+}
+
+func (s *stubAssuranceAdminService) CreateConformanceProfile(ctx context.Context, profile assurance.ConformanceProfile) (assurance.ConformanceProfile, error) {
+	s.gotProfileCreate = profile
+	return s.conformanceProfile, s.err
+}
+
+func (s *stubAssuranceAdminService) ListConformanceProfiles(ctx context.Context, input assurance.ListConformanceProfilesInput) ([]assurance.ConformanceProfile, error) {
+	s.gotProfileList = input
+	if s.err != nil {
+		return nil, s.err
+	}
+	return s.conformanceProfiles, nil
+}
+
+func (s *stubAssuranceAdminService) ReadConformanceProfile(ctx context.Context, input assurance.ReadConformanceProfileInput) (assurance.ConformanceProfile, error) {
+	s.gotProfileRead = input
+	return s.conformanceProfile, s.err
+}
+
+func (s *stubAssuranceAdminService) UpdateConformanceProfile(ctx context.Context, input assurance.UpdateConformanceProfileInput) (assurance.ConformanceProfile, error) {
+	s.gotProfileUpdate = input
+	return s.conformanceProfile, s.err
+}
+
+func (s *stubAssuranceAdminService) DisableConformanceProfile(ctx context.Context, input assurance.DisableConformanceProfileInput) (assurance.ConformanceProfile, error) {
+	s.gotProfileDisable = input
+	return s.conformanceProfile, s.err
+}
+
+func (s *stubAssuranceAdminService) RunConformance(ctx context.Context, input assurance.ConformanceRunInput) (assurance.ConformanceRun, []assurance.MissingEvidenceDiagnostic, error) {
+	s.gotRunCreate = input
+	return s.conformanceRun, s.conformanceDiagnostics, s.err
+}
+
+func (s *stubAssuranceAdminService) ListConformanceRuns(ctx context.Context, input assurance.ListConformanceRunsInput) ([]assurance.ConformanceRun, error) {
+	s.gotRunList = input
+	if s.err != nil {
+		return nil, s.err
+	}
+	return s.conformanceRuns, nil
+}
+
+func (s *stubAssuranceAdminService) ReadConformanceRun(ctx context.Context, input assurance.ReadConformanceRunInput) (assurance.ConformanceRun, error) {
+	s.gotRunRead = input
+	return s.conformanceRun, s.err
+}
+
+func (s *stubAssuranceAdminService) CreateReadinessReport(ctx context.Context, input assurance.ReadinessReportInput) (assurance.ReadinessReport, error) {
+	s.gotReadinessCreate = input
+	return s.readinessReport, s.err
+}
+
+func (s *stubAssuranceAdminService) ListReadinessReports(ctx context.Context, scope memory.Scope) ([]assurance.ReadinessReport, error) {
+	if s.err != nil {
+		return nil, s.err
+	}
+	return s.readinessReports, nil
+}
+
+func (s *stubAssuranceAdminService) ReadReadinessReport(ctx context.Context, input assurance.ReadReadinessReportInput) (assurance.ReadinessReport, error) {
+	s.gotReadinessRead = input
+	return s.readinessReport, s.err
+}
+
+func (s *stubAssuranceAdminService) CreateRecoveryVerification(ctx context.Context, input assurance.RecoveryVerificationInput) (assurance.RecoveryVerification, error) {
+	s.gotRecoveryCreate = input
+	return s.recoveryVerification, s.err
+}
+
+func (s *stubAssuranceAdminService) ListRecoveryVerifications(ctx context.Context, scope memory.Scope) ([]assurance.RecoveryVerification, error) {
+	if s.err != nil {
+		return nil, s.err
+	}
+	return s.recoveryVerifications, nil
+}
+
+func (s *stubAssuranceAdminService) ReadRecoveryVerification(ctx context.Context, input assurance.ReadRecoveryVerificationInput) (assurance.RecoveryVerification, error) {
+	s.gotRecoveryRead = input
+	return s.recoveryVerification, s.err
 }
 
 func (s *stubRankingRolloutAdminService) CreateRankingRolloutPolicy(ctx context.Context, policy memory.RankingRolloutPolicy) (memory.RankingRolloutPolicy, error) {
@@ -4154,6 +4329,390 @@ func TestNewHTTPHandlerServesRankingRolloutAPIs(t *testing.T) {
 	}
 	if service.gotImpact.PolicyID != "policy_1" || service.gotImpact.Scope != scope {
 		t.Fatalf("impact input = %+v, want scoped impact", service.gotImpact)
+	}
+}
+
+func TestNewHTTPHandlerServesAssuranceAdminAPIs(t *testing.T) {
+	scope := memory.Scope{Tenant: "tenant-a", Project: "project-a", Namespace: "namespace-a"}
+	now := time.Date(2026, 7, 18, 10, 0, 0, 0, time.UTC)
+	service := &stubAssuranceAdminService{
+		healthEvaluation: assurance.HealthEvaluation{
+			ID:        "health_eval_1",
+			Scope:     scope,
+			Status:    assurance.HealthStatusHealthy,
+			Severity:  assurance.SeverityInfo,
+			Reason:    assurance.ReasonRuntimeReady,
+			CreatedAt: now,
+		},
+		healthEvaluations: []assurance.HealthEvaluation{{ID: "health_eval_1", Scope: scope}},
+		incident: assurance.Incident{
+			ID:               "incident_1",
+			Scope:            scope,
+			Status:           assurance.IncidentStatusAcknowledged,
+			Severity:         assurance.SeverityWarning,
+			Component:        assurance.ComponentBacklog,
+			Reason:           assurance.ReasonBacklogPressure,
+			DeduplicationKey: "backlog-pressure",
+			OpenedAt:         now,
+			UpdatedAt:        now,
+		},
+		incidents: []assurance.Incident{{ID: "incident_1", Scope: scope, Status: assurance.IncidentStatusOpen}},
+		alertCandidate: assurance.AlertCandidate{
+			ID:               "alert_1",
+			Scope:            scope,
+			IncidentID:       "incident_1",
+			Severity:         assurance.SeverityWarning,
+			Component:        assurance.ComponentBacklog,
+			Reason:           assurance.ReasonBacklogPressure,
+			DeduplicationKey: "alert-dedupe",
+			DeliveryPolicy:   "default",
+			Payload:          map[string]any{"webhook_url": "REDACTED", "authorization": "REDACTED", "reason": "backlog_pressure"},
+			CreatedAt:        now,
+		},
+		alertCandidates: []assurance.AlertCandidate{{ID: "alert_1", Scope: scope}},
+		alertAttempts: []assurance.AlertDeliveryAttempt{{
+			ID:               "attempt_1",
+			AlertCandidateID: "alert_1",
+			Scope:            scope,
+			Adapter:          assurance.AlertAdapterWebhook,
+			Result:           assurance.AlertDeliveryResultFailed,
+			FailureCategory:  "request_failed",
+			Attempt:          1,
+			PayloadHash:      "hash_1",
+			AttemptedAt:      now,
+		}},
+		conformanceProfile: assurance.ConformanceProfile{
+			ID:     "profile_1",
+			Scope:  scope,
+			Status: assurance.ConformanceProfileStatusActive,
+			ExpectedEvidence: []assurance.ExpectedEvidence{{
+				Kind:            assurance.ExpectedEvidenceSession,
+				MinimumCount:    1,
+				FreshnessWindow: time.Hour,
+			}},
+			Actor:     "operator-a",
+			Reason:    "validate integration",
+			CreatedAt: now,
+			UpdatedAt: now,
+		},
+		conformanceProfiles: []assurance.ConformanceProfile{{ID: "profile_1", Scope: scope, Status: assurance.ConformanceProfileStatusActive}},
+		conformanceRun: assurance.ConformanceRun{
+			ID:             "run_1",
+			ProfileID:      "profile_1",
+			Scope:          scope,
+			Result:         assurance.ConformanceResultFailed,
+			EvidenceCounts: map[string]any{"session": 0},
+			StartedAt:      now,
+			FinishedAt:     now,
+			CreatedAt:      now,
+		},
+		conformanceRuns: []assurance.ConformanceRun{{ID: "run_1", ProfileID: "profile_1", Scope: scope}},
+		conformanceDiagnostics: []assurance.MissingEvidenceDiagnostic{{
+			ID:               "diag_1",
+			ConformanceRunID: "run_1",
+			Scope:            scope,
+			EvidenceKind:     assurance.ExpectedEvidenceSession,
+			Category:         assurance.MissingEvidenceSessionWithoutOutcome,
+			ReadinessImpact:  assurance.ReadinessStatusDegraded,
+			CreatedAt:        now,
+		}},
+		readinessReport: assurance.ReadinessReport{
+			ID:                 "readiness_1",
+			Scope:              scope,
+			Status:             assurance.ReadinessStatusDegraded,
+			HealthEvaluationID: "health_eval_1",
+			ConformanceRunID:   "run_1",
+			ComponentSummary:   map[string]any{"conformance_status": "degraded"},
+			RecommendedActions: []assurance.RunbookHintCategory{assurance.RunbookHintReviewConformanceProfile},
+			GeneratedAt:        now,
+			CreatedAt:          now,
+		},
+		readinessReports: []assurance.ReadinessReport{{ID: "readiness_1", Scope: scope}},
+		recoveryVerification: assurance.RecoveryVerification{
+			ID:              "recovery_1",
+			Scope:           scope,
+			Target:          assurance.RecoveryVerificationTargetIncident,
+			TargetID:        "incident_1",
+			Status:          assurance.HealthStatusHealthy,
+			CheckedSurfaces: []string{"health_evaluation", "conformance_run"},
+			ResultCategory:  "recovered",
+			LinkedEvidence:  map[string]any{"health_evaluation_id": "health_eval_1"},
+			Actor:           "operator-a",
+			Reason:          "verify remediation",
+			CreatedAt:       now,
+			VerifiedAt:      now,
+		},
+		recoveryVerifications: []assurance.RecoveryVerification{{ID: "recovery_1", Scope: scope}},
+	}
+	handler := NewHTTPHandler(HTTPDependencies{
+		Readiness:      stubReadinessChecker{},
+		AdminAPIKeys:   map[string]struct{}{"admin-key": {}},
+		AssuranceAdmin: service,
+	})
+
+	healthCreateReq := httptest.NewRequest(http.MethodPost, "/v1/admin/assurance/health-evaluations", strings.NewReader(`{"observed_at":"2026-07-18T10:00:00Z","runtime_readiness":{"status":"healthy","severity":"info","reason":"runtime_ready","evidence":{"ready":true}}}`))
+	setAdminScopeHeaders(healthCreateReq)
+	healthCreateResp := httptest.NewRecorder()
+	handler.ServeHTTP(healthCreateResp, healthCreateReq)
+	if healthCreateResp.Code != http.StatusCreated {
+		t.Fatalf("health create status = %d body=%s, want 201", healthCreateResp.Code, healthCreateResp.Body.String())
+	}
+	if service.gotHealthCreate.Scope != scope || service.gotHealthCreate.RuntimeReadiness.Status != assurance.HealthStatusHealthy {
+		t.Fatalf("health create input = %+v, want scoped healthy runtime observation", service.gotHealthCreate)
+	}
+
+	healthListReq := httptest.NewRequest(http.MethodGet, "/v1/admin/assurance/health-evaluations", nil)
+	setAdminScopeHeaders(healthListReq)
+	healthListResp := httptest.NewRecorder()
+	handler.ServeHTTP(healthListResp, healthListReq)
+	if healthListResp.Code != http.StatusOK || !strings.Contains(healthListResp.Body.String(), `"health_evaluations"`) {
+		t.Fatalf("health list status=%d body=%s, want health_evaluations", healthListResp.Code, healthListResp.Body.String())
+	}
+
+	healthReadReq := httptest.NewRequest(http.MethodGet, "/v1/admin/assurance/health-evaluations/health_eval_1", nil)
+	setAdminScopeHeaders(healthReadReq)
+	healthReadResp := httptest.NewRecorder()
+	handler.ServeHTTP(healthReadResp, healthReadReq)
+	if healthReadResp.Code != http.StatusOK {
+		t.Fatalf("health read status = %d body=%s, want 200", healthReadResp.Code, healthReadResp.Body.String())
+	}
+	if service.gotHealthRead.EvaluationID != "health_eval_1" || service.gotHealthRead.Scope != scope {
+		t.Fatalf("health read input = %+v, want scoped health_eval_1", service.gotHealthRead)
+	}
+
+	incidentListReq := httptest.NewRequest(http.MethodGet, "/v1/admin/assurance/incidents?status=open&limit=25", nil)
+	setAdminScopeHeaders(incidentListReq)
+	incidentListResp := httptest.NewRecorder()
+	handler.ServeHTTP(incidentListResp, incidentListReq)
+	if incidentListResp.Code != http.StatusOK {
+		t.Fatalf("incident list status = %d body=%s, want 200", incidentListResp.Code, incidentListResp.Body.String())
+	}
+	if service.gotIncidentList.Status != assurance.IncidentStatusOpen || service.gotIncidentList.Limit != 25 {
+		t.Fatalf("incident list input = %+v, want open status and limit", service.gotIncidentList)
+	}
+
+	incidentReadReq := httptest.NewRequest(http.MethodGet, "/v1/admin/assurance/incidents/incident_1", nil)
+	setAdminScopeHeaders(incidentReadReq)
+	incidentReadResp := httptest.NewRecorder()
+	handler.ServeHTTP(incidentReadResp, incidentReadReq)
+	if incidentReadResp.Code != http.StatusOK {
+		t.Fatalf("incident read status = %d body=%s, want 200", incidentReadResp.Code, incidentReadResp.Body.String())
+	}
+
+	incidentActionReq := httptest.NewRequest(http.MethodPost, "/v1/admin/assurance/incidents/incident_1/acknowledge", strings.NewReader(`{"actor":"operator-a","reason":"investigating"}`))
+	setAdminScopeHeaders(incidentActionReq)
+	incidentActionResp := httptest.NewRecorder()
+	handler.ServeHTTP(incidentActionResp, incidentActionReq)
+	if incidentActionResp.Code != http.StatusAccepted {
+		t.Fatalf("incident action status = %d body=%s, want 202", incidentActionResp.Code, incidentActionResp.Body.String())
+	}
+	if service.gotIncidentAction.IncidentID != "incident_1" || service.gotIncidentAction.Action != assurance.IncidentActionAcknowledge || service.gotIncidentAction.Actor != "operator-a" {
+		t.Fatalf("incident action input = %+v, want acknowledge by operator-a", service.gotIncidentAction)
+	}
+
+	alertListReq := httptest.NewRequest(http.MethodGet, "/v1/admin/assurance/alert-candidates", nil)
+	setAdminScopeHeaders(alertListReq)
+	alertListResp := httptest.NewRecorder()
+	handler.ServeHTTP(alertListResp, alertListReq)
+	if alertListResp.Code != http.StatusOK || !strings.Contains(alertListResp.Body.String(), `"alert_candidates"`) {
+		t.Fatalf("alert list status=%d body=%s, want alert_candidates", alertListResp.Code, alertListResp.Body.String())
+	}
+
+	alertReadReq := httptest.NewRequest(http.MethodGet, "/v1/admin/assurance/alert-candidates/alert_1", nil)
+	setAdminScopeHeaders(alertReadReq)
+	alertReadResp := httptest.NewRecorder()
+	handler.ServeHTTP(alertReadResp, alertReadReq)
+	if alertReadResp.Code != http.StatusOK {
+		t.Fatalf("alert read status = %d body=%s, want 200", alertReadResp.Code, alertReadResp.Body.String())
+	}
+	if strings.Contains(alertReadResp.Body.String(), "https://hooks.example.test") || strings.Contains(alertReadResp.Body.String(), "Bearer") {
+		t.Fatalf("alert detail body = %s, leaked delivery secret", alertReadResp.Body.String())
+	}
+
+	attemptsReq := httptest.NewRequest(http.MethodGet, "/v1/admin/assurance/alert-candidates/alert_1/delivery-attempts", nil)
+	setAdminScopeHeaders(attemptsReq)
+	attemptsResp := httptest.NewRecorder()
+	handler.ServeHTTP(attemptsResp, attemptsReq)
+	if attemptsResp.Code != http.StatusOK || !strings.Contains(attemptsResp.Body.String(), `"delivery_attempts"`) {
+		t.Fatalf("attempts status=%d body=%s, want delivery_attempts", attemptsResp.Code, attemptsResp.Body.String())
+	}
+	if service.gotAlertAttempts.AlertCandidateID != "alert_1" {
+		t.Fatalf("alert attempts input = %+v, want alert_1", service.gotAlertAttempts)
+	}
+
+	profileCreateReq := httptest.NewRequest(http.MethodPost, "/v1/admin/assurance/conformance-profiles", strings.NewReader(`{"id":"profile_1","expected_evidence":[{"kind":"session","minimum_count":1,"freshness_window":"1h"}],"actor":"operator-a","reason":"validate integration"}`))
+	setAdminScopeHeaders(profileCreateReq)
+	profileCreateResp := httptest.NewRecorder()
+	handler.ServeHTTP(profileCreateResp, profileCreateReq)
+	if profileCreateResp.Code != http.StatusCreated {
+		t.Fatalf("profile create status = %d body=%s, want 201", profileCreateResp.Code, profileCreateResp.Body.String())
+	}
+	if service.gotProfileCreate.ID != "profile_1" || service.gotProfileCreate.Scope != scope || service.gotProfileCreate.ExpectedEvidence[0].FreshnessWindow != time.Hour {
+		t.Fatalf("profile create input = %+v, want scoped profile with 1h freshness", service.gotProfileCreate)
+	}
+
+	profileListReq := httptest.NewRequest(http.MethodGet, "/v1/admin/assurance/conformance-profiles?status=active", nil)
+	setAdminScopeHeaders(profileListReq)
+	profileListResp := httptest.NewRecorder()
+	handler.ServeHTTP(profileListResp, profileListReq)
+	if profileListResp.Code != http.StatusOK {
+		t.Fatalf("profile list status = %d body=%s, want 200", profileListResp.Code, profileListResp.Body.String())
+	}
+	if service.gotProfileList.Status != assurance.ConformanceProfileStatusActive {
+		t.Fatalf("profile list input = %+v, want active status", service.gotProfileList)
+	}
+
+	profileReadReq := httptest.NewRequest(http.MethodGet, "/v1/admin/assurance/conformance-profiles/profile_1", nil)
+	setAdminScopeHeaders(profileReadReq)
+	profileReadResp := httptest.NewRecorder()
+	handler.ServeHTTP(profileReadResp, profileReadReq)
+	if profileReadResp.Code != http.StatusOK {
+		t.Fatalf("profile read status = %d body=%s, want 200", profileReadResp.Code, profileReadResp.Body.String())
+	}
+
+	profileUpdateReq := httptest.NewRequest(http.MethodPatch, "/v1/admin/assurance/conformance-profiles/profile_1", strings.NewReader(`{"expected_evidence":[{"kind":"context","minimum_count":2,"freshness_window":"2h"}],"actor":"operator-b","reason":"tighten checks"}`))
+	setAdminScopeHeaders(profileUpdateReq)
+	profileUpdateResp := httptest.NewRecorder()
+	handler.ServeHTTP(profileUpdateResp, profileUpdateReq)
+	if profileUpdateResp.Code != http.StatusOK {
+		t.Fatalf("profile update status = %d body=%s, want 200", profileUpdateResp.Code, profileUpdateResp.Body.String())
+	}
+	if service.gotProfileUpdate.ProfileID != "profile_1" || service.gotProfileUpdate.ExpectedEvidence[0].Kind != assurance.ExpectedEvidenceContext {
+		t.Fatalf("profile update input = %+v, want context evidence update", service.gotProfileUpdate)
+	}
+
+	profileDisableReq := httptest.NewRequest(http.MethodPost, "/v1/admin/assurance/conformance-profiles/profile_1/disable", strings.NewReader(`{"actor":"operator-c","reason":"retired integration"}`))
+	setAdminScopeHeaders(profileDisableReq)
+	profileDisableResp := httptest.NewRecorder()
+	handler.ServeHTTP(profileDisableResp, profileDisableReq)
+	if profileDisableResp.Code != http.StatusAccepted {
+		t.Fatalf("profile disable status = %d body=%s, want 202", profileDisableResp.Code, profileDisableResp.Body.String())
+	}
+	if service.gotProfileDisable.ProfileID != "profile_1" || service.gotProfileDisable.Actor != "operator-c" {
+		t.Fatalf("profile disable input = %+v, want operator-c", service.gotProfileDisable)
+	}
+
+	runCreateReq := httptest.NewRequest(http.MethodPost, "/v1/admin/assurance/conformance-runs", strings.NewReader(`{"profile_id":"profile_1","started_at":"2026-07-18T10:00:00Z"}`))
+	setAdminScopeHeaders(runCreateReq)
+	runCreateResp := httptest.NewRecorder()
+	handler.ServeHTTP(runCreateResp, runCreateReq)
+	if runCreateResp.Code != http.StatusCreated || !strings.Contains(runCreateResp.Body.String(), `"diagnostics"`) {
+		t.Fatalf("run create status=%d body=%s, want 201 with diagnostics", runCreateResp.Code, runCreateResp.Body.String())
+	}
+	if service.gotRunCreate.ProfileID != "profile_1" || !service.gotRunCreate.StartedAt.Equal(now) {
+		t.Fatalf("run create input = %+v, want profile_1 at now", service.gotRunCreate)
+	}
+
+	runListReq := httptest.NewRequest(http.MethodGet, "/v1/admin/assurance/conformance-runs?profile_id=profile_1", nil)
+	setAdminScopeHeaders(runListReq)
+	runListResp := httptest.NewRecorder()
+	handler.ServeHTTP(runListResp, runListReq)
+	if runListResp.Code != http.StatusOK {
+		t.Fatalf("run list status = %d body=%s, want 200", runListResp.Code, runListResp.Body.String())
+	}
+	if service.gotRunList.ProfileID != "profile_1" {
+		t.Fatalf("run list input = %+v, want profile filter", service.gotRunList)
+	}
+
+	runReadReq := httptest.NewRequest(http.MethodGet, "/v1/admin/assurance/conformance-runs/run_1", nil)
+	setAdminScopeHeaders(runReadReq)
+	runReadResp := httptest.NewRecorder()
+	handler.ServeHTTP(runReadResp, runReadReq)
+	if runReadResp.Code != http.StatusOK {
+		t.Fatalf("run read status = %d body=%s, want 200", runReadResp.Code, runReadResp.Body.String())
+	}
+
+	readinessCreateReq := httptest.NewRequest(http.MethodPost, "/v1/admin/assurance/readiness-reports", strings.NewReader(`{"generated_at":"2026-07-18T10:00:00Z"}`))
+	setAdminScopeHeaders(readinessCreateReq)
+	readinessCreateResp := httptest.NewRecorder()
+	handler.ServeHTTP(readinessCreateResp, readinessCreateReq)
+	if readinessCreateResp.Code != http.StatusCreated {
+		t.Fatalf("readiness create status = %d body=%s, want 201", readinessCreateResp.Code, readinessCreateResp.Body.String())
+	}
+	if service.gotReadinessCreate.Scope != scope || !service.gotReadinessCreate.GeneratedAt.Equal(now) {
+		t.Fatalf("readiness create input = %+v, want scoped now", service.gotReadinessCreate)
+	}
+
+	readinessListReq := httptest.NewRequest(http.MethodGet, "/v1/admin/assurance/readiness-reports", nil)
+	setAdminScopeHeaders(readinessListReq)
+	readinessListResp := httptest.NewRecorder()
+	handler.ServeHTTP(readinessListResp, readinessListReq)
+	if readinessListResp.Code != http.StatusOK || !strings.Contains(readinessListResp.Body.String(), `"readiness_reports"`) {
+		t.Fatalf("readiness list status=%d body=%s, want readiness_reports", readinessListResp.Code, readinessListResp.Body.String())
+	}
+
+	readinessReadReq := httptest.NewRequest(http.MethodGet, "/v1/admin/assurance/readiness-reports/readiness_1", nil)
+	setAdminScopeHeaders(readinessReadReq)
+	readinessReadResp := httptest.NewRecorder()
+	handler.ServeHTTP(readinessReadResp, readinessReadReq)
+	if readinessReadResp.Code != http.StatusOK {
+		t.Fatalf("readiness read status = %d body=%s, want 200", readinessReadResp.Code, readinessReadResp.Body.String())
+	}
+
+	recoveryCreateReq := httptest.NewRequest(http.MethodPost, "/v1/admin/assurance/recovery-verifications", strings.NewReader(`{"target":"incident","target_id":"incident_1","status":"healthy","checked_surfaces":["health_evaluation","conformance_run"],"result_category":"recovered","linked_evidence":{"health_evaluation_id":"health_eval_1"},"actor":"operator-a","reason":"verify remediation","verified_at":"2026-07-18T10:00:00Z"}`))
+	setAdminScopeHeaders(recoveryCreateReq)
+	recoveryCreateResp := httptest.NewRecorder()
+	handler.ServeHTTP(recoveryCreateResp, recoveryCreateReq)
+	if recoveryCreateResp.Code != http.StatusCreated {
+		t.Fatalf("recovery create status = %d body=%s, want 201", recoveryCreateResp.Code, recoveryCreateResp.Body.String())
+	}
+	if service.gotRecoveryCreate.Target != assurance.RecoveryVerificationTargetIncident || service.gotRecoveryCreate.TargetID != "incident_1" || service.gotRecoveryCreate.Actor != "operator-a" {
+		t.Fatalf("recovery create input = %+v, want incident verification", service.gotRecoveryCreate)
+	}
+
+	recoveryListReq := httptest.NewRequest(http.MethodGet, "/v1/admin/assurance/recovery-verifications", nil)
+	setAdminScopeHeaders(recoveryListReq)
+	recoveryListResp := httptest.NewRecorder()
+	handler.ServeHTTP(recoveryListResp, recoveryListReq)
+	if recoveryListResp.Code != http.StatusOK || !strings.Contains(recoveryListResp.Body.String(), `"recovery_verifications"`) {
+		t.Fatalf("recovery list status=%d body=%s, want recovery_verifications", recoveryListResp.Code, recoveryListResp.Body.String())
+	}
+
+	recoveryReadReq := httptest.NewRequest(http.MethodGet, "/v1/admin/assurance/recovery-verifications/recovery_1", nil)
+	setAdminScopeHeaders(recoveryReadReq)
+	recoveryReadResp := httptest.NewRecorder()
+	handler.ServeHTTP(recoveryReadResp, recoveryReadReq)
+	if recoveryReadResp.Code != http.StatusOK {
+		t.Fatalf("recovery read status = %d body=%s, want 200", recoveryReadResp.Code, recoveryReadResp.Body.String())
+	}
+	if service.gotRecoveryRead.RecordID != "recovery_1" {
+		t.Fatalf("recovery read input = %+v, want recovery_1", service.gotRecoveryRead)
+	}
+}
+
+func TestNewHTTPHandlerRejectsAssuranceAdminWithoutAdminKey(t *testing.T) {
+	handler := NewHTTPHandler(HTTPDependencies{
+		Readiness:      stubReadinessChecker{},
+		AdminAPIKeys:   map[string]struct{}{"admin-key": {}},
+		AssuranceAdmin: &stubAssuranceAdminService{},
+	})
+
+	req := httptest.NewRequest(http.MethodGet, "/v1/admin/assurance/incidents", nil)
+	setAPIScopeHeaders(req)
+	resp := httptest.NewRecorder()
+	handler.ServeHTTP(resp, req)
+	if resp.Code != http.StatusUnauthorized {
+		t.Fatalf("status = %d, want 401", resp.Code)
+	}
+}
+
+func TestNewHTTPHandlerRejectsAssuranceAdminWithoutScope(t *testing.T) {
+	service := &stubAssuranceAdminService{}
+	handler := NewHTTPHandler(HTTPDependencies{
+		Readiness:      stubReadinessChecker{},
+		AdminAPIKeys:   map[string]struct{}{"admin-key": {}},
+		AssuranceAdmin: service,
+	})
+
+	req := httptest.NewRequest(http.MethodGet, "/v1/admin/assurance/alert-candidates", nil)
+	req.Header.Set("X-API-Key", "admin-key")
+	resp := httptest.NewRecorder()
+	handler.ServeHTTP(resp, req)
+	if resp.Code != http.StatusBadRequest {
+		t.Fatalf("status = %d body=%s, want 400 for missing scoped boundary", resp.Code, resp.Body.String())
+	}
+	if service.gotAlertRead.AlertCandidateID != "" || service.gotAlertAttempts.AlertCandidateID != "" || service.gotIncidentList.Scope != (memory.Scope{}) {
+		t.Fatalf("assurance service inputs = alert:%+v attempts:%+v incidents:%+v, want no out-of-scope service call", service.gotAlertRead, service.gotAlertAttempts, service.gotIncidentList)
 	}
 }
 

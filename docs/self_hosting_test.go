@@ -195,8 +195,8 @@ func TestSelfHostingDocsStateRemainingFeedbackLoopProductGaps(t *testing.T) {
 		"governed ranking rollout policy",
 		"SDK/UI collection surfaces",
 		"external agent runtime integration",
-		"operational assurance",
-		"alert delivery adapters",
+		"Hosted incident management",
+		"vendor-specific alert integrations",
 		"advanced scoring calibration",
 	} {
 		if !strings.Contains(content, want) {
@@ -206,5 +206,76 @@ func TestSelfHostingDocsStateRemainingFeedbackLoopProductGaps(t *testing.T) {
 
 	if strings.Contains(content, "Default feedback-aware ranking rollout. Current behavior is diagnostics-first") {
 		t.Fatalf("self-hosting docs still describe governed ranking rollout as a remaining gap")
+	}
+}
+
+func TestSelfHostingDocsIncludeAssuranceConformanceReadinessLoop(t *testing.T) {
+	contentBytes, err := os.ReadFile("self-hosting.md")
+	if err != nil {
+		t.Fatalf("read self-hosting.md: %v", err)
+	}
+	content := string(contentBytes)
+	spec := openapi.SpecYAML()
+
+	for _, want := range []string{
+		"Production-readiness assurance and conformance loop",
+		"/v1/admin/assurance/health-evaluations",
+		"/v1/admin/assurance/conformance-profiles",
+		"/v1/admin/assurance/conformance-runs",
+		"/v1/admin/assurance/readiness-reports",
+		"/v1/admin/assurance/incidents",
+		"/v1/admin/assurance/alert-candidates",
+		"/v1/admin/assurance/recovery-verifications",
+		"capacity/load proof",
+		"backup/restore proof",
+		"disabled`, `stdout`, and generic `webhook`",
+		"HTTPS-by-default",
+		"unsafe target rejection",
+		"stele_assurance_health_evaluations_total",
+		"stele_conformance_runs_total",
+		"component=assurance event=lifecycle",
+		"component=conformance event=lifecycle",
+	} {
+		if !strings.Contains(content, want) {
+			t.Fatalf("self-hosting assurance/conformance docs missing %q", want)
+		}
+	}
+
+	for _, route := range []string{
+		"/v1/admin/assurance/health-evaluations",
+		"/v1/admin/assurance/incidents",
+		"/v1/admin/assurance/alert-candidates",
+		"/v1/admin/assurance/conformance-profiles",
+		"/v1/admin/assurance/conformance-runs",
+		"/v1/admin/assurance/readiness-reports",
+		"/v1/admin/assurance/recovery-verifications",
+	} {
+		if !strings.Contains(spec, route) {
+			t.Fatalf("OpenAPI spec missing documented assurance route %q", route)
+		}
+	}
+}
+
+func TestSelfHostingDocsStateRemainingAssuranceProductGaps(t *testing.T) {
+	contentBytes, err := os.ReadFile("self-hosting.md")
+	if err != nil {
+		t.Fatalf("read self-hosting.md: %v", err)
+	}
+	content := string(contentBytes)
+
+	for _, want := range []string{
+		"Remaining assurance product gaps",
+		"SDK/UI collection surfaces",
+		"external agent runtime implementation",
+		"vendor-specific alert integrations",
+		"hosted incident management",
+		"adaptive scoring calibration",
+		"model invocation",
+		"prompt orchestration",
+		"final-answer generation",
+	} {
+		if !strings.Contains(content, want) {
+			t.Fatalf("self-hosting assurance gaps docs missing %q", want)
+		}
 	}
 }
