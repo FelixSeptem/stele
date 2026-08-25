@@ -13,6 +13,7 @@ import (
 	"github.com/FelixSeptem/stele/internal/insights"
 	"github.com/FelixSeptem/stele/internal/memory"
 	"github.com/FelixSeptem/stele/internal/telemetry"
+	"github.com/FelixSeptem/stele/internal/workflow"
 	"github.com/jackc/pgx/v5"
 )
 
@@ -138,6 +139,137 @@ type stubExecutionStore struct {
 	lastBegin     JobExecution
 	lastComplete  JobExecutionCompletion
 	lastFailure   JobExecutionFailure
+}
+
+type stubWorkflowMaintenanceService struct {
+	runs         map[workflow.RunStatus][]workflow.WorkflowRun
+	materialized []workflow.MaterializeGapDiagnosticsInput
+	transitions  []workflow.TransitionRunInput
+	err          error
+}
+
+func (s *stubWorkflowMaintenanceService) ListRuns(ctx context.Context, input workflow.ListRunsInput) ([]workflow.WorkflowRun, error) {
+	if s.err != nil {
+		return nil, s.err
+	}
+	return append([]workflow.WorkflowRun(nil), s.runs[input.Status]...), nil
+}
+
+func (s *stubWorkflowMaintenanceService) MaterializeGapDiagnostics(ctx context.Context, input workflow.MaterializeGapDiagnosticsInput) ([]workflow.GapDiagnostic, error) {
+	if s.err != nil {
+		return nil, s.err
+	}
+	s.materialized = append(s.materialized, input)
+	return []workflow.GapDiagnostic{{ID: "workflow_gap_1"}}, nil
+}
+
+func (s *stubWorkflowMaintenanceService) TransitionRun(ctx context.Context, input workflow.TransitionRunInput) (workflow.WorkflowRun, error) {
+	if s.err != nil {
+		return workflow.WorkflowRun{}, s.err
+	}
+	s.transitions = append(s.transitions, input)
+	return workflow.WorkflowRun{ID: input.Transition.RunID, Scope: input.Transition.Scope, Status: input.Transition.ToStatus}, nil
+}
+
+type stubWorkflowHistoryCleaner struct {
+	deleted       int
+	err           error
+	gotScope      memory.Scope
+	gotCutoff     time.Time
+	retentionRuns []workflow.WorkflowRetentionRun
+}
+
+func (s *stubWorkflowHistoryCleaner) DeleteWorkflowHistoryBefore(ctx context.Context, scope memory.Scope, cutoff time.Time) (int, error) {
+	s.gotScope, s.gotCutoff = scope, cutoff
+	return s.deleted, s.err
+}
+
+func (s *stubWorkflowHistoryCleaner) CreateWorkflowRetentionRun(ctx context.Context, run workflow.WorkflowRetentionRun) (workflow.WorkflowRetentionRun, error) {
+	if s.err != nil {
+		return workflow.WorkflowRetentionRun{}, s.err
+	}
+	s.retentionRuns = append(s.retentionRuns, run)
+	return run, nil
+}
+
+func TestWorkflowDiagnosticsJobMaterializesScopedRunsIdempotently(t *testing.T) {
+	scope := memory.Scope{Tenant: "tenant-a", Project: "project-a", Namespace: "namespace-a"}
+	now := time.Date(2026, 7, 18, 17, 0, 0, 0, time.UTC)
+	service := &stubWorkflowMaintenanceService{runs: map[workflow.RunStatus][]workflow.WorkflowRun{
+		workflow.RunStatusRunning: {{ID: "workflow_run_1", Scope: scope}},
+		workflow.RunStatusBlocked: {{ID: "workflow_run_2", Scope: scope}},
+	}}
+	executions := &stubExecutionStore{beginStarted: true}
+	job := WorkflowDiagnosticsJob{Scope: scope, Service: service, ExecutionStore: executions, TriggerSource: "scheduler", Cadence: time.Hour, Limit: 10, Now: func() time.Time { return now }}
+
+	processed, err := job.Run(context.Background())
+	if err != nil {
+		t.Fatalf("Run() error = %v", err)
+	}
+	if processed != 2 || len(service.materialized) != 2 || executions.completeCalls != 1 {
+		t.Fatalf("workflow diagnostic execution processed=%d materialized=%+v complete=%d, want two scoped runs and completion", processed, service.materialized, executions.completeCalls)
+	}
+	for _, input := range service.materialized {
+		if input.Scope != scope || !input.Now.Equal(now) {
+			t.Fatalf("materialization input = %+v, want bounded scoped now", input)
+		}
+	}
+
+	executions.beginStarted = false
+	processed, err = job.Run(context.Background())
+	if err != nil || processed != 0 || len(service.materialized) != 2 {
+		t.Fatalf("duplicate workflow dispatch processed=%d err=%v materialized=%d, want no duplicate work", processed, err, len(service.materialized))
+	}
+}
+
+func TestWorkflowDiagnosticsJobExpiresStaleRunsWithinRefreshBound(t *testing.T) {
+	scope := memory.Scope{Tenant: "tenant-a", Project: "project-a", Namespace: "namespace-a"}
+	now := time.Date(2026, 7, 18, 17, 30, 0, 0, time.UTC)
+	service := &stubWorkflowMaintenanceService{runs: map[workflow.RunStatus][]workflow.WorkflowRun{
+		workflow.RunStatusRunning: {
+			{ID: "workflow_run_expired", Scope: scope, Status: workflow.RunStatusRunning, StartedAt: now.Add(-3 * time.Hour)},
+			{ID: "workflow_run_unprocessed", Scope: scope, Status: workflow.RunStatusRunning, StartedAt: now.Add(-3 * time.Hour)},
+		},
+	}}
+	executions := &stubExecutionStore{beginStarted: true}
+	job := WorkflowDiagnosticsJob{Scope: scope, Service: service, ExecutionStore: executions, Cadence: time.Hour, Limit: 10, NextActionRefreshLimit: 1, StaleRunWindow: time.Hour, Now: func() time.Time { return now }}
+
+	processed, err := job.Run(context.Background())
+	if err != nil {
+		t.Fatalf("Run() error = %v", err)
+	}
+	if processed != 1 || len(service.materialized) != 1 || len(service.transitions) != 1 {
+		t.Fatalf("stale workflow processing processed=%d materialized=%+v transitions=%+v, want one bounded expired run", processed, service.materialized, service.transitions)
+	}
+	transition := service.transitions[0].Transition
+	if transition.RunID != "workflow_run_expired" || transition.ToStatus != workflow.RunStatusExpired || transition.Actor != "stele-workflow-maintenance" {
+		t.Fatalf("transition = %+v, want append-only expired workflow transition", transition)
+	}
+}
+
+func TestWorkflowRetentionJobRecordsScopedAuditAndFailure(t *testing.T) {
+	scope := memory.Scope{Tenant: "tenant-a", Project: "project-a", Namespace: "namespace-a"}
+	now := time.Date(2026, 7, 18, 18, 0, 0, 0, time.UTC)
+	cleaner := &stubWorkflowHistoryCleaner{deleted: 4}
+	executions := &stubExecutionStore{beginStarted: true}
+	job := WorkflowRetentionJob{Scope: scope, Cleaner: cleaner, ExecutionStore: executions, TriggerSource: "scheduler", Cadence: time.Hour, RetentionWindow: 48 * time.Hour, Now: func() time.Time { return now }, NewRunID: func(string) string { return "workflow_retention_1" }}
+
+	processed, err := job.Run(context.Background())
+	if err != nil {
+		t.Fatalf("Run() error = %v", err)
+	}
+	if processed != 4 || cleaner.gotScope != scope || !cleaner.gotCutoff.Equal(now.Add(-48*time.Hour)) || len(cleaner.retentionRuns) != 1 || cleaner.retentionRuns[0].DeletedCount != 4 {
+		t.Fatalf("workflow retention result=%d cleaner=%+v, want scoped audited cleanup", processed, cleaner)
+	}
+
+	cleaner.err = errors.New("workflow cleanup unavailable")
+	executions.beginStarted = true
+	next := now.Add(time.Hour)
+	job.Now = func() time.Time { return next }
+	processed, err = job.Run(context.Background())
+	if err == nil || processed != 0 || executions.failCalls != 1 {
+		t.Fatalf("failed workflow cleanup processed=%d err=%v failures=%d, want durable failure record", processed, err, executions.failCalls)
+	}
 }
 
 func (s *stubExecutionStore) BeginJobExecution(ctx context.Context, execution JobExecution) (bool, error) {

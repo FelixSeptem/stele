@@ -30,11 +30,53 @@ Required in all modes:
 Common optional variables:
 
 - `STELE_HTTP_ADDR`: listen address for `api` mode, default `:8080`
-- `STELE_AUTH_API_KEYS`: comma-separated public API keys for `/v1/events`, `/v1/memories/search`, `/v1/context/assemble`
-- `STELE_AUTH_ADMIN_API_KEYS`: comma-separated admin API keys for `/v1/admin/...`
+- `STELE_AUTH_BOOTSTRAP_ADMIN_KEY`: one temporary operator secret used only to create the first durable admin principal
+- `STELE_AUTH_API_KEYS` and `STELE_AUTH_ADMIN_API_KEYS`: deprecated unrestricted key lists; startup rejects them unless removed and replaced by constrained bootstrap
 - `STELE_AUTH_DEFAULT_TENANT`: default scheduler tenant scope
 - `STELE_AUTH_DEFAULT_PROJECT`: default scheduler project scope
 - `STELE_AUTH_DEFAULT_NAMESPACE`: default scheduler namespace scope
+
+## Principal Bootstrap And Scoped Access
+
+Protected requests are authenticated against PostgreSQL-backed principals. Every
+request must include `X-API-Key`, `X-Stele-Tenant`, `X-Stele-Project`, and
+`X-Stele-Namespace`; the exact scope must be granted to the principal. Public
+principals can use public memory and event routes. Admin routes additionally
+require the `admin` role.
+
+For a first deployment, configure all four bootstrap variables and start the API:
+
+```bash
+export STELE_AUTH_BOOTSTRAP_ADMIN_KEY='<temporary-bootstrap-secret>'
+export STELE_AUTH_DEFAULT_TENANT='tenant-a'
+export STELE_AUTH_DEFAULT_PROJECT='project-a'
+export STELE_AUTH_DEFAULT_NAMESPACE='namespace-a'
+```
+
+Create the first durable administrator within that default scope:
+
+```bash
+curl -X POST http://localhost:8080/v1/admin/principals \
+  -H 'X-API-Key: <temporary-bootstrap-secret>' \
+  -H 'X-Stele-Tenant: tenant-a' -H 'X-Stele-Project: project-a' \
+  -H 'X-Stele-Namespace: namespace-a' \
+  -H 'Content-Type: application/json' \
+  -d '{"role":"admin","label":"operator"}'
+```
+
+The `credential_secret` in this response is returned once. Store it in a secret
+manager, remove the bootstrap key from the environment, and rotate or revoke
+credentials through the admin endpoints. Principal list/read, grant, and audit
+responses never contain raw credentials or digests. Grant administration is
+exact-scope only; a principal cannot create or request a different scope by
+changing headers.
+
+Event clients must send a bounded, stable `Idempotency-Key` on every
+`POST /v1/events`. An exact retry returns the original `event_id` with
+`replayed=true`; reusing a key for another payload returns `409`. A leased
+in-progress claim also returns `409` with `Retry-After: 1`. Admission rejection
+returns `422` and does not create a completed idempotency result, so clients may
+retry after the admission condition is resolved.
 
 Embedding routing variables:
 
@@ -1605,6 +1647,80 @@ curl 'http://localhost:8080/v1/admin/memories/<memory-id>/embedding/recovery-his
   -H 'X-Stele-Project: project-a' \
   -H 'X-Stele-Namespace: namespace-a'
 ```
+
+## Integration evidence workflow golden path
+
+The workflow contract records whether an external integration has captured the service-side evidence needed for one agent turn, task, or job. It does not execute the external agent or mutate the linked source evidence.
+
+1. Create an admin-owned template for the scope. Template steps use bounded kinds and evidence categories:
+
+```bash
+curl -X POST http://localhost:8080/v1/admin/workflows/templates \
+  -H 'Content-Type: application/json' \
+  -H 'X-API-Key: dev-admin-key' \
+  -H 'X-Stele-Tenant: tenant-a' \
+  -H 'X-Stele-Project: project-a' \
+  -H 'X-Stele-Namespace: namespace-a' \
+  -d '{"integration_kind":"agent_turn","completion_policy":"strict","actor":"operator-a","reason":"golden integration path","steps":[{"kind":"session_started","requirement":"required","allowed_evidence":["session"],"minimum_count":1,"requires_internal":true,"freshness_window":"24h","completion_window":"1h","position":1},{"kind":"turn_outcome_recorded","requirement":"required","allowed_evidence":["outcome"],"minimum_count":1,"requires_internal":true,"freshness_window":"24h","completion_window":"1h","position":2}]}'
+```
+
+2. An external integration starts its scoped workflow run. Repeating the same idempotency key resumes the original run:
+
+```bash
+curl -X POST http://localhost:8080/v1/workflows/runs \
+  -H 'Content-Type: application/json' \
+  -H 'X-API-Key: dev-public-key' \
+  -H 'X-Stele-Tenant: tenant-a' \
+  -H 'X-Stele-Project: project-a' \
+  -H 'X-Stele-Namespace: namespace-a' \
+  -d '{"template_id":"<workflow-template-id>","idempotency_key":"external-turn-001","actor":"agent-integration","reason":"capture evidence for one turn"}'
+```
+
+3. After writing the normal memory-session/context/outcome/verification/feedback/task evidence through their own routes, attach the relevant scoped record as a workflow step:
+
+```bash
+curl -X POST http://localhost:8080/v1/workflows/runs/<workflow-run-id>/steps \
+  -H 'Content-Type: application/json' \
+  -H 'X-API-Key: dev-public-key' \
+  -H 'X-Stele-Tenant: tenant-a' \
+  -H 'X-Stele-Project: project-a' \
+  -H 'X-Stele-Namespace: namespace-a' \
+  -d '{"kind":"session_started","actor":"agent-integration","reason":"session evidence recorded","evidence_links":[{"kind":"session","source":"public_api","target_id":"<memory-session-id>"}]}'
+```
+
+4. Read bounded public guidance for the next missing step. This response intentionally excludes workflow IDs, scope IDs, hidden evidence, prompts, and model output:
+
+```bash
+curl http://localhost:8080/v1/workflows/runs/<workflow-run-id>/next-actions \
+  -H 'X-API-Key: dev-public-key' \
+  -H 'X-Stele-Tenant: tenant-a' \
+  -H 'X-Stele-Project: project-a' \
+  -H 'X-Stele-Namespace: namespace-a'
+```
+
+5. Administrators inspect diagnosed gaps and may supersede a bad evidence link without changing the source record:
+
+```bash
+curl http://localhost:8080/v1/admin/workflows/runs/<workflow-run-id>/diagnostics \
+  -H 'X-API-Key: dev-admin-key' \
+  -H 'X-Stele-Tenant: tenant-a' \
+  -H 'X-Stele-Project: project-a' \
+  -H 'X-Stele-Namespace: namespace-a'
+
+curl -X POST http://localhost:8080/v1/admin/workflows/evidence-links/<evidence-link-id>/supersede \
+  -H 'Content-Type: application/json' \
+  -H 'X-API-Key: dev-admin-key' \
+  -H 'X-Stele-Tenant: tenant-a' \
+  -H 'X-Stele-Project: project-a' \
+  -H 'X-Stele-Namespace: namespace-a' \
+  -d '{"actor":"operator-a","reason":"replace invalid evidence link"}'
+```
+
+6. Run the existing conformance and readiness routes for the same scope, then create a recovery verification when a workflow-related incident has been remediated. Workflow evidence participates in assurance as bounded categories; it never resolves incidents automatically.
+
+Set `STELE_WORKFLOW_MAINTENANCE_ENABLED=true` only when scheduler-driven stale diagnostics and high-volume workflow history cleanup are desired. It is disabled by default. `STELE_WORKFLOW_DIAGNOSTIC_INTERVAL`, `STELE_WORKFLOW_STALE_RUN_WINDOW`, `STELE_WORKFLOW_DIAGNOSTIC_SCAN_LIMIT`, `STELE_WORKFLOW_NEXT_ACTION_REFRESH_LIMIT`, and `STELE_WORKFLOW_HISTORY_RETENTION` bound that maintenance path. Monitor `stele_workflow_lifecycle_total` for template/run/step/evidence/diagnostic/next-action/cleanup categories.
+
+Stele does not provide SDK/UI surfaces, external agent execution, model invocation, prompt orchestration, tool orchestration, or final-answer generation. Those remain with the external integration; Stele owns the scoped memory and evidence records only.
 
 ## Operational Notes
 

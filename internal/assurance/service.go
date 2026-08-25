@@ -52,8 +52,42 @@ type AssuranceStore interface {
 	CreateRetentionRun(ctx context.Context, run RetentionRun) (RetentionRun, error)
 }
 
+// WorkflowHealthReader exposes only scoped workflow health aggregates to assurance.
+// It deliberately excludes workflow, evidence, and actor identifiers.
+type WorkflowHealthReader interface {
+	ReadWorkflowHealth(ctx context.Context, scope memory.Scope, observedAt time.Time) (WorkflowHealthSnapshot, error)
+}
+
+type WorkflowHealthSnapshot struct {
+	Scope               memory.Scope
+	CompletedRuns       int
+	IncompleteRuns      int
+	StaleRuns           int
+	BlockingDiagnostics int
+	LatestObservedAt    time.Time
+	Status              HealthStatus
+	Reason              ReasonCategory
+}
+
+func (s WorkflowHealthSnapshot) Validate() error {
+	if err := s.Scope.Validate(); err != nil {
+		return err
+	}
+	if s.CompletedRuns < 0 || s.IncompleteRuns < 0 || s.StaleRuns < 0 || s.BlockingDiagnostics < 0 {
+		return fmt.Errorf("workflow health counts must not be negative")
+	}
+	if s.Status != "" && !s.Status.Valid() {
+		return fmt.Errorf("workflow health status %q is invalid", s.Status)
+	}
+	if s.Reason != "" && !s.Reason.Valid() {
+		return fmt.Errorf("workflow health reason %q is invalid", s.Reason)
+	}
+	return nil
+}
+
 type ServiceOptions struct {
 	Store    AssuranceStore
+	Workflow WorkflowHealthReader
 	Now      func() time.Time
 	NewID    func(prefix string) string
 	Observer telemetry.Observer
@@ -62,6 +96,7 @@ type ServiceOptions struct {
 
 type Service struct {
 	store    AssuranceStore
+	workflow WorkflowHealthReader
 	now      func() time.Time
 	newID    func(prefix string) string
 	observer telemetry.Observer
@@ -90,6 +125,7 @@ type HealthEvaluationInput struct {
 	RepairStatus          HealthObservation
 	RankingRolloutState   HealthObservation
 	ConformanceStatus     HealthObservation
+	WorkflowHealth        HealthObservation
 	CapacityLoadProof     HealthObservation
 	BackupRestoreProof    HealthObservation
 }
@@ -385,7 +421,7 @@ func NewService(options ServiceOptions) *Service {
 			return fmt.Sprintf("%s_%d", strings.TrimSpace(prefix), now().UnixNano())
 		}
 	}
-	return &Service{store: options.Store, now: now, newID: newID, observer: options.Observer, logger: options.Logger}
+	return &Service{store: options.Store, workflow: options.Workflow, now: now, newID: newID, observer: options.Observer, logger: options.Logger}
 }
 
 func (s *Service) CreateHealthEvaluation(ctx context.Context, input HealthEvaluationInput) (HealthEvaluation, error) {
@@ -415,6 +451,7 @@ func (s *Service) CreateHealthEvaluation(ctx context.Context, input HealthEvalua
 		{component: ComponentRepair, source: "repair_status", obs: input.RepairStatus},
 		{component: ComponentRanking, source: "ranking_rollout_state", obs: input.RankingRolloutState},
 		{component: ComponentConformance, source: "conformance_status", obs: input.ConformanceStatus},
+		{component: ComponentWorkflow, source: "workflow_health", obs: input.WorkflowHealth},
 		{component: ComponentCapacityLoad, source: "capacity_load_proof", obs: input.CapacityLoadProof},
 		{component: ComponentBackupRestore, source: "backup_restore_proof", obs: input.BackupRestoreProof},
 	}
@@ -1032,6 +1069,19 @@ func (s *Service) CreateReadinessReport(ctx context.Context, input ReadinessRepo
 	if err != nil {
 		return ReadinessReport{}, err
 	}
+	workflowHealth := WorkflowHealthSnapshot{Scope: scope, Status: HealthStatusUnknown, Reason: ReasonWorkflowGap}
+	if s.workflow != nil {
+		workflowHealth, err = s.workflow.ReadWorkflowHealth(ctx, scope, input.GeneratedAt.UTC())
+		if err != nil {
+			return ReadinessReport{}, err
+		}
+		if err := workflowHealth.Validate(); err != nil {
+			return ReadinessReport{}, err
+		}
+		if workflowHealth.Scope.Normalized() != scope {
+			return ReadinessReport{}, fmt.Errorf("workflow health scope does not match readiness report scope")
+		}
+	}
 
 	latestHealth := latestHealthEvaluation(healthEvaluations)
 	latestConformance := latestConformanceRun(conformanceRuns)
@@ -1039,7 +1089,19 @@ func (s *Service) CreateReadinessReport(ctx context.Context, input ReadinessRepo
 	activeIncidentCount := countActiveIncidents(incidents)
 	alertCount := len(alerts)
 	status := readinessStatus(latestHealth, latestConformance, capacityProof, backupProof)
+	if workflowHealth.Status == HealthStatusUnhealthy {
+		status = ReadinessStatusBlocked
+	} else if workflowHealth.Status == HealthStatusDegraded || workflowHealth.Status == HealthStatusStale {
+		if status != ReadinessStatusBlocked {
+			status = ReadinessStatusDegraded
+		}
+	} else if workflowHealth.Status == HealthStatusUnknown && status == ReadinessStatusReady {
+		status = ReadinessStatusUnknown
+	}
 	actions := readinessRecommendedActions(status, latestConformance, capacityProof, backupProof, activeIncidentCount, alertCount)
+	if workflowHealth.Status != HealthStatusHealthy {
+		actions = appendUniqueRunbookHint(actions, RunbookHintReviewWorkflow)
+	}
 	reportID := strings.TrimSpace(input.ReportID)
 	if reportID == "" {
 		reportID = s.newID("readiness_report")
@@ -1051,15 +1113,20 @@ func (s *Service) CreateReadinessReport(ctx context.Context, input ReadinessRepo
 		HealthEvaluationID: latestHealth.ID,
 		ConformanceRunID:   latestConformance.ID,
 		ComponentSummary: map[string]any{
-			"health_status":          string(latestHealth.Status),
-			"conformance_status":     string(latestConformance.Result),
-			"capacity_load_status":   string(capacityProof.Status),
-			"backup_restore_status":  string(backupProof.Status),
-			"active_incidents":       activeIncidentCount,
-			"alert_candidates":       alertCount,
-			"repair_health":          string(componentStatus(latestHealth, ComponentRepair)),
-			"ranking_rollout_health": string(componentStatus(latestHealth, ComponentRanking)),
-			"proof_session_health":   string(componentStatus(latestHealth, ComponentProof)),
+			"health_status":                 string(latestHealth.Status),
+			"conformance_status":            string(latestConformance.Result),
+			"capacity_load_status":          string(capacityProof.Status),
+			"backup_restore_status":         string(backupProof.Status),
+			"active_incidents":              activeIncidentCount,
+			"alert_candidates":              alertCount,
+			"repair_health":                 string(componentStatus(latestHealth, ComponentRepair)),
+			"ranking_rollout_health":        string(componentStatus(latestHealth, ComponentRanking)),
+			"proof_session_health":          string(componentStatus(latestHealth, ComponentProof)),
+			"workflow_status":               string(workflowHealth.Status),
+			"workflow_completed_runs":       workflowHealth.CompletedRuns,
+			"workflow_incomplete_runs":      workflowHealth.IncompleteRuns,
+			"workflow_stale_runs":           workflowHealth.StaleRuns,
+			"workflow_blocking_diagnostics": workflowHealth.BlockingDiagnostics,
 		},
 		RecommendedActions: actions,
 		GeneratedAt:        input.GeneratedAt.UTC(),
@@ -1480,6 +1547,8 @@ func missingEvidenceCategoryForKind(kind ExpectedEvidenceKind) MissingEvidenceCa
 		return MissingEvidenceRepairWithoutVerification
 	case ExpectedEvidenceRankingRollout:
 		return MissingEvidenceRolloutWithoutDryRun
+	case ExpectedEvidenceWorkflow:
+		return MissingEvidenceWorkflowIncomplete
 	default:
 		return MissingEvidenceOutOfScope
 	}
@@ -1601,6 +1670,15 @@ func readinessRecommendedActions(status ReadinessStatus, conformance Conformance
 		appendAction(RunbookHintReviewConformanceProfile)
 	}
 	return actions
+}
+
+func appendUniqueRunbookHint(actions []RunbookHintCategory, action RunbookHintCategory) []RunbookHintCategory {
+	for _, existing := range actions {
+		if existing == action {
+			return actions
+		}
+	}
+	return append(actions, action)
 }
 
 func readinessImpactForConformanceResult(result ConformanceResult) string {
@@ -1947,6 +2025,8 @@ func defaultReasonForComponent(component HealthComponent, status HealthStatus) R
 		return ReasonUnknown
 	case ComponentConformance:
 		return ReasonConformanceMissingEvidence
+	case ComponentWorkflow:
+		return ReasonWorkflowGap
 	case ComponentCapacityLoad:
 		if status == HealthStatusHealthy {
 			return ReasonCapacityWithinThresholds
@@ -1970,6 +2050,8 @@ func runbookHintsForComponent(component HealthComponent) []RunbookHintCategory {
 		return []RunbookHintCategory{RunbookHintReviewRepair}
 	case ComponentRanking, ComponentConformance:
 		return []RunbookHintCategory{RunbookHintReviewConformanceProfile}
+	case ComponentWorkflow:
+		return []RunbookHintCategory{RunbookHintReviewWorkflow}
 	case ComponentCapacityLoad:
 		return []RunbookHintCategory{RunbookHintReviewCapacityProof}
 	case ComponentBackupRestore:

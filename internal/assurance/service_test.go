@@ -909,6 +909,107 @@ func TestServiceRunsConformanceAgainstDurableEvidence(t *testing.T) {
 	}
 }
 
+func TestServiceWorkflowEvidenceDegradesConformanceAndReadiness(t *testing.T) {
+	now := time.Date(2026, 7, 18, 12, 0, 0, 0, time.UTC)
+	scope := memory.Scope{Tenant: "tenant-a", Project: "project-a", Namespace: "namespace-a"}
+	profile := ConformanceProfile{
+		ID:     "workflow_profile_1",
+		Scope:  scope,
+		Status: ConformanceProfileStatusActive,
+		ExpectedEvidence: []ExpectedEvidence{
+			{Kind: ExpectedEvidenceWorkflow, MinimumCount: 1, FreshnessWindow: time.Hour},
+		},
+		Actor: "operator-a", Reason: "require integration workflow", CreatedAt: now, UpdatedAt: now,
+	}
+	store := &stubAssuranceStore{
+		conformanceProfiles: []ConformanceProfile{profile},
+		conformanceEvidence: []ConformanceEvidenceObservation{{
+			Kind: ExpectedEvidenceWorkflow, Count: 1, FreshestAt: now.Add(-time.Minute), Contradictory: true,
+		}},
+		healthEvaluations: []HealthEvaluation{{ID: "health_1", Scope: scope, Status: HealthStatusHealthy, Severity: SeverityInfo, Reason: ReasonRuntimeReady, CreatedAt: now}},
+		operationalProofs: []OperationalProof{
+			{ID: "capacity_1", Scope: scope, Target: OperationalProofCapacityLoad, Status: HealthStatusHealthy, Severity: SeverityInfo, Reason: ReasonCapacityWithinThresholds, ObservedAt: now, CreatedAt: now},
+			{ID: "backup_1", Scope: scope, Target: OperationalProofBackupRestore, Status: HealthStatusHealthy, Severity: SeverityInfo, Reason: ReasonBackupRestoreFresh, ObservedAt: now, CreatedAt: now},
+		},
+		workflowHealth: WorkflowHealthSnapshot{Scope: scope, CompletedRuns: 1, BlockingDiagnostics: 1, LatestObservedAt: now.Add(-time.Minute), Status: HealthStatusDegraded, Reason: ReasonWorkflowGap},
+	}
+	service := NewService(ServiceOptions{
+		Store: store,
+		Workflow: workflowHealthReaderFunc(func(ctx context.Context, gotScope memory.Scope, observedAt time.Time) (WorkflowHealthSnapshot, error) {
+			if gotScope != scope {
+				t.Fatalf("workflow health scope = %+v, want %+v", gotScope, scope)
+			}
+			return store.workflowHealth, nil
+		}),
+		Now: func() time.Time { return now }, NewID: func(prefix string) string { return prefix + "_1" },
+	})
+
+	run, diagnostics, err := service.RunConformance(context.Background(), ConformanceRunInput{Scope: scope, ProfileID: profile.ID, RunID: "workflow_run_1", StartedAt: now})
+	if err != nil {
+		t.Fatalf("RunConformance() error = %v", err)
+	}
+	if run.Result != ConformanceResultDegraded || len(diagnostics) != 1 || diagnostics[0].EvidenceKind != ExpectedEvidenceWorkflow {
+		t.Fatalf("workflow conformance = %+v diagnostics=%+v, want degraded workflow diagnostic", run, diagnostics)
+	}
+
+	report, err := service.CreateReadinessReport(context.Background(), ReadinessReportInput{Scope: scope, ReportID: "readiness_1", GeneratedAt: now})
+	if err != nil {
+		t.Fatalf("CreateReadinessReport() error = %v", err)
+	}
+	if report.Status != ReadinessStatusDegraded || report.ComponentSummary["workflow_status"] != string(HealthStatusDegraded) {
+		t.Fatalf("readiness report = %+v, want degraded workflow summary", report)
+	}
+	if !containsRunbookHint(report.RecommendedActions, RunbookHintReviewWorkflow) {
+		t.Fatalf("recommended actions = %+v, want workflow runbook action", report.RecommendedActions)
+	}
+}
+
+func TestServiceWorkflowHealthCreatesDeduplicatedIncidentAndAlertCandidate(t *testing.T) {
+	now := time.Date(2026, 7, 18, 13, 0, 0, 0, time.UTC)
+	scope := memory.Scope{Tenant: "tenant-a", Project: "project-a", Namespace: "namespace-a"}
+	store := &stubAssuranceStore{}
+	service := NewService(ServiceOptions{Store: store, Now: func() time.Time { return now }, NewID: func(prefix string) string { return prefix + "_1" }})
+	input := HealthEvaluationInput{
+		Scope: scope, EvaluationID: "health_1", ObservedAt: now,
+		WorkflowHealth: HealthObservation{Status: HealthStatusUnhealthy, Severity: SeverityCritical, Reason: ReasonWorkflowGap, ObservedAt: now, Evidence: map[string]any{"blocking_diagnostics": 2, "workflow_category": "missing"}},
+	}
+	evaluation, err := service.CreateHealthEvaluation(context.Background(), input)
+	if err != nil {
+		t.Fatalf("CreateHealthEvaluation() error = %v", err)
+	}
+	if componentStatus(evaluation, ComponentWorkflow) != HealthStatusUnhealthy || len(store.createdIncidents) != 1 {
+		t.Fatalf("workflow health evaluation = %+v incidents=%+v, want workflow incident", evaluation, store.createdIncidents)
+	}
+	if store.createdIncidents[0].Component != ComponentWorkflow || store.createdIncidents[0].Reason != ReasonWorkflowGap {
+		t.Fatalf("workflow incident = %+v, want bounded workflow component and reason", store.createdIncidents[0])
+	}
+	candidates, err := service.GenerateAlertCandidates(context.Background(), AlertCandidateGenerationInput{Scope: scope, Evaluation: evaluation, DeliveryPolicy: "disabled", DeduplicationWindow: time.Hour, CreatedAt: now})
+	if err != nil {
+		t.Fatalf("GenerateAlertCandidates() error = %v", err)
+	}
+	if len(candidates) == 0 || candidates[0].Component != ComponentWorkflow {
+		t.Fatalf("workflow alert candidates = %+v, want workflow alert", candidates)
+	}
+}
+
+func TestServiceRecoveryVerificationAcceptsBoundedWorkflowEvidence(t *testing.T) {
+	now := time.Date(2026, 7, 18, 14, 0, 0, 0, time.UTC)
+	scope := memory.Scope{Tenant: "tenant-a", Project: "project-a", Namespace: "namespace-a"}
+	service := NewService(ServiceOptions{Store: &stubAssuranceStore{}, Now: func() time.Time { return now }, NewID: func(prefix string) string { return prefix + "_1" }})
+	record, err := service.CreateRecoveryVerification(context.Background(), RecoveryVerificationInput{
+		Scope: scope, RecordID: "recovery_1", Target: RecoveryVerificationTargetWorkflowRun, TargetID: "workflow_run_1", Status: HealthStatusHealthy,
+		CheckedSurfaces: []string{"workflow_run", "workflow_diagnostic", "conformance_run"}, ResultCategory: "recovered",
+		LinkedEvidence: map[string]any{"workflow_status": "completed", "workflow_gap_category": "missing", "conformance_result": "passed"},
+		Actor:          "operator-a", Reason: "workflow recovery verified", VerifiedAt: now,
+	})
+	if err != nil {
+		t.Fatalf("CreateRecoveryVerification() error = %v", err)
+	}
+	if record.Target != RecoveryVerificationTargetWorkflowRun || record.LinkedEvidence["workflow_status"] != "completed" {
+		t.Fatalf("recovery verification = %+v, want bounded workflow evidence", record)
+	}
+}
+
 func TestServiceConformanceRunRecordsMissingAndStaleDiagnostics(t *testing.T) {
 	now := time.Date(2026, 7, 13, 2, 0, 0, 0, time.UTC)
 	scope := memory.Scope{Tenant: "tenant-a", Project: "project-a", Namespace: "namespace-a"}
@@ -1751,6 +1852,22 @@ type stubAssuranceStore struct {
 	inspectInputs                     []ConformanceEvidenceInspectionInput
 	claimAlertInputs                  []ClaimAlertCandidatesForDeliveryInput
 	transitions                       []IncidentTransition
+	workflowHealth                    WorkflowHealthSnapshot
+}
+
+type workflowHealthReaderFunc func(context.Context, memory.Scope, time.Time) (WorkflowHealthSnapshot, error)
+
+func (f workflowHealthReaderFunc) ReadWorkflowHealth(ctx context.Context, scope memory.Scope, observedAt time.Time) (WorkflowHealthSnapshot, error) {
+	return f(ctx, scope, observedAt)
+}
+
+func containsRunbookHint(hints []RunbookHintCategory, want RunbookHintCategory) bool {
+	for _, hint := range hints {
+		if hint == want {
+			return true
+		}
+	}
+	return false
 }
 
 func (s *stubAssuranceStore) CreateHealthEvaluation(ctx context.Context, evaluation HealthEvaluation) (HealthEvaluation, error) {

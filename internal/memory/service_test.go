@@ -16,6 +16,20 @@ type stubIngestStore struct {
 	err           error
 }
 
+type stubIdempotentIngestStore struct {
+	stubIngestStore
+	gotIdempotent IdempotentEventIngestInput
+	replayed      bool
+}
+
+func (s *stubIdempotentIngestStore) IngestEventIdempotent(ctx context.Context, input IdempotentEventIngestInput, provenance ProvenanceRecord, admission AdmissionPressureReport) (IdempotentEventIngestResult, error) {
+	s.gotIdempotent = input
+	if s.err != nil {
+		return IdempotentEventIngestResult{}, s.err
+	}
+	return IdempotentEventIngestResult{Event: s.event, Replayed: s.replayed}, nil
+}
+
 func (s *stubIngestStore) IngestEvent(ctx context.Context, input IngestEventInput, provenance ProvenanceRecord) (RawEvent, error) {
 	s.gotInput = input
 	s.gotProvenance = provenance
@@ -135,5 +149,37 @@ func TestServiceIngestEmitsTelemetryOperation(t *testing.T) {
 
 	if observer.operations[0].Operation != "ingest" || observer.operations[0].Status != "ok" {
 		t.Fatalf("operation event = %+v, want ingest ok", observer.operations[0])
+	}
+}
+
+func TestServiceIngestIdempotentUsesPrincipalScopeKeyAndStableFingerprint(t *testing.T) {
+	store := &stubIdempotentIngestStore{stubIngestStore: stubIngestStore{event: RawEvent{ID: "evt_123"}}}
+	service := NewService(store, time.Now)
+	input := IngestEventInput{Scope: Scope{Tenant: "tenant-a", Project: "project-a", Namespace: "namespace-a"}, EventType: "conversation.message", Content: "hello", Metadata: map[string]any{"b": "two", "a": "one"}, SourceTimestamp: time.Date(2026, 8, 13, 12, 0, 0, 0, time.UTC)}
+
+	result, err := service.IngestIdempotent(context.Background(), input, "principal_1", "request-key")
+	if err != nil {
+		t.Fatalf("IngestIdempotent() error = %v", err)
+	}
+	if result.Event.ID != "evt_123" || result.Replayed {
+		t.Fatalf("result = %+v, want new evt_123", result)
+	}
+	if store.gotIdempotent.PrincipalID != "principal_1" || store.gotIdempotent.IdempotencyKey != "request-key" || store.gotIdempotent.RequestFingerprint == "" {
+		t.Fatalf("idempotent input = %+v", store.gotIdempotent)
+	}
+	fingerprint, err := EventRequestFingerprint(IngestEventInput{Scope: input.Scope, EventType: input.EventType, Content: input.Content, Metadata: map[string]any{"a": "one", "b": "two"}, SourceTimestamp: input.SourceTimestamp})
+	if err != nil || fingerprint != store.gotIdempotent.RequestFingerprint {
+		t.Fatalf("fingerprint = %q, %v; want %q", fingerprint, err, store.gotIdempotent.RequestFingerprint)
+	}
+}
+
+func TestServiceIngestIdempotentRejectsMissingPrincipalOrKey(t *testing.T) {
+	service := NewService(&stubIdempotentIngestStore{}, time.Now)
+	input := IngestEventInput{Scope: Scope{Tenant: "tenant-a", Project: "project-a", Namespace: "namespace-a"}, EventType: "conversation.message", Content: "hello"}
+	if _, err := service.IngestIdempotent(context.Background(), input, "", "request-key"); err == nil {
+		t.Fatal("IngestIdempotent() error = nil for missing principal")
+	}
+	if _, err := service.IngestIdempotent(context.Background(), input, "principal_1", ""); err == nil {
+		t.Fatal("IngestIdempotent() error = nil for missing key")
 	}
 }

@@ -212,6 +212,18 @@ type RecoveryVerificationEvent struct {
 	ResultCategory string
 }
 
+type WorkflowLifecycleEvent struct {
+	Operation          string
+	Result             string
+	TemplateStatus     string
+	RunStatus          string
+	StepKind           string
+	EvidenceKind       string
+	DiagnosticCategory string
+	NextActionCategory string
+	CleanupCategory    string
+}
+
 type MetricsObserver struct {
 	mu       sync.Mutex
 	counters map[string]float64
@@ -617,6 +629,23 @@ func (o *MetricsObserver) RecordRecoveryVerification(ctx context.Context, event 
 	}, 1)
 }
 
+func (o *MetricsObserver) RecordWorkflowLifecycle(ctx context.Context, event WorkflowLifecycleEvent) {
+	if o == nil {
+		return
+	}
+	o.addCounter("stele_workflow_lifecycle_total", map[string]string{
+		"operation":            labelOrUnknown(event.Operation),
+		"result":               labelOrUnknown(event.Result),
+		"template_status":      labelOrUnknown(event.TemplateStatus),
+		"run_status":           labelOrUnknown(event.RunStatus),
+		"step_kind":            labelOrUnknown(event.StepKind),
+		"evidence_kind":        labelOrUnknown(event.EvidenceKind),
+		"diagnostic_category":  labelOrUnknown(event.DiagnosticCategory),
+		"next_action_category": labelOrUnknown(event.NextActionCategory),
+		"cleanup_category":     labelOrUnknown(event.CleanupCategory),
+	}, 1)
+}
+
 func (o *MetricsObserver) RenderPrometheus() string {
 	if o == nil {
 		return ""
@@ -660,6 +689,7 @@ func (o *MetricsObserver) RenderPrometheus() string {
 	writeMetricFamilyHeader(&builder, "stele_operational_proofs_total", "counter", "Operational proof outcomes by bounded categories.")
 	writeMetricFamilyHeader(&builder, "stele_readiness_reports_total", "counter", "Readiness report outcomes by bounded categories.")
 	writeMetricFamilyHeader(&builder, "stele_recovery_verifications_total", "counter", "Recovery verification outcomes by bounded categories.")
+	writeMetricFamilyHeader(&builder, "stele_workflow_lifecycle_total", "counter", "Integration workflow lifecycle events by bounded categories.")
 
 	writeMetricMap(&builder, o.counters)
 	writeMetricMap(&builder, o.gauges)

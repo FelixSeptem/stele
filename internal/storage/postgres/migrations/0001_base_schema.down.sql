@@ -1,3 +1,17 @@
+DROP TABLE IF EXISTS event_idempotency_records;
+DROP TABLE IF EXISTS access_audit_records;
+DROP TABLE IF EXISTS access_scope_grants;
+DROP TABLE IF EXISTS access_credentials;
+DROP TABLE IF EXISTS access_principals;
+DROP TABLE IF EXISTS integration_workflow_retention_runs;
+DROP TABLE IF EXISTS integration_workflow_transitions;
+DROP TABLE IF EXISTS integration_workflow_next_actions;
+DROP TABLE IF EXISTS integration_workflow_gap_diagnostics;
+DROP TABLE IF EXISTS integration_workflow_evidence_links;
+DROP TABLE IF EXISTS integration_workflow_step_records;
+DROP TABLE IF EXISTS integration_workflow_runs;
+DROP TABLE IF EXISTS integration_workflow_template_steps;
+DROP TABLE IF EXISTS integration_workflow_templates;
 DROP TABLE IF EXISTS assurance_retention_runs;
 DROP TABLE IF EXISTS assurance_recovery_verifications;
 DROP TABLE IF EXISTS assurance_readiness_reports;

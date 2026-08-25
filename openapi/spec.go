@@ -52,6 +52,7 @@ paths:
         - $ref: '#/components/parameters/TenantHeader'
         - $ref: '#/components/parameters/ProjectHeader'
         - $ref: '#/components/parameters/NamespaceHeader'
+        - $ref: '#/components/parameters/IdempotencyKeyHeader'
       requestBody:
         required: true
         content:
@@ -59,6 +60,12 @@ paths:
             schema:
               $ref: '#/components/schemas/EventIngestRequest'
       responses:
+        '200':
+          description: Existing event replayed for an equivalent idempotency request
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/EventIngestResponse'
         '201':
           description: Event ingested
           content:
@@ -69,6 +76,227 @@ paths:
           description: Invalid request
         '401':
           description: Missing or invalid API key
+        '409':
+          description: Idempotency key conflicts with another payload or is currently in progress
+          headers:
+            Retry-After:
+              description: Retry delay when the idempotency claim is still leased
+              schema: {type: integer, minimum: 1}
+        '422':
+          description: Admission rejected before an event was persisted
+  /v1/admin/principals:
+    post:
+      operationId: createPrincipal
+      parameters:
+        - $ref: '#/components/parameters/AdminAPIKey'
+        - $ref: '#/components/parameters/TenantHeader'
+        - $ref: '#/components/parameters/ProjectHeader'
+        - $ref: '#/components/parameters/NamespaceHeader'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/PrincipalCreateRequest'
+      responses:
+        '201':
+          description: Principal created with a one-time credential secret
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/IssuedPrincipal'
+        '400':
+          description: Invalid principal request
+        '401':
+          description: Unauthorized
+        '403':
+          description: Scope or role denied
+    get:
+      operationId: listPrincipals
+      parameters:
+        - $ref: '#/components/parameters/AdminAPIKey'
+        - $ref: '#/components/parameters/TenantHeader'
+        - $ref: '#/components/parameters/ProjectHeader'
+        - $ref: '#/components/parameters/NamespaceHeader'
+        - in: query
+          name: limit
+          schema: {type: integer, minimum: 1, maximum: 100}
+      responses:
+        '200':
+          description: Principals visible in the requested scope
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/PrincipalListResponse'
+        '401': {description: Unauthorized}
+        '403': {description: Scope or role denied}
+  /v1/admin/principals/{principal_id}:
+    get:
+      operationId: readPrincipal
+      parameters:
+        - $ref: '#/components/parameters/AdminAPIKey'
+        - $ref: '#/components/parameters/TenantHeader'
+        - $ref: '#/components/parameters/ProjectHeader'
+        - $ref: '#/components/parameters/NamespaceHeader'
+        - $ref: '#/components/parameters/PrincipalID'
+      responses:
+        '200':
+          description: Scoped principal projection without credential material
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Principal'
+        '401': {description: Unauthorized}
+        '403': {description: Scope or role denied}
+        '404': {description: Principal not found in the authorized scope}
+  /v1/admin/principals/{principal_id}/credentials/rotate:
+    post:
+      operationId: rotatePrincipalCredential
+      parameters:
+        - $ref: '#/components/parameters/AdminAPIKey'
+        - $ref: '#/components/parameters/TenantHeader'
+        - $ref: '#/components/parameters/ProjectHeader'
+        - $ref: '#/components/parameters/NamespaceHeader'
+        - $ref: '#/components/parameters/PrincipalID'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/PrincipalLifecycleRequest'
+      responses:
+        '200':
+          description: New credential secret, returned exactly once
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/IssuedCredential'
+        '401': {description: Unauthorized}
+        '403': {description: Scope or role denied}
+  /v1/admin/principals/{principal_id}/disable:
+    post:
+      operationId: disablePrincipal
+      parameters:
+        - $ref: '#/components/parameters/AdminAPIKey'
+        - $ref: '#/components/parameters/TenantHeader'
+        - $ref: '#/components/parameters/ProjectHeader'
+        - $ref: '#/components/parameters/NamespaceHeader'
+        - $ref: '#/components/parameters/PrincipalID'
+      requestBody:
+        required: false
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/PrincipalLifecycleRequest'
+      responses:
+        '204': {description: Principal disabled}
+        '401': {description: Unauthorized}
+        '403': {description: Scope or role denied}
+  /v1/admin/principals/{principal_id}/expire:
+    post:
+      operationId: expirePrincipal
+      parameters:
+        - $ref: '#/components/parameters/AdminAPIKey'
+        - $ref: '#/components/parameters/TenantHeader'
+        - $ref: '#/components/parameters/ProjectHeader'
+        - $ref: '#/components/parameters/NamespaceHeader'
+        - $ref: '#/components/parameters/PrincipalID'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [expires_at]
+              properties:
+                expires_at: {type: string, format: date-time}
+                actor: {type: string, maxLength: 128}
+                reason: {type: string, maxLength: 256}
+      responses:
+        '204': {description: Principal expiry updated}
+        '400': {description: Invalid expiry}
+        '401': {description: Unauthorized}
+        '403': {description: Scope or role denied}
+  /v1/admin/principals/{principal_id}/grants:
+    get:
+      operationId: listPrincipalGrants
+      parameters:
+        - $ref: '#/components/parameters/AdminAPIKey'
+        - $ref: '#/components/parameters/TenantHeader'
+        - $ref: '#/components/parameters/ProjectHeader'
+        - $ref: '#/components/parameters/NamespaceHeader'
+        - $ref: '#/components/parameters/PrincipalID'
+      responses:
+        '200':
+          description: Exact grants visible in the requested scope
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/GrantListResponse'
+        '401': {description: Unauthorized}
+        '403': {description: Scope or role denied}
+    post:
+      operationId: createPrincipalGrant
+      parameters:
+        - $ref: '#/components/parameters/AdminAPIKey'
+        - $ref: '#/components/parameters/TenantHeader'
+        - $ref: '#/components/parameters/ProjectHeader'
+        - $ref: '#/components/parameters/NamespaceHeader'
+        - $ref: '#/components/parameters/PrincipalID'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/GrantCreateRequest'
+      responses:
+        '201': {description: Grant created}
+        '400': {description: Invalid or out-of-scope grant}
+        '401': {description: Unauthorized}
+        '403': {description: Scope or role denied}
+  /v1/admin/principals/{principal_id}/grants/{grant_id}/revoke:
+    post:
+      operationId: revokePrincipalGrant
+      parameters:
+        - $ref: '#/components/parameters/AdminAPIKey'
+        - $ref: '#/components/parameters/TenantHeader'
+        - $ref: '#/components/parameters/ProjectHeader'
+        - $ref: '#/components/parameters/NamespaceHeader'
+        - $ref: '#/components/parameters/PrincipalID'
+        - $ref: '#/components/parameters/GrantID'
+      requestBody:
+        required: false
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/PrincipalLifecycleRequest'
+      responses:
+        '204': {description: Grant revoked}
+        '401': {description: Unauthorized}
+        '403': {description: Scope or role denied}
+  /v1/admin/access-audit:
+    get:
+      operationId: listAccessAudit
+      parameters:
+        - $ref: '#/components/parameters/AdminAPIKey'
+        - $ref: '#/components/parameters/TenantHeader'
+        - $ref: '#/components/parameters/ProjectHeader'
+        - $ref: '#/components/parameters/NamespaceHeader'
+        - in: query
+          name: principal_id
+          schema: {type: string}
+        - in: query
+          name: limit
+          schema: {type: integer, minimum: 1, maximum: 100}
+      responses:
+        '200':
+          description: Bounded access audit records without secret material
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/AccessAuditResponse'
+        '401': {description: Unauthorized}
+        '403': {description: Scope or role denied}
   /v1/memories:
     get:
       operationId: listMemories
@@ -2814,6 +3042,345 @@ paths:
           description: Invalid request
         '401':
           description: Missing or invalid admin API key
+  /v1/workflows/runs:
+    post:
+      operationId: startWorkflowRun
+      parameters:
+        - $ref: '#/components/parameters/PublicAPIKey'
+        - $ref: '#/components/parameters/TenantHeader'
+        - $ref: '#/components/parameters/ProjectHeader'
+        - $ref: '#/components/parameters/NamespaceHeader'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/WorkflowRunCreateRequest'
+      responses:
+        '201':
+          description: Workflow run started or resumed by idempotency key
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/PublicWorkflowRun'
+        '400': {description: Invalid scoped workflow request}
+        '401': {description: Missing or invalid API key}
+        '404': {description: Active workflow template not found in scope}
+  /v1/workflows/runs/{workflow_run_id}:
+    get:
+      operationId: getWorkflowRun
+      parameters:
+        - $ref: '#/components/parameters/WorkflowRunIDPath'
+        - $ref: '#/components/parameters/PublicAPIKey'
+        - $ref: '#/components/parameters/TenantHeader'
+        - $ref: '#/components/parameters/ProjectHeader'
+        - $ref: '#/components/parameters/NamespaceHeader'
+      responses:
+        '200':
+          description: Scoped workflow run state
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/PublicWorkflowRun'
+        '401': {description: Missing or invalid API key}
+        '404': {description: Workflow run not found in scope}
+  /v1/workflows/runs/{workflow_run_id}/steps:
+    post:
+      operationId: recordWorkflowStep
+      parameters:
+        - $ref: '#/components/parameters/WorkflowRunIDPath'
+        - $ref: '#/components/parameters/PublicAPIKey'
+        - $ref: '#/components/parameters/TenantHeader'
+        - $ref: '#/components/parameters/ProjectHeader'
+        - $ref: '#/components/parameters/NamespaceHeader'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/WorkflowStepRecordRequest'
+      responses:
+        '201':
+          description: Append-only workflow step record
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/PublicWorkflowStepRecord'
+        '400': {description: Invalid workflow step or evidence link}
+        '401': {description: Missing or invalid API key}
+        '404': {description: Workflow run not found in scope}
+  /v1/workflows/runs/{workflow_run_id}/next-actions:
+    get:
+      operationId: listWorkflowNextActions
+      parameters:
+        - $ref: '#/components/parameters/WorkflowRunIDPath'
+        - $ref: '#/components/parameters/PublicAPIKey'
+        - $ref: '#/components/parameters/TenantHeader'
+        - $ref: '#/components/parameters/ProjectHeader'
+        - $ref: '#/components/parameters/NamespaceHeader'
+        - in: query
+          name: status
+          schema:
+            $ref: '#/components/schemas/WorkflowNextActionStatus'
+        - in: query
+          name: limit
+          schema: {type: integer, minimum: 1, maximum: 100}
+      responses:
+        '200':
+          description: Identifier-free next action guidance for the scoped integration
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/PublicWorkflowNextActionListResponse'
+        '400': {description: Invalid query parameters}
+        '401': {description: Missing or invalid API key}
+        '404': {description: Workflow run not found in scope}
+  /v1/admin/workflows/templates:
+    get:
+      operationId: listAdminWorkflowTemplates
+      parameters:
+        - $ref: '#/components/parameters/AdminAPIKey'
+        - $ref: '#/components/parameters/TenantHeader'
+        - $ref: '#/components/parameters/ProjectHeader'
+        - $ref: '#/components/parameters/NamespaceHeader'
+        - in: query
+          name: status
+          schema: {$ref: '#/components/schemas/WorkflowTemplateStatus'}
+        - in: query
+          name: limit
+          schema: {type: integer, minimum: 1, maximum: 100}
+      responses:
+        '200':
+          description: Scoped workflow templates
+          content:
+            application/json:
+              schema: {$ref: '#/components/schemas/WorkflowTemplateListResponse'}
+        '401': {description: Missing or invalid admin API key}
+    post:
+      operationId: createAdminWorkflowTemplate
+      parameters:
+        - $ref: '#/components/parameters/AdminAPIKey'
+        - $ref: '#/components/parameters/TenantHeader'
+        - $ref: '#/components/parameters/ProjectHeader'
+        - $ref: '#/components/parameters/NamespaceHeader'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: {$ref: '#/components/schemas/WorkflowTemplateCreateRequest'}
+      responses:
+        '201':
+          description: Workflow template created
+          content:
+            application/json:
+              schema: {$ref: '#/components/schemas/WorkflowTemplate'}
+        '400': {description: Invalid bounded template contract}
+        '401': {description: Missing or invalid admin API key}
+  /v1/admin/workflows/templates/{workflow_template_id}:
+    get:
+      operationId: getAdminWorkflowTemplate
+      parameters:
+        - $ref: '#/components/parameters/WorkflowTemplateIDPath'
+        - $ref: '#/components/parameters/AdminAPIKey'
+        - $ref: '#/components/parameters/TenantHeader'
+        - $ref: '#/components/parameters/ProjectHeader'
+        - $ref: '#/components/parameters/NamespaceHeader'
+      responses:
+        '200':
+          description: Scoped workflow template
+          content:
+            application/json:
+              schema: {$ref: '#/components/schemas/WorkflowTemplate'}
+        '401': {description: Missing or invalid admin API key}
+        '404': {description: Workflow template not found in scope}
+    patch:
+      operationId: updateAdminWorkflowTemplate
+      parameters:
+        - $ref: '#/components/parameters/WorkflowTemplateIDPath'
+        - $ref: '#/components/parameters/AdminAPIKey'
+        - $ref: '#/components/parameters/TenantHeader'
+        - $ref: '#/components/parameters/ProjectHeader'
+        - $ref: '#/components/parameters/NamespaceHeader'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: {$ref: '#/components/schemas/WorkflowTemplateUpdateRequest'}
+      responses:
+        '200':
+          description: Workflow template updated
+          content:
+            application/json:
+              schema: {$ref: '#/components/schemas/WorkflowTemplate'}
+        '400': {description: Invalid bounded template contract}
+        '401': {description: Missing or invalid admin API key}
+        '404': {description: Workflow template not found in scope}
+  /v1/admin/workflows/templates/{workflow_template_id}/disable:
+    post:
+      operationId: disableAdminWorkflowTemplate
+      parameters:
+        - $ref: '#/components/parameters/WorkflowTemplateIDPath'
+        - $ref: '#/components/parameters/AdminAPIKey'
+        - $ref: '#/components/parameters/TenantHeader'
+        - $ref: '#/components/parameters/ProjectHeader'
+        - $ref: '#/components/parameters/NamespaceHeader'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: {$ref: '#/components/schemas/WorkflowActorReasonRequest'}
+      responses:
+        '200':
+          description: Workflow template disabled
+          content:
+            application/json:
+              schema: {$ref: '#/components/schemas/WorkflowTemplate'}
+        '400': {description: Invalid request}
+        '401': {description: Missing or invalid admin API key}
+        '404': {description: Workflow template not found in scope}
+  /v1/admin/workflows/runs:
+    get:
+      operationId: listAdminWorkflowRuns
+      parameters:
+        - $ref: '#/components/parameters/AdminAPIKey'
+        - $ref: '#/components/parameters/TenantHeader'
+        - $ref: '#/components/parameters/ProjectHeader'
+        - $ref: '#/components/parameters/NamespaceHeader'
+        - in: query
+          name: template_id
+          schema: {type: string}
+        - in: query
+          name: status
+          schema: {$ref: '#/components/schemas/WorkflowRunStatus'}
+        - in: query
+          name: limit
+          schema: {type: integer, minimum: 1, maximum: 100}
+      responses:
+        '200':
+          description: Scoped workflow runs
+          content:
+            application/json:
+              schema: {$ref: '#/components/schemas/WorkflowRunListResponse'}
+        '401': {description: Missing or invalid admin API key}
+  /v1/admin/workflows/runs/{workflow_run_id}:
+    get:
+      operationId: getAdminWorkflowRun
+      parameters:
+        - $ref: '#/components/parameters/WorkflowRunIDPath'
+        - $ref: '#/components/parameters/AdminAPIKey'
+        - $ref: '#/components/parameters/TenantHeader'
+        - $ref: '#/components/parameters/ProjectHeader'
+        - $ref: '#/components/parameters/NamespaceHeader'
+      responses:
+        '200':
+          description: Scoped workflow run with administrative detail
+          content:
+            application/json:
+              schema: {$ref: '#/components/schemas/WorkflowRun'}
+        '401': {description: Missing or invalid admin API key}
+        '404': {description: Workflow run not found in scope}
+  /v1/admin/workflows/runs/{workflow_run_id}/steps:
+    get:
+      operationId: listAdminWorkflowSteps
+      parameters:
+        - $ref: '#/components/parameters/WorkflowRunIDPath'
+        - $ref: '#/components/parameters/AdminAPIKey'
+        - $ref: '#/components/parameters/TenantHeader'
+        - $ref: '#/components/parameters/ProjectHeader'
+        - $ref: '#/components/parameters/NamespaceHeader'
+      responses:
+        '200':
+          description: Scoped append-only workflow step records
+          content:
+            application/json:
+              schema: {$ref: '#/components/schemas/WorkflowStepRecordListResponse'}
+        '401': {description: Missing or invalid admin API key}
+        '404': {description: Workflow run not found in scope}
+  /v1/admin/workflows/runs/{workflow_run_id}/evidence-links:
+    get:
+      operationId: listAdminWorkflowEvidenceLinks
+      parameters:
+        - $ref: '#/components/parameters/WorkflowRunIDPath'
+        - $ref: '#/components/parameters/AdminAPIKey'
+        - $ref: '#/components/parameters/TenantHeader'
+        - $ref: '#/components/parameters/ProjectHeader'
+        - $ref: '#/components/parameters/NamespaceHeader'
+        - in: query
+          name: status
+          schema: {$ref: '#/components/schemas/WorkflowEvidenceLinkStatus'}
+      responses:
+        '200':
+          description: Scoped workflow evidence links
+          content:
+            application/json:
+              schema: {$ref: '#/components/schemas/WorkflowEvidenceLinkListResponse'}
+        '401': {description: Missing or invalid admin API key}
+        '404': {description: Workflow run not found in scope}
+  /v1/admin/workflows/runs/{workflow_run_id}/diagnostics:
+    get:
+      operationId: listAdminWorkflowDiagnostics
+      parameters:
+        - $ref: '#/components/parameters/WorkflowRunIDPath'
+        - $ref: '#/components/parameters/AdminAPIKey'
+        - $ref: '#/components/parameters/TenantHeader'
+        - $ref: '#/components/parameters/ProjectHeader'
+        - $ref: '#/components/parameters/NamespaceHeader'
+        - in: query
+          name: category
+          schema: {$ref: '#/components/schemas/WorkflowDiagnosticCategory'}
+        - in: query
+          name: limit
+          schema: {type: integer, minimum: 1, maximum: 100}
+      responses:
+        '200':
+          description: Scoped bounded workflow gap diagnostics
+          content:
+            application/json:
+              schema: {$ref: '#/components/schemas/WorkflowGapDiagnosticListResponse'}
+        '401': {description: Missing or invalid admin API key}
+        '404': {description: Workflow run not found in scope}
+  /v1/admin/workflows/runs/{workflow_run_id}/next-actions:
+    get:
+      operationId: listAdminWorkflowNextActions
+      parameters:
+        - $ref: '#/components/parameters/WorkflowRunIDPath'
+        - $ref: '#/components/parameters/AdminAPIKey'
+        - $ref: '#/components/parameters/TenantHeader'
+        - $ref: '#/components/parameters/ProjectHeader'
+        - $ref: '#/components/parameters/NamespaceHeader'
+        - in: query
+          name: status
+          schema: {$ref: '#/components/schemas/WorkflowNextActionStatus'}
+        - in: query
+          name: limit
+          schema: {type: integer, minimum: 1, maximum: 100}
+      responses:
+        '200':
+          description: Scoped workflow next actions including administrative detail
+          content:
+            application/json:
+              schema: {$ref: '#/components/schemas/WorkflowNextActionListResponse'}
+        '401': {description: Missing or invalid admin API key}
+        '404': {description: Workflow run not found in scope}
+  /v1/admin/workflows/evidence-links/{evidence_link_id}/supersede:
+    post:
+      operationId: supersedeAdminWorkflowEvidenceLink
+      parameters:
+        - $ref: '#/components/parameters/WorkflowEvidenceLinkIDPath'
+        - $ref: '#/components/parameters/AdminAPIKey'
+        - $ref: '#/components/parameters/TenantHeader'
+        - $ref: '#/components/parameters/ProjectHeader'
+        - $ref: '#/components/parameters/NamespaceHeader'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: {$ref: '#/components/schemas/WorkflowEvidenceLinkSupersedeRequest'}
+      responses:
+        '202': {description: Evidence link supersession accepted with append-only history}
+        '400': {description: Invalid request}
+        '401': {description: Missing or invalid admin API key}
+        '404': {description: Evidence link not found in scope}
 components:
   parameters:
     PublicAPIKey:
@@ -2846,6 +3413,13 @@ components:
       required: true
       schema:
         type: string
+    IdempotencyKeyHeader:
+      in: header
+      name: Idempotency-Key
+      required: true
+      schema:
+        type: string
+        maxLength: 256
     ActorHeader:
       in: header
       name: X-Stele-Actor
@@ -2882,13 +3456,468 @@ components:
       required: true
       schema:
         type: string
+    WorkflowTemplateIDPath:
+      in: path
+      name: workflow_template_id
+      required: true
+      schema:
+        type: string
+    WorkflowRunIDPath:
+      in: path
+      name: workflow_run_id
+      required: true
+      schema:
+        type: string
+    WorkflowEvidenceLinkIDPath:
+      in: path
+      name: evidence_link_id
+      required: true
+      schema:
+        type: string
     CutoverPlanIDPath:
       in: path
       name: cutover_plan_id
       required: true
       schema:
         type: string
+    PrincipalID:
+      in: path
+      name: principal_id
+      required: true
+      schema:
+        type: string
+    GrantID:
+      in: path
+      name: grant_id
+      required: true
+      schema:
+        type: string
   schemas:
+    Principal:
+      type: object
+      required: [id, role, status, label, created_at]
+      properties:
+        id: {type: string}
+        role: {type: string, enum: [public, admin]}
+        status: {type: string, enum: [active, disabled]}
+        label: {type: string, maxLength: 128}
+        expires_at: {type: string, format: date-time}
+        created_at: {type: string, format: date-time}
+        updated_at: {type: string, format: date-time}
+    CredentialProjection:
+      type: object
+      required: [id, principal_id, status, credential_id, created_at]
+      properties:
+        id: {type: string}
+        principal_id: {type: string}
+        status: {type: string, enum: [active, disabled, revoked]}
+        credential_id: {type: string}
+        expires_at: {type: string, format: date-time}
+        created_at: {type: string, format: date-time}
+        disabled_at: {type: string, format: date-time}
+    ScopeGrant:
+      type: object
+      required: [id, principal_id, scope, status, created_at]
+      properties:
+        id: {type: string}
+        principal_id: {type: string}
+        scope:
+          type: object
+          required: [tenant, project, namespace]
+          properties:
+            tenant: {type: string}
+            project: {type: string}
+            namespace: {type: string}
+        status: {type: string, enum: [active, revoked]}
+        created_at: {type: string, format: date-time}
+        revoked_at: {type: string, format: date-time}
+    AuditRecord:
+      type: object
+      required: [id, action, result, created_at]
+      properties:
+        id: {type: string}
+        principal_id: {type: string}
+        credential_id: {type: string}
+        scope:
+          type: object
+          required: [tenant, project, namespace]
+          properties:
+            tenant: {type: string}
+            project: {type: string}
+            namespace: {type: string}
+        action: {type: string}
+        result: {type: string}
+        created_at: {type: string, format: date-time}
+    PrincipalCreateRequest:
+      type: object
+      required: [role, label]
+      properties:
+        role: {type: string, enum: [public, admin]}
+        label: {type: string, maxLength: 128}
+        actor: {type: string, maxLength: 128}
+        reason: {type: string, maxLength: 256}
+    PrincipalLifecycleRequest:
+      type: object
+      properties:
+        actor: {type: string, maxLength: 128}
+        reason: {type: string, maxLength: 256}
+    GrantCreateRequest:
+      type: object
+      required: [tenant, project, namespace]
+      properties:
+        tenant: {type: string}
+        project: {type: string}
+        namespace: {type: string}
+        actor: {type: string, maxLength: 128}
+        reason: {type: string, maxLength: 256}
+    IssuedCredential:
+      type: object
+      required: [credential, credential_secret]
+      properties:
+        credential:
+          $ref: '#/components/schemas/CredentialProjection'
+        credential_secret:
+          type: string
+          description: Returned exactly once and never available through inspection endpoints
+    IssuedPrincipal:
+      type: object
+      required: [principal, credential, grants, credential_secret]
+      properties:
+        principal:
+          $ref: '#/components/schemas/Principal'
+        credential:
+          $ref: '#/components/schemas/CredentialProjection'
+        grants:
+          type: array
+          items:
+            $ref: '#/components/schemas/ScopeGrant'
+        credential_secret:
+          type: string
+          description: Returned exactly once and never persisted or logged
+    PrincipalListResponse:
+      type: object
+      required: [principals]
+      properties:
+        principals:
+          type: array
+          items:
+            $ref: '#/components/schemas/Principal'
+    GrantListResponse:
+      type: object
+      required: [grants]
+      properties:
+        grants:
+          type: array
+          items:
+            $ref: '#/components/schemas/ScopeGrant'
+    AccessAuditResponse:
+      type: object
+      required: [audit]
+      properties:
+        audit:
+          type: array
+          items:
+            $ref: '#/components/schemas/AuditRecord'
+    WorkflowTemplateStatus:
+      type: string
+      enum: [active, disabled]
+    WorkflowRunStatus:
+      type: string
+      enum: [running, completed, blocked, expired, abandoned]
+    WorkflowStepKind:
+      type: string
+      enum: [session_started, context_requested, turn_outcome_recorded, session_verification_recorded, usefulness_feedback_recorded, task_evaluation_recorded, quality_checked, repair_reviewed, ranking_rollout_checked, conformance_checked, readiness_checked, recovery_verified]
+    WorkflowStepRequirement:
+      type: string
+      enum: [required, optional, repeatable]
+    WorkflowStepStatus:
+      type: string
+      enum: [pending, satisfied, blocked, stale, invalid]
+    WorkflowStepResult:
+      type: string
+      enum: [recorded, duplicate, out_of_order, rejected]
+    WorkflowEvidenceKind:
+      type: string
+      enum: [session, turn, context, outcome, verification, usefulness_feedback, task_evaluation, proof, quality_finding, repair_plan, ranking_rollout, conformance_run, readiness_report, incident, recovery_verification, opaque]
+    WorkflowEvidenceSource:
+      type: string
+      enum: [public_api, admin_api, worker, scheduler, opaque]
+    WorkflowEvidenceLinkStatus:
+      type: string
+      enum: [active, superseded, invalid]
+    WorkflowDiagnosticCategory:
+      type: string
+      enum: [missing, stale, out_of_order, duplicate, hidden, opaque_only, contradictory, invalid, subject_missing, insufficient_evidence, out_of_scope]
+    WorkflowReadinessImpact:
+      type: string
+      enum: [ready, degraded, unknown, blocked]
+    WorkflowNextActionCategory:
+      type: string
+      enum: [start_session, request_context, record_outcome, record_verification, record_feedback, record_task_evaluation, run_scope_proof, inspect_quality, review_repair, check_ranking_rollout, run_conformance, read_readiness, verify_recovery, none]
+    WorkflowRouteCategory:
+      type: string
+      enum: [memory_sessions, memory_session_outcome, memory_session_verification, usefulness_feedback, task_evaluations, admin_scope_proofs, admin_quality, admin_repair, admin_ranking_rollouts, admin_conformance, admin_readiness, admin_recovery, none]
+    WorkflowNextActionStatus:
+      type: string
+      enum: [open, satisfied, superseded]
+    WorkflowIntegrationKind:
+      type: string
+      enum: [agent_turn, agent_task, integration_job]
+    WorkflowCompletionPolicy:
+      type: string
+      enum: [strict, permissive]
+    WorkflowTemplateStepRequest:
+      type: object
+      required: [kind, requirement, allowed_evidence, minimum_count, freshness_window, completion_window, position]
+      properties:
+        kind: {$ref: '#/components/schemas/WorkflowStepKind'}
+        requirement: {$ref: '#/components/schemas/WorkflowStepRequirement'}
+        allowed_evidence:
+          type: array
+          minItems: 1
+          items: {$ref: '#/components/schemas/WorkflowEvidenceKind'}
+        minimum_count: {type: integer, minimum: 1}
+        requires_internal: {type: boolean}
+        freshness_window: {type: string, description: Go duration of at least one minute}
+        completion_window: {type: string, description: Go duration of at least one minute}
+        position: {type: integer, minimum: 1}
+        metadata: {type: object, additionalProperties: true}
+    WorkflowTemplateCreateRequest:
+      type: object
+      required: [steps, integration_kind, completion_policy, actor, reason]
+      properties:
+        steps:
+          type: array
+          minItems: 1
+          items: {$ref: '#/components/schemas/WorkflowTemplateStepRequest'}
+        integration_kind: {$ref: '#/components/schemas/WorkflowIntegrationKind'}
+        completion_policy: {$ref: '#/components/schemas/WorkflowCompletionPolicy'}
+        actor: {type: string}
+        reason: {type: string}
+        metadata: {type: object, additionalProperties: true}
+    WorkflowTemplateUpdateRequest:
+      allOf:
+        - $ref: '#/components/schemas/WorkflowTemplateCreateRequest'
+    WorkflowActorReasonRequest:
+      type: object
+      required: [actor, reason]
+      properties:
+        actor: {type: string}
+        reason: {type: string}
+    WorkflowRunCreateRequest:
+      type: object
+      required: [template_id, idempotency_key, actor, reason]
+      properties:
+        template_id: {type: string}
+        idempotency_key: {type: string}
+        actor: {type: string}
+        reason: {type: string}
+        metadata: {type: object, additionalProperties: true}
+        expires_at: {type: string, format: date-time}
+    WorkflowEvidenceLinkRequest:
+      type: object
+      required: [kind, source]
+      properties:
+        kind: {$ref: '#/components/schemas/WorkflowEvidenceKind'}
+        source: {$ref: '#/components/schemas/WorkflowEvidenceSource'}
+        target_id: {type: string}
+        opaque_token: {type: string}
+        metadata: {type: object, additionalProperties: true}
+    WorkflowStepRecordRequest:
+      type: object
+      required: [kind, actor, reason]
+      properties:
+        kind: {$ref: '#/components/schemas/WorkflowStepKind'}
+        actor: {type: string}
+        reason: {type: string}
+        observed_at: {type: string, format: date-time}
+        metadata: {type: object, additionalProperties: true}
+        evidence_links:
+          type: array
+          items: {$ref: '#/components/schemas/WorkflowEvidenceLinkRequest'}
+    WorkflowTemplateStep:
+      type: object
+      required: [id, template_id, scope, kind, requirement, allowed_evidence, minimum_count, requires_internal, freshness_window, completion_window, position, created_at]
+      properties:
+        id: {type: string}
+        template_id: {type: string}
+        scope: {$ref: '#/components/schemas/Scope'}
+        kind: {$ref: '#/components/schemas/WorkflowStepKind'}
+        requirement: {$ref: '#/components/schemas/WorkflowStepRequirement'}
+        allowed_evidence: {type: array, items: {$ref: '#/components/schemas/WorkflowEvidenceKind'}}
+        minimum_count: {type: integer}
+        requires_internal: {type: boolean}
+        freshness_window: {type: integer, description: Duration in nanoseconds}
+        completion_window: {type: integer, description: Duration in nanoseconds}
+        position: {type: integer}
+        metadata: {type: object, additionalProperties: true}
+        created_at: {type: string, format: date-time}
+    WorkflowTemplate:
+      type: object
+      required: [id, scope, status, integration_kind, completion_policy, actor, reason, created_at, updated_at]
+      properties:
+        id: {type: string}
+        scope: {$ref: '#/components/schemas/Scope'}
+        status: {$ref: '#/components/schemas/WorkflowTemplateStatus'}
+        steps: {type: array, items: {$ref: '#/components/schemas/WorkflowTemplateStep'}}
+        integration_kind: {$ref: '#/components/schemas/WorkflowIntegrationKind'}
+        completion_policy: {$ref: '#/components/schemas/WorkflowCompletionPolicy'}
+        actor: {type: string}
+        reason: {type: string}
+        metadata: {type: object, additionalProperties: true}
+        created_at: {type: string, format: date-time}
+        updated_at: {type: string, format: date-time}
+        disabled_at: {type: string, format: date-time}
+    WorkflowRun:
+      type: object
+      required: [id, template_id, scope, status, integration_kind, idempotency_key, actor, reason, created_at, updated_at, started_at]
+      properties:
+        id: {type: string}
+        template_id: {type: string}
+        scope: {$ref: '#/components/schemas/Scope'}
+        status: {$ref: '#/components/schemas/WorkflowRunStatus'}
+        integration_kind: {$ref: '#/components/schemas/WorkflowIntegrationKind'}
+        idempotency_key: {type: string}
+        actor: {type: string}
+        reason: {type: string}
+        metadata: {type: object, additionalProperties: true}
+        created_at: {type: string, format: date-time}
+        updated_at: {type: string, format: date-time}
+        started_at: {type: string, format: date-time}
+        completed_at: {type: string, format: date-time}
+        expires_at: {type: string, format: date-time}
+    PublicWorkflowRun:
+      type: object
+      required: [status, integration_kind, created_at, updated_at, started_at]
+      properties:
+        id: {type: string}
+        status: {$ref: '#/components/schemas/WorkflowRunStatus'}
+        integration_kind: {$ref: '#/components/schemas/WorkflowIntegrationKind'}
+        created_at: {type: string, format: date-time}
+        updated_at: {type: string, format: date-time}
+        started_at: {type: string, format: date-time}
+        completed_at: {type: string, format: date-time}
+        expires_at: {type: string, format: date-time}
+    WorkflowEvidenceLink:
+      type: object
+      required: [id, run_id, scope, kind, status, source, created_at]
+      properties:
+        id: {type: string}
+        run_id: {type: string}
+        step_record_id: {type: string}
+        scope: {$ref: '#/components/schemas/Scope'}
+        kind: {$ref: '#/components/schemas/WorkflowEvidenceKind'}
+        status: {$ref: '#/components/schemas/WorkflowEvidenceLinkStatus'}
+        source: {$ref: '#/components/schemas/WorkflowEvidenceSource'}
+        target_id: {type: string}
+        opaque_token: {type: string}
+        metadata: {type: object, additionalProperties: true}
+        created_at: {type: string, format: date-time}
+        superseded_at: {type: string, format: date-time}
+    WorkflowStepRecord:
+      type: object
+      required: [id, run_id, scope, kind, status, result, actor, reason, observed_at, created_at]
+      properties:
+        id: {type: string}
+        run_id: {type: string}
+        scope: {$ref: '#/components/schemas/Scope'}
+        kind: {$ref: '#/components/schemas/WorkflowStepKind'}
+        status: {$ref: '#/components/schemas/WorkflowStepStatus'}
+        result: {$ref: '#/components/schemas/WorkflowStepResult'}
+        actor: {type: string}
+        reason: {type: string}
+        metadata: {type: object, additionalProperties: true}
+        observed_at: {type: string, format: date-time}
+        created_at: {type: string, format: date-time}
+    PublicWorkflowStepRecord:
+      type: object
+      required: [kind, status, result, observed_at, created_at]
+      properties:
+        kind: {$ref: '#/components/schemas/WorkflowStepKind'}
+        status: {$ref: '#/components/schemas/WorkflowStepStatus'}
+        result: {$ref: '#/components/schemas/WorkflowStepResult'}
+        observed_at: {type: string, format: date-time}
+        created_at: {type: string, format: date-time}
+        evidence_links: {type: array, items: {$ref: '#/components/schemas/WorkflowEvidenceLink'}}
+    WorkflowGapDiagnostic:
+      type: object
+      required: [id, run_id, scope, step_kind, evidence_kind, category, readiness_impact, created_at]
+      properties:
+        id: {type: string}
+        run_id: {type: string}
+        step_record_id: {type: string}
+        evidence_link_id: {type: string}
+        scope: {$ref: '#/components/schemas/Scope'}
+        step_kind: {$ref: '#/components/schemas/WorkflowStepKind'}
+        evidence_kind: {$ref: '#/components/schemas/WorkflowEvidenceKind'}
+        category: {$ref: '#/components/schemas/WorkflowDiagnosticCategory'}
+        readiness_impact: {$ref: '#/components/schemas/WorkflowReadinessImpact'}
+        status: {type: string}
+        metadata: {type: object, additionalProperties: true}
+        created_at: {type: string, format: date-time}
+        resolved_at: {type: string, format: date-time}
+    WorkflowNextAction:
+      type: object
+      required: [id, run_id, scope, category, step_kind, evidence_kind, route_category, status, created_at]
+      properties:
+        id: {type: string}
+        run_id: {type: string}
+        scope: {$ref: '#/components/schemas/Scope'}
+        category: {$ref: '#/components/schemas/WorkflowNextActionCategory'}
+        step_kind: {$ref: '#/components/schemas/WorkflowStepKind'}
+        evidence_kind: {$ref: '#/components/schemas/WorkflowEvidenceKind'}
+        route_category: {$ref: '#/components/schemas/WorkflowRouteCategory'}
+        status: {$ref: '#/components/schemas/WorkflowNextActionStatus'}
+        metadata: {type: object, additionalProperties: true}
+        created_at: {type: string, format: date-time}
+        resolved_at: {type: string, format: date-time}
+    PublicWorkflowNextAction:
+      type: object
+      required: [category, step_kind, evidence_kind, route_category, status]
+      properties:
+        category: {$ref: '#/components/schemas/WorkflowNextActionCategory'}
+        step_kind: {$ref: '#/components/schemas/WorkflowStepKind'}
+        evidence_kind: {$ref: '#/components/schemas/WorkflowEvidenceKind'}
+        route_category: {$ref: '#/components/schemas/WorkflowRouteCategory'}
+        status: {$ref: '#/components/schemas/WorkflowNextActionStatus'}
+    WorkflowTemplateListResponse:
+      type: object
+      required: [templates]
+      properties:
+        templates: {type: array, items: {$ref: '#/components/schemas/WorkflowTemplate'}}
+    WorkflowRunListResponse:
+      type: object
+      required: [runs]
+      properties:
+        runs: {type: array, items: {$ref: '#/components/schemas/WorkflowRun'}}
+    WorkflowStepRecordListResponse:
+      type: object
+      required: [steps]
+      properties:
+        steps: {type: array, items: {$ref: '#/components/schemas/WorkflowStepRecord'}}
+    WorkflowEvidenceLinkListResponse:
+      type: object
+      required: [evidence_links]
+      properties:
+        evidence_links: {type: array, items: {$ref: '#/components/schemas/WorkflowEvidenceLink'}}
+    WorkflowGapDiagnosticListResponse:
+      type: object
+      required: [diagnostics]
+      properties:
+        diagnostics: {type: array, items: {$ref: '#/components/schemas/WorkflowGapDiagnostic'}}
+    WorkflowNextActionListResponse:
+      type: object
+      required: [next_actions]
+      properties:
+        next_actions: {type: array, items: {$ref: '#/components/schemas/WorkflowNextAction'}}
+    PublicWorkflowNextActionListResponse:
+      type: object
+      required: [next_actions]
+      properties:
+        next_actions: {type: array, items: {$ref: '#/components/schemas/PublicWorkflowNextAction'}}
+    WorkflowEvidenceLinkSupersedeRequest:
+      allOf:
+        - $ref: '#/components/schemas/WorkflowActorReasonRequest'
     Scope:
       type: object
       required:
@@ -2913,10 +3942,10 @@ components:
       enum: [info, warning, critical]
     HealthComponent:
       type: string
-      enum: [runtime, backlog, dependency, proof, session, feedback, task, repair, ranking_rollout, conformance, capacity_load, backup_restore]
+      enum: [runtime, backlog, dependency, proof, session, feedback, task, repair, ranking_rollout, conformance, workflow, capacity_load, backup_restore]
     ReasonCategory:
       type: string
-      enum: [runtime_ready, backlog_pressure, capacity_within_thresholds, capacity_threshold_exceeded, backup_restore_fresh, backup_restore_stale, conformance_missing_evidence, unknown]
+      enum: [runtime_ready, backlog_pressure, capacity_within_thresholds, capacity_threshold_exceeded, backup_restore_fresh, backup_restore_stale, conformance_missing_evidence, workflow_gap, unknown]
     IncidentStatus:
       type: string
       enum: [open, acknowledged, suppressed, resolved]
@@ -2937,16 +3966,16 @@ components:
       enum: [passed, degraded, failed, unknown]
     ExpectedEvidenceKind:
       type: string
-      enum: [session, context, outcome, verification, usefulness_feedback, task_evaluation, proof, repair, ranking_rollout]
+      enum: [session, context, outcome, verification, usefulness_feedback, task_evaluation, proof, repair, ranking_rollout, workflow]
     MissingEvidenceCategory:
       type: string
-      enum: [session_without_outcome, turn_without_context, verification_missing, feedback_without_subject, task_evaluation_missing_evidence, repair_without_verification, rollout_without_dry_run, out_of_scope, stale, opaque_only, contradictory, hidden]
+      enum: [session_without_outcome, turn_without_context, verification_missing, feedback_without_subject, task_evaluation_missing_evidence, repair_without_verification, rollout_without_dry_run, workflow_incomplete, out_of_scope, stale, opaque_only, contradictory, hidden]
     RecoveryVerificationTarget:
       type: string
-      enum: [incident, alert_candidate, conformance_run, repair_result, ranking_rollback, proof_run, session_verification, capacity_load_proof, backup_restore_proof]
+      enum: [incident, alert_candidate, conformance_run, repair_result, ranking_rollback, proof_run, session_verification, capacity_load_proof, backup_restore_proof, workflow_run]
     RunbookHintCategory:
       type: string
-      enum: [review_backlog, review_repair, review_conformance_profile, review_capacity_proof, review_backup_restore_proof, review_alert_delivery]
+      enum: [review_backlog, review_repair, review_conformance_profile, review_capacity_proof, review_backup_restore_proof, review_alert_delivery, review_workflow]
     HealthObservation:
       type: object
       properties:
@@ -2985,6 +4014,8 @@ components:
         ranking_rollout_state:
           $ref: '#/components/schemas/HealthObservation'
         conformance_status:
+          $ref: '#/components/schemas/HealthObservation'
+        workflow_health:
           $ref: '#/components/schemas/HealthObservation'
         capacity_load_proof:
           $ref: '#/components/schemas/HealthObservation'
@@ -4819,13 +5850,14 @@ components:
           format: date-time
     EventIngestResponse:
       type: object
-      required:
-        - event_id
+      required: [event_id, replayed]
       properties:
         event_id:
           type: string
         admission:
           $ref: '#/components/schemas/AdmissionPressureReport'
+        replayed:
+          type: boolean
     AdmissionPressureReport:
       type: object
       properties:

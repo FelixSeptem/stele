@@ -383,3 +383,18 @@ func TestMetricsObserverExportsAssuranceConformanceSignalsWithoutHighCardinality
 		}
 	}
 }
+
+func TestMetricsObserverExportsWorkflowLifecycleWithoutHighCardinalityLabels(t *testing.T) {
+	observer := NewMetricsObserver()
+	observer.RecordWorkflowLifecycle(context.Background(), WorkflowLifecycleEvent{Operation: "diagnostic", Result: "ok", TemplateStatus: "active", RunStatus: "expired", StepKind: "turn_outcome_recorded", EvidenceKind: "outcome", DiagnosticCategory: "stale", NextActionCategory: "record_outcome", CleanupCategory: "diagnostic"})
+	metrics := observer.RenderPrometheus()
+	want := `stele_workflow_lifecycle_total{cleanup_category="diagnostic",diagnostic_category="stale",evidence_kind="outcome",next_action_category="record_outcome",operation="diagnostic",result="ok",run_status="expired",step_kind="turn_outcome_recorded",template_status="active"} 1`
+	if !strings.Contains(metrics, want) {
+		t.Fatalf("metrics missing %q\n%s", want, metrics)
+	}
+	for _, forbidden := range []string{"tenant", "project", "namespace", "workflow_run_id", "template_id", "evidence_id", "actor", "reason_text", "prompt", "model_output"} {
+		if strings.Contains(metrics, forbidden) {
+			t.Fatalf("metrics contain high-cardinality label %q\n%s", forbidden, metrics)
+		}
+	}
+}

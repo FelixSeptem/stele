@@ -14,6 +14,7 @@ import (
 	"github.com/FelixSeptem/stele/internal/insights"
 	"github.com/FelixSeptem/stele/internal/memory"
 	"github.com/FelixSeptem/stele/internal/telemetry"
+	"github.com/FelixSeptem/stele/internal/workflow"
 	"github.com/jackc/pgx/v5"
 )
 
@@ -1489,6 +1490,176 @@ type derivedInsightStore interface {
 	UpsertDerivedInsight(ctx context.Context, insight memory.DerivedInsight) (memory.DerivedInsight, error)
 	SummarizeDerivedInsightFeedback(ctx context.Context, input memory.SummarizeDerivedInsightFeedbackInput) (memory.DerivedInsightFeedbackSummary, error)
 	TransitionDerivedInsightLifecycle(ctx context.Context, transition memory.DerivedInsightLifecycleTransition) error
+}
+
+type workflowMaintenanceService interface {
+	ListRuns(ctx context.Context, input workflow.ListRunsInput) ([]workflow.WorkflowRun, error)
+	MaterializeGapDiagnostics(ctx context.Context, input workflow.MaterializeGapDiagnosticsInput) ([]workflow.GapDiagnostic, error)
+	TransitionRun(ctx context.Context, input workflow.TransitionRunInput) (workflow.WorkflowRun, error)
+}
+
+type workflowHistoryCleaner interface {
+	DeleteWorkflowHistoryBefore(ctx context.Context, scope memory.Scope, cutoff time.Time) (int, error)
+	CreateWorkflowRetentionRun(ctx context.Context, run workflow.WorkflowRetentionRun) (workflow.WorkflowRetentionRun, error)
+}
+
+type WorkflowDiagnosticsJob struct {
+	Scope                  memory.Scope
+	Service                workflowMaintenanceService
+	ExecutionStore         ExecutionStore
+	TriggerSource          string
+	Cadence                time.Duration
+	Limit                  int
+	NextActionRefreshLimit int
+	StaleRunWindow         time.Duration
+	Now                    func() time.Time
+}
+
+func (j WorkflowDiagnosticsJob) Name() string { return "workflow_diagnostics" }
+
+func (j WorkflowDiagnosticsJob) Run(ctx context.Context) (int, error) {
+	if err := j.Scope.Validate(); err != nil {
+		return 0, err
+	}
+	if j.Service == nil {
+		return 0, fmt.Errorf("workflow maintenance service is required")
+	}
+	now := time.Now
+	if j.Now != nil {
+		now = j.Now
+	}
+	current := now().UTC()
+	started, key, err := beginScheduledExecution(ctx, j.ExecutionStore, j.Name(), j.Scope, j.triggerSource(), scheduledRunWindow(current, j.Cadence))
+	if err != nil || !started {
+		return 0, err
+	}
+	limit := j.Limit
+	if limit <= 0 {
+		limit = 100
+	}
+	refreshLimit := j.NextActionRefreshLimit
+	if refreshLimit <= 0 {
+		refreshLimit = limit
+	}
+	if refreshLimit < limit {
+		limit = refreshLimit
+	}
+	staleWindow := j.StaleRunWindow
+	if staleWindow <= 0 {
+		staleWindow = 24 * time.Hour
+	}
+	processed := 0
+	for _, status := range []workflow.RunStatus{workflow.RunStatusRunning, workflow.RunStatusBlocked} {
+		runs, listErr := j.Service.ListRuns(ctx, workflow.ListRunsInput{Scope: j.Scope, Status: status, Limit: limit - processed})
+		if listErr != nil {
+			_ = failScheduledExecution(ctx, j.ExecutionStore, key, current, listErr)
+			return processed, listErr
+		}
+		for _, run := range runs {
+			if processed >= limit {
+				break
+			}
+			if _, materializeErr := j.Service.MaterializeGapDiagnostics(ctx, workflow.MaterializeGapDiagnosticsInput{Scope: j.Scope, RunID: run.ID, Now: current}); materializeErr != nil {
+				_ = failScheduledExecution(ctx, j.ExecutionStore, key, current, materializeErr)
+				return processed, materializeErr
+			}
+			if run.Status == workflow.RunStatusRunning && ((!run.ExpiresAt.IsZero() && !run.ExpiresAt.After(current)) || (!run.StartedAt.IsZero() && run.StartedAt.Add(staleWindow).Before(current))) {
+				if _, transitionErr := j.Service.TransitionRun(ctx, workflow.TransitionRunInput{Transition: workflow.WorkflowTransition{ID: fmt.Sprintf("workflow_transition_%d", current.UnixNano()), RunID: run.ID, Scope: j.Scope, FromStatus: run.Status, ToStatus: workflow.RunStatusExpired, Actor: "stele-workflow-maintenance", Reason: "workflow stale window elapsed", OccurredAt: current}, UpdatedAt: current}); transitionErr != nil {
+					_ = failScheduledExecution(ctx, j.ExecutionStore, key, current, transitionErr)
+					return processed, transitionErr
+				}
+			}
+			processed++
+		}
+	}
+	if err := completeScheduledExecution(ctx, j.ExecutionStore, key, current, processed); err != nil {
+		return processed, err
+	}
+	return processed, nil
+}
+
+func (j WorkflowDiagnosticsJob) triggerSource() string {
+	if j.TriggerSource != "" {
+		return j.TriggerSource
+	}
+	return "scheduler"
+}
+
+type WorkflowRetentionJob struct {
+	Scope           memory.Scope
+	Cleaner         workflowHistoryCleaner
+	ExecutionStore  ExecutionStore
+	TriggerSource   string
+	Cadence         time.Duration
+	RetentionWindow time.Duration
+	Now             func() time.Time
+	NewRunID        func(string) string
+	Observer        telemetry.Observer
+}
+
+func (j WorkflowRetentionJob) Name() string { return "workflow_retention" }
+
+func (j WorkflowRetentionJob) Run(ctx context.Context) (int, error) {
+	if err := j.Scope.Validate(); err != nil {
+		return 0, err
+	}
+	if j.Cleaner == nil {
+		return 0, fmt.Errorf("workflow history cleaner is required")
+	}
+	now := time.Now
+	if j.Now != nil {
+		now = j.Now
+	}
+	current := now().UTC()
+	started, key, err := beginScheduledExecution(ctx, j.ExecutionStore, j.Name(), j.Scope, j.triggerSource(), scheduledRunWindow(current, j.Cadence))
+	if err != nil || !started {
+		return 0, err
+	}
+	window := j.RetentionWindow
+	if window <= 0 {
+		window = 30 * 24 * time.Hour
+	}
+	deleted, err := j.Cleaner.DeleteWorkflowHistoryBefore(ctx, j.Scope, current.Add(-window))
+	if err != nil {
+		j.recordCleanup(ctx, "error", "none")
+		_ = failScheduledExecution(ctx, j.ExecutionStore, key, current, err)
+		return 0, err
+	}
+	newID := j.NewRunID
+	if newID == nil {
+		newID = func(prefix string) string { return fmt.Sprintf("%s_%d", prefix, current.UnixNano()) }
+	}
+	if _, err := j.Cleaner.CreateWorkflowRetentionRun(ctx, workflow.WorkflowRetentionRun{ID: newID("workflow_retention"), Scope: j.Scope, RecordCategory: workflow.RetentionClassDiagnostic, Cutoff: current.Add(-window), DeletedCount: deleted, StartedAt: current, FinishedAt: current}); err != nil {
+		j.recordCleanup(ctx, "error", "none")
+		_ = failScheduledExecution(ctx, j.ExecutionStore, key, current, err)
+		return 0, err
+	}
+	if err := completeScheduledExecution(ctx, j.ExecutionStore, key, current, deleted); err != nil {
+		return deleted, err
+	}
+	category := "none"
+	if deleted > 0 {
+		category = "some"
+	}
+	j.recordCleanup(ctx, "ok", category)
+	return deleted, nil
+}
+
+func (j WorkflowRetentionJob) triggerSource() string {
+	if j.TriggerSource != "" {
+		return j.TriggerSource
+	}
+	return "scheduler"
+}
+
+func (j WorkflowRetentionJob) recordCleanup(ctx context.Context, result, category string) {
+	observer, ok := j.Observer.(interface {
+		RecordWorkflowLifecycle(context.Context, telemetry.WorkflowLifecycleEvent)
+	})
+	if !ok {
+		return
+	}
+	observer.RecordWorkflowLifecycle(ctx, telemetry.WorkflowLifecycleEvent{Operation: "cleanup", Result: result, CleanupCategory: category})
 }
 
 type SummaryCompactionJob struct {

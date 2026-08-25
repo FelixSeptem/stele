@@ -279,3 +279,43 @@ func TestSelfHostingDocsStateRemainingAssuranceProductGaps(t *testing.T) {
 		}
 	}
 }
+
+func TestSelfHostingDocsIncludeIntegrationEvidenceWorkflowGoldenPath(t *testing.T) {
+	contentBytes, err := os.ReadFile("self-hosting.md")
+	if err != nil {
+		t.Fatalf("read self-hosting.md: %v", err)
+	}
+	content := string(contentBytes)
+	spec := openapi.SpecYAML()
+	for _, want := range []string{
+		"Integration evidence workflow golden path",
+		"/v1/admin/workflows/templates",
+		"/v1/workflows/runs",
+		"/v1/workflows/runs/<workflow-run-id>/steps",
+		"/v1/workflows/runs/<workflow-run-id>/next-actions",
+		"/v1/admin/workflows/runs/<workflow-run-id>/diagnostics",
+		"/v1/admin/workflows/evidence-links/<evidence-link-id>/supersede",
+		"STELE_WORKFLOW_MAINTENANCE_ENABLED",
+		"stele_workflow_lifecycle_total",
+		"external agent execution",
+		"model invocation",
+		"prompt orchestration",
+		"final-answer generation",
+	} {
+		if !strings.Contains(content, want) {
+			t.Fatalf("self-hosting workflow docs missing %q", want)
+		}
+	}
+	for _, route := range []string{
+		"/v1/admin/workflows/templates",
+		"/v1/workflows/runs",
+		"/v1/workflows/runs/{workflow_run_id}/steps",
+		"/v1/workflows/runs/{workflow_run_id}/next-actions",
+		"/v1/admin/workflows/runs/{workflow_run_id}/diagnostics",
+		"/v1/admin/workflows/evidence-links/{evidence_link_id}/supersede",
+	} {
+		if !strings.Contains(spec, route) {
+			t.Fatalf("OpenAPI spec missing documented workflow route %q", route)
+		}
+	}
+}

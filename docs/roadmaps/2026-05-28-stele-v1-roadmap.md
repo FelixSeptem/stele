@@ -474,6 +474,101 @@ Done when:
 
 - a new operator can bring up the service from documentation alone
 
+## Near-Term Product Hardening
+
+The core memory, governance, retrieval, assurance, and integration-evidence
+surfaces are now present. The next work should improve the product properties
+that make those surfaces safe and dependable for multiple external integrations,
+rather than add another memory type or an end-user application feature.
+
+### Stage 1: Scoped Principal Authorization And Idempotent Ingestion
+
+Goal: bind every protected request to a durable principal and explicit allowed
+scope, then make public raw-event retries safe.
+
+Scope:
+
+- Replace process-wide allow-list-only API key validation with durable scoped
+  principals, hashed keys, roles, expiry/disable state, and explicit scope
+  grants.
+- Resolve scope from the authenticated principal and reject requested headers
+  that exceed its tenant/project/namespace grants.
+- Preserve a bootstrap operator path for first deployment without storing raw
+  secrets in PostgreSQL or logs.
+- Add scoped idempotency to `POST /v1/events`, returning the original durable
+  event and admission result for an exact retry while rejecting payload reuse
+  with incompatible content.
+- Record bounded authentication, authorization, and idempotency audit history.
+
+Exit signal:
+
+- A valid key cannot read or write an ungranted scope merely by changing scope
+  headers.
+- Disabled, expired, or rotated keys are rejected without leaking grants or key
+  material.
+- Retried event writes produce one raw event, one provenance chain, and a
+  stable response.
+
+### Stage 2: Versioned Migrations And Runtime Hardening
+
+Goal: make upgrades and public runtime exposure safe for a long-lived
+self-hosted deployment.
+
+Scope:
+
+- Introduce ordered, checksummed PostgreSQL migrations with applied-version
+  history and expand/migrate/contract rollout guidance.
+- Add real PostgreSQL plus pgvector integration coverage for bootstrap,
+  upgrades, foreign-key behavior, leases, retention, and scope isolation.
+- Add HTTP body limits, server read/write/idle timeouts, connection-pool
+  configuration, and bounded request concurrency or rate limits.
+- Publish backup/restore and upgrade runbooks with readiness checks.
+
+Exit signal:
+
+- An operator can upgrade an existing database deterministically and verify
+  the applied schema version before traffic is accepted.
+- Untrusted clients cannot consume unbounded request bodies or connections.
+
+### Stage 3: Durable Multi-Scope Maintenance
+
+Goal: ensure asynchronous maintenance reaches every active product surface and
+recovers safely across replicas or process restarts.
+
+Scope:
+
+- Discover maintenance scopes from all durable scoped surfaces, not only
+  promoted candidates and active canonical memory.
+- Model workflow diagnostic and cleanup work with per-run durable claims,
+  leases, retry budgets, and bounded failure summaries.
+- Make worker identity instance-specific and make execution leases configurable
+  by job class.
+- Expose worker and scheduler metrics from every runtime mode or through a
+  shared telemetry path, then define operational SLOs for ingest lag,
+  governance backlog, workflow completion, and cleanup.
+
+Exit signal:
+
+- A scope with only workflow, session, feedback, or assurance data still
+  receives scheduled maintenance.
+- Restarted or horizontally scaled workers do not strand or duplicate eligible
+  workflow work.
+
+### Stage Sequencing
+
+1. `scoped-principal-auth-and-ingest-idempotency`
+2. `versioned-migrations-and-runtime-hardening`
+3. `durable-multi-scope-maintenance`
+
+Reasoning:
+
+- Explicit identity and idempotent writes are the authorization boundary for
+  every existing and future public API.
+- Safe schema evolution and runtime limits must precede broad external
+  exposure.
+- Durable maintenance then makes the already implemented workflow and
+  assurance surfaces reliable across scopes and replicas.
+
 ## Reference-Informed Expansion Backlog
 
 This section captures external reference findings that should inform post-v1 planning without changing the current v1 execution order. The immediate reference is `alash3al/stash`, a Go, PostgreSQL, pgvector, and MCP-oriented agent memory project that emphasizes continuous agent experience memory. Treat this section as a research backlog, not as an approved implementation plan.

@@ -652,6 +652,7 @@ func TestRepositoryInspectsConformanceEvidenceByScope(t *testing.T) {
 		{Kind: assurance.ExpectedEvidenceProof, MinimumCount: 1, FreshnessWindow: time.Hour},
 		{Kind: assurance.ExpectedEvidenceRepair, MinimumCount: 1, FreshnessWindow: time.Hour},
 		{Kind: assurance.ExpectedEvidenceRankingRollout, MinimumCount: 1, FreshnessWindow: time.Hour},
+		{Kind: assurance.ExpectedEvidenceWorkflow, MinimumCount: 1, FreshnessWindow: time.Hour},
 	}
 
 	mock.ExpectQuery("FROM memory_session_runs").
@@ -681,6 +682,9 @@ func TestRepositoryInspectsConformanceEvidenceByScope(t *testing.T) {
 	mock.ExpectQuery("FROM ranking_rollout_dry_runs").
 		WithArgs(scope.Tenant, scope.Project, scope.Namespace).
 		WillReturnRows(conformanceEvidenceRows().AddRow(int64(1), now, false, false, true))
+	mock.ExpectQuery("FROM integration_workflow_runs wr").
+		WithArgs(scope.Tenant, scope.Project, scope.Namespace).
+		WillReturnRows(conformanceEvidenceRows().AddRow(int64(1), now, false, true, false))
 
 	repo := NewRepository(mock)
 	observations, err := repo.InspectConformanceEvidence(context.Background(), assurance.ConformanceEvidenceInspectionInput{
@@ -702,6 +706,9 @@ func TestRepositoryInspectsConformanceEvidenceByScope(t *testing.T) {
 	}
 	if !observations[8].Hidden {
 		t.Fatalf("ranking observation = %+v, want hidden flag", observations[8])
+	}
+	if !observations[9].Contradictory {
+		t.Fatalf("workflow observation = %+v, want blocking diagnostic flag", observations[9])
 	}
 
 	if err := mock.ExpectationsWereMet(); err != nil {

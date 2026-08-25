@@ -8,11 +8,13 @@ import (
 	"log"
 	"net/http"
 	"net/http/httptest"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
 
 	"github.com/FelixSeptem/stele/internal/assurance"
+	"github.com/FelixSeptem/stele/internal/auth"
 	"github.com/FelixSeptem/stele/internal/diagnostics"
 	"github.com/FelixSeptem/stele/internal/governance"
 	"github.com/FelixSeptem/stele/internal/jobs"
@@ -20,6 +22,7 @@ import (
 	"github.com/FelixSeptem/stele/internal/policy"
 	"github.com/FelixSeptem/stele/internal/retrieval"
 	"github.com/FelixSeptem/stele/internal/telemetry"
+	"github.com/FelixSeptem/stele/internal/workflow"
 	"github.com/jackc/pgx/v5"
 )
 
@@ -27,19 +30,55 @@ type stubReadinessChecker struct {
 	err error
 }
 
+type stubPrincipalAuthorizer struct {
+	principal auth.Principal
+	granted   bool
+}
+
+func (s stubPrincipalAuthorizer) Authenticate(context.Context, string) (auth.Principal, auth.Credential, error) {
+	return s.principal, auth.Credential{}, nil
+}
+
+func (s stubPrincipalAuthorizer) AuthorizeScope(context.Context, string, memory.Scope) (bool, error) {
+	return s.granted, nil
+}
+
 func (s stubReadinessChecker) Ready(ctx context.Context) error {
 	return s.err
 }
 
 type stubEventIngestor struct {
-	gotInput  memory.IngestEventInput
-	eventID   string
-	admission *memory.AdmissionPressureReport
-	err       error
+	gotInput    memory.IngestEventInput
+	ingestCalls int
+	eventID     string
+	admission   *memory.AdmissionPressureReport
+	err         error
+}
+
+type stubIdempotentEventIngestor struct {
+	stubEventIngestor
+	gotPrincipalID   string
+	gotKey           string
+	idempotentCalls  int
+	replayed         bool
+	replayAfterFirst bool
+}
+
+func (s *stubIdempotentEventIngestor) IngestIdempotent(ctx context.Context, input memory.IngestEventInput, principalID, idempotencyKey string) (memory.IdempotentEventIngestResult, error) {
+	s.gotInput = input
+	s.gotPrincipalID = principalID
+	s.gotKey = idempotencyKey
+	s.idempotentCalls++
+	if s.err != nil {
+		return memory.IdempotentEventIngestResult{}, s.err
+	}
+	replayed := s.replayed || (s.replayAfterFirst && s.idempotentCalls > 1)
+	return memory.IdempotentEventIngestResult{Event: memory.RawEvent{ID: s.eventID, Admission: s.admission}, Replayed: replayed}, nil
 }
 
 func (s *stubEventIngestor) Ingest(ctx context.Context, input memory.IngestEventInput) (memory.RawEvent, error) {
 	s.gotInput = input
+	s.ingestCalls++
 	if s.err != nil {
 		return memory.RawEvent{}, s.err
 	}
@@ -1081,6 +1120,213 @@ func TestNewHTTPHandlerRejectsMissingAPIKeyForEvents(t *testing.T) {
 		t.Fatalf("status = %d, want %d", rec.Code, http.StatusUnauthorized)
 	}
 }
+
+func TestNewHTTPHandlerUsesPrincipalAuthorizationForPublicRoutes(t *testing.T) {
+	query := &stubMemoryQueryService{}
+	handler := NewHTTPHandler(HTTPDependencies{
+		APIKeys: auth.StaticAPIKeys{"legacy-key": {}},
+		PrincipalAuthorizer: stubPrincipalAuthorizer{
+			principal: auth.Principal{ID: "principal_1", Role: auth.PrincipalRolePublic, Status: auth.PrincipalStatusActive, Label: "integration-a", CreatedAt: time.Now().UTC()},
+			granted:   true,
+		},
+		MemoryQuery: query,
+	})
+
+	req := httptest.NewRequest(http.MethodGet, "/v1/memories", nil)
+	req.Header.Set("X-API-Key", "principal-key")
+	req.Header.Set("X-Stele-Tenant", "tenant-a")
+	req.Header.Set("X-Stele-Project", "project-a")
+	req.Header.Set("X-Stele-Namespace", "namespace-a")
+	rec := httptest.NewRecorder()
+
+	handler.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d, want %d", rec.Code, http.StatusOK)
+	}
+	if query.gotListInput.Scope != (memory.Scope{Tenant: "tenant-a", Project: "project-a", Namespace: "namespace-a"}) {
+		t.Fatalf("scope = %+v, want authorized header scope", query.gotListInput.Scope)
+	}
+}
+
+func TestNewHTTPHandlerDeniesPublicPrincipalOnAdminRoute(t *testing.T) {
+	handler := NewHTTPHandler(HTTPDependencies{
+		PrincipalAuthorizer: stubPrincipalAuthorizer{
+			principal: auth.Principal{ID: "principal_1", Role: auth.PrincipalRolePublic, Status: auth.PrincipalStatusActive, Label: "integration-a", CreatedAt: time.Now().UTC()},
+			granted:   true,
+		},
+		GovernanceStatusRead: &stubGovernanceStatusReader{},
+	})
+
+	req := httptest.NewRequest(http.MethodGet, "/v1/admin/jobs/governance/status", nil)
+	req.Header.Set("X-API-Key", "principal-key")
+	req.Header.Set("X-Stele-Tenant", "tenant-a")
+	req.Header.Set("X-Stele-Project", "project-a")
+	req.Header.Set("X-Stele-Namespace", "namespace-a")
+	rec := httptest.NewRecorder()
+
+	handler.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusForbidden {
+		t.Fatalf("status = %d, want %d", rec.Code, http.StatusForbidden)
+	}
+}
+
+func TestNewHTTPHandlerRequiresIdempotencyKeyForPrincipalEventIngest(t *testing.T) {
+	ingestor := &stubIdempotentEventIngestor{stubEventIngestor: stubEventIngestor{eventID: "evt_123"}}
+	handler := NewHTTPHandler(HTTPDependencies{
+		PrincipalAuthorizer: stubPrincipalAuthorizer{principal: auth.Principal{ID: "principal_1", Role: auth.PrincipalRolePublic, Status: auth.PrincipalStatusActive, Label: "integration-a", CreatedAt: time.Now().UTC()}, granted: true},
+		EventIngestor:       ingestor,
+	})
+	req := httptest.NewRequest(http.MethodPost, "/v1/events", strings.NewReader(`{"event_type":"conversation.message","content":"hello"}`))
+	req.Header.Set("X-API-Key", "principal-key")
+	req.Header.Set("X-Stele-Tenant", "tenant-a")
+	req.Header.Set("X-Stele-Project", "project-a")
+	req.Header.Set("X-Stele-Namespace", "namespace-a")
+	rec := httptest.NewRecorder()
+	handler.ServeHTTP(rec, req)
+	if rec.Code != http.StatusBadRequest || ingestor.gotKey != "" {
+		t.Fatalf("status=%d key=%q, want missing key rejection", rec.Code, ingestor.gotKey)
+	}
+}
+
+func TestNewHTTPHandlerReplaysIdempotentPrincipalEventIngest(t *testing.T) {
+	ingestor := &stubIdempotentEventIngestor{stubEventIngestor: stubEventIngestor{eventID: "evt_123"}, replayed: true}
+	handler := NewHTTPHandler(HTTPDependencies{
+		PrincipalAuthorizer: stubPrincipalAuthorizer{principal: auth.Principal{ID: "principal_1", Role: auth.PrincipalRolePublic, Status: auth.PrincipalStatusActive, Label: "integration-a", CreatedAt: time.Now().UTC()}, granted: true},
+		EventIngestor:       ingestor,
+	})
+	req := httptest.NewRequest(http.MethodPost, "/v1/events", strings.NewReader(`{"event_type":"conversation.message","content":"hello"}`))
+	req.Header.Set("X-API-Key", "principal-key")
+	req.Header.Set("Idempotency-Key", "request-key")
+	req.Header.Set("X-Stele-Tenant", "tenant-a")
+	req.Header.Set("X-Stele-Project", "project-a")
+	req.Header.Set("X-Stele-Namespace", "namespace-a")
+	rec := httptest.NewRecorder()
+	handler.ServeHTTP(rec, req)
+	if rec.Code != http.StatusOK || ingestor.gotPrincipalID != "principal_1" || ingestor.gotKey != "request-key" {
+		t.Fatalf("status=%d principal=%q key=%q", rec.Code, ingestor.gotPrincipalID, ingestor.gotKey)
+	}
+}
+
+func TestNewHTTPHandlerRoutesExactPrincipalRetryOnlyThroughIdempotentIngestor(t *testing.T) {
+	ingestor := &stubIdempotentEventIngestor{stubEventIngestor: stubEventIngestor{eventID: "evt_123"}, replayAfterFirst: true}
+	handler := NewHTTPHandler(HTTPDependencies{
+		PrincipalAuthorizer: stubPrincipalAuthorizer{principal: auth.Principal{ID: "principal_1", Role: auth.PrincipalRolePublic, Status: auth.PrincipalStatusActive, Label: "integration-a", CreatedAt: time.Now().UTC()}, granted: true},
+		EventIngestor:       ingestor,
+	})
+
+	for attempt, wantStatus := range []int{http.StatusCreated, http.StatusOK} {
+		req := httptest.NewRequest(http.MethodPost, "/v1/events", strings.NewReader(`{"event_type":"conversation.message","content":"hello"}`))
+		req.Header.Set("X-API-Key", "principal-key")
+		req.Header.Set("Idempotency-Key", "request-key")
+		req.Header.Set("X-Stele-Tenant", "tenant-a")
+		req.Header.Set("X-Stele-Project", "project-a")
+		req.Header.Set("X-Stele-Namespace", "namespace-a")
+		rec := httptest.NewRecorder()
+		handler.ServeHTTP(rec, req)
+		if rec.Code != wantStatus {
+			t.Fatalf("attempt %d status=%d body=%s, want %d", attempt+1, rec.Code, rec.Body.String(), wantStatus)
+		}
+	}
+	if ingestor.idempotentCalls != 2 || ingestor.ingestCalls != 0 || ingestor.gotPrincipalID != "principal_1" || ingestor.gotKey != "request-key" {
+		t.Fatalf("idempotent_calls=%d ingest_calls=%d principal=%q key=%q", ingestor.idempotentCalls, ingestor.ingestCalls, ingestor.gotPrincipalID, ingestor.gotKey)
+	}
+}
+
+func TestNewHTTPHandlerMapsIdempotencyConflictsToSafeRetryResponses(t *testing.T) {
+	tests := []struct {
+		name       string
+		err        error
+		wantStatus int
+		wantRetry  string
+	}{
+		{name: "payload conflict", err: memory.ErrIdempotencyConflict, wantStatus: http.StatusConflict},
+		{name: "active claim", err: memory.ErrIdempotencyInProgress, wantStatus: http.StatusConflict, wantRetry: "1"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			ingestor := &stubIdempotentEventIngestor{stubEventIngestor: stubEventIngestor{err: tt.err}}
+			handler := NewHTTPHandler(HTTPDependencies{
+				PrincipalAuthorizer: stubPrincipalAuthorizer{principal: auth.Principal{ID: "principal_1", Role: auth.PrincipalRolePublic, Status: auth.PrincipalStatusActive, CreatedAt: time.Now().UTC()}, granted: true},
+				EventIngestor:       ingestor,
+			})
+			req := httptest.NewRequest(http.MethodPost, "/v1/events", strings.NewReader(`{"event_type":"conversation.message","content":"hello"}`))
+			req.Header.Set("X-API-Key", "principal-key")
+			req.Header.Set("Idempotency-Key", "request-key")
+			req.Header.Set("X-Stele-Tenant", "tenant-a")
+			req.Header.Set("X-Stele-Project", "project-a")
+			req.Header.Set("X-Stele-Namespace", "namespace-a")
+			rec := httptest.NewRecorder()
+			handler.ServeHTTP(rec, req)
+			if rec.Code != tt.wantStatus {
+				t.Fatalf("status=%d body=%s, want %d", rec.Code, rec.Body.String(), tt.wantStatus)
+			}
+			if got := rec.Header().Get("Retry-After"); got != tt.wantRetry {
+				t.Fatalf("Retry-After=%q, want %q", got, tt.wantRetry)
+			}
+			if ingestor.ingestCalls != 0 || ingestor.idempotentCalls != 1 {
+				t.Fatalf("idempotent_calls=%d ingest_calls=%d", ingestor.idempotentCalls, ingestor.ingestCalls)
+			}
+		})
+	}
+}
+
+func TestNewHTTPHandlerCreatesScopedPrincipalWithOneTimeSecret(t *testing.T) {
+	store := &principalAdminStoreHTTPStub{}
+	service := auth.NewPrincipalAdminService(store, func() time.Time { return time.Date(2026, 8, 13, 12, 0, 0, 0, time.UTC) }, uniqueTestID)
+	handler := NewHTTPHandler(HTTPDependencies{
+		PrincipalAuthorizer: stubPrincipalAuthorizer{principal: auth.Principal{ID: "bootstrap-operator", Role: auth.PrincipalRoleAdmin, Status: auth.PrincipalStatusActive, Label: "bootstrap", CreatedAt: time.Now().UTC()}, granted: true},
+		PrincipalAdmin:      service,
+	})
+	req := httptest.NewRequest(http.MethodPost, "/v1/admin/principals", strings.NewReader(`{"role":"admin","label":"first-admin"}`))
+	req.Header.Set("X-API-Key", "bootstrap-key")
+	req.Header.Set("X-Stele-Tenant", "tenant-a")
+	req.Header.Set("X-Stele-Project", "project-a")
+	req.Header.Set("X-Stele-Namespace", "namespace-a")
+	rec := httptest.NewRecorder()
+	handler.ServeHTTP(rec, req)
+	if rec.Code != http.StatusCreated || !strings.Contains(rec.Body.String(), "credential_secret") || !strings.Contains(rec.Body.String(), "stl_") {
+		t.Fatalf("status=%d body=%s", rec.Code, rec.Body.String())
+	}
+}
+
+type principalAdminStoreHTTPStub struct{}
+
+func (principalAdminStoreHTTPStub) CreatePrincipal(context.Context, auth.Principal, auth.Credential, []auth.ScopeGrant, auth.AuditRecord) error {
+	return nil
+}
+func (principalAdminStoreHTTPStub) ListPrincipals(context.Context, memory.Scope, int) ([]auth.Principal, error) {
+	return nil, nil
+}
+func (principalAdminStoreHTTPStub) ReadPrincipal(context.Context, memory.Scope, string) (auth.Principal, error) {
+	return auth.Principal{}, nil
+}
+func (principalAdminStoreHTTPStub) ListScopeGrants(context.Context, memory.Scope, string) ([]auth.ScopeGrant, error) {
+	return nil, nil
+}
+func (principalAdminStoreHTTPStub) RotateCredential(context.Context, memory.Scope, string, auth.Credential, auth.AuditRecord) error {
+	return nil
+}
+func (principalAdminStoreHTTPStub) DisablePrincipal(context.Context, memory.Scope, string, time.Time, auth.AuditRecord) error {
+	return nil
+}
+func (principalAdminStoreHTTPStub) ExpirePrincipal(context.Context, memory.Scope, string, time.Time, auth.AuditRecord) error {
+	return nil
+}
+func (principalAdminStoreHTTPStub) CreateScopeGrant(context.Context, memory.Scope, auth.ScopeGrant, auth.AuditRecord) error {
+	return nil
+}
+func (principalAdminStoreHTTPStub) RevokeScopeGrant(context.Context, memory.Scope, string, time.Time, auth.AuditRecord) error {
+	return nil
+}
+func (principalAdminStoreHTTPStub) ListAccessAudit(context.Context, memory.Scope, string, int) ([]auth.AuditRecord, error) {
+	return nil, nil
+}
+
+var testIDSequence int
+
+func uniqueTestID() string { testIDSequence++; return "test-id-" + strconv.Itoa(testIDSequence) }
 
 func TestNewHTTPHandlerIngestsEvent(t *testing.T) {
 	ingestor := &stubEventIngestor{
@@ -4905,6 +5151,511 @@ func TestRankingRolloutLifecycleLogUsesBoundedFields(t *testing.T) {
 		if strings.Contains(line, forbidden) {
 			t.Fatalf("log = %q, contains high-cardinality field %q", line, forbidden)
 		}
+	}
+}
+
+func TestNewHTTPHandlerWorkflowPublicEndpoints(t *testing.T) {
+	scope := memory.Scope{Tenant: "tenant-a", Project: "project-a", Namespace: "namespace-a"}
+	now := time.Date(2026, 7, 18, 10, 0, 0, 0, time.UTC)
+	service := &stubWorkflowHTTPService{
+		run: workflow.WorkflowRun{
+			ID:              "workflow_run_1",
+			TemplateID:      "workflow_template_1",
+			Scope:           scope,
+			Status:          workflow.RunStatusRunning,
+			IntegrationKind: workflow.IntegrationKindAgentTurn,
+			IdempotencyKey:  "run-key-1",
+			Actor:           "agent-a",
+			Reason:          "serve user turn",
+			Metadata:        map[string]any{"prompt": "caller prompt", "subject": "user-42"},
+			CreatedAt:       now,
+			UpdatedAt:       now,
+			StartedAt:       now,
+		},
+		step: workflow.WorkflowStepRecord{
+			ID:         "workflow_step_1",
+			RunID:      "workflow_run_1",
+			Scope:      scope,
+			Kind:       workflow.StepKindSessionStarted,
+			Status:     workflow.StepStatusSatisfied,
+			Result:     workflow.StepResultRecorded,
+			Actor:      "agent-a",
+			Reason:     "session opened",
+			Metadata:   map[string]any{"model_output": "private completion"},
+			ObservedAt: now,
+			CreatedAt:  now,
+		},
+		nextActions: []workflow.NextAction{{
+			ID:            "workflow_next_action_1",
+			RunID:         "workflow_run_1",
+			Scope:         scope,
+			Category:      workflow.NextActionRecordOutcome,
+			StepKind:      workflow.StepKindTurnOutcomeRecorded,
+			EvidenceKind:  workflow.EvidenceKindOutcome,
+			RouteCategory: workflow.RouteCategoryMemorySessionOutcome,
+			Status:        workflow.NextActionStatusOpen,
+			Metadata: map[string]any{
+				"prompt":        "hidden prompt text",
+				"model_output":  "hidden model output",
+				"hidden_memory": "mem_secret",
+			},
+			CreatedAt: now,
+		}},
+	}
+	handler := NewHTTPHandler(HTTPDependencies{
+		Readiness: stubReadinessChecker{},
+		APIKeys:   map[string]struct{}{"test-key": {}},
+		Workflow:  service,
+	})
+
+	createReq := httptest.NewRequest(http.MethodPost, "/v1/workflows/runs", strings.NewReader(`{"template_id":"workflow_template_1","idempotency_key":"run-key-1","actor":"agent-a","reason":"serve user turn","metadata":{"integration":"test-agent"},"expires_at":"2026-07-18T11:00:00Z"}`))
+	setAPIScopeHeaders(createReq)
+	createResp := httptest.NewRecorder()
+	handler.ServeHTTP(createResp, createReq)
+	if createResp.Code != http.StatusCreated {
+		t.Fatalf("create status = %d body=%s, want 201", createResp.Code, createResp.Body.String())
+	}
+	if service.gotStartRun.TemplateID != "workflow_template_1" || service.gotStartRun.IdempotencyKey != "run-key-1" {
+		t.Fatalf("start input = %+v, want template/idempotency", service.gotStartRun)
+	}
+	if service.gotStartRun.Scope != scope {
+		t.Fatalf("start scope = %+v, want %+v", service.gotStartRun.Scope, scope)
+	}
+	if !strings.Contains(createResp.Body.String(), `"id":"workflow_run_1"`) {
+		t.Fatalf("create body = %s, missing run id", createResp.Body.String())
+	}
+	for _, forbidden := range []string{"workflow_template_1", "tenant-a", "project-a", "namespace-a", "run-key-1", "agent-a", "serve user turn", "caller prompt", "user-42"} {
+		if strings.Contains(createResp.Body.String(), forbidden) {
+			t.Fatalf("create body = %s, contains sensitive field %q", createResp.Body.String(), forbidden)
+		}
+	}
+
+	replayReq := httptest.NewRequest(http.MethodPost, "/v1/workflows/runs", strings.NewReader(`{"template_id":"workflow_template_1","idempotency_key":"run-key-1","actor":"agent-a","reason":"serve user turn"}`))
+	setAPIScopeHeaders(replayReq)
+	replayResp := httptest.NewRecorder()
+	handler.ServeHTTP(replayResp, replayReq)
+	if replayResp.Code != http.StatusCreated {
+		t.Fatalf("idempotent create status = %d body=%s, want 201", replayResp.Code, replayResp.Body.String())
+	}
+	if strings.Count(replayResp.Body.String(), "workflow_run_1") == 0 {
+		t.Fatalf("idempotent create body = %s, missing original run id", replayResp.Body.String())
+	}
+
+	readReq := httptest.NewRequest(http.MethodGet, "/v1/workflows/runs/workflow_run_1", nil)
+	setAPIScopeHeaders(readReq)
+	readResp := httptest.NewRecorder()
+	handler.ServeHTTP(readResp, readReq)
+	if readResp.Code != http.StatusOK {
+		t.Fatalf("read status = %d body=%s, want 200", readResp.Code, readResp.Body.String())
+	}
+	if service.gotReadRun.RunID != "workflow_run_1" {
+		t.Fatalf("read input = %+v, want workflow_run_1", service.gotReadRun)
+	}
+	for _, forbidden := range []string{"workflow_run_1", "workflow_template_1", "tenant-a", "project-a", "namespace-a", "run-key-1", "agent-a", "serve user turn", "caller prompt", "user-42"} {
+		if strings.Contains(readResp.Body.String(), forbidden) {
+			t.Fatalf("read body = %s, contains sensitive field %q", readResp.Body.String(), forbidden)
+		}
+	}
+
+	stepReq := httptest.NewRequest(http.MethodPost, "/v1/workflows/runs/workflow_run_1/steps", strings.NewReader(`{"kind":"session_started","actor":"agent-a","reason":"session opened","observed_at":"2026-07-18T10:00:00Z","evidence_links":[{"kind":"session","source":"public_api","target_id":"session_1"}]}`))
+	setAPIScopeHeaders(stepReq)
+	stepResp := httptest.NewRecorder()
+	handler.ServeHTTP(stepResp, stepReq)
+	if stepResp.Code != http.StatusCreated {
+		t.Fatalf("step status = %d body=%s, want 201", stepResp.Code, stepResp.Body.String())
+	}
+	if service.gotRecordStep.RunID != "workflow_run_1" || service.gotRecordStep.Kind != workflow.StepKindSessionStarted {
+		t.Fatalf("record step input = %+v, want run/kind", service.gotRecordStep)
+	}
+	if len(service.gotRecordStep.EvidenceLinks) != 1 || service.gotRecordStep.EvidenceLinks[0].TargetID != "session_1" {
+		t.Fatalf("evidence links = %+v, want session_1", service.gotRecordStep.EvidenceLinks)
+	}
+	for _, forbidden := range []string{"workflow_step_1", "workflow_run_1", "tenant-a", "project-a", "namespace-a", "agent-a", "session opened", "private completion"} {
+		if strings.Contains(stepResp.Body.String(), forbidden) {
+			t.Fatalf("step body = %s, contains sensitive field %q", stepResp.Body.String(), forbidden)
+		}
+	}
+
+	actionsReq := httptest.NewRequest(http.MethodGet, "/v1/workflows/runs/workflow_run_1/next-actions", nil)
+	setAPIScopeHeaders(actionsReq)
+	actionsResp := httptest.NewRecorder()
+	handler.ServeHTTP(actionsResp, actionsReq)
+	if actionsResp.Code != http.StatusOK {
+		t.Fatalf("next actions status = %d body=%s, want 200", actionsResp.Code, actionsResp.Body.String())
+	}
+	body := actionsResp.Body.String()
+	for _, want := range []string{`"category":"record_outcome"`, `"step_kind":"turn_outcome_recorded"`, `"evidence_kind":"outcome"`, `"route_category":"memory_session_outcome"`} {
+		if !strings.Contains(body, want) {
+			t.Fatalf("next actions body = %s, missing %s", body, want)
+		}
+	}
+	for _, forbidden := range []string{"workflow_run_1", "workflow_next_action_1", "tenant-a", "project-a", "namespace-a", "hidden prompt text", "hidden model output", "mem_secret"} {
+		if strings.Contains(body, forbidden) {
+			t.Fatalf("next actions body = %s, contains sensitive field %q", body, forbidden)
+		}
+	}
+}
+
+func TestNewHTTPHandlerWorkflowAdminEndpoints(t *testing.T) {
+	scope := memory.Scope{Tenant: "tenant-a", Project: "project-a", Namespace: "namespace-a"}
+	now := time.Date(2026, 7, 18, 10, 0, 0, 0, time.UTC)
+	template := testWorkflowTemplate(scope, now)
+	run := workflow.WorkflowRun{
+		ID:              "workflow_run_1",
+		TemplateID:      template.ID,
+		Scope:           scope,
+		Status:          workflow.RunStatusRunning,
+		IntegrationKind: workflow.IntegrationKindAgentTurn,
+		IdempotencyKey:  "run-key-1",
+		Actor:           "agent-a",
+		Reason:          "serve user turn",
+		CreatedAt:       now,
+		UpdatedAt:       now,
+		StartedAt:       now,
+	}
+	service := &stubWorkflowHTTPService{
+		template:    template,
+		templates:   []workflow.WorkflowTemplate{template},
+		run:         run,
+		runs:        []workflow.WorkflowRun{run},
+		steps:       []workflow.WorkflowStepRecord{{ID: "workflow_step_1", RunID: run.ID, Scope: scope, Kind: workflow.StepKindSessionStarted, Status: workflow.StepStatusSatisfied, Result: workflow.StepResultRecorded, Actor: "agent-a", Reason: "session opened", ObservedAt: now, CreatedAt: now}},
+		evidence:    []workflow.EvidenceLink{{ID: "workflow_link_1", RunID: run.ID, StepRecordID: "workflow_step_1", Scope: scope, Kind: workflow.EvidenceKindSession, Status: workflow.EvidenceLinkStatusActive, Source: workflow.EvidenceSourcePublicAPI, TargetID: "session_1", CreatedAt: now}},
+		diagnostics: []workflow.GapDiagnostic{{ID: "workflow_gap_1", RunID: run.ID, Scope: scope, StepKind: workflow.StepKindTurnOutcomeRecorded, EvidenceKind: workflow.EvidenceKindOutcome, Category: workflow.DiagnosticCategoryMissing, ReadinessImpact: workflow.ReadinessImpactDegraded, Status: "open", CreatedAt: now}},
+		nextActions: []workflow.NextAction{{ID: "workflow_next_action_1", RunID: run.ID, Scope: scope, Category: workflow.NextActionRecordOutcome, StepKind: workflow.StepKindTurnOutcomeRecorded, EvidenceKind: workflow.EvidenceKindOutcome, RouteCategory: workflow.RouteCategoryMemorySessionOutcome, Status: workflow.NextActionStatusOpen, CreatedAt: now}},
+	}
+	handler := NewHTTPHandler(HTTPDependencies{
+		Readiness:    stubReadinessChecker{},
+		AdminAPIKeys: map[string]struct{}{"admin-key": {}},
+		Workflow:     service,
+	})
+
+	createReq := httptest.NewRequest(http.MethodPost, "/v1/admin/workflows/templates", strings.NewReader(`{"integration_kind":"agent_turn","completion_policy":"strict","actor":"operator-a","reason":"define product loop","steps":[{"kind":"session_started","requirement":"required","allowed_evidence":["session"],"minimum_count":1,"requires_internal":true,"freshness_window":"24h","completion_window":"1h","position":1}]}`))
+	setAdminScopeHeaders(createReq)
+	createResp := httptest.NewRecorder()
+	handler.ServeHTTP(createResp, createReq)
+	if createResp.Code != http.StatusCreated {
+		t.Fatalf("template create status = %d body=%s, want 201", createResp.Code, createResp.Body.String())
+	}
+	if service.gotCreateTemplate.IntegrationKind != workflow.IntegrationKindAgentTurn || service.gotCreateTemplate.Steps[0].FreshnessWindow != 24*time.Hour {
+		t.Fatalf("create template input = %+v, want parsed bounded workflow template", service.gotCreateTemplate)
+	}
+
+	for _, tc := range []struct {
+		method string
+		path   string
+		body   string
+		want   int
+	}{
+		{http.MethodGet, "/v1/admin/workflows/templates?status=active&limit=10", "", http.StatusOK},
+		{http.MethodGet, "/v1/admin/workflows/templates/workflow_template_1", "", http.StatusOK},
+		{http.MethodPatch, "/v1/admin/workflows/templates/workflow_template_1", `{"integration_kind":"agent_turn","completion_policy":"permissive","actor":"operator-b","reason":"relax order","steps":[{"kind":"session_started","requirement":"required","allowed_evidence":["session"],"minimum_count":1,"requires_internal":true,"freshness_window":"24h","completion_window":"1h","position":1}]}`, http.StatusOK},
+		{http.MethodPost, "/v1/admin/workflows/templates/workflow_template_1/disable", `{"actor":"operator-c","reason":"retire template"}`, http.StatusOK},
+		{http.MethodGet, "/v1/admin/workflows/runs?status=running&limit=10", "", http.StatusOK},
+		{http.MethodGet, "/v1/admin/workflows/runs/workflow_run_1", "", http.StatusOK},
+		{http.MethodGet, "/v1/admin/workflows/runs/workflow_run_1/steps", "", http.StatusOK},
+		{http.MethodGet, "/v1/admin/workflows/runs/workflow_run_1/evidence-links?status=active", "", http.StatusOK},
+		{http.MethodGet, "/v1/admin/workflows/runs/workflow_run_1/diagnostics?category=missing", "", http.StatusOK},
+		{http.MethodGet, "/v1/admin/workflows/runs/workflow_run_1/next-actions?status=open", "", http.StatusOK},
+		{http.MethodPost, "/v1/admin/workflows/evidence-links/workflow_link_1/supersede", `{"actor":"operator-d","reason":"bad evidence link"}`, http.StatusAccepted},
+	} {
+		var reader *strings.Reader
+		if tc.body == "" {
+			reader = strings.NewReader("")
+		} else {
+			reader = strings.NewReader(tc.body)
+		}
+		req := httptest.NewRequest(tc.method, tc.path, reader)
+		setAdminScopeHeaders(req)
+		resp := httptest.NewRecorder()
+		handler.ServeHTTP(resp, req)
+		if resp.Code != tc.want {
+			t.Fatalf("%s %s status = %d body=%s, want %d", tc.method, tc.path, resp.Code, resp.Body.String(), tc.want)
+		}
+	}
+	if service.gotListTemplates.Status != workflow.TemplateStatusActive || service.gotListRuns.Status != workflow.RunStatusRunning {
+		t.Fatalf("list filters templates=%+v runs=%+v, want active/running", service.gotListTemplates, service.gotListRuns)
+	}
+	if service.gotSupersede.LinkID != "workflow_link_1" || service.gotSupersede.Actor != "operator-d" {
+		t.Fatalf("supersede input = %+v, want link and actor", service.gotSupersede)
+	}
+}
+
+func TestNewHTTPHandlerWorkflowAuthScopeAndValidation(t *testing.T) {
+	service := &stubWorkflowHTTPService{
+		run: workflow.WorkflowRun{
+			ID:              "workflow_run_1",
+			TemplateID:      "workflow_template_1",
+			Scope:           memory.Scope{Tenant: "tenant-a", Project: "project-a", Namespace: "namespace-a"},
+			Status:          workflow.RunStatusRunning,
+			IntegrationKind: workflow.IntegrationKindAgentTurn,
+			IdempotencyKey:  "run-key-1",
+			Actor:           "agent-a",
+			Reason:          "serve user turn",
+			CreatedAt:       time.Date(2026, 7, 18, 10, 0, 0, 0, time.UTC),
+			UpdatedAt:       time.Date(2026, 7, 18, 10, 0, 0, 0, time.UTC),
+			StartedAt:       time.Date(2026, 7, 18, 10, 0, 0, 0, time.UTC),
+		},
+		readErr: pgx.ErrNoRows,
+	}
+	handler := NewHTTPHandler(HTTPDependencies{
+		Readiness:    stubReadinessChecker{},
+		APIKeys:      map[string]struct{}{"test-key": {}},
+		AdminAPIKeys: map[string]struct{}{"admin-key": {}},
+		Workflow:     service,
+	})
+
+	noKeyReq := httptest.NewRequest(http.MethodPost, "/v1/workflows/runs", strings.NewReader(`{"template_id":"workflow_template_1","idempotency_key":"run-key-1","actor":"agent-a","reason":"serve turn"}`))
+	noKeyReq.Header.Set("X-Stele-Tenant", "tenant-a")
+	noKeyReq.Header.Set("X-Stele-Project", "project-a")
+	noKeyReq.Header.Set("X-Stele-Namespace", "namespace-a")
+	noKeyResp := httptest.NewRecorder()
+	handler.ServeHTTP(noKeyResp, noKeyReq)
+	if noKeyResp.Code != http.StatusUnauthorized {
+		t.Fatalf("missing public key status = %d, want 401", noKeyResp.Code)
+	}
+
+	publicKeyAdminReq := httptest.NewRequest(http.MethodGet, "/v1/admin/workflows/templates", nil)
+	setAPIScopeHeaders(publicKeyAdminReq)
+	publicKeyAdminResp := httptest.NewRecorder()
+	handler.ServeHTTP(publicKeyAdminResp, publicKeyAdminReq)
+	if publicKeyAdminResp.Code != http.StatusUnauthorized {
+		t.Fatalf("public key admin status = %d, want 401", publicKeyAdminResp.Code)
+	}
+
+	missingScopeReq := httptest.NewRequest(http.MethodGet, "/v1/workflows/runs/workflow_run_1", nil)
+	missingScopeReq.Header.Set("X-API-Key", "test-key")
+	missingScopeResp := httptest.NewRecorder()
+	handler.ServeHTTP(missingScopeResp, missingScopeReq)
+	if missingScopeResp.Code != http.StatusBadRequest {
+		t.Fatalf("missing scope status = %d body=%s, want 400", missingScopeResp.Code, missingScopeResp.Body.String())
+	}
+
+	invalidStepReq := httptest.NewRequest(http.MethodPost, "/v1/workflows/runs/workflow_run_1/steps", strings.NewReader(`{"kind":"free_form","actor":"agent-a","reason":"bad step","evidence_links":[{"kind":"free_form","source":"public_api","target_id":"session_1"}]}`))
+	setAPIScopeHeaders(invalidStepReq)
+	invalidStepResp := httptest.NewRecorder()
+	handler.ServeHTTP(invalidStepResp, invalidStepReq)
+	if invalidStepResp.Code != http.StatusBadRequest {
+		t.Fatalf("invalid step status = %d body=%s, want 400", invalidStepResp.Code, invalidStepResp.Body.String())
+	}
+
+	outOfScopeReq := httptest.NewRequest(http.MethodGet, "/v1/workflows/runs/secret_run_1", nil)
+	setAPIScopeHeaders(outOfScopeReq)
+	outOfScopeResp := httptest.NewRecorder()
+	handler.ServeHTTP(outOfScopeResp, outOfScopeReq)
+	if outOfScopeResp.Code != http.StatusNotFound {
+		t.Fatalf("out-of-scope status = %d body=%s, want 404", outOfScopeResp.Code, outOfScopeResp.Body.String())
+	}
+	for _, forbidden := range []string{"secret_run_1", "tenant-b", "project-b", "namespace-b"} {
+		if strings.Contains(outOfScopeResp.Body.String(), forbidden) {
+			t.Fatalf("out-of-scope body = %s, contains %q", outOfScopeResp.Body.String(), forbidden)
+		}
+	}
+}
+
+type stubWorkflowHTTPService struct {
+	gotCreateTemplate  workflow.CreateTemplateInput
+	gotUpdateTemplate  workflow.UpdateTemplateInput
+	gotDisable         workflow.DisableTemplateInput
+	gotReadTemplate    workflow.ReadTemplateInput
+	gotListTemplates   workflow.ListTemplatesInput
+	gotStartRun        workflow.StartRunInput
+	gotReadRun         workflow.ReadRunInput
+	gotListRuns        workflow.ListRunsInput
+	gotRecordStep      workflow.RecordStepInput
+	gotListSteps       workflow.ListStepRecordsInput
+	gotListEvidence    workflow.ListEvidenceLinksInput
+	gotListDiagnostics workflow.ListDiagnosticsInput
+	gotListNextActions workflow.ListNextActionsInput
+	gotSupersede       workflow.SupersedeEvidenceLinkInput
+
+	template    workflow.WorkflowTemplate
+	templates   []workflow.WorkflowTemplate
+	run         workflow.WorkflowRun
+	runs        []workflow.WorkflowRun
+	step        workflow.WorkflowStepRecord
+	steps       []workflow.WorkflowStepRecord
+	evidence    []workflow.EvidenceLink
+	diagnostics []workflow.GapDiagnostic
+	nextActions []workflow.NextAction
+
+	readErr error
+	err     error
+}
+
+func (s *stubWorkflowHTTPService) CreateTemplate(ctx context.Context, input workflow.CreateTemplateInput) (workflow.WorkflowTemplate, error) {
+	s.gotCreateTemplate = input
+	if s.err != nil {
+		return workflow.WorkflowTemplate{}, s.err
+	}
+	if err := validateHTTPWorkflowTemplateInput(input.Steps); err != nil {
+		return workflow.WorkflowTemplate{}, err
+	}
+	if s.template.ID == "" {
+		s.template = testWorkflowTemplate(input.Scope, time.Date(2026, 7, 18, 10, 0, 0, 0, time.UTC))
+	}
+	return s.template, nil
+}
+
+func (s *stubWorkflowHTTPService) UpdateTemplate(ctx context.Context, input workflow.UpdateTemplateInput) (workflow.WorkflowTemplate, error) {
+	s.gotUpdateTemplate = input
+	if s.err != nil {
+		return workflow.WorkflowTemplate{}, s.err
+	}
+	if err := validateHTTPWorkflowTemplateInput(input.Steps); err != nil {
+		return workflow.WorkflowTemplate{}, err
+	}
+	return s.template, nil
+}
+
+func (s *stubWorkflowHTTPService) DisableTemplate(ctx context.Context, input workflow.DisableTemplateInput) (workflow.WorkflowTemplate, error) {
+	s.gotDisable = input
+	if s.err != nil {
+		return workflow.WorkflowTemplate{}, s.err
+	}
+	template := s.template
+	template.Status = workflow.TemplateStatusDisabled
+	template.DisabledAt = input.DisabledAt
+	return template, nil
+}
+
+func (s *stubWorkflowHTTPService) ReadTemplate(ctx context.Context, input workflow.ReadTemplateInput) (workflow.WorkflowTemplate, error) {
+	s.gotReadTemplate = input
+	if s.readErr != nil {
+		return workflow.WorkflowTemplate{}, s.readErr
+	}
+	return s.template, nil
+}
+
+func (s *stubWorkflowHTTPService) ListTemplates(ctx context.Context, input workflow.ListTemplatesInput) ([]workflow.WorkflowTemplate, error) {
+	s.gotListTemplates = input
+	if s.err != nil {
+		return nil, s.err
+	}
+	return s.templates, nil
+}
+
+func (s *stubWorkflowHTTPService) StartRun(ctx context.Context, input workflow.StartRunInput) (workflow.WorkflowRun, error) {
+	s.gotStartRun = input
+	if s.err != nil {
+		return workflow.WorkflowRun{}, s.err
+	}
+	return s.run, nil
+}
+
+func (s *stubWorkflowHTTPService) ReadRun(ctx context.Context, input workflow.ReadRunInput) (workflow.WorkflowRun, error) {
+	s.gotReadRun = input
+	if s.readErr != nil {
+		return workflow.WorkflowRun{}, s.readErr
+	}
+	return s.run, nil
+}
+
+func (s *stubWorkflowHTTPService) ListRuns(ctx context.Context, input workflow.ListRunsInput) ([]workflow.WorkflowRun, error) {
+	s.gotListRuns = input
+	if s.err != nil {
+		return nil, s.err
+	}
+	return s.runs, nil
+}
+
+func (s *stubWorkflowHTTPService) RecordStep(ctx context.Context, input workflow.RecordStepInput) (workflow.WorkflowStepRecord, error) {
+	s.gotRecordStep = input
+	if s.err != nil {
+		return workflow.WorkflowStepRecord{}, s.err
+	}
+	if !input.Kind.Valid() {
+		return workflow.WorkflowStepRecord{}, errors.New("workflow step kind is invalid")
+	}
+	for _, link := range input.EvidenceLinks {
+		if !link.Kind.Valid() || !link.Source.Valid() {
+			return workflow.WorkflowStepRecord{}, errors.New("workflow evidence link is invalid")
+		}
+	}
+	if s.step.ID != "" {
+		return s.step, nil
+	}
+	return workflow.WorkflowStepRecord{ID: "workflow_step_1", RunID: input.RunID, Scope: input.Scope, Kind: input.Kind, Status: workflow.StepStatusSatisfied, Result: workflow.StepResultRecorded, Actor: input.Actor, Reason: input.Reason, ObservedAt: input.ObservedAt, CreatedAt: input.ObservedAt}, nil
+}
+
+func (s *stubWorkflowHTTPService) ListStepRecords(ctx context.Context, input workflow.ListStepRecordsInput) ([]workflow.WorkflowStepRecord, error) {
+	s.gotListSteps = input
+	if s.err != nil {
+		return nil, s.err
+	}
+	return s.steps, nil
+}
+
+func (s *stubWorkflowHTTPService) ListEvidenceLinks(ctx context.Context, input workflow.ListEvidenceLinksInput) ([]workflow.EvidenceLink, error) {
+	s.gotListEvidence = input
+	if s.err != nil {
+		return nil, s.err
+	}
+	return s.evidence, nil
+}
+
+func (s *stubWorkflowHTTPService) ListDiagnostics(ctx context.Context, input workflow.ListDiagnosticsInput) ([]workflow.GapDiagnostic, error) {
+	s.gotListDiagnostics = input
+	if s.err != nil {
+		return nil, s.err
+	}
+	return s.diagnostics, nil
+}
+
+func (s *stubWorkflowHTTPService) ListNextActions(ctx context.Context, input workflow.ListNextActionsInput) ([]workflow.NextAction, error) {
+	s.gotListNextActions = input
+	if s.err != nil {
+		return nil, s.err
+	}
+	return s.nextActions, nil
+}
+
+func (s *stubWorkflowHTTPService) SupersedeEvidenceLink(ctx context.Context, input workflow.SupersedeEvidenceLinkInput) error {
+	s.gotSupersede = input
+	return s.err
+}
+
+func validateHTTPWorkflowTemplateInput(steps []workflow.TemplateStep) error {
+	if len(steps) == 0 {
+		return errors.New("workflow template steps are required")
+	}
+	for _, step := range steps {
+		if !step.Kind.Valid() || !step.Requirement.Valid() {
+			return errors.New("workflow template step is invalid")
+		}
+		for _, kind := range step.AllowedEvidence {
+			if !kind.Valid() {
+				return errors.New("workflow evidence kind is invalid")
+			}
+		}
+	}
+	return nil
+}
+
+func testWorkflowTemplate(scope memory.Scope, now time.Time) workflow.WorkflowTemplate {
+	return workflow.WorkflowTemplate{
+		ID:               "workflow_template_1",
+		Scope:            scope,
+		Status:           workflow.TemplateStatusActive,
+		IntegrationKind:  workflow.IntegrationKindAgentTurn,
+		CompletionPolicy: workflow.CompletionPolicyStrict,
+		Actor:            "operator-a",
+		Reason:           "define product loop",
+		CreatedAt:        now,
+		UpdatedAt:        now,
+		Steps: []workflow.TemplateStep{{
+			ID:               "workflow_template_step_1",
+			TemplateID:       "workflow_template_1",
+			Scope:            scope,
+			Kind:             workflow.StepKindSessionStarted,
+			Requirement:      workflow.StepRequirementRequired,
+			AllowedEvidence:  []workflow.EvidenceKind{workflow.EvidenceKindSession},
+			MinimumCount:     1,
+			RequiresInternal: true,
+			FreshnessWindow:  24 * time.Hour,
+			CompletionWindow: time.Hour,
+			Position:         1,
+			CreatedAt:        now,
+		}},
 	}
 }
 

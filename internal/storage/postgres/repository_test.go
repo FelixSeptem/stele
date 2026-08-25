@@ -1180,9 +1180,9 @@ func TestRepositoryBeginJobExecutionSkipsCompletedIdempotencyKey(t *testing.T) {
 			execution.StartedAt,
 		).
 		WillReturnError(&pgconn.PgError{Code: "23505"})
-	mock.ExpectQuery("SELECT status FROM job_executions WHERE idempotency_key = \\$1").
+	mock.ExpectQuery("SELECT status, started_at FROM job_executions WHERE idempotency_key = \\$1").
 		WithArgs(execution.IdempotencyKey).
-		WillReturnRows(pgxmock.NewRows([]string{"status"}).AddRow(string(jobs.JobExecutionStatusCompleted)))
+		WillReturnRows(pgxmock.NewRows([]string{"status", "started_at"}).AddRow(string(jobs.JobExecutionStatusCompleted), execution.StartedAt))
 
 	repo := NewRepository(mock)
 	started, err := repo.BeginJobExecution(context.Background(), execution)

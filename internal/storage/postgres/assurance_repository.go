@@ -707,6 +707,28 @@ FROM ranking_rollout_dry_runs
 WHERE tenant = $1 AND project = $2 AND namespace = $3
 `
 		return scanConformanceEvidenceObservation(kind, r.db.QueryRow(ctx, query, scope.Tenant, scope.Project, scope.Namespace))
+	case assurance.ExpectedEvidenceWorkflow:
+		const query = `
+SELECT
+	COUNT(DISTINCT wr.id) FILTER (WHERE wr.status = 'completed')::bigint,
+	GREATEST(MAX(wr.updated_at), MAX(wsr.observed_at), MAX(wgd.created_at)),
+	false,
+	COALESCE(bool_or(wgd.status = 'open' AND wgd.readiness_impact IN ('degraded', 'blocked')), false),
+	COALESCE(bool_or(wgd.category = 'hidden'), false)
+FROM integration_workflow_runs wr
+LEFT JOIN integration_workflow_step_records wsr
+	ON wsr.run_id = wr.id
+	AND wsr.tenant = wr.tenant
+	AND wsr.project = wr.project
+	AND wsr.namespace = wr.namespace
+LEFT JOIN integration_workflow_gap_diagnostics wgd
+	ON wgd.run_id = wr.id
+	AND wgd.tenant = wr.tenant
+	AND wgd.project = wr.project
+	AND wgd.namespace = wr.namespace
+WHERE wr.tenant = $1 AND wr.project = $2 AND wr.namespace = $3
+`
+		return scanConformanceEvidenceObservation(kind, r.db.QueryRow(ctx, query, scope.Tenant, scope.Project, scope.Namespace))
 	default:
 		return assurance.ConformanceEvidenceObservation{Kind: kind, OutOfScope: true}, nil
 	}

@@ -17,6 +17,27 @@ func TestSpecYAMLContainsBaselineEndpoints(t *testing.T) {
 	}
 }
 
+func TestEventIngestContractRequiresIdempotencyAndDocumentsReplay(t *testing.T) {
+	loader := openapi3.NewLoader()
+	doc, err := loader.LoadFromData([]byte(SpecYAML()))
+	if err != nil {
+		t.Fatalf("LoadFromData() error = %v", err)
+	}
+	operation := doc.Paths.Value("/v1/events").Post
+	if operation == nil {
+		t.Fatal("POST /v1/events is missing")
+	}
+	foundKey := false
+	for _, parameter := range operation.Parameters {
+		if parameter.Value != nil && parameter.Value.Name == "Idempotency-Key" && parameter.Value.Required {
+			foundKey = true
+		}
+	}
+	if !foundKey || operation.Responses.Value("200") == nil || operation.Responses.Value("409") == nil || !strings.Contains(SpecYAML(), "replayed") {
+		t.Fatal("event ingest contract does not declare required idempotency replay and conflict behavior")
+	}
+}
+
 func TestSpecYAMLIncludesMemoryManagementRoutes(t *testing.T) {
 	for _, want := range []string{
 		"/v1/memories",
@@ -248,6 +269,104 @@ func TestSpecYAMLIncludesScopeProofAndMemorySessionRoutesAndSchemas(t *testing.T
 		if !strings.Contains(SpecYAML(), want) {
 			t.Fatalf("SpecYAML() missing %q", want)
 		}
+	}
+}
+
+func TestSpecYAMLIncludesIntegrationWorkflowContract(t *testing.T) {
+	for _, want := range []string{
+		"/v1/workflows/runs",
+		"/v1/workflows/runs/{workflow_run_id}",
+		"/v1/workflows/runs/{workflow_run_id}/steps",
+		"/v1/workflows/runs/{workflow_run_id}/next-actions",
+		"/v1/admin/workflows/templates",
+		"/v1/admin/workflows/templates/{workflow_template_id}",
+		"/v1/admin/workflows/templates/{workflow_template_id}/disable",
+		"/v1/admin/workflows/runs",
+		"/v1/admin/workflows/runs/{workflow_run_id}",
+		"/v1/admin/workflows/runs/{workflow_run_id}/steps",
+		"/v1/admin/workflows/runs/{workflow_run_id}/evidence-links",
+		"/v1/admin/workflows/runs/{workflow_run_id}/diagnostics",
+		"/v1/admin/workflows/runs/{workflow_run_id}/next-actions",
+		"/v1/admin/workflows/evidence-links/{evidence_link_id}/supersede",
+		"WorkflowTemplate",
+		"WorkflowRun",
+		"WorkflowStepRecord",
+		"WorkflowEvidenceLink",
+		"WorkflowGapDiagnostic",
+		"WorkflowNextAction",
+		"WorkflowTemplateCreateRequest",
+		"WorkflowRunCreateRequest",
+		"WorkflowStepRecordRequest",
+		"WorkflowEvidenceLinkSupersedeRequest",
+		"session_started",
+		"turn_outcome_recorded",
+		"task_evaluation_recorded",
+		"subject_missing",
+		"insufficient_evidence",
+		"PublicAPIKey",
+		"AdminAPIKey",
+		"TenantHeader",
+		"ProjectHeader",
+		"NamespaceHeader",
+		"workflow_gap",
+		"workflow_incomplete",
+		"review_workflow",
+	} {
+		if !strings.Contains(SpecYAML(), want) {
+			t.Fatalf("SpecYAML() missing workflow contract element %q", want)
+		}
+	}
+}
+
+func TestSpecYAMLWorkflowOperationsRequireScopedCorrectAuth(t *testing.T) {
+	loader := openapi3.NewLoader()
+	doc, err := loader.LoadFromData([]byte(SpecYAML()))
+	if err != nil {
+		t.Fatalf("LoadFromData() error = %v", err)
+	}
+
+	publicPaths := []string{
+		"/v1/workflows/runs",
+		"/v1/workflows/runs/{workflow_run_id}",
+		"/v1/workflows/runs/{workflow_run_id}/steps",
+		"/v1/workflows/runs/{workflow_run_id}/next-actions",
+	}
+	adminPaths := []string{
+		"/v1/admin/workflows/templates",
+		"/v1/admin/workflows/templates/{workflow_template_id}",
+		"/v1/admin/workflows/templates/{workflow_template_id}/disable",
+		"/v1/admin/workflows/runs",
+		"/v1/admin/workflows/runs/{workflow_run_id}",
+		"/v1/admin/workflows/runs/{workflow_run_id}/steps",
+		"/v1/admin/workflows/runs/{workflow_run_id}/evidence-links",
+		"/v1/admin/workflows/runs/{workflow_run_id}/diagnostics",
+		"/v1/admin/workflows/runs/{workflow_run_id}/next-actions",
+		"/v1/admin/workflows/evidence-links/{evidence_link_id}/supersede",
+	}
+
+	assertWorkflowPathAuth := func(path, authRef string) {
+		t.Helper()
+		item := doc.Paths.Value(path)
+		if item == nil {
+			t.Fatalf("OpenAPI path %q missing", path)
+		}
+		for method, operation := range item.Operations() {
+			refs := map[string]bool{}
+			for _, param := range operation.Parameters {
+				refs[param.Ref] = true
+			}
+			for _, ref := range []string{authRef, "#/components/parameters/TenantHeader", "#/components/parameters/ProjectHeader", "#/components/parameters/NamespaceHeader"} {
+				if !refs[ref] {
+					t.Fatalf("%s %s missing parameter ref %s", method, path, ref)
+				}
+			}
+		}
+	}
+	for _, path := range publicPaths {
+		assertWorkflowPathAuth(path, "#/components/parameters/PublicAPIKey")
+	}
+	for _, path := range adminPaths {
+		assertWorkflowPathAuth(path, "#/components/parameters/AdminAPIKey")
 	}
 }
 

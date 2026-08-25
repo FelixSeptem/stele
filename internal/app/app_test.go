@@ -685,6 +685,53 @@ func TestBuildSchedulerRuntimeAssemblesMaintenanceScheduler(t *testing.T) {
 	}
 }
 
+func TestBuildSchedulerRuntimeAddsWorkflowMaintenanceOnlyWhenEnabled(t *testing.T) {
+	newRuntime := func(enabled bool) jobs.MaintenanceScheduler {
+		t.Helper()
+		mock, err := pgxmock.NewPool()
+		if err != nil {
+			t.Fatalf("pgxmock.NewPool() error = %v", err)
+		}
+		t.Cleanup(func() { mock.Close() })
+		cfg := config.Config{
+			Mode:        config.ModeScheduler,
+			PostgresDSN: "postgres://runtime",
+			Auth: config.AuthConfig{DefaultTenant: "tenant-a", DefaultProject: "project-a", DefaultNamespace: "namespace-a"},
+			Jobs: config.JobConfig{MaintenanceInterval: time.Minute, SchedulerErrorBackoff: time.Minute, WorkflowMaintenanceEnabled: enabled, WorkflowDiagnosticCadence: 2 * time.Minute, WorkflowDiagnosticScanLimit: 10, WorkflowHistoryRetention: 24 * time.Hour},
+		}
+		runtime, err := buildSchedulerRuntime(context.Background(), cfg, schedulerRuntimeDependencies{
+			openPool: func(ctx context.Context, dsn string) (postgresRuntimeStore, error) { return mock, nil },
+			bootstrapDatabase: func(ctx context.Context, db postgresRuntimeStore) error { return nil },
+			now:               func() time.Time { return time.Date(2026, 7, 18, 19, 0, 0, 0, time.UTC) },
+		})
+		if err != nil {
+			t.Fatalf("buildSchedulerRuntime() error = %v", err)
+		}
+		scheduler, ok := runtime.scheduler.(jobs.MaintenanceScheduler)
+		if !ok {
+			t.Fatalf("runtime scheduler type = %T, want jobs.MaintenanceScheduler", runtime.scheduler)
+		}
+		return scheduler
+	}
+
+	disabled := newRuntime(false)
+	for _, job := range disabled.Jobs {
+		if job.Name() == "workflow_diagnostics_dispatch" || job.Name() == "workflow_retention_dispatch" {
+			t.Fatalf("disabled scheduler jobs = %+v, must not include workflow maintenance", disabled.Jobs)
+		}
+	}
+	enabled := newRuntime(true)
+	found := map[string]bool{}
+	for _, job := range enabled.Jobs {
+		found[job.Name()] = true
+	}
+	for _, name := range []string{"workflow_diagnostics_dispatch", "workflow_retention_dispatch"} {
+		if !found[name] {
+			t.Fatalf("enabled scheduler jobs missing %q: %+v", name, enabled.Jobs)
+		}
+	}
+}
+
 func TestBuildSchedulerRuntimeAssemblesScopeDispatchJobs(t *testing.T) {
 	mock, err := pgxmock.NewPool()
 	if err != nil {

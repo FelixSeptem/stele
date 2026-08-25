@@ -20,6 +20,7 @@ import (
 	"github.com/FelixSeptem/stele/internal/policy"
 	"github.com/FelixSeptem/stele/internal/retrieval"
 	"github.com/FelixSeptem/stele/internal/telemetry"
+	"github.com/FelixSeptem/stele/internal/workflow"
 	"github.com/jackc/pgx/v5"
 )
 
@@ -31,6 +32,8 @@ type HTTPDependencies struct {
 	Readiness                 ReadinessChecker
 	APIKeys                   auth.StaticAPIKeys
 	AdminAPIKeys              auth.StaticAPIKeys
+	PrincipalAuthorizer       auth.PrincipalAuthorizer
+	PrincipalAdmin            PrincipalAdministrationService
 	EventIngestor             memory.EventIngestor
 	MemoryQuery               MemoryQueryService
 	MemoryLifecycleAction     MemoryLifecycleActionService
@@ -49,6 +52,7 @@ type HTTPDependencies struct {
 	TaskEvaluations           TaskEvaluationService
 	RankingRollout            RankingRolloutAdminService
 	AssuranceAdmin            AssuranceAdminService
+	Workflow                  WorkflowService
 	MemoryHistoryRead         MemoryHistoryReader
 	JobExecutionRead          JobExecutionReader
 	Metrics                   MetricsRecorder
@@ -65,6 +69,19 @@ type GovernanceStatusReader interface {
 
 type MemoryHistoryReader interface {
 	ReadMemoryHistory(ctx context.Context, scope memory.Scope, memoryID string) (memory.MemoryHistory, error)
+}
+
+type PrincipalAdministrationService interface {
+	CreatePrincipal(ctx context.Context, input auth.CreatePrincipalInput) (auth.IssuedPrincipal, error)
+	ListPrincipals(ctx context.Context, scope memory.Scope, limit int) ([]auth.Principal, error)
+	ReadPrincipal(ctx context.Context, scope memory.Scope, principalID string) (auth.Principal, error)
+	ListScopeGrants(ctx context.Context, scope memory.Scope, principalID string) ([]auth.ScopeGrant, error)
+	RotateCredential(ctx context.Context, scope memory.Scope, principalID, actor, reason string) (auth.IssuedCredential, error)
+	DisablePrincipal(ctx context.Context, scope memory.Scope, principalID, actor, reason string) error
+	ExpirePrincipal(ctx context.Context, scope memory.Scope, principalID string, expiresAt time.Time, actor, reason string) error
+	CreateScopeGrant(ctx context.Context, scope memory.Scope, principalID string, grantScope memory.Scope, actor, reason string) error
+	RevokeScopeGrant(ctx context.Context, scope memory.Scope, grantID, actor, reason string) error
+	ListAccessAudit(ctx context.Context, scope memory.Scope, principalID string, limit int) ([]auth.AuditRecord, error)
 }
 
 type MemoryQueryService interface {
@@ -145,6 +162,23 @@ type TaskEvaluationService interface {
 	ListTaskEvaluations(ctx context.Context, input memory.ListTaskEvaluationsInput) ([]memory.TaskEvaluation, error)
 	SupersedeTaskEvaluation(ctx context.Context, input memory.SupersedeTaskEvaluationInput) error
 	SummarizeTaskEvaluations(ctx context.Context, input memory.SummarizeTaskEvaluationsInput) (memory.TaskEvaluationSummary, error)
+}
+
+type WorkflowService interface {
+	CreateTemplate(ctx context.Context, input workflow.CreateTemplateInput) (workflow.WorkflowTemplate, error)
+	UpdateTemplate(ctx context.Context, input workflow.UpdateTemplateInput) (workflow.WorkflowTemplate, error)
+	DisableTemplate(ctx context.Context, input workflow.DisableTemplateInput) (workflow.WorkflowTemplate, error)
+	ReadTemplate(ctx context.Context, input workflow.ReadTemplateInput) (workflow.WorkflowTemplate, error)
+	ListTemplates(ctx context.Context, input workflow.ListTemplatesInput) ([]workflow.WorkflowTemplate, error)
+	StartRun(ctx context.Context, input workflow.StartRunInput) (workflow.WorkflowRun, error)
+	ReadRun(ctx context.Context, input workflow.ReadRunInput) (workflow.WorkflowRun, error)
+	ListRuns(ctx context.Context, input workflow.ListRunsInput) ([]workflow.WorkflowRun, error)
+	RecordStep(ctx context.Context, input workflow.RecordStepInput) (workflow.WorkflowStepRecord, error)
+	ListStepRecords(ctx context.Context, input workflow.ListStepRecordsInput) ([]workflow.WorkflowStepRecord, error)
+	ListEvidenceLinks(ctx context.Context, input workflow.ListEvidenceLinksInput) ([]workflow.EvidenceLink, error)
+	ListDiagnostics(ctx context.Context, input workflow.ListDiagnosticsInput) ([]workflow.GapDiagnostic, error)
+	ListNextActions(ctx context.Context, input workflow.ListNextActionsInput) ([]workflow.NextAction, error)
+	SupersedeEvidenceLink(ctx context.Context, input workflow.SupersedeEvidenceLinkInput) error
 }
 
 type RankingRolloutAdminService interface {
@@ -327,6 +361,87 @@ type taskEvaluationSupersedeRequest struct {
 	Reason string `json:"reason"`
 }
 
+type workflowTemplateStepRequest struct {
+	Kind             workflow.StepKind        `json:"kind"`
+	Requirement      workflow.StepRequirement `json:"requirement"`
+	AllowedEvidence  []workflow.EvidenceKind  `json:"allowed_evidence"`
+	MinimumCount     int                      `json:"minimum_count"`
+	RequiresInternal bool                     `json:"requires_internal"`
+	FreshnessWindow  string                   `json:"freshness_window"`
+	CompletionWindow string                   `json:"completion_window"`
+	Position         int                      `json:"position"`
+	Metadata         map[string]any           `json:"metadata,omitempty"`
+}
+
+type workflowTemplateCreateRequest struct {
+	Steps            []workflowTemplateStepRequest `json:"steps"`
+	IntegrationKind  workflow.IntegrationKind      `json:"integration_kind"`
+	CompletionPolicy workflow.CompletionPolicy     `json:"completion_policy"`
+	Actor            string                        `json:"actor"`
+	Reason           string                        `json:"reason"`
+	Metadata         map[string]any                `json:"metadata,omitempty"`
+}
+
+type workflowTemplateUpdateRequest struct {
+	Steps            []workflowTemplateStepRequest `json:"steps"`
+	IntegrationKind  workflow.IntegrationKind      `json:"integration_kind"`
+	CompletionPolicy workflow.CompletionPolicy     `json:"completion_policy"`
+	Actor            string                        `json:"actor"`
+	Reason           string                        `json:"reason"`
+	Metadata         map[string]any                `json:"metadata,omitempty"`
+}
+
+type workflowActorReasonRequest struct {
+	Actor  string `json:"actor"`
+	Reason string `json:"reason"`
+}
+
+type workflowRunCreateRequest struct {
+	TemplateID     string         `json:"template_id"`
+	IdempotencyKey string         `json:"idempotency_key"`
+	Actor          string         `json:"actor"`
+	Reason         string         `json:"reason"`
+	Metadata       map[string]any `json:"metadata,omitempty"`
+	ExpiresAt      string         `json:"expires_at,omitempty"`
+}
+
+type workflowStepRecordRequest struct {
+	Kind          workflow.StepKind       `json:"kind"`
+	Actor         string                  `json:"actor"`
+	Reason        string                  `json:"reason"`
+	ObservedAt    string                  `json:"observed_at,omitempty"`
+	Metadata      map[string]any          `json:"metadata,omitempty"`
+	EvidenceLinks []workflow.EvidenceLink `json:"evidence_links,omitempty"`
+}
+
+type publicWorkflowNextAction struct {
+	Category      workflow.NextActionCategory `json:"category"`
+	StepKind      workflow.StepKind           `json:"step_kind"`
+	EvidenceKind  workflow.EvidenceKind       `json:"evidence_kind"`
+	RouteCategory workflow.RouteCategory      `json:"route_category"`
+	Status        workflow.NextActionStatus   `json:"status"`
+}
+
+// Public workflow responses deliberately exclude scope, attribution, metadata, and source ids.
+type publicWorkflowRun struct {
+	ID              string                   `json:"id,omitempty"`
+	Status          workflow.RunStatus       `json:"status"`
+	IntegrationKind workflow.IntegrationKind `json:"integration_kind"`
+	CreatedAt       time.Time                `json:"created_at"`
+	UpdatedAt       time.Time                `json:"updated_at"`
+	StartedAt       time.Time                `json:"started_at"`
+	CompletedAt     time.Time                `json:"completed_at,omitempty"`
+	ExpiresAt       time.Time                `json:"expires_at,omitempty"`
+}
+
+type publicWorkflowStepRecord struct {
+	Kind       workflow.StepKind   `json:"kind"`
+	Status     workflow.StepStatus `json:"status"`
+	Result     workflow.StepResult `json:"result"`
+	ObservedAt time.Time           `json:"observed_at"`
+	CreatedAt  time.Time           `json:"created_at"`
+}
+
 type rankingRolloutPolicyCreateRequest struct {
 	ID              string                               `json:"id"`
 	Status          memory.RankingRolloutPolicyStatus    `json:"status"`
@@ -356,6 +471,7 @@ type assuranceHealthEvaluationCreateRequest struct {
 	RepairStatus          assurance.HealthObservation `json:"repair_status,omitempty"`
 	RankingRolloutState   assurance.HealthObservation `json:"ranking_rollout_state,omitempty"`
 	ConformanceStatus     assurance.HealthObservation `json:"conformance_status,omitempty"`
+	WorkflowHealth        assurance.HealthObservation `json:"workflow_health,omitempty"`
 	CapacityLoadProof     assurance.HealthObservation `json:"capacity_load_proof,omitempty"`
 	BackupRestoreProof    assurance.HealthObservation `json:"backup_restore_proof,omitempty"`
 }
@@ -472,6 +588,27 @@ type eventIngestRequest struct {
 type eventIngestResponse struct {
 	EventID   string                          `json:"event_id"`
 	Admission *memory.AdmissionPressureReport `json:"admission,omitempty"`
+	Replayed  bool                            `json:"replayed"`
+}
+
+type principalCreateRequest struct {
+	Role   auth.PrincipalRole `json:"role"`
+	Label  string             `json:"label"`
+	Actor  string             `json:"actor"`
+	Reason string             `json:"reason"`
+}
+
+type principalGrantRequest struct {
+	Tenant    string `json:"tenant"`
+	Project   string `json:"project"`
+	Namespace string `json:"namespace"`
+	Actor     string `json:"actor"`
+	Reason    string `json:"reason"`
+}
+
+type principalLifecycleRequest struct {
+	Actor  string `json:"actor"`
+	Reason string `json:"reason"`
 }
 
 type memorySearchRequest struct {
@@ -535,7 +672,6 @@ func NewHTTPHandler(deps HTTPDependencies) http.Handler {
 		}
 		_, _ = w.Write([]byte("# HELP stele_runtime_info Stele runtime information\n# TYPE stele_runtime_info gauge\nstele_runtime_info 1\n"))
 	})
-
 	protectedEvents := auth.APIKeyMiddleware(deps.APIKeys)(
 		auth.ScopeMiddleware()(
 			http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -680,6 +816,43 @@ func NewHTTPHandler(deps HTTPDependencies) http.Handler {
 		),
 	)
 	mux.Handle("GET /v1/task-evaluations/{evaluation_id}/report", protectedTaskEvaluationReport)
+
+	protectedWorkflows := auth.APIKeyMiddleware(deps.APIKeys)(
+		auth.ScopeMiddleware()(
+			http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				handleWorkflows(w, r, deps.Workflow)
+			}),
+		),
+	)
+	mux.Handle("POST /v1/workflows/runs", protectedWorkflows)
+	mux.Handle("GET /v1/workflows/runs/{workflow_run_id}", protectedWorkflows)
+	mux.Handle("POST /v1/workflows/runs/{workflow_run_id}/steps", protectedWorkflows)
+	mux.Handle("GET /v1/workflows/runs/{workflow_run_id}/next-actions", protectedWorkflows)
+
+	adminPrincipals := auth.APIKeyMiddleware(deps.AdminAPIKeys)(
+		auth.ScopeMiddleware()(
+			http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				handleAdminPrincipals(w, r, deps.PrincipalAdmin)
+			}),
+		),
+	)
+	mux.Handle("POST /v1/admin/principals", adminPrincipals)
+	mux.Handle("GET /v1/admin/principals", adminPrincipals)
+	mux.Handle("GET /v1/admin/principals/{principal_id}", adminPrincipals)
+	mux.Handle("POST /v1/admin/principals/{principal_id}/credentials/rotate", adminPrincipals)
+	mux.Handle("POST /v1/admin/principals/{principal_id}/disable", adminPrincipals)
+	mux.Handle("POST /v1/admin/principals/{principal_id}/expire", adminPrincipals)
+	mux.Handle("GET /v1/admin/principals/{principal_id}/grants", adminPrincipals)
+	mux.Handle("POST /v1/admin/principals/{principal_id}/grants", adminPrincipals)
+	mux.Handle("POST /v1/admin/principals/{principal_id}/grants/{grant_id}/revoke", adminPrincipals)
+
+	adminAccessAudit := auth.APIKeyMiddleware(deps.AdminAPIKeys)(
+		auth.ScopeMiddleware()(
+			http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				handleAdminAccessAudit(w, r, deps.PrincipalAdmin)
+			}),
+		))
+	mux.Handle("GET /v1/admin/access-audit", adminAccessAudit)
 
 	adminGovernance := auth.APIKeyMiddleware(deps.AdminAPIKeys)(
 		http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -826,6 +999,26 @@ func NewHTTPHandler(deps HTTPDependencies) http.Handler {
 	mux.Handle("GET /v1/admin/task-evaluations/{evaluation_id}", adminTaskEvaluations)
 	mux.Handle("GET /v1/admin/task-evaluations/summary", adminTaskEvaluations)
 	mux.Handle("POST /v1/admin/task-evaluations/{evaluation_id}/supersede", adminTaskEvaluations)
+
+	adminWorkflows := auth.APIKeyMiddleware(deps.AdminAPIKeys)(
+		auth.ScopeMiddleware()(
+			http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				handleAdminWorkflows(w, r, deps.Workflow)
+			}),
+		),
+	)
+	mux.Handle("GET /v1/admin/workflows/templates", adminWorkflows)
+	mux.Handle("POST /v1/admin/workflows/templates", adminWorkflows)
+	mux.Handle("GET /v1/admin/workflows/templates/{workflow_template_id}", adminWorkflows)
+	mux.Handle("PATCH /v1/admin/workflows/templates/{workflow_template_id}", adminWorkflows)
+	mux.Handle("POST /v1/admin/workflows/templates/{workflow_template_id}/disable", adminWorkflows)
+	mux.Handle("GET /v1/admin/workflows/runs", adminWorkflows)
+	mux.Handle("GET /v1/admin/workflows/runs/{workflow_run_id}", adminWorkflows)
+	mux.Handle("GET /v1/admin/workflows/runs/{workflow_run_id}/steps", adminWorkflows)
+	mux.Handle("GET /v1/admin/workflows/runs/{workflow_run_id}/evidence-links", adminWorkflows)
+	mux.Handle("GET /v1/admin/workflows/runs/{workflow_run_id}/diagnostics", adminWorkflows)
+	mux.Handle("GET /v1/admin/workflows/runs/{workflow_run_id}/next-actions", adminWorkflows)
+	mux.Handle("POST /v1/admin/workflows/evidence-links/{evidence_link_id}/supersede", adminWorkflows)
 
 	adminRankingRollouts := auth.APIKeyMiddleware(deps.AdminAPIKeys)(
 		auth.ScopeMiddleware()(
@@ -1112,7 +1305,29 @@ func NewHTTPHandler(deps HTTPDependencies) http.Handler {
 	)
 	mux.Handle("POST /v1/admin/memories/{memory_action}", adminMemoryAction)
 
-	return requestMiddleware(mux, deps.Logger)
+	handler := http.Handler(mux)
+	if deps.PrincipalAuthorizer != nil {
+		var observer telemetry.Observer
+		if candidate, ok := deps.Metrics.(telemetry.Observer); ok {
+			observer = candidate
+		}
+		handler = principalProtectedRoutes(handler, deps.PrincipalAuthorizer, observer)
+	}
+	return requestMiddleware(handler, deps.Logger)
+}
+
+func principalProtectedRoutes(next http.Handler, authorizer auth.PrincipalAuthorizer, observer telemetry.Observer) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if !strings.HasPrefix(r.URL.Path, "/v1/") {
+			next.ServeHTTP(w, r)
+			return
+		}
+		requiredRole := auth.PrincipalRolePublic
+		if strings.HasPrefix(r.URL.Path, "/v1/admin/") {
+			requiredRole = auth.PrincipalRoleAdmin
+		}
+		auth.PrincipalMiddlewareWithObserver(authorizer, requiredRole, observer)(next).ServeHTTP(w, r)
+	})
 }
 
 func NewHTTPServer(addr string, deps HTTPDependencies) *http.Server {
@@ -1210,6 +1425,42 @@ func handleEventIngest(w http.ResponseWriter, r *http.Request, ingestor memory.E
 		http.Error(w, err.Error(), http.StatusBadRequest)
 		return
 	}
+	principal, principalAuthorized := auth.PrincipalFromContext(r.Context())
+	if principalAuthorized {
+		idempotencyKey := strings.TrimSpace(r.Header.Get("Idempotency-Key"))
+		if err := auth.ValidateIdempotencyKey(idempotencyKey); err != nil {
+			http.Error(w, "invalid idempotency key", http.StatusBadRequest)
+			return
+		}
+		idempotentIngestor, ok := ingestor.(memory.IdempotentEventIngestor)
+		if !ok {
+			http.Error(w, "idempotent event ingestor is not configured", http.StatusServiceUnavailable)
+			return
+		}
+		result, err := idempotentIngestor.IngestIdempotent(r.Context(), input, principal.ID, idempotencyKey)
+		if err != nil {
+			status := http.StatusInternalServerError
+			switch {
+			case errors.Is(err, memory.ErrAdmissionRejected):
+				status = http.StatusUnprocessableEntity
+			case errors.Is(err, memory.ErrIdempotencyConflict):
+				status = http.StatusConflict
+			case errors.Is(err, memory.ErrIdempotencyInProgress):
+				status = http.StatusConflict
+				w.Header().Set("Retry-After", "1")
+			case errors.Is(err, context.Canceled), errors.Is(err, context.DeadlineExceeded):
+				status = http.StatusGatewayTimeout
+			}
+			http.Error(w, "failed to ingest event", status)
+			return
+		}
+		status := http.StatusCreated
+		if result.Replayed {
+			status = http.StatusOK
+		}
+		writeJSON(w, status, eventIngestResponse{EventID: result.Event.ID, Admission: result.Event.Admission, Replayed: result.Replayed})
+		return
+	}
 
 	event, err := ingestor.Ingest(r.Context(), input)
 	if err != nil {
@@ -1225,6 +1476,229 @@ func handleEventIngest(w http.ResponseWriter, r *http.Request, ingestor memory.E
 	}
 
 	writeJSON(w, http.StatusCreated, eventIngestResponse{EventID: event.ID, Admission: event.Admission})
+}
+
+func handleAdminPrincipalCreate(w http.ResponseWriter, r *http.Request, service PrincipalAdministrationService) {
+	if service == nil {
+		http.Error(w, "principal administration service is not configured", http.StatusServiceUnavailable)
+		return
+	}
+
+	var request principalCreateRequest
+	if !decodeJSONBody(w, r, &request) {
+		return
+	}
+
+	scope, ok := auth.ScopeFromContext(r.Context())
+	if !ok {
+		http.Error(w, "scope context is missing", http.StatusInternalServerError)
+		return
+	}
+
+	issued, err := service.CreatePrincipal(r.Context(), auth.CreatePrincipalInput{
+		Role:   request.Role,
+		Label:  request.Label,
+		Grants: []memory.Scope{scope},
+		Actor:  request.Actor,
+		Reason: request.Reason,
+	})
+	if err != nil {
+		if strings.Contains(err.Error(), "required") || strings.Contains(err.Error(), "invalid") || strings.Contains(err.Error(), "at most") {
+			http.Error(w, err.Error(), http.StatusBadRequest)
+			return
+		}
+		http.Error(w, "failed to create principal", http.StatusInternalServerError)
+		return
+	}
+
+	writeJSON(w, http.StatusCreated, issued)
+}
+
+func handleAdminPrincipals(w http.ResponseWriter, r *http.Request, service PrincipalAdministrationService) {
+	if service == nil {
+		http.Error(w, "principal administration service is not configured", http.StatusServiceUnavailable)
+		return
+	}
+	scope, ok := auth.ScopeFromContext(r.Context())
+	if !ok {
+		http.Error(w, "scope context is missing", http.StatusInternalServerError)
+		return
+	}
+	principalID := r.PathValue("principal_id")
+	if principalID == "" && r.Method == http.MethodPost {
+		handleAdminPrincipalCreate(w, r, service)
+		return
+	}
+	if principalID == "" && r.Method == http.MethodGet {
+		principals, err := service.ListPrincipals(r.Context(), scope, queryLimit(r, 20))
+		if err != nil {
+			http.Error(w, "failed to list principals", http.StatusInternalServerError)
+			return
+		}
+		writeJSON(w, http.StatusOK, map[string]any{"principals": principals})
+		return
+	}
+	if r.Method == http.MethodGet && strings.HasSuffix(r.URL.Path, "/grants") {
+		grants, err := service.ListScopeGrants(r.Context(), scope, principalID)
+		if err != nil {
+			http.Error(w, "failed to list scope grants", http.StatusInternalServerError)
+			return
+		}
+		writeJSON(w, http.StatusOK, map[string]any{"grants": grants})
+		return
+	}
+	if r.Method == http.MethodGet {
+		principal, err := service.ReadPrincipal(r.Context(), scope, principalID)
+		if err != nil {
+			http.Error(w, "principal not found", http.StatusNotFound)
+			return
+		}
+		writeJSON(w, http.StatusOK, principal)
+		return
+	}
+	if r.Method != http.MethodPost {
+		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+	switch {
+	case strings.HasSuffix(r.URL.Path, "/credentials/rotate") || strings.HasSuffix(r.URL.Path, "/credentials:rotate"):
+		handleAdminCredentialRotate(w, r, service)
+	case strings.HasSuffix(r.URL.Path, "/disable"):
+		handleAdminPrincipalDisable(w, r, service)
+	case strings.HasSuffix(r.URL.Path, "/expire"):
+		handleAdminPrincipalExpire(w, r, service)
+	case strings.HasSuffix(r.URL.Path, "/grants"):
+		handleAdminGrantCreate(w, r, service)
+	case strings.HasSuffix(r.URL.Path, "/revoke"):
+		handleAdminGrantRevoke(w, r, service)
+	default:
+		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+	}
+}
+
+func handleAdminCredentialRotate(w http.ResponseWriter, r *http.Request, service PrincipalAdministrationService) {
+	var request principalLifecycleRequest
+	if !decodeJSONBody(w, r, &request) {
+		return
+	}
+	scope, ok := auth.ScopeFromContext(r.Context())
+	if !ok {
+		http.Error(w, "scope context is missing", http.StatusInternalServerError)
+		return
+	}
+	issued, err := service.RotateCredential(r.Context(), scope, r.PathValue("principal_id"), request.Actor, request.Reason)
+	if err != nil {
+		http.Error(w, "failed to rotate credential", http.StatusInternalServerError)
+		return
+	}
+	writeJSON(w, http.StatusOK, issued)
+}
+
+func handleAdminPrincipalDisable(w http.ResponseWriter, r *http.Request, service PrincipalAdministrationService) {
+	var request principalLifecycleRequest
+	if !decodeJSONBody(w, r, &request) {
+		return
+	}
+	scope, ok := auth.ScopeFromContext(r.Context())
+	if !ok {
+		http.Error(w, "scope context is missing", http.StatusInternalServerError)
+		return
+	}
+	if err := service.DisablePrincipal(r.Context(), scope, r.PathValue("principal_id"), request.Actor, request.Reason); err != nil {
+		http.Error(w, "failed to disable principal", http.StatusInternalServerError)
+		return
+	}
+	w.WriteHeader(http.StatusNoContent)
+}
+
+func handleAdminPrincipalExpire(w http.ResponseWriter, r *http.Request, service PrincipalAdministrationService) {
+	var request struct {
+		ExpiresAt string `json:"expires_at"`
+		Actor     string `json:"actor"`
+		Reason    string `json:"reason"`
+	}
+	if !decodeJSONBody(w, r, &request) {
+		return
+	}
+	expiresAt, err := time.Parse(time.RFC3339, strings.TrimSpace(request.ExpiresAt))
+	if err != nil {
+		http.Error(w, "invalid expires_at", http.StatusBadRequest)
+		return
+	}
+	scope, ok := auth.ScopeFromContext(r.Context())
+	if !ok {
+		http.Error(w, "scope context is missing", http.StatusInternalServerError)
+		return
+	}
+	if err := service.ExpirePrincipal(r.Context(), scope, r.PathValue("principal_id"), expiresAt, request.Actor, request.Reason); err != nil {
+		http.Error(w, "failed to expire principal", http.StatusBadRequest)
+		return
+	}
+	w.WriteHeader(http.StatusNoContent)
+}
+
+func handleAdminGrantCreate(w http.ResponseWriter, r *http.Request, service PrincipalAdministrationService) {
+	var request principalGrantRequest
+	if !decodeJSONBody(w, r, &request) {
+		return
+	}
+	scope, ok := auth.ScopeFromContext(r.Context())
+	if !ok {
+		http.Error(w, "scope context is missing", http.StatusInternalServerError)
+		return
+	}
+	grantScope := memory.Scope{Tenant: request.Tenant, Project: request.Project, Namespace: request.Namespace}
+	if err := service.CreateScopeGrant(r.Context(), scope, r.PathValue("principal_id"), grantScope, request.Actor, request.Reason); err != nil {
+		http.Error(w, "failed to create scope grant", http.StatusBadRequest)
+		return
+	}
+	w.WriteHeader(http.StatusCreated)
+}
+
+func handleAdminGrantRevoke(w http.ResponseWriter, r *http.Request, service PrincipalAdministrationService) {
+	var request principalLifecycleRequest
+	if !decodeJSONBody(w, r, &request) {
+		return
+	}
+	scope, ok := auth.ScopeFromContext(r.Context())
+	if !ok {
+		http.Error(w, "scope context is missing", http.StatusInternalServerError)
+		return
+	}
+	if err := service.RevokeScopeGrant(r.Context(), scope, r.PathValue("grant_id"), request.Actor, request.Reason); err != nil {
+		http.Error(w, "failed to revoke scope grant", http.StatusInternalServerError)
+		return
+	}
+	w.WriteHeader(http.StatusNoContent)
+}
+
+func handleAdminAccessAudit(w http.ResponseWriter, r *http.Request, service PrincipalAdministrationService) {
+	if service == nil {
+		http.Error(w, "principal administration service is not configured", http.StatusServiceUnavailable)
+		return
+	}
+	scope, ok := auth.ScopeFromContext(r.Context())
+	if !ok {
+		http.Error(w, "scope context is missing", http.StatusInternalServerError)
+		return
+	}
+	records, err := service.ListAccessAudit(r.Context(), scope, strings.TrimSpace(r.URL.Query().Get("principal_id")), queryLimit(r, 20))
+	if err != nil {
+		http.Error(w, "failed to list access audit", http.StatusInternalServerError)
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"audit": records})
+}
+
+func queryLimit(r *http.Request, fallback int) int {
+	parsed, err := strconv.Atoi(strings.TrimSpace(r.URL.Query().Get("limit")))
+	if err != nil || parsed <= 0 {
+		return fallback
+	}
+	if parsed > 100 {
+		return 100
+	}
+	return parsed
 }
 
 func handleMemoryList(w http.ResponseWriter, r *http.Request, reader MemoryQueryService) {
@@ -1772,6 +2246,408 @@ func handleTaskEvaluationReport(w http.ResponseWriter, r *http.Request, service 
 	writeJSON(w, http.StatusOK, memory.BuildTaskEvaluationReport(evaluation, summary))
 }
 
+func handleWorkflows(w http.ResponseWriter, r *http.Request, service WorkflowService) {
+	if service == nil {
+		http.Error(w, "workflow service is not configured", http.StatusServiceUnavailable)
+		return
+	}
+	scope, ok := auth.ScopeFromContext(r.Context())
+	if !ok {
+		http.Error(w, "scope context is missing", http.StatusInternalServerError)
+		return
+	}
+	switch {
+	case r.URL.Path == "/v1/workflows/runs" && r.Method == http.MethodPost:
+		handleWorkflowRunCreate(w, r, service, scope)
+	case strings.HasSuffix(r.URL.Path, "/steps") && r.Method == http.MethodPost:
+		handleWorkflowStepRecord(w, r, service, scope)
+	case strings.HasSuffix(r.URL.Path, "/next-actions") && r.Method == http.MethodGet:
+		handleWorkflowNextActionList(w, r, service, scope, true)
+	case strings.TrimSpace(r.PathValue("workflow_run_id")) != "" && r.Method == http.MethodGet:
+		run, err := service.ReadRun(r.Context(), workflow.ReadRunInput{
+			Scope: scope,
+			RunID: strings.TrimSpace(r.PathValue("workflow_run_id")),
+		})
+		if err != nil {
+			writeWorkflowError(w, err, "failed to read workflow run")
+			return
+		}
+		writeJSON(w, http.StatusOK, publicWorkflowRunFromRun(run, false))
+	default:
+		http.NotFound(w, r)
+	}
+}
+
+func handleWorkflowRunCreate(w http.ResponseWriter, r *http.Request, service WorkflowService, scope memory.Scope) {
+	var req workflowRunCreateRequest
+	if !decodeJSONBody(w, r, &req) {
+		return
+	}
+	var expiresAt time.Time
+	if strings.TrimSpace(req.ExpiresAt) != "" {
+		parsed, err := time.Parse(time.RFC3339, strings.TrimSpace(req.ExpiresAt))
+		if err != nil {
+			http.Error(w, "invalid expires_at", http.StatusBadRequest)
+			return
+		}
+		expiresAt = parsed
+	}
+	run, err := service.StartRun(r.Context(), workflow.StartRunInput{
+		Scope:          scope,
+		TemplateID:     strings.TrimSpace(req.TemplateID),
+		IdempotencyKey: strings.TrimSpace(req.IdempotencyKey),
+		Actor:          strings.TrimSpace(req.Actor),
+		Reason:         strings.TrimSpace(req.Reason),
+		Metadata:       req.Metadata,
+		ExpiresAt:      expiresAt,
+	})
+	if err != nil {
+		writeWorkflowError(w, err, "failed to start workflow run")
+		return
+	}
+	writeJSON(w, http.StatusCreated, publicWorkflowRunFromRun(run, true))
+}
+
+func handleWorkflowStepRecord(w http.ResponseWriter, r *http.Request, service WorkflowService, scope memory.Scope) {
+	var req workflowStepRecordRequest
+	if !decodeJSONBody(w, r, &req) {
+		return
+	}
+	var observedAt time.Time
+	if strings.TrimSpace(req.ObservedAt) != "" {
+		parsed, err := time.Parse(time.RFC3339, strings.TrimSpace(req.ObservedAt))
+		if err != nil {
+			http.Error(w, "invalid observed_at", http.StatusBadRequest)
+			return
+		}
+		observedAt = parsed
+	}
+	record, err := service.RecordStep(r.Context(), workflow.RecordStepInput{
+		Scope:         scope,
+		RunID:         strings.TrimSpace(r.PathValue("workflow_run_id")),
+		Kind:          req.Kind,
+		Actor:         strings.TrimSpace(req.Actor),
+		Reason:        strings.TrimSpace(req.Reason),
+		ObservedAt:    observedAt,
+		Metadata:      req.Metadata,
+		EvidenceLinks: append([]workflow.EvidenceLink(nil), req.EvidenceLinks...),
+	})
+	if err != nil {
+		writeWorkflowError(w, err, "failed to record workflow step")
+		return
+	}
+	writeJSON(w, http.StatusCreated, publicWorkflowStepRecord{
+		Kind:       record.Kind,
+		Status:     record.Status,
+		Result:     record.Result,
+		ObservedAt: record.ObservedAt,
+		CreatedAt:  record.CreatedAt,
+	})
+}
+
+func publicWorkflowRunFromRun(run workflow.WorkflowRun, includeID bool) publicWorkflowRun {
+	public := publicWorkflowRun{
+		Status:          run.Status,
+		IntegrationKind: run.IntegrationKind,
+		CreatedAt:       run.CreatedAt,
+		UpdatedAt:       run.UpdatedAt,
+		StartedAt:       run.StartedAt,
+		CompletedAt:     run.CompletedAt,
+		ExpiresAt:       run.ExpiresAt,
+	}
+	if includeID {
+		public.ID = run.ID
+	}
+	return public
+}
+
+func handleWorkflowNextActionList(w http.ResponseWriter, r *http.Request, service WorkflowService, scope memory.Scope, redact bool) {
+	limit, err := parseOptionalLimit(r, 50)
+	if err != nil {
+		http.Error(w, "invalid limit", http.StatusBadRequest)
+		return
+	}
+	actions, err := service.ListNextActions(r.Context(), workflow.ListNextActionsInput{
+		Scope:  scope,
+		RunID:  strings.TrimSpace(r.PathValue("workflow_run_id")),
+		Status: workflow.NextActionStatus(strings.TrimSpace(r.URL.Query().Get("status"))),
+		Limit:  limit,
+	})
+	if err != nil {
+		writeWorkflowError(w, err, "failed to list workflow next actions")
+		return
+	}
+	if !redact {
+		writeJSON(w, http.StatusOK, map[string]any{"next_actions": actions})
+		return
+	}
+	publicActions := make([]publicWorkflowNextAction, 0, len(actions))
+	for _, action := range actions {
+		publicActions = append(publicActions, publicWorkflowNextAction{
+			Category:      action.Category,
+			StepKind:      action.StepKind,
+			EvidenceKind:  action.EvidenceKind,
+			RouteCategory: action.RouteCategory,
+			Status:        action.Status,
+		})
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"next_actions": publicActions})
+}
+
+func handleAdminWorkflows(w http.ResponseWriter, r *http.Request, service WorkflowService) {
+	if service == nil {
+		http.Error(w, "workflow service is not configured", http.StatusServiceUnavailable)
+		return
+	}
+	scope, ok := auth.ScopeFromContext(r.Context())
+	if !ok {
+		http.Error(w, "scope context is missing", http.StatusInternalServerError)
+		return
+	}
+	path := r.URL.Path
+	switch {
+	case path == "/v1/admin/workflows/templates" && r.Method == http.MethodPost:
+		handleAdminWorkflowTemplateCreate(w, r, service, scope)
+	case path == "/v1/admin/workflows/templates" && r.Method == http.MethodGet:
+		handleAdminWorkflowTemplateList(w, r, service, scope)
+	case strings.HasSuffix(path, "/disable") && r.Method == http.MethodPost:
+		handleAdminWorkflowTemplateDisable(w, r, service, scope)
+	case strings.Contains(path, "/v1/admin/workflows/templates/") && r.Method == http.MethodPatch:
+		handleAdminWorkflowTemplateUpdate(w, r, service, scope)
+	case strings.Contains(path, "/v1/admin/workflows/templates/") && r.Method == http.MethodGet:
+		template, err := service.ReadTemplate(r.Context(), workflow.ReadTemplateInput{
+			Scope:      scope,
+			TemplateID: strings.TrimSpace(r.PathValue("workflow_template_id")),
+		})
+		if err != nil {
+			writeWorkflowError(w, err, "failed to read workflow template")
+			return
+		}
+		writeJSON(w, http.StatusOK, template)
+	case path == "/v1/admin/workflows/runs" && r.Method == http.MethodGet:
+		handleAdminWorkflowRunList(w, r, service, scope)
+	case strings.HasSuffix(path, "/steps") && r.Method == http.MethodGet:
+		steps, err := service.ListStepRecords(r.Context(), workflow.ListStepRecordsInput{
+			Scope: scope,
+			RunID: strings.TrimSpace(r.PathValue("workflow_run_id")),
+		})
+		if err != nil {
+			writeWorkflowError(w, err, "failed to list workflow steps")
+			return
+		}
+		writeJSON(w, http.StatusOK, map[string]any{"steps": steps})
+	case strings.HasSuffix(path, "/evidence-links") && r.Method == http.MethodGet:
+		links, err := service.ListEvidenceLinks(r.Context(), workflow.ListEvidenceLinksInput{
+			Scope:  scope,
+			RunID:  strings.TrimSpace(r.PathValue("workflow_run_id")),
+			Status: workflow.EvidenceLinkStatus(strings.TrimSpace(r.URL.Query().Get("status"))),
+		})
+		if err != nil {
+			writeWorkflowError(w, err, "failed to list workflow evidence links")
+			return
+		}
+		writeJSON(w, http.StatusOK, map[string]any{"evidence_links": links})
+	case strings.HasSuffix(path, "/diagnostics") && r.Method == http.MethodGet:
+		limit, err := parseOptionalLimit(r, 50)
+		if err != nil {
+			http.Error(w, "invalid limit", http.StatusBadRequest)
+			return
+		}
+		diagnostics, err := service.ListDiagnostics(r.Context(), workflow.ListDiagnosticsInput{
+			Scope:    scope,
+			RunID:    strings.TrimSpace(r.PathValue("workflow_run_id")),
+			Category: workflow.DiagnosticCategory(strings.TrimSpace(r.URL.Query().Get("category"))),
+			Limit:    limit,
+		})
+		if err != nil {
+			writeWorkflowError(w, err, "failed to list workflow diagnostics")
+			return
+		}
+		writeJSON(w, http.StatusOK, map[string]any{"diagnostics": diagnostics})
+	case strings.HasSuffix(path, "/next-actions") && r.Method == http.MethodGet:
+		handleWorkflowNextActionList(w, r, service, scope, false)
+	case strings.Contains(path, "/v1/admin/workflows/runs/") && r.Method == http.MethodGet:
+		run, err := service.ReadRun(r.Context(), workflow.ReadRunInput{
+			Scope: scope,
+			RunID: strings.TrimSpace(r.PathValue("workflow_run_id")),
+		})
+		if err != nil {
+			writeWorkflowError(w, err, "failed to read workflow run")
+			return
+		}
+		writeJSON(w, http.StatusOK, run)
+	case strings.Contains(path, "/v1/admin/workflows/evidence-links/") && strings.HasSuffix(path, "/supersede") && r.Method == http.MethodPost:
+		handleAdminWorkflowEvidenceSupersede(w, r, service, scope)
+	default:
+		http.NotFound(w, r)
+	}
+}
+
+func handleAdminWorkflowTemplateCreate(w http.ResponseWriter, r *http.Request, service WorkflowService, scope memory.Scope) {
+	var req workflowTemplateCreateRequest
+	if !decodeJSONBody(w, r, &req) {
+		return
+	}
+	steps, err := workflowTemplateStepsFromRequest(req.Steps)
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusBadRequest)
+		return
+	}
+	template, err := service.CreateTemplate(r.Context(), workflow.CreateTemplateInput{
+		Scope:            scope,
+		Steps:            steps,
+		IntegrationKind:  req.IntegrationKind,
+		CompletionPolicy: req.CompletionPolicy,
+		Actor:            strings.TrimSpace(req.Actor),
+		Reason:           strings.TrimSpace(req.Reason),
+		Metadata:         req.Metadata,
+	})
+	if err != nil {
+		writeWorkflowError(w, err, "failed to create workflow template")
+		return
+	}
+	writeJSON(w, http.StatusCreated, template)
+}
+
+func handleAdminWorkflowTemplateUpdate(w http.ResponseWriter, r *http.Request, service WorkflowService, scope memory.Scope) {
+	var req workflowTemplateUpdateRequest
+	if !decodeJSONBody(w, r, &req) {
+		return
+	}
+	steps, err := workflowTemplateStepsFromRequest(req.Steps)
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusBadRequest)
+		return
+	}
+	template, err := service.UpdateTemplate(r.Context(), workflow.UpdateTemplateInput{
+		Scope:            scope,
+		TemplateID:       strings.TrimSpace(r.PathValue("workflow_template_id")),
+		Steps:            steps,
+		IntegrationKind:  req.IntegrationKind,
+		CompletionPolicy: req.CompletionPolicy,
+		Actor:            strings.TrimSpace(req.Actor),
+		Reason:           strings.TrimSpace(req.Reason),
+		Metadata:         req.Metadata,
+		UpdatedAt:        time.Now().UTC(),
+	})
+	if err != nil {
+		writeWorkflowError(w, err, "failed to update workflow template")
+		return
+	}
+	writeJSON(w, http.StatusOK, template)
+}
+
+func handleAdminWorkflowTemplateDisable(w http.ResponseWriter, r *http.Request, service WorkflowService, scope memory.Scope) {
+	var req workflowActorReasonRequest
+	if !decodeJSONBody(w, r, &req) {
+		return
+	}
+	template, err := service.DisableTemplate(r.Context(), workflow.DisableTemplateInput{
+		Scope:      scope,
+		TemplateID: strings.TrimSpace(r.PathValue("workflow_template_id")),
+		Actor:      strings.TrimSpace(req.Actor),
+		Reason:     strings.TrimSpace(req.Reason),
+		DisabledAt: time.Now().UTC(),
+	})
+	if err != nil {
+		writeWorkflowError(w, err, "failed to disable workflow template")
+		return
+	}
+	writeJSON(w, http.StatusOK, template)
+}
+
+func handleAdminWorkflowTemplateList(w http.ResponseWriter, r *http.Request, service WorkflowService, scope memory.Scope) {
+	limit, err := parseOptionalLimit(r, 50)
+	if err != nil {
+		http.Error(w, "invalid limit", http.StatusBadRequest)
+		return
+	}
+	templates, err := service.ListTemplates(r.Context(), workflow.ListTemplatesInput{
+		Scope:  scope,
+		Status: workflow.TemplateStatus(strings.TrimSpace(r.URL.Query().Get("status"))),
+		Limit:  limit,
+	})
+	if err != nil {
+		writeWorkflowError(w, err, "failed to list workflow templates")
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"templates": templates})
+}
+
+func handleAdminWorkflowRunList(w http.ResponseWriter, r *http.Request, service WorkflowService, scope memory.Scope) {
+	limit, err := parseOptionalLimit(r, 50)
+	if err != nil {
+		http.Error(w, "invalid limit", http.StatusBadRequest)
+		return
+	}
+	runs, err := service.ListRuns(r.Context(), workflow.ListRunsInput{
+		Scope:      scope,
+		TemplateID: strings.TrimSpace(r.URL.Query().Get("template_id")),
+		Status:     workflow.RunStatus(strings.TrimSpace(r.URL.Query().Get("status"))),
+		Limit:      limit,
+	})
+	if err != nil {
+		writeWorkflowError(w, err, "failed to list workflow runs")
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"runs": runs})
+}
+
+func handleAdminWorkflowEvidenceSupersede(w http.ResponseWriter, r *http.Request, service WorkflowService, scope memory.Scope) {
+	var req workflowActorReasonRequest
+	if !decodeJSONBody(w, r, &req) {
+		return
+	}
+	if err := service.SupersedeEvidenceLink(r.Context(), workflow.SupersedeEvidenceLinkInput{
+		Scope:        scope,
+		LinkID:       strings.TrimSpace(r.PathValue("evidence_link_id")),
+		Actor:        strings.TrimSpace(req.Actor),
+		Reason:       strings.TrimSpace(req.Reason),
+		SupersededAt: time.Now().UTC(),
+	}); err != nil {
+		writeWorkflowError(w, err, "failed to supersede workflow evidence link")
+		return
+	}
+	w.WriteHeader(http.StatusAccepted)
+}
+
+func workflowTemplateStepsFromRequest(requests []workflowTemplateStepRequest) ([]workflow.TemplateStep, error) {
+	steps := make([]workflow.TemplateStep, 0, len(requests))
+	for _, req := range requests {
+		freshness, err := parseRequiredDuration(req.FreshnessWindow, "freshness_window")
+		if err != nil {
+			return nil, err
+		}
+		completion, err := parseRequiredDuration(req.CompletionWindow, "completion_window")
+		if err != nil {
+			return nil, err
+		}
+		steps = append(steps, workflow.TemplateStep{
+			Kind:             req.Kind,
+			Requirement:      req.Requirement,
+			AllowedEvidence:  append([]workflow.EvidenceKind(nil), req.AllowedEvidence...),
+			MinimumCount:     req.MinimumCount,
+			RequiresInternal: req.RequiresInternal,
+			FreshnessWindow:  freshness,
+			CompletionWindow: completion,
+			Position:         req.Position,
+			Metadata:         req.Metadata,
+		})
+	}
+	return steps, nil
+}
+
+func parseRequiredDuration(value string, field string) (time.Duration, error) {
+	if strings.TrimSpace(value) == "" {
+		return 0, fmt.Errorf("%s is required", field)
+	}
+	duration, err := time.ParseDuration(strings.TrimSpace(value))
+	if err != nil {
+		return 0, fmt.Errorf("invalid %s", field)
+	}
+	return duration, nil
+}
+
 func handleAdminTaskEvaluations(w http.ResponseWriter, r *http.Request, service TaskEvaluationService, metrics MetricsRecorder, logger *log.Logger) {
 	if service == nil {
 		http.Error(w, "task evaluation service is not configured", http.StatusServiceUnavailable)
@@ -2015,6 +2891,7 @@ func handleAdminAssuranceHealthCreate(w http.ResponseWriter, r *http.Request, se
 		RepairStatus:          normalizeHealthObservation(req.RepairStatus),
 		RankingRolloutState:   normalizeHealthObservation(req.RankingRolloutState),
 		ConformanceStatus:     normalizeHealthObservation(req.ConformanceStatus),
+		WorkflowHealth:        normalizeHealthObservation(req.WorkflowHealth),
 		CapacityLoadProof:     normalizeHealthObservation(req.CapacityLoadProof),
 		BackupRestoreProof:    normalizeHealthObservation(req.BackupRestoreProof),
 	})
@@ -4552,6 +5429,23 @@ func writeTaskEvaluationError(w http.ResponseWriter, err error, fallback string)
 		http.Error(w, err.Error(), http.StatusServiceUnavailable)
 	default:
 		if strings.Contains(err.Error(), "required") || strings.Contains(err.Error(), "invalid") || strings.Contains(err.Error(), "must be") || strings.Contains(err.Error(), "at least one") {
+			http.Error(w, err.Error(), http.StatusBadRequest)
+			return
+		}
+		http.Error(w, fallback, http.StatusInternalServerError)
+	}
+}
+
+func writeWorkflowError(w http.ResponseWriter, err error, fallback string) {
+	switch {
+	case errors.Is(err, pgx.ErrNoRows):
+		http.Error(w, "workflow resource not found", http.StatusNotFound)
+	case strings.Contains(err.Error(), "not configured"):
+		http.Error(w, err.Error(), http.StatusServiceUnavailable)
+	default:
+		if strings.Contains(err.Error(), "required") || strings.Contains(err.Error(), "invalid") ||
+			strings.Contains(err.Error(), "must be") || strings.Contains(err.Error(), "must not") ||
+			strings.Contains(err.Error(), "out of scope") || strings.Contains(err.Error(), "not active") {
 			http.Error(w, err.Error(), http.StatusBadRequest)
 			return
 		}

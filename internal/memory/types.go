@@ -2,6 +2,9 @@ package memory
 
 import (
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
+	"encoding/json"
 	"fmt"
 	"strings"
 	"time"
@@ -202,22 +205,75 @@ type EventIngestor interface {
 	Ingest(ctx context.Context, input IngestEventInput) (RawEvent, error)
 }
 
+var (
+	ErrIdempotencyConflict   = fmt.Errorf("idempotency key conflicts with an existing request")
+	ErrIdempotencyInProgress = fmt.Errorf("idempotency request is in progress")
+)
+
+type IdempotentEventIngestInput struct {
+	PrincipalID        string
+	IdempotencyKey     string
+	RequestFingerprint string
+}
+
+func (i IdempotentEventIngestInput) Validate() error {
+	if strings.TrimSpace(i.PrincipalID) == "" {
+		return fmt.Errorf("principal id is required")
+	}
+	if strings.TrimSpace(i.IdempotencyKey) == "" || len(i.IdempotencyKey) > 256 {
+		return fmt.Errorf("idempotency key is required and must be at most 256 bytes")
+	}
+	if strings.TrimSpace(i.RequestFingerprint) == "" {
+		return fmt.Errorf("request fingerprint is required")
+	}
+	return nil
+}
+
+type IdempotentEventIngestResult struct {
+	Event    RawEvent
+	Replayed bool
+}
+
+type IdempotentEventIngestor interface {
+	IngestIdempotent(ctx context.Context, input IngestEventInput, principalID, idempotencyKey string) (IdempotentEventIngestResult, error)
+}
+
+func EventRequestFingerprint(input IngestEventInput) (string, error) {
+	payload := struct {
+		EventType       string         `json:"event_type"`
+		Content         string         `json:"content"`
+		Metadata        map[string]any `json:"metadata,omitempty"`
+		SourceTimestamp string         `json:"source_timestamp,omitempty"`
+	}{
+		EventType: strings.TrimSpace(input.EventType), Content: input.Content, Metadata: input.Metadata,
+	}
+	if !input.SourceTimestamp.IsZero() {
+		payload.SourceTimestamp = input.SourceTimestamp.UTC().Format(time.RFC3339Nano)
+	}
+	encoded, err := json.Marshal(payload)
+	if err != nil {
+		return "", fmt.Errorf("marshal event request fingerprint: %w", err)
+	}
+	digest := sha256.Sum256(encoded)
+	return hex.EncodeToString(digest[:]), nil
+}
+
 type TaskEvidenceTargetKind string
 
 const (
-	TaskEvidenceTargetSession         TaskEvidenceTargetKind = "session"
-	TaskEvidenceTargetTurn            TaskEvidenceTargetKind = "turn"
-	TaskEvidenceTargetRawEvent        TaskEvidenceTargetKind = "raw_event"
-	TaskEvidenceTargetOutcomeEvent     TaskEvidenceTargetKind = "outcome_event"
-	TaskEvidenceTargetVerification     TaskEvidenceTargetKind = "verification"
-	TaskEvidenceTargetExpectedRecall   TaskEvidenceTargetKind = "expected_recall"
+	TaskEvidenceTargetSession            TaskEvidenceTargetKind = "session"
+	TaskEvidenceTargetTurn               TaskEvidenceTargetKind = "turn"
+	TaskEvidenceTargetRawEvent           TaskEvidenceTargetKind = "raw_event"
+	TaskEvidenceTargetOutcomeEvent       TaskEvidenceTargetKind = "outcome_event"
+	TaskEvidenceTargetVerification       TaskEvidenceTargetKind = "verification"
+	TaskEvidenceTargetExpectedRecall     TaskEvidenceTargetKind = "expected_recall"
 	TaskEvidenceTargetUsefulnessFeedback TaskEvidenceTargetKind = "usefulness_feedback"
-	TaskEvidenceTargetContextCitation  TaskEvidenceTargetKind = "context_citation"
-	TaskEvidenceTargetDerivedInsight   TaskEvidenceTargetKind = "derived_insight"
-	TaskEvidenceTargetMemory           TaskEvidenceTargetKind = "memory"
-	TaskEvidenceTargetQualityFinding   TaskEvidenceTargetKind = "quality_finding"
-	TaskEvidenceTargetRepairPlan       TaskEvidenceTargetKind = "repair_plan"
-	TaskEvidenceTargetOpaque           TaskEvidenceTargetKind = "opaque"
+	TaskEvidenceTargetContextCitation    TaskEvidenceTargetKind = "context_citation"
+	TaskEvidenceTargetDerivedInsight     TaskEvidenceTargetKind = "derived_insight"
+	TaskEvidenceTargetMemory             TaskEvidenceTargetKind = "memory"
+	TaskEvidenceTargetQualityFinding     TaskEvidenceTargetKind = "quality_finding"
+	TaskEvidenceTargetRepairPlan         TaskEvidenceTargetKind = "repair_plan"
+	TaskEvidenceTargetOpaque             TaskEvidenceTargetKind = "opaque"
 )
 
 func (k TaskEvidenceTargetKind) Valid() bool {

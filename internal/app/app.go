@@ -20,6 +20,7 @@ import (
 	"github.com/FelixSeptem/stele/internal/retrieval"
 	"github.com/FelixSeptem/stele/internal/storage/postgres"
 	"github.com/FelixSeptem/stele/internal/telemetry"
+	"github.com/FelixSeptem/stele/internal/workflow"
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgconn"
 )
@@ -57,6 +58,7 @@ type workerRuntime struct {
 	bootstrapper bootstrapper
 	worker       backgroundWorker
 	readiness    ReadinessChecker
+	authorizer   auth.PrincipalAuthorizer
 	cleanup      func()
 }
 
@@ -64,6 +66,7 @@ type schedulerRuntime struct {
 	bootstrapper bootstrapper
 	scheduler    backgroundScheduler
 	readiness    ReadinessChecker
+	authorizer   auth.PrincipalAuthorizer
 	cleanup      func()
 }
 
@@ -310,6 +313,22 @@ func staticAPIKeys(values []string) auth.StaticAPIKeys {
 	return keys
 }
 
+type principalRuntimeStore interface {
+	auth.PrincipalStore
+	auth.BootstrapAdminGate
+}
+
+func principalAuthorizerForRuntime(cfg config.Config, store principalRuntimeStore, now func() time.Time) auth.PrincipalAuthorizer {
+	durable := auth.NewPrincipalService(store, now)
+	if strings.TrimSpace(cfg.Auth.BootstrapAdminKey) == "" {
+		return durable
+	}
+	bootstrap := auth.NewBootstrapAuthorizer(cfg.Auth.BootstrapAdminKey, memory.Scope{
+		Tenant: cfg.Auth.DefaultTenant, Project: cfg.Auth.DefaultProject, Namespace: cfg.Auth.DefaultNamespace,
+	}, store)
+	return auth.NewPrincipalResolver(durable, bootstrap)
+}
+
 func httpDependenciesFromConfig(cfg config.Config) HTTPDependencies {
 	return HTTPDependencies{
 		APIKeys:      staticAPIKeysFromConfig(cfg),
@@ -413,6 +432,18 @@ func buildAPIRuntime(ctx context.Context, cfg config.Config, deps apiRuntimeDepe
 		RankingRolloutPolicyReader: repo,
 	}, deps.observer)
 	httpDeps := httpDependenciesFromConfigWithIngestor(cfg, ingestor)
+	durableAuthorizer := auth.NewPrincipalService(repo, time.Now)
+	httpDeps.PrincipalAdmin = auth.NewPrincipalAdminService(repo, time.Now, newID)
+	if cfg.Auth.BootstrapAdminKey != "" {
+		bootstrapAuthorizer := auth.NewBootstrapAuthorizer(cfg.Auth.BootstrapAdminKey, memory.Scope{
+			Tenant:    cfg.Auth.DefaultTenant,
+			Project:   cfg.Auth.DefaultProject,
+			Namespace: cfg.Auth.DefaultNamespace,
+		}, repo)
+		httpDeps.PrincipalAuthorizer = auth.NewPrincipalResolver(durableAuthorizer, bootstrapAuthorizer)
+	} else if len(cfg.Auth.APIKeys) == 0 && len(cfg.Auth.AdminAPIKeys) == 0 {
+		httpDeps.PrincipalAuthorizer = durableAuthorizer
+	}
 	httpDeps.Readiness = runtimeReadinessChecker(config.ModeAPI, pool, embeddingRuntime, false, deps.observer)
 	if metrics, ok := deps.observer.(interface {
 		RenderPrometheus() string
@@ -456,6 +487,7 @@ func buildAPIRuntime(ctx context.Context, cfg config.Config, deps apiRuntimeDepe
 	httpDeps.DerivedInsightReplayAdmin = replayService
 	httpDeps.AssuranceAdmin = assurance.NewService(assurance.ServiceOptions{
 		Store:    repo,
+		Workflow: repo,
 		Now:      time.Now,
 		NewID:    newQualityID,
 		Observer: deps.observer,
@@ -484,6 +516,14 @@ func buildAPIRuntime(ctx context.Context, cfg config.Config, deps apiRuntimeDepe
 		NewID:                newQualityID,
 	})
 	httpDeps.TaskEvaluations = repo
+	httpDeps.Workflow = workflow.NewService(workflow.ServiceOptions{
+		Store:            repo,
+		EvidenceVerifier: repo,
+		Now:              time.Now,
+		NewID:            newQualityID,
+		Observer:         deps.observer,
+		Logger:           httpDeps.Logger,
+	})
 	httpDeps.MemoryHistoryRead = memoryHistoryReaderFunc(func(ctx context.Context, scope memory.Scope, memoryID string) (memory.MemoryHistory, error) {
 		return repo.ReadMemoryHistory(ctx, scope, memoryID, true)
 	})
@@ -658,6 +698,7 @@ func buildWorkerRuntime(ctx context.Context, cfg config.Config, deps workerRunti
 	}
 	assuranceService := assurance.NewService(assurance.ServiceOptions{
 		Store:    repo,
+		Workflow: repo,
 		Now:      now,
 		NewID:    newQualityID,
 		Observer: deps.observer,
@@ -690,7 +731,8 @@ func buildWorkerRuntime(ctx context.Context, cfg config.Config, deps workerRunti
 			PollInterval: cfg.Jobs.WorkerPollInterval,
 			ErrorBackoff: cfg.Jobs.WorkerErrorBackoff,
 		},
-		readiness: runtimeReadinessChecker(config.ModeWorker, pool, embeddingRuntime, true, deps.observer),
+		readiness:  runtimeReadinessChecker(config.ModeWorker, pool, embeddingRuntime, true, deps.observer),
+		authorizer: principalAuthorizerForRuntime(cfg, repo, now),
 		cleanup: func() {
 			pool.Close()
 		},
@@ -746,6 +788,7 @@ func buildSchedulerRuntime(ctx context.Context, cfg config.Config, deps schedule
 	}
 	assuranceService := assurance.NewService(assurance.ServiceOptions{
 		Store:    repo,
+		Workflow: repo,
 		Now:      now,
 		NewID:    newQualityID,
 		Observer: deps.observer,
@@ -779,7 +822,8 @@ func buildSchedulerRuntime(ctx context.Context, cfg config.Config, deps schedule
 	assuranceInterval := firstPositiveDuration(cfg.Assurance.Cadence, cfg.Jobs.MaintenanceInterval, 15*time.Minute)
 	conformanceInterval := firstPositiveDuration(cfg.Assurance.ConformanceCadence, cfg.Jobs.MaintenanceInterval, 15*time.Minute)
 	assuranceRetentionInterval := firstPositiveDuration(cfg.Jobs.CleanupInterval, cfg.Jobs.MaintenanceInterval, 15*time.Minute)
-	schedulerInterval := minPositiveDuration(summaryInterval, retentionInterval, cleanupInterval, derivedInsightInterval, embeddingInterval, assuranceInterval, conformanceInterval, assuranceRetentionInterval, cfg.Jobs.MaintenanceInterval, 15*time.Minute)
+	workflowInterval := firstPositiveDuration(cfg.Jobs.WorkflowDiagnosticCadence, cfg.Jobs.MaintenanceInterval, 15*time.Minute)
+	schedulerInterval := minPositiveDuration(summaryInterval, retentionInterval, cleanupInterval, derivedInsightInterval, embeddingInterval, assuranceInterval, conformanceInterval, assuranceRetentionInterval, workflowInterval, cfg.Jobs.MaintenanceInterval, 15*time.Minute)
 
 	scheduler := jobs.MaintenanceScheduler{
 		Jobs: []jobs.MaintenanceJob{
@@ -942,13 +986,43 @@ func buildSchedulerRuntime(ctx context.Context, cfg config.Config, deps schedule
 		Interval:     schedulerInterval,
 		ErrorBackoff: cfg.Jobs.SchedulerErrorBackoff,
 	}
+	if cfg.Jobs.WorkflowMaintenanceEnabled {
+		scheduler.Jobs = append(scheduler.Jobs,
+			jobs.ScopeDispatchJob{
+				NameValue:       "workflow_diagnostics_dispatch",
+				ScopeSource:     repo,
+				ScopeBatchLimit: cfg.Jobs.MaintenanceScopeBatchLimit,
+				FallbackScope:   scope,
+				Dispatch: func(scope memory.Scope) jobs.MaintenanceJob {
+					return jobs.WorkflowDiagnosticsJob{
+						Scope: scope, Service: workflow.NewService(workflow.ServiceOptions{Store: repo, EvidenceVerifier: repo, Now: now, NewID: newQualityID, Observer: deps.observer}),
+						ExecutionStore: repo, TriggerSource: "scheduler", Cadence: workflowInterval, Limit: cfg.Jobs.WorkflowDiagnosticScanLimit,
+						NextActionRefreshLimit: cfg.Jobs.WorkflowNextActionRefreshLimit, StaleRunWindow: cfg.Jobs.WorkflowStaleRunWindow, Now: now,
+					}
+				},
+			},
+			jobs.ScopeDispatchJob{
+				NameValue:       "workflow_retention_dispatch",
+				ScopeSource:     repo,
+				ScopeBatchLimit: cfg.Jobs.MaintenanceScopeBatchLimit,
+				FallbackScope:   scope,
+				Dispatch: func(scope memory.Scope) jobs.MaintenanceJob {
+					return jobs.WorkflowRetentionJob{
+						Scope: scope, Cleaner: repo, ExecutionStore: repo, TriggerSource: "scheduler", Cadence: workflowInterval,
+						RetentionWindow: cfg.Jobs.WorkflowHistoryRetention, Now: now, NewRunID: newQualityID, Observer: deps.observer,
+					}
+				},
+			},
+		)
+	}
 
 	return schedulerRuntime{
 		bootstrapper: bootstrapperFunc(func(ctx context.Context) error {
 			return deps.bootstrapDatabase(ctx, pool)
 		}),
-		scheduler: scheduler,
-		readiness: runtimeReadinessChecker(config.ModeScheduler, pool, embeddingRuntime, true, deps.observer),
+		scheduler:  scheduler,
+		readiness:  runtimeReadinessChecker(config.ModeScheduler, pool, embeddingRuntime, true, deps.observer),
+		authorizer: principalAuthorizerForRuntime(cfg, repo, now),
 		cleanup: func() {
 			pool.Close()
 		},

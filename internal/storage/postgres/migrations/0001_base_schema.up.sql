@@ -242,6 +242,69 @@ CREATE TABLE IF NOT EXISTS job_executions (
     finished_at timestamptz
 );
 
+CREATE TABLE IF NOT EXISTS access_principals (
+    id text PRIMARY KEY,
+    role text NOT NULL,
+    status text NOT NULL,
+    label text NOT NULL,
+    expires_at timestamptz,
+    created_at timestamptz NOT NULL DEFAULT now(),
+    updated_at timestamptz NOT NULL DEFAULT now(),
+    disabled_at timestamptz
+);
+
+CREATE TABLE IF NOT EXISTS access_credentials (
+    id text PRIMARY KEY,
+    principal_id text NOT NULL REFERENCES access_principals(id),
+    status text NOT NULL,
+    credential_id text NOT NULL,
+    salt bytea NOT NULL,
+    digest bytea NOT NULL,
+    expires_at timestamptz,
+    created_at timestamptz NOT NULL DEFAULT now(),
+    disabled_at timestamptz,
+    rotated_from_id text REFERENCES access_credentials(id)
+);
+
+CREATE TABLE IF NOT EXISTS access_scope_grants (
+    id text PRIMARY KEY,
+    principal_id text NOT NULL REFERENCES access_principals(id),
+    tenant text NOT NULL,
+    project text NOT NULL,
+    namespace text NOT NULL,
+    status text NOT NULL,
+    created_at timestamptz NOT NULL DEFAULT now(),
+    revoked_at timestamptz
+);
+
+CREATE TABLE IF NOT EXISTS access_audit_records (
+    id text PRIMARY KEY,
+    principal_id text REFERENCES access_principals(id),
+    credential_id text REFERENCES access_credentials(id),
+    tenant text,
+    project text,
+    namespace text,
+    action text NOT NULL,
+    result text NOT NULL,
+    created_at timestamptz NOT NULL DEFAULT now()
+);
+
+CREATE TABLE IF NOT EXISTS event_idempotency_records (
+    id text PRIMARY KEY,
+    principal_id text NOT NULL REFERENCES access_principals(id),
+    tenant text NOT NULL,
+    project text NOT NULL,
+    namespace text NOT NULL,
+    idempotency_key text NOT NULL,
+    request_fingerprint text NOT NULL,
+    status text NOT NULL,
+    raw_event_id uuid REFERENCES raw_events(id),
+    admission jsonb,
+    lease_until timestamptz,
+    created_at timestamptz NOT NULL DEFAULT now(),
+    completed_at timestamptz
+);
+
 CREATE TABLE IF NOT EXISTS derived_insights (
     id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
     tenant text NOT NULL,
@@ -949,6 +1012,156 @@ CREATE TABLE IF NOT EXISTS assurance_retention_runs (
     finished_at timestamptz
 );
 
+CREATE TABLE IF NOT EXISTS integration_workflow_templates (
+    id text PRIMARY KEY,
+    tenant text NOT NULL,
+    project text NOT NULL,
+    namespace text NOT NULL,
+    status text NOT NULL,
+    integration_kind text NOT NULL,
+    completion_policy text NOT NULL,
+    actor text NOT NULL,
+    reason text NOT NULL,
+    metadata jsonb NOT NULL DEFAULT '{}'::jsonb,
+    created_at timestamptz NOT NULL DEFAULT now(),
+    updated_at timestamptz NOT NULL DEFAULT now(),
+    disabled_at timestamptz
+);
+
+CREATE TABLE IF NOT EXISTS integration_workflow_template_steps (
+    id text PRIMARY KEY,
+    template_id text NOT NULL REFERENCES integration_workflow_templates(id) ON DELETE CASCADE,
+    tenant text NOT NULL,
+    project text NOT NULL,
+    namespace text NOT NULL,
+    kind text NOT NULL,
+    requirement text NOT NULL,
+    allowed_evidence text[] NOT NULL DEFAULT '{}'::text[],
+    minimum_count integer NOT NULL DEFAULT 1,
+    requires_internal boolean NOT NULL DEFAULT false,
+    freshness_window_ns bigint NOT NULL,
+    completion_window_ns bigint NOT NULL,
+    position integer NOT NULL,
+    metadata jsonb NOT NULL DEFAULT '{}'::jsonb,
+    created_at timestamptz NOT NULL DEFAULT now()
+);
+
+CREATE TABLE IF NOT EXISTS integration_workflow_runs (
+    id text PRIMARY KEY,
+    template_id text NOT NULL REFERENCES integration_workflow_templates(id),
+    tenant text NOT NULL,
+    project text NOT NULL,
+    namespace text NOT NULL,
+    status text NOT NULL,
+    integration_kind text NOT NULL,
+    idempotency_key text NOT NULL,
+    actor text NOT NULL,
+    reason text NOT NULL,
+    metadata jsonb NOT NULL DEFAULT '{}'::jsonb,
+    created_at timestamptz NOT NULL DEFAULT now(),
+    updated_at timestamptz NOT NULL DEFAULT now(),
+    started_at timestamptz NOT NULL,
+    completed_at timestamptz,
+    expires_at timestamptz
+);
+
+CREATE TABLE IF NOT EXISTS integration_workflow_step_records (
+    id text PRIMARY KEY,
+    run_id text NOT NULL REFERENCES integration_workflow_runs(id) ON DELETE CASCADE,
+    tenant text NOT NULL,
+    project text NOT NULL,
+    namespace text NOT NULL,
+    kind text NOT NULL,
+    status text NOT NULL,
+    result text NOT NULL,
+    actor text NOT NULL,
+    reason text NOT NULL,
+    metadata jsonb NOT NULL DEFAULT '{}'::jsonb,
+    observed_at timestamptz NOT NULL,
+    created_at timestamptz NOT NULL DEFAULT now()
+);
+
+CREATE TABLE IF NOT EXISTS integration_workflow_evidence_links (
+    id text PRIMARY KEY,
+    run_id text NOT NULL REFERENCES integration_workflow_runs(id) ON DELETE CASCADE,
+    step_record_id text REFERENCES integration_workflow_step_records(id) ON DELETE CASCADE,
+    tenant text NOT NULL,
+    project text NOT NULL,
+    namespace text NOT NULL,
+    kind text NOT NULL,
+    status text NOT NULL,
+    source text NOT NULL,
+    target_id text,
+    opaque_token text,
+    metadata jsonb NOT NULL DEFAULT '{}'::jsonb,
+    created_at timestamptz NOT NULL DEFAULT now(),
+    superseded_at timestamptz,
+    superseded_by_actor text,
+    superseded_by_reason text
+);
+
+CREATE TABLE IF NOT EXISTS integration_workflow_gap_diagnostics (
+    id text PRIMARY KEY,
+    run_id text NOT NULL REFERENCES integration_workflow_runs(id) ON DELETE CASCADE,
+    step_record_id text REFERENCES integration_workflow_step_records(id) ON DELETE SET NULL,
+    evidence_link_id text REFERENCES integration_workflow_evidence_links(id) ON DELETE SET NULL,
+    tenant text NOT NULL,
+    project text NOT NULL,
+    namespace text NOT NULL,
+    step_kind text NOT NULL,
+    evidence_kind text NOT NULL,
+    category text NOT NULL,
+    readiness_impact text NOT NULL,
+    status text,
+    metadata jsonb NOT NULL DEFAULT '{}'::jsonb,
+    created_at timestamptz NOT NULL DEFAULT now(),
+    resolved_at timestamptz
+);
+
+CREATE TABLE IF NOT EXISTS integration_workflow_next_actions (
+    id text PRIMARY KEY,
+    run_id text NOT NULL REFERENCES integration_workflow_runs(id) ON DELETE CASCADE,
+    tenant text NOT NULL,
+    project text NOT NULL,
+    namespace text NOT NULL,
+    category text NOT NULL,
+    step_kind text NOT NULL,
+    evidence_kind text NOT NULL,
+    route_category text NOT NULL,
+    status text NOT NULL,
+    metadata jsonb NOT NULL DEFAULT '{}'::jsonb,
+    created_at timestamptz NOT NULL DEFAULT now(),
+    resolved_at timestamptz
+);
+
+CREATE TABLE IF NOT EXISTS integration_workflow_transitions (
+    id text PRIMARY KEY,
+    run_id text NOT NULL,
+    tenant text NOT NULL,
+    project text NOT NULL,
+    namespace text NOT NULL,
+    from_status text,
+    to_status text NOT NULL,
+    actor text NOT NULL,
+    reason text NOT NULL,
+    occurred_at timestamptz NOT NULL
+);
+
+CREATE TABLE IF NOT EXISTS integration_workflow_retention_runs (
+    id text PRIMARY KEY,
+    tenant text NOT NULL,
+    project text NOT NULL,
+    namespace text NOT NULL,
+    record_category text NOT NULL,
+    cutoff timestamptz NOT NULL,
+    deleted_count integer NOT NULL DEFAULT 0,
+    started_at timestamptz NOT NULL,
+    finished_at timestamptz
+);
+
+ALTER TABLE integration_workflow_transitions
+    DROP CONSTRAINT IF EXISTS integration_workflow_transitions_run_id_fkey;
+
 CREATE INDEX IF NOT EXISTS raw_events_scope_created_at_idx
     ON raw_events (tenant, project, namespace, created_at DESC);
 
@@ -1035,6 +1248,18 @@ CREATE INDEX IF NOT EXISTS job_executions_scope_started_at_idx
 
 CREATE INDEX IF NOT EXISTS job_executions_job_name_started_at_idx
     ON job_executions (job_name, started_at DESC);
+
+CREATE UNIQUE INDEX IF NOT EXISTS access_credentials_lookup_id_idx
+    ON access_credentials (credential_id);
+
+CREATE INDEX IF NOT EXISTS access_scope_grants_principal_scope_idx
+    ON access_scope_grants (principal_id, tenant, project, namespace, status);
+
+CREATE INDEX IF NOT EXISTS access_audit_records_principal_created_at_idx
+    ON access_audit_records (principal_id, created_at DESC);
+
+CREATE UNIQUE INDEX IF NOT EXISTS event_idempotency_records_principal_scope_key_idx
+    ON event_idempotency_records (principal_id, tenant, project, namespace, idempotency_key);
 
 CREATE UNIQUE INDEX IF NOT EXISTS derived_insights_scope_type_fingerprint_idx
     ON derived_insights (tenant, project, namespace, type, derivation_fingerprint);
@@ -1209,3 +1434,33 @@ CREATE INDEX IF NOT EXISTS assurance_recovery_verifications_scope_target_idx
 
 CREATE INDEX IF NOT EXISTS assurance_retention_runs_scope_category_started_idx
     ON assurance_retention_runs (tenant, project, namespace, record_category, started_at DESC);
+
+CREATE INDEX IF NOT EXISTS integration_workflow_templates_scope_status_updated_idx
+    ON integration_workflow_templates (tenant, project, namespace, status, updated_at DESC);
+
+CREATE INDEX IF NOT EXISTS integration_workflow_template_steps_template_position_idx
+    ON integration_workflow_template_steps (template_id, position ASC, id ASC);
+
+CREATE INDEX IF NOT EXISTS integration_workflow_runs_scope_status_updated_idx
+    ON integration_workflow_runs (tenant, project, namespace, status, updated_at DESC);
+
+CREATE UNIQUE INDEX IF NOT EXISTS integration_workflow_runs_scope_idempotency_idx
+    ON integration_workflow_runs (tenant, project, namespace, template_id, idempotency_key);
+
+CREATE INDEX IF NOT EXISTS integration_workflow_step_records_run_created_idx
+    ON integration_workflow_step_records (run_id, created_at ASC, id ASC);
+
+CREATE INDEX IF NOT EXISTS integration_workflow_evidence_links_run_kind_status_idx
+    ON integration_workflow_evidence_links (tenant, project, namespace, run_id, kind, status, created_at DESC);
+
+CREATE INDEX IF NOT EXISTS integration_workflow_gap_diagnostics_run_status_created_idx
+    ON integration_workflow_gap_diagnostics (tenant, project, namespace, run_id, status, created_at DESC);
+
+CREATE INDEX IF NOT EXISTS integration_workflow_next_actions_run_status_created_idx
+    ON integration_workflow_next_actions (tenant, project, namespace, run_id, status, created_at DESC);
+
+CREATE INDEX IF NOT EXISTS integration_workflow_transitions_run_occurred_idx
+    ON integration_workflow_transitions (run_id, occurred_at DESC, id ASC);
+
+CREATE INDEX IF NOT EXISTS integration_workflow_retention_runs_scope_category_started_idx
+    ON integration_workflow_retention_runs (tenant, project, namespace, record_category, started_at DESC);

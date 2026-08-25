@@ -29,11 +29,12 @@ type Config struct {
 }
 
 type AuthConfig struct {
-	APIKeys          []string
-	AdminAPIKeys     []string
-	DefaultTenant    string
-	DefaultProject   string
-	DefaultNamespace string
+	APIKeys           []string
+	AdminAPIKeys      []string
+	BootstrapAdminKey string
+	DefaultTenant     string
+	DefaultProject    string
+	DefaultNamespace  string
 }
 
 type EmbeddingRouteConfig struct {
@@ -72,6 +73,12 @@ type JobConfig struct {
 	GovernanceRetryBackoff           time.Duration
 	GovernanceLeaseRenewPeriod       time.Duration
 	MaintenanceScopeBatchLimit       int
+	WorkflowMaintenanceEnabled       bool
+	WorkflowDiagnosticCadence        time.Duration
+	WorkflowStaleRunWindow           time.Duration
+	WorkflowDiagnosticScanLimit      int
+	WorkflowNextActionRefreshLimit   int
+	WorkflowHistoryRetention         time.Duration
 }
 
 type AssuranceConfig struct {
@@ -161,6 +168,29 @@ func LoadFromEnv() (Config, error) {
 	if err != nil {
 		return Config{}, err
 	}
+	workflowDiagnosticCadence, err := loadDurationWithDefault("STELE_WORKFLOW_DIAGNOSTIC_INTERVAL", maintenanceInterval)
+	if err != nil {
+		return Config{}, err
+	}
+	workflowStaleRunWindow, err := loadDurationWithDefault("STELE_WORKFLOW_STALE_RUN_WINDOW", 24*time.Hour)
+	if err != nil {
+		return Config{}, err
+	}
+	workflowDiagnosticScanLimit, err := loadIntWithDefault("STELE_WORKFLOW_DIAGNOSTIC_SCAN_LIMIT", 100)
+	if err != nil {
+		return Config{}, err
+	}
+	workflowNextActionRefreshLimit, err := loadIntWithDefault("STELE_WORKFLOW_NEXT_ACTION_REFRESH_LIMIT", 100)
+	if err != nil {
+		return Config{}, err
+	}
+	workflowHistoryRetention, err := loadDurationWithDefault("STELE_WORKFLOW_HISTORY_RETENTION", 30*24*time.Hour)
+	if err != nil {
+		return Config{}, err
+	}
+	if workflowDiagnosticCadence <= 0 || workflowStaleRunWindow < time.Minute || workflowDiagnosticScanLimit <= 0 || workflowNextActionRefreshLimit <= 0 || workflowHistoryRetention < time.Hour {
+		return Config{}, fmt.Errorf("workflow maintenance settings are invalid")
+	}
 	assuranceCadence, err := loadDurationWithDefault("STELE_JOBS_ASSURANCE_INTERVAL", maintenanceInterval)
 	if err != nil {
 		return Config{}, err
@@ -247,17 +277,28 @@ func LoadFromEnv() (Config, error) {
 	if err != nil {
 		return Config{}, err
 	}
+	legacyAPIKeys := splitCSVEnv("STELE_AUTH_API_KEYS")
+	legacyAdminAPIKeys := splitCSVEnv("STELE_AUTH_ADMIN_API_KEYS")
+	if len(legacyAPIKeys) > 0 || len(legacyAdminAPIKeys) > 0 {
+		return Config{}, fmt.Errorf("STELE_AUTH_API_KEYS and STELE_AUTH_ADMIN_API_KEYS are deprecated; configure STELE_AUTH_BOOTSTRAP_ADMIN_KEY to create the first durable principal")
+	}
+	bootstrapAdminKey := strings.TrimSpace(os.Getenv("STELE_AUTH_BOOTSTRAP_ADMIN_KEY"))
+	defaultTenant := strings.TrimSpace(os.Getenv("STELE_AUTH_DEFAULT_TENANT"))
+	defaultProject := strings.TrimSpace(os.Getenv("STELE_AUTH_DEFAULT_PROJECT"))
+	defaultNamespace := strings.TrimSpace(os.Getenv("STELE_AUTH_DEFAULT_NAMESPACE"))
+	if bootstrapAdminKey != "" && (defaultTenant == "" || defaultProject == "" || defaultNamespace == "") {
+		return Config{}, fmt.Errorf("STELE_AUTH_BOOTSTRAP_ADMIN_KEY requires STELE_AUTH_DEFAULT_TENANT, STELE_AUTH_DEFAULT_PROJECT, and STELE_AUTH_DEFAULT_NAMESPACE")
+	}
 
 	return Config{
 		Mode:        mode,
 		HTTPAddr:    getEnvOrDefault("STELE_HTTP_ADDR", ":8080"),
 		PostgresDSN: postgresDSN,
 		Auth: AuthConfig{
-			APIKeys:          splitCSVEnv("STELE_AUTH_API_KEYS"),
-			AdminAPIKeys:     splitCSVEnv("STELE_AUTH_ADMIN_API_KEYS"),
-			DefaultTenant:    strings.TrimSpace(os.Getenv("STELE_AUTH_DEFAULT_TENANT")),
-			DefaultProject:   strings.TrimSpace(os.Getenv("STELE_AUTH_DEFAULT_PROJECT")),
-			DefaultNamespace: strings.TrimSpace(os.Getenv("STELE_AUTH_DEFAULT_NAMESPACE")),
+			BootstrapAdminKey: bootstrapAdminKey,
+			DefaultTenant:     defaultTenant,
+			DefaultProject:    defaultProject,
+			DefaultNamespace:  defaultNamespace,
 		},
 		Embedding: EmbeddingConfig{
 			DefaultProvider:   strings.TrimSpace(os.Getenv("STELE_EMBEDDING_DEFAULT_PROVIDER")),
@@ -286,6 +327,12 @@ func LoadFromEnv() (Config, error) {
 			GovernanceRetryBackoff:           governanceRetryBackoff,
 			GovernanceLeaseRenewPeriod:       governanceLeaseRenewPeriod,
 			MaintenanceScopeBatchLimit:       maintenanceScopeBatchLimit,
+			WorkflowMaintenanceEnabled:       loadBoolEnv("STELE_WORKFLOW_MAINTENANCE_ENABLED"),
+			WorkflowDiagnosticCadence:        workflowDiagnosticCadence,
+			WorkflowStaleRunWindow:           workflowStaleRunWindow,
+			WorkflowDiagnosticScanLimit:      workflowDiagnosticScanLimit,
+			WorkflowNextActionRefreshLimit:   workflowNextActionRefreshLimit,
+			WorkflowHistoryRetention:         workflowHistoryRetention,
 		},
 		Assurance: AssuranceConfig{
 			Cadence:                  assuranceCadence,

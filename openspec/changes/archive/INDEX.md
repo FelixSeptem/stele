@@ -1,6 +1,6 @@
 # Archive Index
 
-Updated: 2026-07-11 16:45:21
+Updated: 2026-08-23 17:22:49
 
 - 001 -> bootstrap-foundation-and-event-ingestion
 - 002 -> governance-pipeline-and-memory-consolidation
@@ -19,3 +19,8 @@ Updated: 2026-07-11 16:45:21
 - 015 -> self-hosting-operational-replay-loop
 - 016 -> memory-quality-admission-repair-loop
 - 017 -> scope-proof-and-agent-session-memory-loop
+- 018 -> scoped-principal-auth-and-ingest-idempotency
+- 019 -> memory-usefulness-feedback-and-agent-session-contract
+- 020 -> task-success-evaluation-and-feedback-ranking-rollout
+- 021 -> self-hosted-assurance-and-conformance-loop
+- 022 -> integration-evidence-workflow-contract

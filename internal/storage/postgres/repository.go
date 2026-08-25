@@ -1179,17 +1179,21 @@ INSERT INTO job_executions (
 	}
 
 	const statusQuery = `
-SELECT status
+SELECT status, started_at
 FROM job_executions
 WHERE idempotency_key = $1
 `
 
 	var status string
-	if err := r.db.QueryRow(ctx, statusQuery, execution.IdempotencyKey).Scan(&status); err != nil {
+	var startedAt time.Time
+	if err := r.db.QueryRow(ctx, statusQuery, execution.IdempotencyKey).Scan(&status, &startedAt); err != nil {
 		return false, fmt.Errorf("read existing job execution: %w", err)
 	}
 
-	if jobs.JobExecutionStatus(status) != jobs.JobExecutionStatusFailed {
+	if jobs.JobExecutionStatus(status) == jobs.JobExecutionStatusRunning && time.Since(startedAt) < 15*time.Minute {
+		return false, nil
+	}
+	if jobs.JobExecutionStatus(status) == jobs.JobExecutionStatusCompleted {
 		return false, nil
 	}
 

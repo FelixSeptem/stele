@@ -9,8 +9,7 @@ func TestLoadFromEnvReturnsConfigForValidMode(t *testing.T) {
 	t.Setenv("STELE_MODE", "api")
 	t.Setenv("STELE_HTTP_ADDR", ":8080")
 	t.Setenv("STELE_POSTGRES_DSN", "postgres://stele:stele@localhost:5432/stele?sslmode=disable")
-	t.Setenv("STELE_AUTH_API_KEYS", " key-a,key-b ")
-	t.Setenv("STELE_AUTH_ADMIN_API_KEYS", " admin-a,admin-b ")
+	t.Setenv("STELE_AUTH_BOOTSTRAP_ADMIN_KEY", " bootstrap-admin-key ")
 	t.Setenv("STELE_AUTH_DEFAULT_TENANT", "tenant-a")
 	t.Setenv("STELE_AUTH_DEFAULT_PROJECT", "project-a")
 	t.Setenv("STELE_AUTH_DEFAULT_NAMESPACE", "namespace-a")
@@ -25,6 +24,12 @@ func TestLoadFromEnvReturnsConfigForValidMode(t *testing.T) {
 	t.Setenv("STELE_JOBS_DERIVED_INSIGHT_BATCH_SIZE", "75")
 	t.Setenv("STELE_JOBS_DERIVED_INSIGHT_MINIMUM_EVIDENCE", "3")
 	t.Setenv("STELE_JOBS_JOB_EXECUTION_RETENTION", "72h")
+	t.Setenv("STELE_WORKFLOW_MAINTENANCE_ENABLED", "true")
+	t.Setenv("STELE_WORKFLOW_DIAGNOSTIC_INTERVAL", "25m")
+	t.Setenv("STELE_WORKFLOW_STALE_RUN_WINDOW", "3h")
+	t.Setenv("STELE_WORKFLOW_DIAGNOSTIC_SCAN_LIMIT", "45")
+	t.Setenv("STELE_WORKFLOW_NEXT_ACTION_REFRESH_LIMIT", "55")
+	t.Setenv("STELE_WORKFLOW_HISTORY_RETENTION", "240h")
 
 	cfg, err := LoadFromEnv()
 	if err != nil {
@@ -39,12 +44,8 @@ func TestLoadFromEnvReturnsConfigForValidMode(t *testing.T) {
 		t.Fatalf("HTTPAddr = %q, want %q", cfg.HTTPAddr, ":8080")
 	}
 
-	if len(cfg.Auth.APIKeys) != 2 || cfg.Auth.APIKeys[0] != "key-a" || cfg.Auth.APIKeys[1] != "key-b" {
-		t.Fatalf("Auth.APIKeys = %#v, want trimmed api keys", cfg.Auth.APIKeys)
-	}
-
-	if len(cfg.Auth.AdminAPIKeys) != 2 || cfg.Auth.AdminAPIKeys[0] != "admin-a" || cfg.Auth.AdminAPIKeys[1] != "admin-b" {
-		t.Fatalf("Auth.AdminAPIKeys = %#v, want trimmed admin api keys", cfg.Auth.AdminAPIKeys)
+	if cfg.Auth.BootstrapAdminKey != "bootstrap-admin-key" {
+		t.Fatalf("Auth.BootstrapAdminKey = %q, want configured bootstrap key", cfg.Auth.BootstrapAdminKey)
 	}
 
 	if cfg.Auth.DefaultTenant != "tenant-a" || cfg.Auth.DefaultProject != "project-a" || cfg.Auth.DefaultNamespace != "namespace-a" {
@@ -93,6 +94,30 @@ func TestLoadFromEnvReturnsConfigForValidMode(t *testing.T) {
 
 	if cfg.Jobs.JobExecutionRetention != 72*time.Hour {
 		t.Fatalf("Jobs.JobExecutionRetention = %v, want 72h", cfg.Jobs.JobExecutionRetention)
+	}
+	if !cfg.Jobs.WorkflowMaintenanceEnabled || cfg.Jobs.WorkflowDiagnosticCadence != 25*time.Minute || cfg.Jobs.WorkflowStaleRunWindow != 3*time.Hour || cfg.Jobs.WorkflowDiagnosticScanLimit != 45 || cfg.Jobs.WorkflowNextActionRefreshLimit != 55 || cfg.Jobs.WorkflowHistoryRetention != 240*time.Hour {
+		t.Fatalf("workflow maintenance config = %+v, want configured bounded values", cfg.Jobs)
+	}
+}
+
+func TestLoadFromEnvRejectsLegacyAPIKeyLists(t *testing.T) {
+	t.Setenv("STELE_MODE", "api")
+	t.Setenv("STELE_POSTGRES_DSN", "postgres://stele:stele@localhost:5432/stele?sslmode=disable")
+	t.Setenv("STELE_AUTH_API_KEYS", "legacy-key")
+
+	if _, err := LoadFromEnv(); err == nil {
+		t.Fatal("LoadFromEnv() error = nil for deprecated legacy key list")
+	}
+}
+
+func TestLoadFromEnvRequiresDefaultScopeForBootstrapOperator(t *testing.T) {
+	t.Setenv("STELE_MODE", "api")
+	t.Setenv("STELE_POSTGRES_DSN", "postgres://stele:stele@localhost:5432/stele?sslmode=disable")
+	t.Setenv("STELE_AUTH_BOOTSTRAP_ADMIN_KEY", "bootstrap-admin-key")
+	t.Setenv("STELE_AUTH_DEFAULT_TENANT", "tenant-a")
+
+	if _, err := LoadFromEnv(); err == nil {
+		t.Fatal("LoadFromEnv() error = nil without complete bootstrap default scope")
 	}
 }
 
@@ -153,5 +178,15 @@ func TestLoadFromEnvParsesDurableWorkerSettings(t *testing.T) {
 
 	if cfg.Jobs.MaintenanceScopeBatchLimit != 25 {
 		t.Fatalf("MaintenanceScopeBatchLimit = %d, want 25", cfg.Jobs.MaintenanceScopeBatchLimit)
+	}
+}
+
+func TestLoadFromEnvRejectsUnsafeWorkflowMaintenanceSettings(t *testing.T) {
+	t.Setenv("STELE_MODE", "scheduler")
+	t.Setenv("STELE_POSTGRES_DSN", "postgres://example")
+	t.Setenv("STELE_WORKFLOW_STALE_RUN_WINDOW", "30s")
+
+	if _, err := LoadFromEnv(); err == nil {
+		t.Fatal("LoadFromEnv() error = nil, want unsafe workflow stale window rejection")
 	}
 }

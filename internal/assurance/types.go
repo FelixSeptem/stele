@@ -94,6 +94,7 @@ const (
 	ComponentRepair        HealthComponent = "repair"
 	ComponentRanking       HealthComponent = "ranking_rollout"
 	ComponentConformance   HealthComponent = "conformance"
+	ComponentWorkflow      HealthComponent = "workflow"
 	ComponentCapacityLoad  HealthComponent = "capacity_load"
 	ComponentBackupRestore HealthComponent = "backup_restore"
 )
@@ -101,7 +102,7 @@ const (
 func (c HealthComponent) Valid() bool {
 	switch c {
 	case ComponentRuntime, ComponentBacklog, ComponentDependency, ComponentProof, ComponentSession,
-		ComponentFeedback, ComponentTask, ComponentRepair, ComponentRanking, ComponentConformance,
+		ComponentFeedback, ComponentTask, ComponentRepair, ComponentRanking, ComponentConformance, ComponentWorkflow,
 		ComponentCapacityLoad, ComponentBackupRestore:
 		return true
 	default:
@@ -156,13 +157,14 @@ const (
 	ReasonBackupRestoreFresh         ReasonCategory = "backup_restore_fresh"
 	ReasonBackupRestoreStale         ReasonCategory = "backup_restore_stale"
 	ReasonConformanceMissingEvidence ReasonCategory = "conformance_missing_evidence"
+	ReasonWorkflowGap                ReasonCategory = "workflow_gap"
 	ReasonUnknown                    ReasonCategory = "unknown"
 )
 
 func (r ReasonCategory) Valid() bool {
 	switch r {
 	case ReasonRuntimeReady, ReasonBacklogPressure, ReasonCapacityWithinThresholds, ReasonCapacityThresholdExceeded,
-		ReasonBackupRestoreFresh, ReasonBackupRestoreStale, ReasonConformanceMissingEvidence, ReasonUnknown:
+		ReasonBackupRestoreFresh, ReasonBackupRestoreStale, ReasonConformanceMissingEvidence, ReasonWorkflowGap, ReasonUnknown:
 		return true
 	default:
 		return false
@@ -743,13 +745,14 @@ const (
 	ExpectedEvidenceProof              ExpectedEvidenceKind = "proof"
 	ExpectedEvidenceRepair             ExpectedEvidenceKind = "repair"
 	ExpectedEvidenceRankingRollout     ExpectedEvidenceKind = "ranking_rollout"
+	ExpectedEvidenceWorkflow           ExpectedEvidenceKind = "workflow"
 )
 
 func (k ExpectedEvidenceKind) Valid() bool {
 	switch k {
 	case ExpectedEvidenceSession, ExpectedEvidenceContext, ExpectedEvidenceOutcome, ExpectedEvidenceVerification,
 		ExpectedEvidenceUsefulnessFeedback, ExpectedEvidenceTaskEvaluation, ExpectedEvidenceProof,
-		ExpectedEvidenceRepair, ExpectedEvidenceRankingRollout:
+		ExpectedEvidenceRepair, ExpectedEvidenceRankingRollout, ExpectedEvidenceWorkflow:
 		return true
 	default:
 		return false
@@ -771,6 +774,7 @@ const (
 	MissingEvidenceOpaqueOnly                    MissingEvidenceCategory = "opaque_only"
 	MissingEvidenceContradictory                 MissingEvidenceCategory = "contradictory"
 	MissingEvidenceHidden                        MissingEvidenceCategory = "hidden"
+	MissingEvidenceWorkflowIncomplete            MissingEvidenceCategory = "workflow_incomplete"
 )
 
 func (c MissingEvidenceCategory) Valid() bool {
@@ -778,7 +782,8 @@ func (c MissingEvidenceCategory) Valid() bool {
 	case MissingEvidenceSessionWithoutOutcome, MissingEvidenceTurnWithoutContext, MissingEvidenceVerificationMissing,
 		MissingEvidenceFeedbackWithoutSubject, MissingEvidenceTaskEvaluationMissingEvidence,
 		MissingEvidenceRepairWithoutVerification, MissingEvidenceRolloutWithoutDryRun, MissingEvidenceOutOfScope,
-		MissingEvidenceStale, MissingEvidenceOpaqueOnly, MissingEvidenceContradictory, MissingEvidenceHidden:
+		MissingEvidenceStale, MissingEvidenceOpaqueOnly, MissingEvidenceContradictory, MissingEvidenceHidden,
+		MissingEvidenceWorkflowIncomplete:
 		return true
 	default:
 		return false
@@ -942,6 +947,7 @@ const (
 	RecoveryVerificationTargetSessionVerification RecoveryVerificationTarget = "session_verification"
 	RecoveryVerificationTargetCapacityLoadProof   RecoveryVerificationTarget = "capacity_load_proof"
 	RecoveryVerificationTargetBackupRestoreProof  RecoveryVerificationTarget = "backup_restore_proof"
+	RecoveryVerificationTargetWorkflowRun         RecoveryVerificationTarget = "workflow_run"
 )
 
 func (t RecoveryVerificationTarget) Valid() bool {
@@ -950,7 +956,7 @@ func (t RecoveryVerificationTarget) Valid() bool {
 		RecoveryVerificationTargetConformanceRun, RecoveryVerificationTargetRepairResult,
 		RecoveryVerificationTargetRankingRollback, RecoveryVerificationTargetProofRun,
 		RecoveryVerificationTargetSessionVerification, RecoveryVerificationTargetCapacityLoadProof,
-		RecoveryVerificationTargetBackupRestoreProof:
+		RecoveryVerificationTargetBackupRestoreProof, RecoveryVerificationTargetWorkflowRun:
 		return true
 	default:
 		return false
@@ -982,12 +988,14 @@ const (
 	RunbookHintReviewCapacityProof      RunbookHintCategory = "review_capacity_proof"
 	RunbookHintReviewBackupRestoreProof RunbookHintCategory = "review_backup_restore_proof"
 	RunbookHintReviewAlertDelivery      RunbookHintCategory = "review_alert_delivery"
+	RunbookHintReviewWorkflow           RunbookHintCategory = "review_workflow"
 )
 
 func (c RunbookHintCategory) Valid() bool {
 	switch c {
 	case RunbookHintReviewBacklog, RunbookHintReviewRepair, RunbookHintReviewConformanceProfile,
-		RunbookHintReviewCapacityProof, RunbookHintReviewBackupRestoreProof, RunbookHintReviewAlertDelivery:
+		RunbookHintReviewCapacityProof, RunbookHintReviewBackupRestoreProof, RunbookHintReviewAlertDelivery,
+		RunbookHintReviewWorkflow:
 		return true
 	default:
 		return false
