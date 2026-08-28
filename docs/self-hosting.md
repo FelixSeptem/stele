@@ -223,6 +223,23 @@ runtime_api_key=<durable-runtime-credential-created-by-bootstrap>
 actor=operator-a
 ```
 
+For a repeatable PowerShell smoke flow, run the repository script against the
+running API. It creates the durable admin, creates a public runtime principal,
+writes each one-time credential only to the explicitly supplied directory, and
+checks that the bootstrap credential is rejected after the durable admin exists:
+
+```powershell
+pwsh -File scripts/stele-bootstrap-smoke.ps1 `
+  -BootstrapKey $env:STELE_AUTH_BOOTSTRAP_ADMIN_KEY `
+  -Tenant $env:STELE_AUTH_DEFAULT_TENANT `
+  -Project $env:STELE_AUTH_DEFAULT_PROJECT `
+  -Namespace $env:STELE_AUTH_DEFAULT_NAMESPACE `
+  -CredentialOutputDirectory .\.stele-smoke-credentials
+```
+
+Treat `.stele-smoke-credentials` as secret material: move the values into an
+operator-managed secret store and remove the directory after the smoke run.
+
 Before ingesting the smoke fixture, create the first durable admin with the
 bootstrap key and then create an exact-scope public/runtime principal. The
 bootstrap secret is only valid for the configured default scope and is rejected

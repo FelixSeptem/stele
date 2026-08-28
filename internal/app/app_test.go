@@ -1172,6 +1172,229 @@ func TestAPIRunnerClosesRuntimeResourcesWhenBootstrapFails(t *testing.T) {
 	}
 }
 
+func TestBuildAPIRuntimeDefaultMigrationPolicyRunsBeforeServing(t *testing.T) {
+	mock, err := pgxmock.NewPool()
+	if err != nil {
+		t.Fatalf("pgxmock.NewPool() error = %v", err)
+	}
+	defer mock.Close()
+	cfg := config.Config{Mode: config.ModeAPI, HTTPAddr: ":9090", PostgresDSN: "postgres://runtime", Migrations: config.MigrationConfig{Policy: config.MigrationPolicyValidate}}
+	var gotPolicy string
+	runtime, err := buildAPIRuntime(context.Background(), cfg, apiRuntimeDependencies{
+		openPool:        func(context.Context, string) (postgresRuntimeStore, error) { return mock, nil },
+		migrateDatabase: func(_ context.Context, _ string, policy string) error { gotPolicy = policy; return nil },
+		newServer:       func(string, HTTPDependencies) httpServer { return &stubAPIServer{err: http.ErrServerClosed} },
+	})
+	if err != nil {
+		t.Fatalf("buildAPIRuntime() error = %v", err)
+	}
+	if err := runAPIRuntime(context.Background(), runtime); err != nil {
+		t.Fatalf("runAPIRuntime() error = %v", err)
+	}
+	if gotPolicy != string(cfg.Migrations.Policy) {
+		t.Fatalf("migration policy = %q, want %q", gotPolicy, cfg.Migrations.Policy)
+	}
+}
+
+type stubBackgroundWorker struct{ called bool }
+
+func (s *stubBackgroundWorker) Start(context.Context) error { s.called = true; return nil }
+
+type stubBackgroundScheduler struct{ called bool }
+
+func (s *stubBackgroundScheduler) Start(context.Context) error { s.called = true; return nil }
+
+type cancellationAwareWorker struct{ called chan struct{} }
+
+func (w cancellationAwareWorker) Start(ctx context.Context) error {
+	close(w.called)
+	<-ctx.Done()
+	return ctx.Err()
+}
+
+type cancellationAwareScheduler struct{ called chan struct{} }
+
+func (s cancellationAwareScheduler) Start(ctx context.Context) error {
+	close(s.called)
+	<-ctx.Done()
+	return ctx.Err()
+}
+
+func TestRuntimeCleanupIsExactlyOnceOnCancellation(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	server := &stubAPIServer{shutdownCh: make(chan struct{})}
+	cleanupCount := 0
+	done := make(chan error, 1)
+	go func() {
+		done <- runAPIRuntime(ctx, apiRuntime{bootstrapper: &stubBootstrapper{}, server: server, shutdownTimeout: time.Second, cleanup: func() { cleanupCount++ }})
+	}()
+	time.Sleep(10 * time.Millisecond)
+	cancel()
+	if err := <-done; err != nil {
+		t.Fatalf("api runtime error = %v", err)
+	}
+	if cleanupCount != 1 {
+		t.Fatalf("api cleanup count = %d, want 1", cleanupCount)
+	}
+
+	workerCtx, workerCancel := context.WithCancel(context.Background())
+	workerCalled := make(chan struct{})
+	workerCleanup := 0
+	worker := workerRunner{build: func(context.Context) (workerRuntime, error) {
+		return workerRuntime{bootstrapper: &stubBootstrapper{}, worker: cancellationAwareWorker{called: workerCalled}, cleanup: func() { workerCleanup++ }}, nil
+	}}
+	workerDone := make(chan error, 1)
+	go func() { workerDone <- worker.Start(workerCtx) }()
+	<-workerCalled
+	workerCancel()
+	if err := <-workerDone; !errors.Is(err, context.Canceled) {
+		t.Fatalf("worker runtime error = %v, want context canceled", err)
+	}
+	if workerCleanup != 1 {
+		t.Fatalf("worker cleanup count = %d, want 1", workerCleanup)
+	}
+
+	schedulerCtx, schedulerCancel := context.WithCancel(context.Background())
+	schedulerCalled := make(chan struct{})
+	schedulerCleanup := 0
+	scheduler := schedulerRunner{build: func(context.Context) (schedulerRuntime, error) {
+		return schedulerRuntime{bootstrapper: &stubBootstrapper{}, scheduler: cancellationAwareScheduler{called: schedulerCalled}, cleanup: func() { schedulerCleanup++ }}, nil
+	}}
+	schedulerDone := make(chan error, 1)
+	go func() { schedulerDone <- scheduler.Start(schedulerCtx) }()
+	<-schedulerCalled
+	schedulerCancel()
+	if err := <-schedulerDone; !errors.Is(err, context.Canceled) {
+		t.Fatalf("scheduler runtime error = %v, want context canceled", err)
+	}
+	if schedulerCleanup != 1 {
+		t.Fatalf("scheduler cleanup count = %d, want 1", schedulerCleanup)
+	}
+}
+
+func TestBuildWorkerAndSchedulerRuntimeDefaultMigrationPolicyRunsBeforeWork(t *testing.T) {
+	cases := []struct {
+		name   string
+		policy config.MigrationPolicy
+		build  func(config.Config, func(context.Context, string) (postgresRuntimeStore, error), func(context.Context, string, string) error) (Runner, error)
+	}{
+		{name: "worker", policy: config.MigrationPolicyValidate, build: func(cfg config.Config, open func(context.Context, string) (postgresRuntimeStore, error), migrate func(context.Context, string, string) error) (Runner, error) {
+			return workerRunner{build: func(ctx context.Context) (workerRuntime, error) {
+				r, err := buildWorkerRuntime(ctx, cfg, workerRuntimeDependencies{openPool: open, migrateDatabase: migrate})
+				r.worker = &stubBackgroundWorker{}
+				return r, err
+			}}, nil
+		}},
+		{name: "scheduler", policy: config.MigrationPolicyOff, build: func(cfg config.Config, open func(context.Context, string) (postgresRuntimeStore, error), migrate func(context.Context, string, string) error) (Runner, error) {
+			return schedulerRunner{build: func(ctx context.Context) (schedulerRuntime, error) {
+				r, err := buildSchedulerRuntime(ctx, cfg, schedulerRuntimeDependencies{openPool: open, migrateDatabase: migrate})
+				r.scheduler = &stubBackgroundScheduler{}
+				return r, err
+			}}, nil
+		}},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			mock, err := pgxmock.NewPool()
+			if err != nil {
+				t.Fatalf("pgxmock.NewPool() error = %v", err)
+			}
+			defer mock.Close()
+			cfg := config.Config{PostgresDSN: "postgres://runtime", Migrations: config.MigrationConfig{Policy: tc.policy}, Auth: config.AuthConfig{DefaultTenant: "tenant-a", DefaultProject: "project-a", DefaultNamespace: "namespace-a"}}
+			var gotPolicy string
+			runner, err := tc.build(cfg, func(context.Context, string) (postgresRuntimeStore, error) { return mock, nil }, func(_ context.Context, _ string, policy string) error { gotPolicy = policy; return nil })
+			if err != nil {
+				t.Fatalf("build runner error = %v", err)
+			}
+			if err := runner.Start(context.Background()); err != nil {
+				t.Fatalf("runner.Start() error = %v", err)
+			}
+			if gotPolicy != string(tc.policy) {
+				t.Fatalf("migration policy = %q, want %q", gotPolicy, tc.policy)
+			}
+		})
+	}
+}
+
+func TestRuntimeStartupRejectsMigrationValidationFailureBeforeWork(t *testing.T) {
+	validationErr := errors.New("migration validation failed: status=pending current_version=0 latest_version=1 dirty=false")
+	apiServer := &stubAPIServer{err: http.ErrServerClosed}
+	apiMock, err := pgxmock.NewPool()
+	if err != nil {
+		t.Fatalf("pgxmock.NewPool() error = %v", err)
+	}
+	defer apiMock.Close()
+	apiRuntime, err := buildAPIRuntime(context.Background(), config.Config{Mode: config.ModeAPI, HTTPAddr: ":9090", PostgresDSN: "postgres://runtime", Migrations: config.MigrationConfig{Policy: config.MigrationPolicyValidate}}, apiRuntimeDependencies{
+		openPool:        func(context.Context, string) (postgresRuntimeStore, error) { return apiMock, nil },
+		migrateDatabase: func(context.Context, string, string) error { return validationErr },
+		newServer:       func(string, HTTPDependencies) httpServer { return apiServer },
+	})
+	if err != nil {
+		t.Fatalf("buildAPIRuntime() error = %v", err)
+	}
+	if err := runAPIRuntime(context.Background(), apiRuntime); !errors.Is(err, validationErr) && !strings.Contains(err.Error(), "status=pending") {
+		t.Fatalf("runAPIRuntime() error = %v, want pending migration failure", err)
+	}
+	if apiServer.called {
+		t.Fatal("api server started despite migration validation failure")
+	}
+	dirtyServer := &stubAPIServer{err: http.ErrServerClosed}
+	dirtyRuntime, err := buildAPIRuntime(context.Background(), config.Config{Mode: config.ModeAPI, HTTPAddr: ":9090", PostgresDSN: "postgres://runtime", Migrations: config.MigrationConfig{Policy: config.MigrationPolicyValidate}}, apiRuntimeDependencies{
+		openPool: func(context.Context, string) (postgresRuntimeStore, error) { return apiMock, nil },
+		migrateDatabase: func(context.Context, string, string) error {
+			return errors.New("migration validation failed: status=dirty current_version=1 latest_version=1 dirty=true")
+		},
+		newServer: func(string, HTTPDependencies) httpServer { return dirtyServer },
+	})
+	if err != nil {
+		t.Fatalf("build dirty APIRuntime() error = %v", err)
+	}
+	if err := runAPIRuntime(context.Background(), dirtyRuntime); err == nil || !strings.Contains(err.Error(), "status=dirty") {
+		t.Fatalf("runAPIRuntime() error = %v, want dirty migration failure", err)
+	}
+	if dirtyServer.called {
+		t.Fatal("api server started despite dirty migration validation failure")
+	}
+
+	workerMock, err := pgxmock.NewPool()
+	if err != nil {
+		t.Fatalf("pgxmock.NewPool() error = %v", err)
+	}
+	defer workerMock.Close()
+	workerRunner := workerRunner{build: func(ctx context.Context) (workerRuntime, error) {
+		r, err := buildWorkerRuntime(ctx, config.Config{Mode: config.ModeWorker, PostgresDSN: "postgres://runtime", Migrations: config.MigrationConfig{Policy: config.MigrationPolicyValidate}}, workerRuntimeDependencies{
+			openPool:        func(context.Context, string) (postgresRuntimeStore, error) { return workerMock, nil },
+			migrateDatabase: func(context.Context, string, string) error { return validationErr },
+		})
+		if err == nil {
+			r.worker = &stubBackgroundWorker{}
+		}
+		return r, err
+	}}
+	if err := workerRunner.Start(context.Background()); !strings.Contains(err.Error(), "status=pending") {
+		t.Fatalf("worker Start() error = %v, want pending migration failure", err)
+	}
+
+	schedulerMock, err := pgxmock.NewPool()
+	if err != nil {
+		t.Fatalf("pgxmock.NewPool() error = %v", err)
+	}
+	defer schedulerMock.Close()
+	schedulerRunner := schedulerRunner{build: func(ctx context.Context) (schedulerRuntime, error) {
+		r, err := buildSchedulerRuntime(ctx, config.Config{Mode: config.ModeScheduler, PostgresDSN: "postgres://runtime", Migrations: config.MigrationConfig{Policy: config.MigrationPolicyValidate}, Auth: config.AuthConfig{DefaultTenant: "tenant-a", DefaultProject: "project-a", DefaultNamespace: "namespace-a"}}, schedulerRuntimeDependencies{
+			openPool:        func(context.Context, string) (postgresRuntimeStore, error) { return schedulerMock, nil },
+			migrateDatabase: func(context.Context, string, string) error { return validationErr },
+		})
+		if err == nil {
+			r.scheduler = &stubBackgroundScheduler{}
+		}
+		return r, err
+	}}
+	if err := schedulerRunner.Start(context.Background()); !strings.Contains(err.Error(), "status=pending") {
+		t.Fatalf("scheduler Start() error = %v, want pending migration failure", err)
+	}
+}
+
 func TestBuildAPIRuntimeAssemblesEventIngestionPath(t *testing.T) {
 	mock, err := pgxmock.NewPool()
 	if err != nil {

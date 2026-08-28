@@ -117,6 +117,7 @@ type transactionStarter interface {
 type apiRuntimeDependencies struct {
 	openPool           func(ctx context.Context, dsn string) (postgresRuntimeStore, error)
 	bootstrapDatabase  func(ctx context.Context, db postgresRuntimeStore) error
+	migrateDatabase    func(ctx context.Context, dsn, policy string) error
 	newServer          func(addr string, deps HTTPDependencies) httpServer
 	embeddingProviders map[string]embedding.Provider
 	observer           telemetry.Observer
@@ -125,6 +126,7 @@ type apiRuntimeDependencies struct {
 type workerRuntimeDependencies struct {
 	openPool           func(ctx context.Context, dsn string) (postgresRuntimeStore, error)
 	bootstrapDatabase  func(ctx context.Context, db postgresRuntimeStore) error
+	migrateDatabase    func(ctx context.Context, dsn, policy string) error
 	embeddingProviders map[string]embedding.Provider
 	now                func() time.Time
 	observer           telemetry.Observer
@@ -137,6 +139,7 @@ type backgroundWorker interface {
 type schedulerRuntimeDependencies struct {
 	openPool           func(ctx context.Context, dsn string) (postgresRuntimeStore, error)
 	bootstrapDatabase  func(ctx context.Context, db postgresRuntimeStore) error
+	migrateDatabase    func(ctx context.Context, dsn, policy string) error
 	embeddingProviders map[string]embedding.Provider
 	now                func() time.Time
 	observer           telemetry.Observer
@@ -434,8 +437,11 @@ func buildAPIRuntime(ctx context.Context, cfg config.Config, deps apiRuntimeDepe
 		deps.openPool = defaultAPIRuntimeDependencies().openPool
 	}
 	if deps.bootstrapDatabase == nil {
+		if deps.migrateDatabase == nil {
+			deps.migrateDatabase = postgres.MigrateDatabase
+		}
 		deps.bootstrapDatabase = func(ctx context.Context, db postgresRuntimeStore) error {
-			return postgres.MigrateDatabase(ctx, cfg.PostgresDSN, string(cfg.Migrations.Policy))
+			return deps.migrateDatabase(ctx, cfg.PostgresDSN, string(cfg.Migrations.Policy))
 		}
 	}
 	if deps.newServer == nil {
@@ -601,8 +607,11 @@ func buildWorkerRuntime(ctx context.Context, cfg config.Config, deps workerRunti
 		deps.openPool = defaultWorkerRuntimeDependencies().openPool
 	}
 	if deps.bootstrapDatabase == nil {
+		if deps.migrateDatabase == nil {
+			deps.migrateDatabase = postgres.MigrateDatabase
+		}
 		deps.bootstrapDatabase = func(ctx context.Context, db postgresRuntimeStore) error {
-			return postgres.MigrateDatabase(ctx, cfg.PostgresDSN, string(cfg.Migrations.Policy))
+			return deps.migrateDatabase(ctx, cfg.PostgresDSN, string(cfg.Migrations.Policy))
 		}
 	}
 	if deps.now == nil {
@@ -800,8 +809,11 @@ func buildSchedulerRuntime(ctx context.Context, cfg config.Config, deps schedule
 		deps.openPool = defaultSchedulerRuntimeDependencies().openPool
 	}
 	if deps.bootstrapDatabase == nil {
+		if deps.migrateDatabase == nil {
+			deps.migrateDatabase = postgres.MigrateDatabase
+		}
 		deps.bootstrapDatabase = func(ctx context.Context, db postgresRuntimeStore) error {
-			return postgres.MigrateDatabase(ctx, cfg.PostgresDSN, string(cfg.Migrations.Policy))
+			return deps.migrateDatabase(ctx, cfg.PostgresDSN, string(cfg.Migrations.Policy))
 		}
 	}
 	if deps.now == nil {
