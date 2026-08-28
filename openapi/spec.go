@@ -6,6 +6,28 @@ info:
   title: Stele API
   version: 0.1.0
 paths:
+  /openapi.yaml:
+    get:
+      operationId: getOpenAPI
+      responses:
+        '200':
+          description: Authoritative OpenAPI contract for the running service
+          content:
+            application/yaml:
+              schema:
+                type: string
+        '304':
+          description: Contract has not changed since the supplied ETag
+  /version:
+    get:
+      operationId: getVersion
+      responses:
+        '200':
+          description: Bounded service and schema compatibility metadata
+          content:
+            application/json:
+              schema:
+                type: object
   /health:
     get:
       operationId: getHealth

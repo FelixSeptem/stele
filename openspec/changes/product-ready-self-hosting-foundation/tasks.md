@@ -1,8 +1,8 @@
 ## 1. Migration Foundation
 
-- [ ] 1.1 Inventory the current PostgreSQL bootstrap schema, startup call sites, and existing `golang-migrate` dependency; evaluate mature PostgreSQL migration libraries on `pkg.go.dev` and record the selected library, version, licensing, dirty-state, locking, and embedded-SQL rationale in implementation notes before adding production code.
-- [ ] 1.2 Define migration configuration, bounded error categories, migration status model, and startup policy (`auto`, `validate`, and documented externally managed mode); add configuration validation and focused unit tests.
-- [ ] 1.3 Convert the current supported base schema into an immutable initial numbered migration and implement a migration ledger/status reader that reports current, pending, dirty, divergent, and incompatible states.
+- [x] 1.1 Inventory the current PostgreSQL bootstrap schema, startup call sites, and existing `golang-migrate` dependency; evaluate mature PostgreSQL migration libraries on `pkg.go.dev` and record the selected library, version, licensing, dirty-state, locking, and embedded-SQL rationale in implementation notes before adding production code.
+- [x] 1.2 Define migration configuration, bounded error categories, migration status model, and startup policy (`auto`, `validate`, and documented externally managed mode); add configuration validation and focused unit tests.
+- [x] 1.3 Convert the current supported base schema into an immutable initial numbered migration and implement a migration ledger/status reader that reports current, pending, dirty, divergent, and incompatible states.
 - [ ] 1.4 Implement locked forward migration execution using PostgreSQL-owned serialization and tests that prove concurrent invocations cannot apply the same migration twice.
 - [ ] 1.5 Wire migration validation/execution into API, worker, and scheduler startup before protected traffic or job claims, with unit tests for policy, pending, and dirty outcomes.
 - [ ] 1.6 Add the standalone `stele migrate status` and forward-apply commands with machine-readable and human-readable output; verify that they use the same ledger and lock as runtime startup.
@@ -11,27 +11,27 @@
 
 ## 2. Runtime Resource and Lifecycle Safety
 
-- [ ] 2.1 Add bounded HTTP header, body, read, write, idle, and shutdown-drain settings to runtime configuration with defaults, startup validation, and unit tests for invalid values.
-- [ ] 2.2 Add shared request-body limiting and JSON decode error mapping to public and admin HTTP handlers; verify oversized, malformed, and valid requests cannot partially persist an event or expose request content.
-- [ ] 2.3 Configure `http.Server` limits and readiness drain state; add handler/server tests proving readiness goes non-ready before shutdown while health behavior remains documented.
+- [x] 2.1 Add bounded HTTP header, body, read, write, idle, and shutdown-drain settings to runtime configuration with defaults, startup validation, and unit tests for invalid values.
+- [x] 2.2 Add shared request-body limiting and JSON decode error mapping to public and admin HTTP handlers; verify oversized, malformed, and valid requests cannot partially persist an event or expose request content.
+- [x] 2.3 Configure `http.Server` limits and readiness drain state; add handler/server tests proving readiness goes non-ready before shutdown while health behavior remains documented.
 - [ ] 2.4 Replace the uncancelable main context with signal-aware `SIGINT`/`SIGTERM` propagation and implement bounded API server shutdown with exactly-once dependency cleanup tests.
 - [ ] 2.5 Make worker and scheduler loops observe cancellation, cease new claims, preserve durable retry/lease semantics, and close dependencies on cancellation or startup failure; add focused lifecycle tests.
 - [ ] 2.6 Add bounded lifecycle metrics/log events for startup, migration validation, readiness transition, signal, drain, timeout, and cleanup; verify metric labels and ordinary logs exclude scopes, principals, DSNs, credentials, and raw errors.
 
 ## 3. Runtime Contract Publication
 
-- [ ] 3.1 Define build/version/OpenAPI digest/schema compatibility metadata and reproducible build-time injection defaults; add unit tests for explicit and absent build metadata.
-- [ ] 3.2 Expose the authoritative embedded OpenAPI document from API mode with correct content type and cache validator, and add tests that parse the served document and verify conditional requests.
-- [ ] 3.3 Expose the bounded public version/compatibility endpoint and tests that confirm it reports contract/schema facts while excluding configuration, secrets, scope data, and operational detail.
+- [x] 3.1 Define build/version/OpenAPI digest/schema compatibility metadata and reproducible build-time injection defaults; add unit tests for explicit and absent build metadata.
+- [x] 3.2 Expose the authoritative embedded OpenAPI document from API mode with correct content type and cache validator, and add tests that parse the served document and verify conditional requests.
+- [x] 3.3 Expose the bounded public version/compatibility endpoint and tests that confirm it reports contract/schema facts while excluding configuration, secrets, scope data, and operational detail.
 - [ ] 3.4 Add automated route-to-OpenAPI coverage checks for all public discovery and protected API routes, including authentication, scope, idempotency, and error contract assertions.
 
 ## 4. Self-hosted Bootstrap and Deployment Assets
 
-- [ ] 4.1 Refactor `docker-compose.yml` into documented local-evaluation wiring that uses only accepted bootstrap-admin authorization settings and one consistent configuration set across API, worker, and scheduler.
-- [ ] 4.2 Add a non-secret environment example and production configuration reference that distinguish local bundled PostgreSQL from external operator-managed PostgreSQL, secret injection, migration policy, and reverse-proxy/TLS responsibilities.
+- [x] 4.1 Refactor `docker-compose.yml` into documented local-evaluation wiring that uses only accepted bootstrap-admin authorization settings and one consistent configuration set across API, worker, and scheduler.
+- [x] 4.2 Add a non-secret environment example and production configuration reference that distinguish local bundled PostgreSQL from external operator-managed PostgreSQL, secret injection, migration policy, and reverse-proxy/TLS responsibilities.
 - [ ] 4.3 Create a repeatable bootstrap smoke command/script that creates the first durable admin, least-privilege runtime principal and exact grant, securely captures one-time credentials, and verifies bootstrap deactivation semantics.
 - [ ] 4.4 Extend the smoke flow to prove migration status, OpenAPI/version discovery, idempotent ingest, async governance, retrieval, context assembly, and same-scope assurance evidence using the runtime principal.
-- [ ] 4.5 Update README and self-hosting documentation to make the canonical bootstrap and product smoke path authoritative, remove live obsolete allow-list examples, and document failure diagnostics by stage.
+- [x] 4.5 Update README and self-hosting documentation to make the canonical bootstrap and product smoke path authoritative, remove live obsolete allow-list examples, and document failure diagnostics by stage.
 - [ ] 4.6 Add documentation/deployment contract tests that reject obsolete auth settings and validate referenced environment variables, commands, routes, and smoke script sequence against the running configuration/OpenAPI contract.
 
 ## 5. PostgreSQL Backup and Recovery Operations

@@ -31,17 +31,50 @@ func (s *stubBootstrapper) Bootstrap(ctx context.Context) error {
 }
 
 type stubAPIServer struct {
-	called bool
-	err    error
+	called         bool
+	err            error
+	shutdownCalled bool
+	shutdownCh     chan struct{}
 }
 
 func (s *stubAPIServer) ListenAndServe() error {
 	s.called = true
+	if s.shutdownCh != nil {
+		<-s.shutdownCh
+		return http.ErrServerClosed
+	}
 	return s.err
 }
 
 func (s *stubAPIServer) Shutdown(ctx context.Context) error {
+	s.shutdownCalled = true
+	if s.shutdownCh != nil {
+		close(s.shutdownCh)
+	}
 	return nil
+}
+
+func TestRunAPIRuntimeShutsDownServerWhenContextIsCanceled(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	server := &stubAPIServer{shutdownCh: make(chan struct{})}
+	runtime := apiRuntime{bootstrapper: &stubBootstrapper{}, server: server, shutdownTimeout: time.Second}
+
+	done := make(chan error, 1)
+	go func() { done <- runAPIRuntime(ctx, runtime) }()
+	time.Sleep(10 * time.Millisecond)
+	cancel()
+
+	select {
+	case err := <-done:
+		if err != nil {
+			t.Fatalf("runAPIRuntime() error = %v", err)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("runAPIRuntime() did not stop after context cancellation")
+	}
+	if !server.shutdownCalled {
+		t.Fatal("server shutdown was not called")
+	}
 }
 
 type stubAppObserver struct {
@@ -159,6 +192,22 @@ func TestAPIRunnerReturnsBootstrapFailure(t *testing.T) {
 
 	if server.called {
 		t.Fatal("server should not start when bootstrap fails")
+	}
+}
+
+func TestHTTPDependenciesFromConfigPassesRuntimeLimits(t *testing.T) {
+	cfg := config.Config{HTTP: config.HTTPConfig{
+		MaxRequestBodyBytes: 123,
+		MaxHeaderBytes:      456,
+		ReadHeaderTimeout:   time.Second,
+		ReadTimeout:         2 * time.Second,
+		WriteTimeout:        3 * time.Second,
+		IdleTimeout:         4 * time.Second,
+	}}
+
+	deps := httpDependenciesFromConfig(cfg)
+	if deps.HTTP.MaxRequestBodyBytes != 123 || deps.HTTP.MaxHeaderBytes != 456 || deps.HTTP.ReadHeaderTimeout != time.Second || deps.HTTP.ReadTimeout != 2*time.Second || deps.HTTP.WriteTimeout != 3*time.Second || deps.HTTP.IdleTimeout != 4*time.Second {
+		t.Fatalf("HTTP dependencies = %+v, want config runtime limits", deps.HTTP)
 	}
 }
 
@@ -696,11 +745,11 @@ func TestBuildSchedulerRuntimeAddsWorkflowMaintenanceOnlyWhenEnabled(t *testing.
 		cfg := config.Config{
 			Mode:        config.ModeScheduler,
 			PostgresDSN: "postgres://runtime",
-			Auth: config.AuthConfig{DefaultTenant: "tenant-a", DefaultProject: "project-a", DefaultNamespace: "namespace-a"},
-			Jobs: config.JobConfig{MaintenanceInterval: time.Minute, SchedulerErrorBackoff: time.Minute, WorkflowMaintenanceEnabled: enabled, WorkflowDiagnosticCadence: 2 * time.Minute, WorkflowDiagnosticScanLimit: 10, WorkflowHistoryRetention: 24 * time.Hour},
+			Auth:        config.AuthConfig{DefaultTenant: "tenant-a", DefaultProject: "project-a", DefaultNamespace: "namespace-a"},
+			Jobs:        config.JobConfig{MaintenanceInterval: time.Minute, SchedulerErrorBackoff: time.Minute, WorkflowMaintenanceEnabled: enabled, WorkflowDiagnosticCadence: 2 * time.Minute, WorkflowDiagnosticScanLimit: 10, WorkflowHistoryRetention: 24 * time.Hour},
 		}
 		runtime, err := buildSchedulerRuntime(context.Background(), cfg, schedulerRuntimeDependencies{
-			openPool: func(ctx context.Context, dsn string) (postgresRuntimeStore, error) { return mock, nil },
+			openPool:          func(ctx context.Context, dsn string) (postgresRuntimeStore, error) { return mock, nil },
 			bootstrapDatabase: func(ctx context.Context, db postgresRuntimeStore) error { return nil },
 			now:               func() time.Time { return time.Date(2026, 7, 18, 19, 0, 0, 0, time.UTC) },
 		})

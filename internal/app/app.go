@@ -2,10 +2,12 @@ package app
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"net/http"
 	"sort"
 	"strings"
+	"sync/atomic"
 	"time"
 
 	"github.com/FelixSeptem/stele/internal/assurance"
@@ -37,6 +39,25 @@ type bootstrapper interface {
 	Bootstrap(ctx context.Context) error
 }
 
+var errRuntimeDraining = errors.New("runtime is draining")
+
+type readinessGate struct {
+	checker  ReadinessChecker
+	draining atomic.Bool
+}
+
+func (g *readinessGate) BeginDrain() { g.draining.Store(true) }
+
+func (g *readinessGate) Ready(ctx context.Context) error {
+	if g.draining.Load() {
+		return errRuntimeDraining
+	}
+	if g.checker == nil {
+		return nil
+	}
+	return g.checker.Ready(ctx)
+}
+
 type httpServer interface {
 	ListenAndServe() error
 	Shutdown(ctx context.Context) error
@@ -49,9 +70,11 @@ type apiRunner struct {
 }
 
 type apiRuntime struct {
-	bootstrapper bootstrapper
-	server       httpServer
-	cleanup      func()
+	bootstrapper    bootstrapper
+	server          httpServer
+	shutdownTimeout time.Duration
+	markDraining    func()
+	cleanup         func()
 }
 
 type workerRuntime struct {
@@ -283,11 +306,32 @@ func runAPIRuntime(ctx context.Context, runtime apiRuntime) error {
 		return err
 	}
 
-	if err := runtime.server.ListenAndServe(); err != nil && err != http.ErrServerClosed {
-		return err
+	serverErr := make(chan error, 1)
+	go func() { serverErr <- runtime.server.ListenAndServe() }()
+	select {
+	case err := <-serverErr:
+		if err != nil && err != http.ErrServerClosed {
+			return err
+		}
+		return nil
+	case <-ctx.Done():
+		if runtime.markDraining != nil {
+			runtime.markDraining()
+		}
+		timeout := runtime.shutdownTimeout
+		if timeout <= 0 {
+			timeout = 20 * time.Second
+		}
+		shutdownCtx, cancel := context.WithTimeout(context.Background(), timeout)
+		defer cancel()
+		if err := runtime.server.Shutdown(shutdownCtx); err != nil {
+			return fmt.Errorf("shutdown api server: %w", err)
+		}
+		if err := <-serverErr; err != nil && err != http.ErrServerClosed {
+			return err
+		}
+		return nil
 	}
-
-	return nil
 }
 
 type noopBootstrapper struct{}
@@ -331,6 +375,20 @@ func principalAuthorizerForRuntime(cfg config.Config, store principalRuntimeStor
 
 func httpDependenciesFromConfig(cfg config.Config) HTTPDependencies {
 	return HTTPDependencies{
+		Contract: RuntimeContract{
+			ServiceVersion: BuildVersion,
+			BuildID:        BuildID,
+			BuildTimestamp: BuildTimestamp,
+			SchemaVersion:  postgres.CurrentMigrationVersion,
+		},
+		HTTP: HTTPRuntimeLimits{
+			MaxRequestBodyBytes: cfg.HTTP.MaxRequestBodyBytes,
+			MaxHeaderBytes:      cfg.HTTP.MaxHeaderBytes,
+			ReadHeaderTimeout:   cfg.HTTP.ReadHeaderTimeout,
+			ReadTimeout:         cfg.HTTP.ReadTimeout,
+			WriteTimeout:        cfg.HTTP.WriteTimeout,
+			IdleTimeout:         cfg.HTTP.IdleTimeout,
+		},
 		APIKeys:      staticAPIKeysFromConfig(cfg),
 		AdminAPIKeys: staticAdminAPIKeysFromConfig(cfg),
 	}
@@ -347,9 +405,6 @@ func defaultAPIRuntimeDependencies() apiRuntimeDependencies {
 		openPool: func(ctx context.Context, dsn string) (postgresRuntimeStore, error) {
 			return postgres.OpenPool(ctx, dsn)
 		},
-		bootstrapDatabase: func(ctx context.Context, db postgresRuntimeStore) error {
-			return postgres.BootstrapDatabase(ctx, db)
-		},
 		newServer: func(addr string, deps HTTPDependencies) httpServer {
 			return NewHTTPServer(addr, deps)
 		},
@@ -361,9 +416,6 @@ func defaultWorkerRuntimeDependencies() workerRuntimeDependencies {
 		openPool: func(ctx context.Context, dsn string) (postgresRuntimeStore, error) {
 			return postgres.OpenPool(ctx, dsn)
 		},
-		bootstrapDatabase: func(ctx context.Context, db postgresRuntimeStore) error {
-			return postgres.BootstrapDatabase(ctx, db)
-		},
 		now: time.Now,
 	}
 }
@@ -372,9 +424,6 @@ func defaultSchedulerRuntimeDependencies() schedulerRuntimeDependencies {
 	return schedulerRuntimeDependencies{
 		openPool: func(ctx context.Context, dsn string) (postgresRuntimeStore, error) {
 			return postgres.OpenPool(ctx, dsn)
-		},
-		bootstrapDatabase: func(ctx context.Context, db postgresRuntimeStore) error {
-			return postgres.BootstrapDatabase(ctx, db)
 		},
 		now: time.Now,
 	}
@@ -385,7 +434,9 @@ func buildAPIRuntime(ctx context.Context, cfg config.Config, deps apiRuntimeDepe
 		deps.openPool = defaultAPIRuntimeDependencies().openPool
 	}
 	if deps.bootstrapDatabase == nil {
-		deps.bootstrapDatabase = defaultAPIRuntimeDependencies().bootstrapDatabase
+		deps.bootstrapDatabase = func(ctx context.Context, db postgresRuntimeStore) error {
+			return postgres.MigrateDatabase(ctx, cfg.PostgresDSN, string(cfg.Migrations.Policy))
+		}
 	}
 	if deps.newServer == nil {
 		deps.newServer = defaultAPIRuntimeDependencies().newServer
@@ -444,7 +495,8 @@ func buildAPIRuntime(ctx context.Context, cfg config.Config, deps apiRuntimeDepe
 	} else if len(cfg.Auth.APIKeys) == 0 && len(cfg.Auth.AdminAPIKeys) == 0 {
 		httpDeps.PrincipalAuthorizer = durableAuthorizer
 	}
-	httpDeps.Readiness = runtimeReadinessChecker(config.ModeAPI, pool, embeddingRuntime, false, deps.observer)
+	readiness := &readinessGate{checker: runtimeReadinessChecker(config.ModeAPI, pool, embeddingRuntime, false, deps.observer)}
+	httpDeps.Readiness = readiness
 	if metrics, ok := deps.observer.(interface {
 		RenderPrometheus() string
 		RecordAdmission(ctx context.Context, event telemetry.AdmissionEvent)
@@ -535,7 +587,9 @@ func buildAPIRuntime(ctx context.Context, cfg config.Config, deps apiRuntimeDepe
 		bootstrapper: bootstrapperFunc(func(ctx context.Context) error {
 			return deps.bootstrapDatabase(ctx, pool)
 		}),
-		server: deps.newServer(cfg.HTTPAddr, httpDeps),
+		server:          deps.newServer(cfg.HTTPAddr, httpDeps),
+		shutdownTimeout: cfg.HTTP.ShutdownTimeout,
+		markDraining:    readiness.BeginDrain,
 		cleanup: func() {
 			pool.Close()
 		},
@@ -547,7 +601,9 @@ func buildWorkerRuntime(ctx context.Context, cfg config.Config, deps workerRunti
 		deps.openPool = defaultWorkerRuntimeDependencies().openPool
 	}
 	if deps.bootstrapDatabase == nil {
-		deps.bootstrapDatabase = defaultWorkerRuntimeDependencies().bootstrapDatabase
+		deps.bootstrapDatabase = func(ctx context.Context, db postgresRuntimeStore) error {
+			return postgres.MigrateDatabase(ctx, cfg.PostgresDSN, string(cfg.Migrations.Policy))
+		}
 	}
 	if deps.now == nil {
 		deps.now = time.Now
@@ -744,7 +800,9 @@ func buildSchedulerRuntime(ctx context.Context, cfg config.Config, deps schedule
 		deps.openPool = defaultSchedulerRuntimeDependencies().openPool
 	}
 	if deps.bootstrapDatabase == nil {
-		deps.bootstrapDatabase = defaultSchedulerRuntimeDependencies().bootstrapDatabase
+		deps.bootstrapDatabase = func(ctx context.Context, db postgresRuntimeStore) error {
+			return postgres.MigrateDatabase(ctx, cfg.PostgresDSN, string(cfg.Migrations.Policy))
+		}
 	}
 	if deps.now == nil {
 		deps.now = time.Now

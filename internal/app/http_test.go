@@ -1099,6 +1099,65 @@ func TestNewHTTPHandlerServesLivenessReadinessAndMetrics(t *testing.T) {
 	}
 }
 
+func TestNewHTTPHandlerServesRuntimeOpenAPIWithCacheValidator(t *testing.T) {
+	handler := NewHTTPHandler(HTTPDependencies{Contract: RuntimeContract{
+		ServiceVersion: "1.2.3",
+		BuildID:        "commit-123",
+		SchemaVersion:  1,
+	}})
+
+	req := httptest.NewRequest(http.MethodGet, "/openapi.yaml", nil)
+	rec := httptest.NewRecorder()
+	handler.ServeHTTP(rec, req)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d, want %d", rec.Code, http.StatusOK)
+	}
+	if !strings.Contains(rec.Body.String(), "openapi: 3.1.0") {
+		t.Fatalf("OpenAPI body missing authoritative document")
+	}
+	if got := rec.Header().Get("Content-Type"); !strings.Contains(got, "application/yaml") {
+		t.Fatalf("Content-Type = %q, want YAML", got)
+	}
+	etag := rec.Header().Get("ETag")
+	if etag == "" {
+		t.Fatal("OpenAPI response missing ETag")
+	}
+
+	conditional := httptest.NewRequest(http.MethodGet, "/openapi.yaml", nil)
+	conditional.Header.Set("If-None-Match", etag)
+	conditionalRec := httptest.NewRecorder()
+	handler.ServeHTTP(conditionalRec, conditional)
+	if conditionalRec.Code != http.StatusNotModified {
+		t.Fatalf("conditional status = %d, want %d", conditionalRec.Code, http.StatusNotModified)
+	}
+}
+
+func TestNewHTTPHandlerServesBoundedRuntimeVersion(t *testing.T) {
+	handler := NewHTTPHandler(HTTPDependencies{Contract: RuntimeContract{
+		ServiceVersion: "1.2.3",
+		BuildID:        "commit-123",
+		BuildTimestamp: "2026-08-27T00:00:00Z",
+		SchemaVersion:  1,
+	}})
+
+	req := httptest.NewRequest(http.MethodGet, "/version", nil)
+	rec := httptest.NewRecorder()
+	handler.ServeHTTP(rec, req)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d, want %d", rec.Code, http.StatusOK)
+	}
+	var body map[string]any
+	if err := json.Unmarshal(rec.Body.Bytes(), &body); err != nil {
+		t.Fatalf("decode version response: %v", err)
+	}
+	if body["service_version"] != "1.2.3" || body["build_id"] != "commit-123" || body["schema_version"] != float64(1) {
+		t.Fatalf("version response = %#v, want bounded contract metadata", body)
+	}
+	if _, found := body["postgres_dsn"]; found {
+		t.Fatalf("version response leaked configuration: %#v", body)
+	}
+}
+
 func TestNewHTTPHandlerRejectsMissingAPIKeyForEvents(t *testing.T) {
 	handler := NewHTTPHandler(HTTPDependencies{
 		Readiness:     stubReadinessChecker{},
@@ -1437,6 +1496,14 @@ func TestNewHTTPHandlerRecoversFromPanic(t *testing.T) {
 func TestNewHTTPServerUsesConfiguredAddress(t *testing.T) {
 	server := NewHTTPServer(":9090", HTTPDependencies{
 		Readiness: stubReadinessChecker{},
+		HTTP: HTTPRuntimeLimits{
+			MaxRequestBodyBytes: 12345,
+			MaxHeaderBytes:      23456,
+			ReadHeaderTimeout:   3 * time.Second,
+			ReadTimeout:         4 * time.Second,
+			WriteTimeout:        5 * time.Second,
+			IdleTimeout:         6 * time.Second,
+		},
 	})
 
 	if server.Addr != ":9090" {
@@ -1445,6 +1512,9 @@ func TestNewHTTPServerUsesConfiguredAddress(t *testing.T) {
 
 	if server.Handler == nil {
 		t.Fatal("server.Handler = nil, want handler")
+	}
+	if server.MaxHeaderBytes != 23456 || server.ReadHeaderTimeout != 3*time.Second || server.ReadTimeout != 4*time.Second || server.WriteTimeout != 5*time.Second || server.IdleTimeout != 6*time.Second {
+		t.Fatalf("server limits = %+v, want configured limits", server)
 	}
 }
 
@@ -1468,6 +1538,32 @@ func TestNewHTTPHandlerReturnsServerErrorWhenIngestFails(t *testing.T) {
 
 	if rec.Code != http.StatusInternalServerError {
 		t.Fatalf("status = %d, want %d", rec.Code, http.StatusInternalServerError)
+	}
+}
+
+func TestNewHTTPHandlerRejectsOversizedJSONBodyBeforeIngest(t *testing.T) {
+	ingestor := &stubEventIngestor{}
+	handler := NewHTTPHandler(HTTPDependencies{
+		HTTP:          HTTPRuntimeLimits{MaxRequestBodyBytes: 32},
+		APIKeys:       map[string]struct{}{"test-key": {}},
+		EventIngestor: ingestor,
+	})
+
+	req := httptest.NewRequest(http.MethodPost, "/v1/events", strings.NewReader(`{"event_type":"conversation.message","content":"this payload is larger than the configured limit"}`))
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("X-API-Key", "test-key")
+	req.Header.Set("X-Stele-Tenant", "tenant-a")
+	req.Header.Set("X-Stele-Project", "project-a")
+	req.Header.Set("X-Stele-Namespace", "namespace-a")
+	rec := httptest.NewRecorder()
+
+	handler.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusRequestEntityTooLarge {
+		t.Fatalf("status = %d, want %d", rec.Code, http.StatusRequestEntityTooLarge)
+	}
+	if ingestor.ingestCalls != 0 {
+		t.Fatal("ingestor called for oversized request")
 	}
 }
 

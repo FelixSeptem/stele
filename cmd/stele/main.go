@@ -3,6 +3,9 @@ package main
 import (
 	"context"
 	"log"
+	"os"
+	"os/signal"
+	"syscall"
 
 	"github.com/FelixSeptem/stele/internal/app"
 	"github.com/FelixSeptem/stele/internal/config"
@@ -27,5 +30,7 @@ func run() error {
 		return err
 	}
 
-	return runner.Start(context.Background())
+	runContext, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
+	defer stop()
+	return runner.Start(runContext)
 }
