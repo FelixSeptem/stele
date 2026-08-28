@@ -4,7 +4,7 @@ services:
     restart: unless-stopped
     environment:
       POSTGRES_USER: stele
-      POSTGRES_PASSWORD: stele
+      POSTGRES_PASSWORD: ${STELE_POSTGRES_PASSWORD:-stele-local-only}
       POSTGRES_DB: stele
     ports:
       - "5432:5432"
@@ -23,9 +23,9 @@ services:
     environment:
       STELE_MODE: api
       STELE_HTTP_ADDR: :8080
-      STELE_POSTGRES_DSN: postgres://stele:stele@postgres:5432/stele?sslmode=disable
-      STELE_AUTH_API_KEYS: dev-public-key
-      STELE_AUTH_ADMIN_API_KEYS: dev-admin-key
+      STELE_POSTGRES_DSN: postgres://stele:${STELE_POSTGRES_PASSWORD:-stele-local-only}@postgres:5432/stele?sslmode=disable
+      STELE_DATABASE_MIGRATION_POLICY: ${STELE_DATABASE_MIGRATION_POLICY:-auto}
+      STELE_AUTH_BOOTSTRAP_ADMIN_KEY: ${STELE_AUTH_BOOTSTRAP_ADMIN_KEY:-local-bootstrap-admin-change-me}
       STELE_AUTH_DEFAULT_TENANT: tenant-a
       STELE_AUTH_DEFAULT_PROJECT: project-a
       STELE_AUTH_DEFAULT_NAMESPACE: namespace-a
@@ -49,9 +49,9 @@ services:
     restart: unless-stopped
     environment:
       STELE_MODE: worker
-      STELE_POSTGRES_DSN: postgres://stele:stele@postgres:5432/stele?sslmode=disable
-      STELE_AUTH_API_KEYS: dev-public-key
-      STELE_AUTH_ADMIN_API_KEYS: dev-admin-key
+      STELE_POSTGRES_DSN: postgres://stele:${STELE_POSTGRES_PASSWORD:-stele-local-only}@postgres:5432/stele?sslmode=disable
+      STELE_DATABASE_MIGRATION_POLICY: ${STELE_DATABASE_MIGRATION_POLICY:-auto}
+      STELE_AUTH_BOOTSTRAP_ADMIN_KEY: ${STELE_AUTH_BOOTSTRAP_ADMIN_KEY:-local-bootstrap-admin-change-me}
       STELE_AUTH_DEFAULT_TENANT: tenant-a
       STELE_AUTH_DEFAULT_PROJECT: project-a
       STELE_AUTH_DEFAULT_NAMESPACE: namespace-a
@@ -73,9 +73,9 @@ services:
     restart: unless-stopped
     environment:
       STELE_MODE: scheduler
-      STELE_POSTGRES_DSN: postgres://stele:stele@postgres:5432/stele?sslmode=disable
-      STELE_AUTH_API_KEYS: dev-public-key
-      STELE_AUTH_ADMIN_API_KEYS: dev-admin-key
+      STELE_POSTGRES_DSN: postgres://stele:${STELE_POSTGRES_PASSWORD:-stele-local-only}@postgres:5432/stele?sslmode=disable
+      STELE_DATABASE_MIGRATION_POLICY: ${STELE_DATABASE_MIGRATION_POLICY:-auto}
+      STELE_AUTH_BOOTSTRAP_ADMIN_KEY: ${STELE_AUTH_BOOTSTRAP_ADMIN_KEY:-local-bootstrap-admin-change-me}
       STELE_AUTH_DEFAULT_TENANT: tenant-a
       STELE_AUTH_DEFAULT_PROJECT: project-a
       STELE_AUTH_DEFAULT_NAMESPACE: namespace-a

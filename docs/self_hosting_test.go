@@ -46,14 +46,74 @@ func TestSelfHostingSmokeLoopDocumentsReplayContextAndMetrics(t *testing.T) {
 	}
 
 	for _, requiredConfig := range []string{
-		"STELE_AUTH_API_KEYS",
-		"STELE_AUTH_ADMIN_API_KEYS",
+		"STELE_AUTH_BOOTSTRAP_ADMIN_KEY",
 		"STELE_AUTH_DEFAULT_TENANT",
 		"STELE_AUTH_DEFAULT_PROJECT",
 		"STELE_AUTH_DEFAULT_NAMESPACE",
 	} {
 		if !strings.Contains(content, requiredConfig) {
 			t.Fatalf("self-hosting smoke docs missing required config %q", requiredConfig)
+		}
+	}
+	for _, obsolete := range []string{"STELE_AUTH_API_KEYS", "STELE_AUTH_ADMIN_API_KEYS"} {
+		if strings.Contains(content, obsolete+"=") {
+			t.Fatalf("self-hosting docs must not present obsolete auth setting as live configuration: %q", obsolete)
+		}
+	}
+}
+
+func TestBootstrapSmokeScriptIsDocumentedAndConstrained(t *testing.T) {
+	script, err := os.ReadFile("../scripts/stele-bootstrap-smoke.ps1")
+	if err != nil {
+		t.Fatalf("read bootstrap smoke script: %v", err)
+	}
+	content := string(script)
+	for _, want := range []string{"CredentialOutputDirectory", "/v1/admin/principals", "/grants", "bootstrap credential was still accepted", "/openapi.yaml", "/version", "/v1/events", "Idempotency-Key", "/v1/memories/search", "/v1/context/assemble"} {
+		if !strings.Contains(content, want) {
+			t.Fatalf("bootstrap smoke script missing %q", want)
+		}
+	}
+}
+
+func TestDeploymentContractRejectsObsoleteAuthAndRequiresBootstrapVariables(t *testing.T) {
+	compose, err := os.ReadFile("../docker-compose.yml")
+	if err != nil {
+		t.Fatalf("read docker-compose.yml: %v", err)
+	}
+	envExample, err := os.ReadFile("../.env.example")
+	if err != nil {
+		t.Fatalf("read .env.example: %v", err)
+	}
+	for _, content := range []string{string(compose), string(envExample)} {
+		for _, obsolete := range []string{"STELE_AUTH_API_KEYS", "STELE_AUTH_ADMIN_API_KEYS"} {
+			if strings.Contains(content, obsolete) {
+				t.Fatalf("deployment asset contains obsolete auth setting %q", obsolete)
+			}
+		}
+	}
+	for _, required := range []string{"STELE_AUTH_BOOTSTRAP_ADMIN_KEY", "STELE_AUTH_DEFAULT_TENANT", "STELE_AUTH_DEFAULT_PROJECT", "STELE_AUTH_DEFAULT_NAMESPACE", "STELE_DATABASE_MIGRATION_POLICY"} {
+		if !strings.Contains(string(compose), required) || !strings.Contains(string(envExample), required) {
+			t.Fatalf("deployment contract missing required variable %q", required)
+		}
+	}
+}
+
+func TestBackupRecoveryScriptsExposeSafetyGuards(t *testing.T) {
+	checks := map[string][]string{
+		"../scripts/stele-backup.ps1":         {"SourceDsn", "Destination", "pg_dump", "SHA256", "manifest"},
+		"../scripts/stele-restore.ps1":        {"Artifact", "Manifest", "TargetDsn", "ConfirmDestructive", "source-equal", "checksum mismatch", "pg_restore"},
+		"../scripts/stele-restore-verify.ps1": {"TargetDsn", "Manifest", "schema_migrations", "X-Stele-Tenant", "authorized scoped service proof", "RecordAssurance", "backup_restore_proof"},
+	}
+	for path, required := range checks {
+		contentBytes, err := os.ReadFile(path)
+		if err != nil {
+			t.Fatalf("read %s: %v", path, err)
+		}
+		content := string(contentBytes)
+		for _, want := range required {
+			if !strings.Contains(content, want) {
+				t.Fatalf("%s missing safety/verification guard %q", path, want)
+			}
 		}
 	}
 }

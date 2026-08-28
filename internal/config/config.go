@@ -18,14 +18,38 @@ const (
 	ModeScheduler Mode = "scheduler"
 )
 
+type MigrationPolicy string
+
+const (
+	MigrationPolicyAuto     MigrationPolicy = "auto"
+	MigrationPolicyValidate MigrationPolicy = "validate"
+	MigrationPolicyOff      MigrationPolicy = "off"
+)
+
+type MigrationConfig struct {
+	Policy MigrationPolicy
+}
+
 type Config struct {
 	Mode        Mode
 	HTTPAddr    string
+	HTTP        HTTPConfig
 	PostgresDSN string
+	Migrations  MigrationConfig
 	Auth        AuthConfig
 	Embedding   EmbeddingConfig
 	Jobs        JobConfig
 	Assurance   AssuranceConfig
+}
+
+type HTTPConfig struct {
+	MaxRequestBodyBytes int64
+	MaxHeaderBytes      int
+	ReadHeaderTimeout   time.Duration
+	ReadTimeout         time.Duration
+	WriteTimeout        time.Duration
+	IdleTimeout         time.Duration
+	ShutdownTimeout     time.Duration
 }
 
 type AuthConfig struct {
@@ -106,6 +130,45 @@ func LoadFromEnv() (Config, error) {
 	postgresDSN := os.Getenv("STELE_POSTGRES_DSN")
 	if postgresDSN == "" {
 		return Config{}, fmt.Errorf("STELE_POSTGRES_DSN is required")
+	}
+
+	migrationPolicy := MigrationPolicy(getEnvOrDefault("STELE_DATABASE_MIGRATION_POLICY", string(MigrationPolicyAuto)))
+	switch migrationPolicy {
+	case MigrationPolicyAuto, MigrationPolicyValidate, MigrationPolicyOff:
+	default:
+		return Config{}, fmt.Errorf("invalid STELE_DATABASE_MIGRATION_POLICY %q", migrationPolicy)
+	}
+
+	maxRequestBodyBytes, err := loadIntWithDefault("STELE_HTTP_MAX_REQUEST_BODY_BYTES", 1<<20)
+	if err != nil {
+		return Config{}, err
+	}
+	maxHeaderBytes, err := loadIntWithDefault("STELE_HTTP_MAX_HEADER_BYTES", 1<<20)
+	if err != nil {
+		return Config{}, err
+	}
+	readHeaderTimeout, err := loadDurationWithDefault("STELE_HTTP_READ_HEADER_TIMEOUT", 5*time.Second)
+	if err != nil {
+		return Config{}, err
+	}
+	readTimeout, err := loadDurationWithDefault("STELE_HTTP_READ_TIMEOUT", 30*time.Second)
+	if err != nil {
+		return Config{}, err
+	}
+	writeTimeout, err := loadDurationWithDefault("STELE_HTTP_WRITE_TIMEOUT", 30*time.Second)
+	if err != nil {
+		return Config{}, err
+	}
+	idleTimeout, err := loadDurationWithDefault("STELE_HTTP_IDLE_TIMEOUT", 60*time.Second)
+	if err != nil {
+		return Config{}, err
+	}
+	shutdownTimeout, err := loadDurationWithDefault("STELE_HTTP_SHUTDOWN_TIMEOUT", 20*time.Second)
+	if err != nil {
+		return Config{}, err
+	}
+	if maxRequestBodyBytes <= 0 || maxHeaderBytes <= 0 || readHeaderTimeout <= 0 || readTimeout <= 0 || writeTimeout <= 0 || idleTimeout <= 0 || shutdownTimeout <= 0 {
+		return Config{}, fmt.Errorf("HTTP runtime limits must be greater than zero")
 	}
 
 	maintenanceInterval, err := loadDurationWithDefault("STELE_JOBS_MAINTENANCE_INTERVAL", 15*time.Minute)
@@ -291,9 +354,19 @@ func LoadFromEnv() (Config, error) {
 	}
 
 	return Config{
-		Mode:        mode,
-		HTTPAddr:    getEnvOrDefault("STELE_HTTP_ADDR", ":8080"),
+		Mode:     mode,
+		HTTPAddr: getEnvOrDefault("STELE_HTTP_ADDR", ":8080"),
+		HTTP: HTTPConfig{
+			MaxRequestBodyBytes: int64(maxRequestBodyBytes),
+			MaxHeaderBytes:      maxHeaderBytes,
+			ReadHeaderTimeout:   readHeaderTimeout,
+			ReadTimeout:         readTimeout,
+			WriteTimeout:        writeTimeout,
+			IdleTimeout:         idleTimeout,
+			ShutdownTimeout:     shutdownTimeout,
+		},
 		PostgresDSN: postgresDSN,
+		Migrations:  MigrationConfig{Policy: migrationPolicy},
 		Auth: AuthConfig{
 			BootstrapAdminKey: bootstrapAdminKey,
 			DefaultTenant:     defaultTenant,
