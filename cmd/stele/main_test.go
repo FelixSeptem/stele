@@ -70,3 +70,10 @@ func TestRunReturnsRunnerConstructionFailure(t *testing.T) {
 		t.Fatal("run() error = nil, want runner construction failure")
 	}
 }
+
+func TestRunMigrateRejectsUnknownSubcommand(t *testing.T) {
+	t.Setenv("STELE_POSTGRES_DSN", "postgres://example")
+	if err := runArgs([]string{"migrate", "unknown"}); err == nil {
+		t.Fatal("runArgs() error = nil, want unknown migrate subcommand error")
+	}
+}

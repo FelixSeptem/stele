@@ -45,6 +45,17 @@ migration command before starting all modes and use `validate` when migrations
 are managed separately. `off` does not bypass compatibility checks; it is only
 for an explicitly documented external migration workflow.
 
+The standalone migration commands are:
+
+```bash
+STELE_POSTGRES_DSN='<operator-managed-dsn>' stele migrate status
+STELE_POSTGRES_DSN='<operator-managed-dsn>' stele migrate up
+STELE_MIGRATION_OUTPUT=json STELE_POSTGRES_DSN='<operator-managed-dsn>' stele migrate status
+```
+
+`migrate up` is forward-only and uses the same PostgreSQL migration ledger and
+serialization as runtime startup. It never performs an automatic downgrade.
+
 API mode publishes the running contract at `GET /openapi.yaml` and bounded
 build/schema compatibility metadata at `GET /version`. Both endpoints are
 unauthenticated discovery surfaces and intentionally exclude DSNs, credentials,

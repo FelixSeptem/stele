@@ -5,7 +5,7 @@
 - [x] 1.3 Convert the current supported base schema into an immutable initial numbered migration and implement a migration ledger/status reader that reports current, pending, dirty, divergent, and incompatible states.
 - [ ] 1.4 Implement locked forward migration execution using PostgreSQL-owned serialization and tests that prove concurrent invocations cannot apply the same migration twice.
 - [ ] 1.5 Wire migration validation/execution into API, worker, and scheduler startup before protected traffic or job claims, with unit tests for policy, pending, and dirty outcomes.
-- [ ] 1.6 Add the standalone `stele migrate status` and forward-apply commands with machine-readable and human-readable output; verify that they use the same ledger and lock as runtime startup.
+- [x] 1.6 Add the standalone `stele migrate status` and forward-apply commands with machine-readable and human-readable output; verify that they use the same ledger and lock as runtime startup.
 - [ ] 1.7 Create a prior-release populated database fixture and real PostgreSQL upgrade test that preserves authorized principal/grant, event/idempotency, canonical-memory, provenance, and history behavior.
 - [ ] 1.8 Add dirty-state and incompatible-version recovery tests plus operator documentation that prohibits automatic down migration and states the forward-remediation/restore path.
 
