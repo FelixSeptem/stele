@@ -5,7 +5,8 @@ param(
     [Parameter(Mandatory = $true)][string]$Tenant,
     [Parameter(Mandatory = $true)][string]$Project,
     [Parameter(Mandatory = $true)][string]$Namespace,
-    [Parameter(Mandatory = $true)][string]$CredentialOutputDirectory
+    [Parameter(Mandatory = $true)][string]$CredentialOutputDirectory,
+    [switch]$SkipLifecycle
 )
 
 $ErrorActionPreference = "Stop"
@@ -48,6 +49,27 @@ if ([string]::IsNullOrWhiteSpace($runtime.credential_secret) -or [string]::IsNul
 Invoke-Json POST ("/v1/admin/principals/{0}/grants" -f $runtime.id) $adminHeaders @{ tenant = $Tenant; project = $Project; namespace = $Namespace; actor = "bootstrap-smoke-admin"; reason = "exact runtime scope grant" } | Out-Null
 $runtimeCredentialPath = Join-Path $CredentialOutputDirectory "runtime.credential"
 Set-Content -LiteralPath $runtimeCredentialPath -Value $runtime.credential_secret -NoNewline
+
+if (-not $SkipLifecycle) {
+    $runtimeHeaders = @{
+        "X-API-Key" = $runtime.credential_secret
+        "X-Stele-Tenant" = $Tenant
+        "X-Stele-Project" = $Project
+        "X-Stele-Namespace" = $Namespace
+        "Content-Type" = "application/json"
+    }
+    Write-Host "Verifying idempotent ingest, retrieval, and context assembly..."
+    $eventHeaders = $runtimeHeaders.Clone()
+    $eventHeaders["Idempotency-Key"] = "bootstrap-smoke-$([guid]::NewGuid().ToString('N'))"
+    $eventBody = @{ event_type = "self-hosting.smoke"; content = "Stele bootstrap smoke lifecycle fixture"; metadata = @{ fixture = "bootstrap-smoke" } }
+    $firstEvent = Invoke-Json POST "/v1/events" $eventHeaders $eventBody
+    $replayedEvent = Invoke-Json POST "/v1/events" $eventHeaders $eventBody
+    if ($firstEvent.event_id -ne $replayedEvent.event_id -or -not $replayedEvent.replayed) { throw "idempotent event replay contract failed" }
+    Invoke-Json GET "/v1/admin/jobs/governance/status" $adminHeaders $null | Out-Null
+    Invoke-Json GET "/v1/memories?limit=5" $runtimeHeaders $null | Out-Null
+    Invoke-Json POST "/v1/memories/search" $runtimeHeaders @{ query = "bootstrap smoke lifecycle fixture"; top_k = 5 } | Out-Null
+    Invoke-Json POST "/v1/context/assemble" $runtimeHeaders @{ query = "bootstrap smoke lifecycle fixture"; budget = 1200; include_diagnostics = $true } | Out-Null
+}
 
 Write-Host "Verifying bootstrap credential is no longer accepted after durable admin creation..."
 try {

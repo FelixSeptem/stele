@@ -75,6 +75,7 @@ type apiRuntime struct {
 	shutdownTimeout time.Duration
 	markDraining    func()
 	cleanup         func()
+	observer        telemetry.Observer
 }
 
 type workerRuntime struct {
@@ -83,6 +84,7 @@ type workerRuntime struct {
 	readiness    ReadinessChecker
 	authorizer   auth.PrincipalAuthorizer
 	cleanup      func()
+	observer     telemetry.Observer
 }
 
 type schedulerRuntime struct {
@@ -91,6 +93,7 @@ type schedulerRuntime struct {
 	readiness    ReadinessChecker
 	authorizer   auth.PrincipalAuthorizer
 	cleanup      func()
+	observer     telemetry.Observer
 }
 
 type postgresRuntimeStore interface {
@@ -247,6 +250,7 @@ func (r workerRunner) Start(ctx context.Context) error {
 	if runtime.cleanup != nil {
 		defer runtime.cleanup()
 	}
+	recordRuntimeOperation(runtime.observer, config.ModeWorker, "startup", "started")
 
 	if runtime.bootstrapper == nil {
 		return fmt.Errorf("worker bootstrapper is required")
@@ -257,10 +261,18 @@ func (r workerRunner) Start(ctx context.Context) error {
 	}
 
 	if err := runtime.bootstrapper.Bootstrap(ctx); err != nil {
+		recordRuntimeOperation(runtime.observer, config.ModeWorker, "migration_validation", "failure")
+		recordRuntimeOperation(runtime.observer, config.ModeWorker, "startup", "failure")
 		return err
 	}
-
-	return runtime.worker.Start(ctx)
+	recordRuntimeOperation(runtime.observer, config.ModeWorker, "migration_validation", "success")
+	recordRuntimeOperation(runtime.observer, config.ModeWorker, "startup", "success")
+	err = runtime.worker.Start(ctx)
+	if errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) {
+		recordRuntimeOperation(runtime.observer, config.ModeWorker, "signal", "received")
+		recordRuntimeOperation(runtime.observer, config.ModeWorker, "drain", "success")
+	}
+	return err
 }
 
 func (r schedulerRunner) Start(ctx context.Context) error {
@@ -276,6 +288,7 @@ func (r schedulerRunner) Start(ctx context.Context) error {
 	if runtime.cleanup != nil {
 		defer runtime.cleanup()
 	}
+	recordRuntimeOperation(runtime.observer, config.ModeScheduler, "startup", "started")
 
 	if runtime.bootstrapper == nil {
 		return fmt.Errorf("scheduler bootstrapper is required")
@@ -286,10 +299,18 @@ func (r schedulerRunner) Start(ctx context.Context) error {
 	}
 
 	if err := runtime.bootstrapper.Bootstrap(ctx); err != nil {
+		recordRuntimeOperation(runtime.observer, config.ModeScheduler, "migration_validation", "failure")
+		recordRuntimeOperation(runtime.observer, config.ModeScheduler, "startup", "failure")
 		return err
 	}
-
-	return runtime.scheduler.Start(ctx)
+	recordRuntimeOperation(runtime.observer, config.ModeScheduler, "migration_validation", "success")
+	recordRuntimeOperation(runtime.observer, config.ModeScheduler, "startup", "success")
+	err = runtime.scheduler.Start(ctx)
+	if errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) {
+		recordRuntimeOperation(runtime.observer, config.ModeScheduler, "signal", "received")
+		recordRuntimeOperation(runtime.observer, config.ModeScheduler, "drain", "success")
+	}
+	return err
 }
 
 func runAPIRuntime(ctx context.Context, runtime apiRuntime) error {
@@ -298,16 +319,23 @@ func runAPIRuntime(ctx context.Context, runtime apiRuntime) error {
 	}
 
 	if runtime.bootstrapper == nil {
+		recordRuntimeOperation(runtime.observer, config.ModeAPI, "startup", "failure")
 		return fmt.Errorf("api bootstrapper is required")
 	}
 
 	if runtime.server == nil {
+		recordRuntimeOperation(runtime.observer, config.ModeAPI, "startup", "failure")
 		return fmt.Errorf("api server is required")
 	}
 
+	recordRuntimeOperation(runtime.observer, config.ModeAPI, "migration_validation", "started")
 	if err := runtime.bootstrapper.Bootstrap(ctx); err != nil {
+		recordRuntimeOperation(runtime.observer, config.ModeAPI, "migration_validation", "failure")
+		recordRuntimeOperation(runtime.observer, config.ModeAPI, "startup", "failure")
 		return err
 	}
+	recordRuntimeOperation(runtime.observer, config.ModeAPI, "migration_validation", "success")
+	recordRuntimeOperation(runtime.observer, config.ModeAPI, "startup", "success")
 
 	serverErr := make(chan error, 1)
 	go func() { serverErr <- runtime.server.ListenAndServe() }()
@@ -318,9 +346,11 @@ func runAPIRuntime(ctx context.Context, runtime apiRuntime) error {
 		}
 		return nil
 	case <-ctx.Done():
+		recordRuntimeOperation(runtime.observer, config.ModeAPI, "signal", "received")
 		if runtime.markDraining != nil {
 			runtime.markDraining()
 		}
+		recordRuntimeOperation(runtime.observer, config.ModeAPI, "drain", "started")
 		timeout := runtime.shutdownTimeout
 		if timeout <= 0 {
 			timeout = 20 * time.Second
@@ -328,13 +358,22 @@ func runAPIRuntime(ctx context.Context, runtime apiRuntime) error {
 		shutdownCtx, cancel := context.WithTimeout(context.Background(), timeout)
 		defer cancel()
 		if err := runtime.server.Shutdown(shutdownCtx); err != nil {
+			recordRuntimeOperation(runtime.observer, config.ModeAPI, "drain", "timeout")
 			return fmt.Errorf("shutdown api server: %w", err)
 		}
 		if err := <-serverErr; err != nil && err != http.ErrServerClosed {
 			return err
 		}
+		recordRuntimeOperation(runtime.observer, config.ModeAPI, "drain", "success")
 		return nil
 	}
+}
+
+func recordRuntimeOperation(observer telemetry.Observer, mode config.Mode, operation, status string) {
+	if observer == nil {
+		return
+	}
+	observer.RecordOperation(context.Background(), telemetry.OperationEvent{Mode: string(mode), Component: "runtime", Operation: operation, Status: status})
 }
 
 type noopBootstrapper struct{}
@@ -599,6 +638,7 @@ func buildAPIRuntime(ctx context.Context, cfg config.Config, deps apiRuntimeDepe
 		cleanup: func() {
 			pool.Close()
 		},
+		observer: deps.observer,
 	}, nil
 }
 
@@ -801,6 +841,7 @@ func buildWorkerRuntime(ctx context.Context, cfg config.Config, deps workerRunti
 		cleanup: func() {
 			pool.Close()
 		},
+		observer: deps.observer,
 	}, nil
 }
 
@@ -1096,6 +1137,7 @@ func buildSchedulerRuntime(ctx context.Context, cfg config.Config, deps schedule
 		cleanup: func() {
 			pool.Close()
 		},
+		observer: deps.observer,
 	}, nil
 }
 

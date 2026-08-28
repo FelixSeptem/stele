@@ -7,7 +7,7 @@
 - [x] 1.5 Wire migration validation/execution into API, worker, and scheduler startup before protected traffic or job claims, with unit tests for policy, pending, and dirty outcomes.
 - [x] 1.6 Add the standalone `stele migrate status` and forward-apply commands with machine-readable and human-readable output; verify that they use the same ledger and lock as runtime startup.
 - [ ] 1.7 Create a prior-release populated database fixture and real PostgreSQL upgrade test that preserves authorized principal/grant, event/idempotency, canonical-memory, provenance, and history behavior.
-- [ ] 1.8 Add dirty-state and incompatible-version recovery tests plus operator documentation that prohibits automatic down migration and states the forward-remediation/restore path.
+- [x] 1.8 Add dirty-state and incompatible-version recovery tests plus operator documentation that prohibits automatic down migration and states the forward-remediation/restore path.
 
 ## 2. Runtime Resource and Lifecycle Safety
 
@@ -16,7 +16,7 @@
 - [x] 2.3 Configure `http.Server` limits and readiness drain state; add handler/server tests proving readiness goes non-ready before shutdown while health behavior remains documented.
 - [x] 2.4 Replace the uncancelable main context with signal-aware `SIGINT`/`SIGTERM` propagation and implement bounded API server shutdown with exactly-once dependency cleanup tests.
 - [x] 2.5 Make worker and scheduler loops observe cancellation, cease new claims, preserve durable retry/lease semantics, and close dependencies on cancellation or startup failure; add focused lifecycle tests.
-- [ ] 2.6 Add bounded lifecycle metrics/log events for startup, migration validation, readiness transition, signal, drain, timeout, and cleanup; verify metric labels and ordinary logs exclude scopes, principals, DSNs, credentials, and raw errors.
+- [x] 2.6 Add bounded lifecycle metrics/log events for startup, migration validation, readiness transition, signal, drain, timeout, and cleanup; verify metric labels and ordinary logs exclude scopes, principals, DSNs, credentials, and raw errors.
 
 ## 3. Runtime Contract Publication
 
@@ -36,11 +36,11 @@
 
 ## 5. PostgreSQL Backup and Recovery Operations
 
-- [ ] 5.1 Implement a constrained operator backup script that validates explicit source and destination inputs, invokes supported PostgreSQL tooling without echoing secrets, writes a checksum manifest with bounded compatibility metadata, and has command-level validation tests.
-- [ ] 5.2 Implement a constrained restore script that validates artifact/manifest integrity, requires a distinct explicit target and destructive confirmation, and refuses empty, broad, source-equal, or otherwise unsafe restore targets; add refusal-path tests.
-- [ ] 5.3 Implement a restore-verification command that validates current migrations and performs bounded authorized scope-safe read proof against the restored target; test success and stable failure categories.
-- [ ] 5.4 Bridge successful restore verification into existing backup/restore assurance proof with strict bounded metadata validation, freshness behavior, isolation tests, and lifecycle-safe readiness reporting.
-- [ ] 5.5 Document backup, restore, restore drill, failed-verification, forward-migration, and rollback runbooks, including PostgreSQL client prerequisites, RPO/RTO ownership boundaries, and a prohibition on implicit destructive restore.
+- [x] 5.1 Implement a constrained operator backup script that validates explicit source and destination inputs, invokes supported PostgreSQL tooling without echoing secrets, writes a checksum manifest with bounded compatibility metadata, and has command-level validation tests.
+- [x] 5.2 Implement a constrained restore script that validates artifact/manifest integrity, requires a distinct explicit target and destructive confirmation, and refuses empty, broad, source-equal, or otherwise unsafe restore targets; add refusal-path tests.
+- [x] 5.3 Implement a restore-verification command that validates current migrations and performs bounded authorized scope-safe read proof against the restored target; test success and stable failure categories.
+- [x] 5.4 Bridge successful restore verification into existing backup/restore assurance proof with strict bounded metadata validation, freshness behavior, isolation tests, and lifecycle-safe readiness reporting.
+- [x] 5.5 Document backup, restore, restore drill, failed-verification, forward-migration, and rollback runbooks, including PostgreSQL client prerequisites, RPO/RTO ownership boundaries, and a prohibition on implicit destructive restore.
 
 ## 6. Real-stack Product Verification
 

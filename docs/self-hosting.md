@@ -56,6 +56,64 @@ STELE_MIGRATION_OUTPUT=json STELE_POSTGRES_DSN='<operator-managed-dsn>' stele mi
 `migrate up` is forward-only and uses the same PostgreSQL migration ledger and
 serialization as runtime startup. It never performs an automatic downgrade.
 
+If `migrate status` reports `dirty`, `incompatible`, or `divergent`, do not
+restart the application modes with `auto` and do not edit the migration ledger
+by hand. Stop the deployment, preserve a PostgreSQL backup, inspect the bounded
+diagnostic, and either run the documented forward-remediation migration or
+restore the verified backup into an explicit target. Automatic down migration
+is prohibited; an older image may only be used when its schema compatibility is
+confirmed. A failed migration must be repaired or restored before readiness is
+considered valid.
+
+## PostgreSQL Backup, Restore, And Verification
+
+Backup and restore are operator-owned procedures. Install the PostgreSQL client
+tools (`pg_dump`, `pg_restore`, and `psql`) on the operator host, provide an
+explicit source/target DSN, and keep the resulting artifact and manifest in a
+protected directory. The scripts never print connection strings or passwords.
+
+Create a checksum-backed custom-format backup:
+
+```powershell
+pwsh -File scripts/stele-backup.ps1 `
+  -SourceDsn $env:STELE_POSTGRES_DSN `
+  -Destination .\backups\stele-$(Get-Date -Format yyyyMMdd-HHmmss).dump `
+  -ServiceVersion $env:STELE_SERVICE_VERSION
+```
+
+Restore only into a distinct disposable or replacement target. The target must
+be explicit and `-ConfirmDestructive` is mandatory; source-equal and template
+databases are refused:
+
+```powershell
+pwsh -File scripts/stele-restore.ps1 `
+  -Artifact .\backups\stele.dump `
+  -Manifest .\backups\stele.dump.manifest.json `
+  -SourceDsn $env:STELE_POSTGRES_DSN `
+  -TargetDsn $env:STELE_VERIFY_POSTGRES_DSN `
+  -ConfirmDestructive
+```
+
+Start Stele against the restored target, then run bounded migration and
+scope-safe read verification:
+
+```powershell
+pwsh -File scripts/stele-restore-verify.ps1 `
+  -TargetDsn $env:STELE_VERIFY_POSTGRES_DSN `
+  -Manifest .\backups\stele.dump.manifest.json `
+  -BaseUrl http://localhost:8080 `
+  -ApiKey $env:STELE_RUNTIME_API_KEY `
+  -Tenant $env:STELE_AUTH_DEFAULT_TENANT `
+  -Project $env:STELE_AUTH_DEFAULT_PROJECT `
+  -Namespace $env:STELE_AUTH_DEFAULT_NAMESPACE
+```
+
+Only a successful verification should be recorded through the authenticated
+assurance recovery-verification workflow as `backup_restore_proof`. Backups,
+retention, scheduling, storage durability, and recovery point/recovery time
+objectives remain the operator's responsibility; Stele does not schedule or
+upload backups. Never overwrite the source database implicitly.
+
 API mode publishes the running contract at `GET /openapi.yaml` and bounded
 build/schema compatibility metadata at `GET /version`. Both endpoints are
 unauthenticated discovery surfaces and intentionally exclude DSNs, credentials,
@@ -236,6 +294,11 @@ pwsh -File scripts/stele-bootstrap-smoke.ps1 `
   -Namespace $env:STELE_AUTH_DEFAULT_NAMESPACE `
   -CredentialOutputDirectory .\.stele-smoke-credentials
 ```
+
+The lifecycle portion is enabled by default and sends an idempotent event retry,
+then exercises scoped memory listing, search, and context assembly with the new
+runtime credential. Use `-SkipLifecycle` only when you are splitting bootstrap
+from a separately orchestrated worker/retrieval verification.
 
 Treat `.stele-smoke-credentials` as secret material: move the values into an
 operator-managed secret store and remove the directory after the smoke run.

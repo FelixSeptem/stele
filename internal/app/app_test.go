@@ -1272,6 +1272,29 @@ func TestRuntimeCleanupIsExactlyOnceOnCancellation(t *testing.T) {
 	}
 }
 
+func TestRuntimeLifecycleTelemetryUsesBoundedLabels(t *testing.T) {
+	observer := &stubAppObserver{}
+	runtime := apiRuntime{
+		bootstrapper: &stubBootstrapper{},
+		server:       &stubAPIServer{err: http.ErrServerClosed},
+		observer:     observer,
+	}
+	if err := runAPIRuntime(context.Background(), runtime); err != nil {
+		t.Fatalf("runAPIRuntime() error = %v", err)
+	}
+	if len(observer.operations) < 3 {
+		t.Fatalf("lifecycle operation count = %d, want startup and migration events", len(observer.operations))
+	}
+	for _, event := range observer.operations {
+		if event.Mode != string(config.ModeAPI) || event.Component != "runtime" {
+			t.Fatalf("lifecycle event = %+v, want bounded api runtime labels", event)
+		}
+		if event.Error != "" {
+			t.Fatalf("lifecycle event leaked raw error: %+v", event)
+		}
+	}
+}
+
 func TestBuildWorkerAndSchedulerRuntimeDefaultMigrationPolicyRunsBeforeWork(t *testing.T) {
 	cases := []struct {
 		name   string

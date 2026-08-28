@@ -68,7 +68,7 @@ func TestBootstrapSmokeScriptIsDocumentedAndConstrained(t *testing.T) {
 		t.Fatalf("read bootstrap smoke script: %v", err)
 	}
 	content := string(script)
-	for _, want := range []string{"CredentialOutputDirectory", "/v1/admin/principals", "/grants", "bootstrap credential was still accepted", "/openapi.yaml", "/version"} {
+	for _, want := range []string{"CredentialOutputDirectory", "/v1/admin/principals", "/grants", "bootstrap credential was still accepted", "/openapi.yaml", "/version", "/v1/events", "Idempotency-Key", "/v1/memories/search", "/v1/context/assemble"} {
 		if !strings.Contains(content, want) {
 			t.Fatalf("bootstrap smoke script missing %q", want)
 		}
@@ -94,6 +94,26 @@ func TestDeploymentContractRejectsObsoleteAuthAndRequiresBootstrapVariables(t *t
 	for _, required := range []string{"STELE_AUTH_BOOTSTRAP_ADMIN_KEY", "STELE_AUTH_DEFAULT_TENANT", "STELE_AUTH_DEFAULT_PROJECT", "STELE_AUTH_DEFAULT_NAMESPACE", "STELE_DATABASE_MIGRATION_POLICY"} {
 		if !strings.Contains(string(compose), required) || !strings.Contains(string(envExample), required) {
 			t.Fatalf("deployment contract missing required variable %q", required)
+		}
+	}
+}
+
+func TestBackupRecoveryScriptsExposeSafetyGuards(t *testing.T) {
+	checks := map[string][]string{
+		"../scripts/stele-backup.ps1":         {"SourceDsn", "Destination", "pg_dump", "SHA256", "manifest"},
+		"../scripts/stele-restore.ps1":        {"Artifact", "Manifest", "TargetDsn", "ConfirmDestructive", "source-equal", "checksum mismatch", "pg_restore"},
+		"../scripts/stele-restore-verify.ps1": {"TargetDsn", "Manifest", "schema_migrations", "X-Stele-Tenant", "authorized scoped service proof", "RecordAssurance", "backup_restore_proof"},
+	}
+	for path, required := range checks {
+		contentBytes, err := os.ReadFile(path)
+		if err != nil {
+			t.Fatalf("read %s: %v", path, err)
+		}
+		content := string(contentBytes)
+		for _, want := range required {
+			if !strings.Contains(content, want) {
+				t.Fatalf("%s missing safety/verification guard %q", path, want)
+			}
 		}
 	}
 }
