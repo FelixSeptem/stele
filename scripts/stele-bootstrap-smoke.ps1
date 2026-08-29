@@ -24,6 +24,19 @@ function Invoke-Json([string]$Method, [string]$Path, [hashtable]$Headers, [objec
     Invoke-RestMethod @params
 }
 
+function Assert-HttpStatus([string]$Method, [string]$Path, [hashtable]$Headers, [object]$Body, [int]$ExpectedStatus, [string]$Scenario) {
+    $params = @{ Method = $Method; Uri = ($BaseUrl.TrimEnd('/') + $Path); Headers = $Headers; ErrorAction = "Stop" }
+    if ($null -ne $Body) { $params.Body = ($Body | ConvertTo-Json -Depth 10) }
+    try {
+        $response = Invoke-WebRequest @params
+        if ([int]$response.StatusCode -ne $ExpectedStatus) { throw "$Scenario returned HTTP $($response.StatusCode), want $ExpectedStatus" }
+    } catch {
+        $statusCode = $null
+        try { $statusCode = [int]$_.Exception.Response.StatusCode } catch { }
+        if ($statusCode -ne $ExpectedStatus) { throw "$Scenario returned an unexpected non-secret status" }
+    }
+}
+
 New-Item -ItemType Directory -Force -Path $CredentialOutputDirectory | Out-Null
 Write-Host "Checking runtime discovery endpoints..."
 Invoke-Json GET "/health" @{} $null | Out-Null
@@ -32,7 +45,7 @@ Invoke-Json GET "/version" @{} $null | Out-Null
 
 Write-Host "Creating durable administrator in the configured default scope..."
 $admin = Invoke-Json POST "/v1/admin/principals" $scopeHeaders @{ role = "admin"; label = "bootstrap-smoke-admin"; actor = "bootstrap-smoke"; reason = "first self-hosted bootstrap" }
-if ([string]::IsNullOrWhiteSpace($admin.credential_secret) -or [string]::IsNullOrWhiteSpace($admin.id)) { throw "bootstrap response did not contain one-time administrator credential" }
+if ([string]::IsNullOrWhiteSpace($admin.credential_secret) -or [string]::IsNullOrWhiteSpace($admin.principal.id)) { throw "bootstrap response did not contain one-time administrator credential" }
 $adminCredentialPath = Join-Path $CredentialOutputDirectory "admin.credential"
 Set-Content -LiteralPath $adminCredentialPath -Value $admin.credential_secret -NoNewline
 
@@ -45,8 +58,8 @@ $adminHeaders = @{
 }
 Write-Host "Creating least-privilege runtime principal and exact grant..."
 $runtime = Invoke-Json POST "/v1/admin/principals" $adminHeaders @{ role = "public"; label = "bootstrap-smoke-runtime"; actor = "bootstrap-smoke-admin"; reason = "least-privilege runtime principal" }
-if ([string]::IsNullOrWhiteSpace($runtime.credential_secret) -or [string]::IsNullOrWhiteSpace($runtime.id)) { throw "runtime principal response did not contain one-time credential" }
-Invoke-Json POST ("/v1/admin/principals/{0}/grants" -f $runtime.id) $adminHeaders @{ tenant = $Tenant; project = $Project; namespace = $Namespace; actor = "bootstrap-smoke-admin"; reason = "exact runtime scope grant" } | Out-Null
+if ([string]::IsNullOrWhiteSpace($runtime.credential_secret) -or [string]::IsNullOrWhiteSpace($runtime.principal.id)) { throw "runtime principal response did not contain one-time credential" }
+Invoke-Json POST ("/v1/admin/principals/{0}/grants" -f $runtime.principal.id) $adminHeaders @{ tenant = $Tenant; project = $Project; namespace = $Namespace; actor = "bootstrap-smoke-admin"; reason = "exact runtime scope grant" } | Out-Null
 $runtimeCredentialPath = Join-Path $CredentialOutputDirectory "runtime.credential"
 Set-Content -LiteralPath $runtimeCredentialPath -Value $runtime.credential_secret -NoNewline
 
@@ -65,6 +78,11 @@ if (-not $SkipLifecycle) {
     $firstEvent = Invoke-Json POST "/v1/events" $eventHeaders $eventBody
     $replayedEvent = Invoke-Json POST "/v1/events" $eventHeaders $eventBody
     if ($firstEvent.event_id -ne $replayedEvent.event_id -or -not $replayedEvent.replayed) { throw "idempotent event replay contract failed" }
+    Assert-HttpStatus POST "/v1/events" $eventHeaders @{ event_type = "self-hosting.smoke"; content = "conflicting bootstrap smoke payload"; metadata = @{ fixture = "bootstrap-smoke" } } 409 "idempotency payload conflict"
+    Assert-HttpStatus GET "/v1/admin/jobs/governance/status" $runtimeHeaders $null 403 "runtime principal admin access"
+    $ungrantedScopeHeaders = $runtimeHeaders.Clone()
+    $ungrantedScopeHeaders["X-Stele-Tenant"] = "ungranted-$([guid]::NewGuid().ToString('N').Substring(0, 12))"
+    Assert-HttpStatus GET "/v1/memories?limit=5" $ungrantedScopeHeaders $null 403 "ungranted scope read"
     Invoke-Json GET "/v1/admin/jobs/governance/status" $adminHeaders $null | Out-Null
     Invoke-Json GET "/v1/memories?limit=5" $runtimeHeaders $null | Out-Null
     Invoke-Json POST "/v1/memories/search" $runtimeHeaders @{ query = "bootstrap smoke lifecycle fixture"; top_k = 5 } | Out-Null

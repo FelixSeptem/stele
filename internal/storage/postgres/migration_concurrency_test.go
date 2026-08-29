@@ -46,4 +46,16 @@ func TestMigrationRunnerSerializesConcurrentApply(t *testing.T) {
 	if state.Status != MigrationStatusCurrent || state.Dirty || state.Pending {
 		t.Fatalf("state after concurrent apply = %+v, want current clean schema", state)
 	}
+	db, err := runner.openDB(dsn)
+	if err != nil {
+		t.Fatalf("open migration database after concurrent apply: %v", err)
+	}
+	defer db.Close()
+	var applied int
+	if err := db.QueryRowContext(ctx, `SELECT COUNT(*) FROM schema_migrations WHERE version = $1 AND dirty = false`, CurrentMigrationVersion).Scan(&applied); err != nil {
+		t.Fatalf("count applied migration ledger rows: %v", err)
+	}
+	if applied != 1 {
+		t.Fatalf("applied migration ledger rows = %d, want exactly one", applied)
+	}
 }

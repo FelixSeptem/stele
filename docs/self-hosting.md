@@ -19,6 +19,9 @@ The repository ships a production-oriented `Dockerfile` plus a local `docker-com
 - One reachable DSN for all three Stele modes
 
 The bundled compose file uses `pgvector/pgvector:pg17`, which already includes the required `vector` extension.
+The PostgreSQL data volume is mounted at `/var/lib/postgresql` so the same
+configuration also supports PostgreSQL 18's major-version-specific data
+directory layout.
 
 ## Runtime Variables
 
@@ -323,11 +326,18 @@ For example, when the `1ms.run` Docker registry proxy is reachable:
 
 ```powershell
 $env:STELE_PRODUCT_VERIFY_POSTGRES_IMAGE = "docker.1ms.run/pgvector/pgvector:pg17"
+$env:STELE_PRODUCT_VERIFY_GO_IMAGE = "docker.1ms.run/library/golang:1.25-bookworm"
+$env:STELE_PRODUCT_VERIFY_RUNTIME_IMAGE = "docker.1ms.run/library/debian:bookworm-slim"
+$env:STELE_PRODUCT_VERIFY_GOPROXY = "https://goproxy.cn,direct"
 pwsh -File scripts/stele-product-verify.ps1
 ```
 
 The proxy host is an operator choice and is not contacted unless this override
 is explicitly set.
+
+The same build-image overrides are available directly in Compose as
+`STELE_GO_IMAGE`, `STELE_RUNTIME_IMAGE`, and `STELE_GOPROXY`. The defaults
+remain the official Docker Hub and Go module proxy references.
 
 Treat `.stele-smoke-credentials` as secret material: move the values into an
 operator-managed secret store and remove the directory after the smoke run.

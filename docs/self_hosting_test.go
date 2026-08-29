@@ -68,7 +68,7 @@ func TestBootstrapSmokeScriptIsDocumentedAndConstrained(t *testing.T) {
 		t.Fatalf("read bootstrap smoke script: %v", err)
 	}
 	content := string(script)
-	for _, want := range []string{"CredentialOutputDirectory", "/v1/admin/principals", "/grants", "bootstrap credential was still accepted", "/openapi.yaml", "/version", "/v1/events", "Idempotency-Key", "/v1/memories/search", "/v1/context/assemble", "/v1/admin/scope-proofs", "same-scope product smoke proof"} {
+	for _, want := range []string{"CredentialOutputDirectory", "/v1/admin/principals", "/grants", "bootstrap credential was still accepted", "/openapi.yaml", "/version", "/v1/events", "Idempotency-Key", "/v1/memories/search", "/v1/context/assemble", "/v1/admin/scope-proofs", "same-scope product smoke proof", "$admin.principal.id", "$runtime.principal.id", "ungranted scope read", "runtime principal admin access", "idempotency payload conflict"} {
 		if !strings.Contains(content, want) {
 			t.Fatalf("bootstrap smoke script missing %q", want)
 		}
@@ -124,7 +124,7 @@ func TestProductVerificationEntryPointDocumentsPrerequisiteAndOwnershipGuards(t 
 		t.Fatalf("read product verification script: %v", err)
 	}
 	content := string(contentBytes)
-	for _, want := range []string{"STELE_PRODUCT_VERIFY_CI", "SKIP:", "COMPOSE_PROJECT_NAME", "--build -d", "--volumes --remove-orphans", "KeepResources", "stele-bootstrap-smoke.ps1"} {
+	for _, want := range []string{"STELE_PRODUCT_VERIFY_CI", "SKIP:", "COMPOSE_PROJECT_NAME", "--build -d", "--volumes --remove-orphans", "KeepResources", "stele-bootstrap-smoke.ps1", "CREATE DATABASE", "STELE_TEST_POSTGRES_DSN", "TestMigrationRunnerSerializesConcurrentApply", "STELE_TEST_POSTGRES_UPGRADE_DSN", "TestMigrationRunnerUpgradesPopulatedPriorRelease", "$($migrationDatabase)?sslmode=disable", "docker compose", "stop -t", "readyz", "restart", "Idempotency-Key", "pending_raw_events", "pg_dump", "pg_restore", "targetDatabase", "sha256", "restored scoped behavior"} {
 		if !strings.Contains(content, want) {
 			t.Fatalf("product verification entrypoint missing %q", want)
 		}
@@ -137,17 +137,22 @@ func TestComposeSupportsIsolatedScopesPortsAndMirrorImageOverride(t *testing.T) 
 		t.Fatalf("read docker-compose.yml: %v", err)
 	}
 	content := string(contentBytes)
-	for _, want := range []string{"STELE_POSTGRES_IMAGE", "STELE_POSTGRES_HOST_PORT", "STELE_HTTP_HOST_PORT", "STELE_AUTH_DEFAULT_TENANT", "STELE_AUTH_DEFAULT_PROJECT", "STELE_AUTH_DEFAULT_NAMESPACE"} {
+	for _, want := range []string{"STELE_POSTGRES_IMAGE", "STELE_POSTGRES_HOST_PORT", "STELE_HTTP_HOST_PORT", "STELE_AUTH_DEFAULT_TENANT", "STELE_AUTH_DEFAULT_PROJECT", "STELE_AUTH_DEFAULT_NAMESPACE", "STELE_GO_IMAGE", "STELE_RUNTIME_IMAGE", "STELE_GOPROXY"} {
 		if !strings.Contains(content, want) {
 			t.Fatalf("compose missing isolated verification override %q", want)
 		}
+	}
+	if !strings.Contains(content, "stele-postgres-data:/var/lib/postgresql") {
+		t.Fatal("compose must mount PostgreSQL data at the major-version-compatible parent directory")
 	}
 	docsBytes, err := os.ReadFile("self-hosting.md")
 	if err != nil {
 		t.Fatalf("read self-hosting.md: %v", err)
 	}
-	if !strings.Contains(string(docsBytes), "docker.1ms.run/pgvector/pgvector:pg17") {
-		t.Fatal("self-hosting docs must include the explicit 1ms.run mirror example")
+	for _, want := range []string{"docker.1ms.run/pgvector/pgvector:pg17", "docker.1ms.run/library/golang:1.25-bookworm", "docker.1ms.run/library/debian:bookworm-slim", "https://goproxy.cn,direct"} {
+		if !strings.Contains(string(docsBytes), want) {
+			t.Fatalf("self-hosting docs must include the explicit 1ms.run mirror example %q", want)
+		}
 	}
 }
 

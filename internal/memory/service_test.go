@@ -19,11 +19,13 @@ type stubIngestStore struct {
 type stubIdempotentIngestStore struct {
 	stubIngestStore
 	gotIdempotent IdempotentEventIngestInput
+	gotEvent      IngestEventInput
 	replayed      bool
 }
 
-func (s *stubIdempotentIngestStore) IngestEventIdempotent(ctx context.Context, input IdempotentEventIngestInput, provenance ProvenanceRecord, admission AdmissionPressureReport) (IdempotentEventIngestResult, error) {
+func (s *stubIdempotentIngestStore) IngestEventIdempotent(ctx context.Context, input IdempotentEventIngestInput, event IngestEventInput, provenance ProvenanceRecord, admission AdmissionPressureReport) (IdempotentEventIngestResult, error) {
 	s.gotIdempotent = input
+	s.gotEvent = event
 	if s.err != nil {
 		return IdempotentEventIngestResult{}, s.err
 	}
@@ -166,6 +168,9 @@ func TestServiceIngestIdempotentUsesPrincipalScopeKeyAndStableFingerprint(t *tes
 	}
 	if store.gotIdempotent.PrincipalID != "principal_1" || store.gotIdempotent.IdempotencyKey != "request-key" || store.gotIdempotent.RequestFingerprint == "" {
 		t.Fatalf("idempotent input = %+v", store.gotIdempotent)
+	}
+	if store.gotEvent.EventType != input.EventType || store.gotEvent.Content != input.Content || store.gotEvent.Scope != input.Scope {
+		t.Fatalf("idempotent event = %+v", store.gotEvent)
 	}
 	fingerprint, err := EventRequestFingerprint(IngestEventInput{Scope: input.Scope, EventType: input.EventType, Content: input.Content, Metadata: map[string]any{"a": "one", "b": "two"}, SourceTimestamp: input.SourceTimestamp})
 	if err != nil || fingerprint != store.gotIdempotent.RequestFingerprint {

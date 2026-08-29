@@ -1,15 +1,20 @@
-FROM golang:1.25-bookworm AS build
+ARG STELE_GO_IMAGE=golang:1.25-bookworm
+ARG STELE_RUNTIME_IMAGE=debian:bookworm-slim
+ARG STELE_GOPROXY=https://proxy.golang.org,direct
+FROM ${STELE_GO_IMAGE} AS build
+ARG STELE_GOPROXY=https://proxy.golang.org,direct
 
 WORKDIR /src
 
 COPY go.mod go.sum ./
+ENV GOPROXY=${STELE_GOPROXY}
 RUN go mod download
 
 COPY . .
 
 RUN CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build -trimpath -ldflags="-s -w" -o /out/stele ./cmd/stele
 
-FROM debian:bookworm-slim
+FROM ${STELE_RUNTIME_IMAGE}
 
 RUN apt-get update \
 	&& apt-get install -y --no-install-recommends ca-certificates \

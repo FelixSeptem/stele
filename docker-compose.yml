@@ -14,11 +14,15 @@ services:
       timeout: 5s
       retries: 12
     volumes:
-      - stele-postgres-data:/var/lib/postgresql/data
+      - stele-postgres-data:/var/lib/postgresql
 
   api:
     build:
       context: .
+      args:
+        STELE_GO_IMAGE: ${STELE_GO_IMAGE:-golang:1.25-bookworm}
+        STELE_RUNTIME_IMAGE: ${STELE_RUNTIME_IMAGE:-debian:bookworm-slim}
+        STELE_GOPROXY: ${STELE_GOPROXY:-https://proxy.golang.org,direct}
     restart: unless-stopped
     environment:
       STELE_MODE: api
@@ -46,6 +50,10 @@ services:
   worker:
     build:
       context: .
+      args:
+        STELE_GO_IMAGE: ${STELE_GO_IMAGE:-golang:1.25-bookworm}
+        STELE_RUNTIME_IMAGE: ${STELE_RUNTIME_IMAGE:-debian:bookworm-slim}
+        STELE_GOPROXY: ${STELE_GOPROXY:-https://proxy.golang.org,direct}
     restart: unless-stopped
     environment:
       STELE_MODE: worker
@@ -70,6 +78,10 @@ services:
   scheduler:
     build:
       context: .
+      args:
+        STELE_GO_IMAGE: ${STELE_GO_IMAGE:-golang:1.25-bookworm}
+        STELE_RUNTIME_IMAGE: ${STELE_RUNTIME_IMAGE:-debian:bookworm-slim}
+        STELE_GOPROXY: ${STELE_GOPROXY:-https://proxy.golang.org,direct}
     restart: unless-stopped
     environment:
       STELE_MODE: scheduler

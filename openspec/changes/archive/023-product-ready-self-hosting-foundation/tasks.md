@@ -3,10 +3,10 @@
 - [x] 1.1 Inventory the current PostgreSQL bootstrap schema, startup call sites, and existing `golang-migrate` dependency; evaluate mature PostgreSQL migration libraries on `pkg.go.dev` and record the selected library, version, licensing, dirty-state, locking, and embedded-SQL rationale in implementation notes before adding production code.
 - [x] 1.2 Define migration configuration, bounded error categories, migration status model, and startup policy (`auto`, `validate`, and documented externally managed mode); add configuration validation and focused unit tests.
 - [x] 1.3 Convert the current supported base schema into an immutable initial numbered migration and implement a migration ledger/status reader that reports current, pending, dirty, divergent, and incompatible states.
-- [ ] 1.4 Implement locked forward migration execution using PostgreSQL-owned serialization and tests that prove concurrent invocations cannot apply the same migration twice.
+- [x] 1.4 Implement locked forward migration execution using PostgreSQL-owned serialization and tests that prove concurrent invocations cannot apply the same migration twice.
 - [x] 1.5 Wire migration validation/execution into API, worker, and scheduler startup before protected traffic or job claims, with unit tests for policy, pending, and dirty outcomes.
 - [x] 1.6 Add the standalone `stele migrate status` and forward-apply commands with machine-readable and human-readable output; verify that they use the same ledger and lock as runtime startup.
-- [ ] 1.7 Create a prior-release populated database fixture and real PostgreSQL upgrade test that preserves authorized principal/grant, event/idempotency, canonical-memory, provenance, and history behavior.
+- [x] 1.7 Create a prior-release populated database fixture and real PostgreSQL upgrade test that preserves authorized principal/grant, event/idempotency, canonical-memory, provenance, and history behavior.
 - [x] 1.8 Add dirty-state and incompatible-version recovery tests plus operator documentation that prohibits automatic down migration and states the forward-remediation/restore path.
 
 ## 2. Runtime Resource and Lifecycle Safety
@@ -44,15 +44,15 @@
 
 ## 6. Real-stack Product Verification
 
-- [ ] 6.1 Build an isolated real PostgreSQL/pgvector integration harness with generated credentials, unique labelled resources, bounded deadlines, prerequisite detection, and ownership-safe cleanup behavior.
-- [ ] 6.2 Add a fresh-stack black-box test that starts API/worker/scheduler, runs bootstrap-admin-first setup, creates exact grants, discovers the runtime API contract, and completes idempotent ingest through retrieval/context assembly.
-- [ ] 6.3 Add black-box negative cases for ungranted-scope denial, unauthorized admin access, idempotency-key replay/conflict, and lifecycle-safe absence of cross-scope retrieval disclosure.
-- [ ] 6.4 Add black-box signal/drain/restart tests for API, worker, and scheduler that prove readiness transition, bounded termination, no duplicate raw event, and durable continuation of eligible background work.
-- [ ] 6.5 Add black-box migration-upgrade and disposable backup/restore verification cases using only harness-owned databases and compare restored scoped behavior with the source fixture.
+- [x] 6.1 Build an isolated real PostgreSQL/pgvector integration harness with generated credentials, unique labelled resources, bounded deadlines, prerequisite detection, and ownership-safe cleanup behavior.
+- [x] 6.2 Add a fresh-stack black-box test that starts API/worker/scheduler, runs bootstrap-admin-first setup, creates exact grants, discovers the runtime API contract, and completes idempotent ingest through retrieval/context assembly.
+- [x] 6.3 Add black-box negative cases for ungranted-scope denial, unauthorized admin access, idempotency-key replay/conflict, and lifecycle-safe absence of cross-scope retrieval disclosure.
+- [x] 6.4 Add black-box signal/drain/restart tests for API, worker, and scheduler that prove readiness transition, bounded termination, no duplicate raw event, and durable continuation of eligible background work.
+- [x] 6.5 Add black-box migration-upgrade and disposable backup/restore verification cases using only harness-owned databases and compare restored scoped behavior with the source fixture.
 - [x] 6.6 Provide one documented local product-verification entrypoint with explicit non-pass skip behavior when container prerequisites are absent, plus CI wiring that treats the real-stack suite as mandatory for release builds.
 
 ## 7. Release Evidence and Completion Gate
 
 - [x] 7.1 Update observability and self-hosted assurance docs/fixtures for migration, startup/drain, product verification, and restore-proof evidence; verify all new telemetry remains low-cardinality and redacted.
-- [ ] 7.2 Run focused unit tests, real PostgreSQL integration tests, Compose/product verification, migration upgrade/recovery checks, documentation contract checks, OpenAPI validation, and `openspec validate product-ready-self-hosting-foundation --strict`; fix every failure before marking tasks complete.
-- [ ] 7.3 Execute the documented fresh-install, restart, and restore-drill runbooks from a clean harness environment; capture bounded reproducible release evidence and verify no user workspace volume, unlabelled database, or credential-bearing artifact was modified or committed.
+- [x] 7.2 Run focused unit tests, real PostgreSQL integration tests, Compose/product verification, migration upgrade/recovery checks, documentation contract checks, OpenAPI validation, and `openspec validate product-ready-self-hosting-foundation --strict`; fix every failure before marking tasks complete.
+- [x] 7.3 Execute the documented fresh-install, restart, and restore-drill runbooks from a clean harness environment; capture bounded reproducible release evidence and verify no user workspace volume, unlabelled database, or credential-bearing artifact was modified or committed.

@@ -608,7 +608,7 @@ CREATE TABLE IF NOT EXISTS usefulness_feedback (
     namespace text NOT NULL,
     feedback_type text NOT NULL,
     source_surface text NOT NULL,
-    task_evaluation_id text REFERENCES task_evaluations(id) ON DELETE SET NULL,
+    task_evaluation_id text,
     actor text NOT NULL,
     reason text NOT NULL,
     idempotency_key text,
