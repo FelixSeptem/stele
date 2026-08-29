@@ -131,6 +131,26 @@ func TestProductVerificationEntryPointDocumentsPrerequisiteAndOwnershipGuards(t 
 	}
 }
 
+func TestComposeSupportsIsolatedScopesPortsAndMirrorImageOverride(t *testing.T) {
+	contentBytes, err := os.ReadFile("../docker-compose.yml")
+	if err != nil {
+		t.Fatalf("read docker-compose.yml: %v", err)
+	}
+	content := string(contentBytes)
+	for _, want := range []string{"STELE_POSTGRES_IMAGE", "STELE_POSTGRES_HOST_PORT", "STELE_HTTP_HOST_PORT", "STELE_AUTH_DEFAULT_TENANT", "STELE_AUTH_DEFAULT_PROJECT", "STELE_AUTH_DEFAULT_NAMESPACE"} {
+		if !strings.Contains(content, want) {
+			t.Fatalf("compose missing isolated verification override %q", want)
+		}
+	}
+	docsBytes, err := os.ReadFile("self-hosting.md")
+	if err != nil {
+		t.Fatalf("read self-hosting.md: %v", err)
+	}
+	if !strings.Contains(string(docsBytes), "docker.1ms.run/pgvector/pgvector:pg17") {
+		t.Fatal("self-hosting docs must include the explicit 1ms.run mirror example")
+	}
+}
+
 func TestSelfHostingDocsDescribeBoundedRuntimeTelemetry(t *testing.T) {
 	contentBytes, err := os.ReadFile("self-hosting.md")
 	if err != nil {

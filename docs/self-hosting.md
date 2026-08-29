@@ -314,6 +314,21 @@ status `2` and prints `SKIP`; this is explicitly not a pass. CI sets
 Use `-KeepResources` only to retain the uniquely named verification resources
 for bounded diagnostics.
 
+For restricted networks, set `STELE_PRODUCT_VERIFY_POSTGRES_IMAGE` to an image
+reference available from your configured registry mirror. Compose also accepts
+`STELE_POSTGRES_IMAGE`, `STELE_POSTGRES_HOST_PORT`, and `STELE_HTTP_HOST_PORT`
+overrides; the isolated verifier selects random host ports automatically.
+
+For example, when the `1ms.run` Docker registry proxy is reachable:
+
+```powershell
+$env:STELE_PRODUCT_VERIFY_POSTGRES_IMAGE = "docker.1ms.run/pgvector/pgvector:pg17"
+pwsh -File scripts/stele-product-verify.ps1
+```
+
+The proxy host is an operator choice and is not contacted unless this override
+is explicitly set.
+
 Treat `.stele-smoke-credentials` as secret material: move the values into an
 operator-managed secret store and remove the directory after the smoke run.
 

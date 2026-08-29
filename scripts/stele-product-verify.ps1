@@ -32,6 +32,12 @@ try {
     $env:STELE_AUTH_DEFAULT_TENANT = "tenant-verify-$ProjectName"
     $env:STELE_AUTH_DEFAULT_PROJECT = "project-verify-$ProjectName"
     $env:STELE_AUTH_DEFAULT_NAMESPACE = "namespace-verify-$ProjectName"
+    $env:STELE_POSTGRES_HOST_PORT = (Get-Random -Minimum 15432 -Maximum 25432).ToString()
+    $env:STELE_HTTP_HOST_PORT = (Get-Random -Minimum 18080 -Maximum 28080).ToString()
+    if (-not [string]::IsNullOrWhiteSpace($env:STELE_PRODUCT_VERIFY_POSTGRES_IMAGE)) {
+        $env:STELE_POSTGRES_IMAGE = $env:STELE_PRODUCT_VERIFY_POSTGRES_IMAGE
+    }
+    $baseUrl = "http://localhost:$($env:STELE_HTTP_HOST_PORT)"
 
     Write-Output "Starting isolated product verification project '$ProjectName'"
     & docker compose -f $ComposeFile up --build -d
@@ -41,7 +47,7 @@ try {
         $credentialDir = Join-Path ([System.IO.Path]::GetTempPath()) "stele-product-verify-$ProjectName"
         New-Item -ItemType Directory -Force -Path $credentialDir | Out-Null
         & pwsh -NoProfile -File (Join-Path $PSScriptRoot "stele-bootstrap-smoke.ps1") `
-            -BaseUrl "http://localhost:8080" `
+            -BaseUrl $baseUrl `
             -BootstrapKey $env:STELE_AUTH_BOOTSTRAP_ADMIN_KEY `
             -Tenant $env:STELE_AUTH_DEFAULT_TENANT `
             -Project $env:STELE_AUTH_DEFAULT_PROJECT `

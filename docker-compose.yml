@@ -1,13 +1,13 @@
 services:
   postgres:
-    image: pgvector/pgvector:pg17
+    image: ${STELE_POSTGRES_IMAGE:-pgvector/pgvector:pg17}
     restart: unless-stopped
     environment:
       POSTGRES_USER: stele
       POSTGRES_PASSWORD: ${STELE_POSTGRES_PASSWORD:-stele-local-only}
       POSTGRES_DB: stele
     ports:
-      - "5432:5432"
+      - "${STELE_POSTGRES_HOST_PORT:-5432}:5432"
     healthcheck:
       test: ["CMD-SHELL", "pg_isready -U stele -d stele"]
       interval: 5s
@@ -26,9 +26,9 @@ services:
       STELE_POSTGRES_DSN: postgres://stele:${STELE_POSTGRES_PASSWORD:-stele-local-only}@postgres:5432/stele?sslmode=disable
       STELE_DATABASE_MIGRATION_POLICY: ${STELE_DATABASE_MIGRATION_POLICY:-auto}
       STELE_AUTH_BOOTSTRAP_ADMIN_KEY: ${STELE_AUTH_BOOTSTRAP_ADMIN_KEY:-local-bootstrap-admin-change-me}
-      STELE_AUTH_DEFAULT_TENANT: tenant-a
-      STELE_AUTH_DEFAULT_PROJECT: project-a
-      STELE_AUTH_DEFAULT_NAMESPACE: namespace-a
+      STELE_AUTH_DEFAULT_TENANT: ${STELE_AUTH_DEFAULT_TENANT:-tenant-a}
+      STELE_AUTH_DEFAULT_PROJECT: ${STELE_AUTH_DEFAULT_PROJECT:-project-a}
+      STELE_AUTH_DEFAULT_NAMESPACE: ${STELE_AUTH_DEFAULT_NAMESPACE:-namespace-a}
       STELE_JOBS_MAINTENANCE_INTERVAL: 30s
       STELE_JOBS_SUMMARY_COMPACTION_INTERVAL: 30s
       STELE_JOBS_RETENTION_INTERVAL: 30s
@@ -41,7 +41,7 @@ services:
       postgres:
         condition: service_healthy
     ports:
-      - "8080:8080"
+      - "${STELE_HTTP_HOST_PORT:-8080}:8080"
 
   worker:
     build:
@@ -52,9 +52,9 @@ services:
       STELE_POSTGRES_DSN: postgres://stele:${STELE_POSTGRES_PASSWORD:-stele-local-only}@postgres:5432/stele?sslmode=disable
       STELE_DATABASE_MIGRATION_POLICY: ${STELE_DATABASE_MIGRATION_POLICY:-auto}
       STELE_AUTH_BOOTSTRAP_ADMIN_KEY: ${STELE_AUTH_BOOTSTRAP_ADMIN_KEY:-local-bootstrap-admin-change-me}
-      STELE_AUTH_DEFAULT_TENANT: tenant-a
-      STELE_AUTH_DEFAULT_PROJECT: project-a
-      STELE_AUTH_DEFAULT_NAMESPACE: namespace-a
+      STELE_AUTH_DEFAULT_TENANT: ${STELE_AUTH_DEFAULT_TENANT:-tenant-a}
+      STELE_AUTH_DEFAULT_PROJECT: ${STELE_AUTH_DEFAULT_PROJECT:-project-a}
+      STELE_AUTH_DEFAULT_NAMESPACE: ${STELE_AUTH_DEFAULT_NAMESPACE:-namespace-a}
       STELE_JOBS_MAINTENANCE_INTERVAL: 30s
       STELE_JOBS_SUMMARY_COMPACTION_INTERVAL: 30s
       STELE_JOBS_RETENTION_INTERVAL: 30s
@@ -76,9 +76,9 @@ services:
       STELE_POSTGRES_DSN: postgres://stele:${STELE_POSTGRES_PASSWORD:-stele-local-only}@postgres:5432/stele?sslmode=disable
       STELE_DATABASE_MIGRATION_POLICY: ${STELE_DATABASE_MIGRATION_POLICY:-auto}
       STELE_AUTH_BOOTSTRAP_ADMIN_KEY: ${STELE_AUTH_BOOTSTRAP_ADMIN_KEY:-local-bootstrap-admin-change-me}
-      STELE_AUTH_DEFAULT_TENANT: tenant-a
-      STELE_AUTH_DEFAULT_PROJECT: project-a
-      STELE_AUTH_DEFAULT_NAMESPACE: namespace-a
+      STELE_AUTH_DEFAULT_TENANT: ${STELE_AUTH_DEFAULT_TENANT:-tenant-a}
+      STELE_AUTH_DEFAULT_PROJECT: ${STELE_AUTH_DEFAULT_PROJECT:-project-a}
+      STELE_AUTH_DEFAULT_NAMESPACE: ${STELE_AUTH_DEFAULT_NAMESPACE:-namespace-a}
       STELE_JOBS_MAINTENANCE_INTERVAL: 30s
       STELE_JOBS_SUMMARY_COMPACTION_INTERVAL: 30s
       STELE_JOBS_RETENTION_INTERVAL: 30s
