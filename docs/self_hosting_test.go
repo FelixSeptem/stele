@@ -118,6 +118,19 @@ func TestBackupRecoveryScriptsExposeSafetyGuards(t *testing.T) {
 	}
 }
 
+func TestProductVerificationEntryPointDocumentsPrerequisiteAndOwnershipGuards(t *testing.T) {
+	contentBytes, err := os.ReadFile("../scripts/stele-product-verify.ps1")
+	if err != nil {
+		t.Fatalf("read product verification script: %v", err)
+	}
+	content := string(contentBytes)
+	for _, want := range []string{"STELE_PRODUCT_VERIFY_CI", "SKIP:", "COMPOSE_PROJECT_NAME", "--build -d", "--volumes --remove-orphans", "KeepResources", "stele-bootstrap-smoke.ps1"} {
+		if !strings.Contains(content, want) {
+			t.Fatalf("product verification entrypoint missing %q", want)
+		}
+	}
+}
+
 func TestSelfHostingDocsIncludeMemoryQualityRepairLoop(t *testing.T) {
 	contentBytes, err := os.ReadFile("self-hosting.md")
 	if err != nil {

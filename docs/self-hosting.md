@@ -300,6 +300,20 @@ then exercises scoped memory listing, search, and context assembly with the new
 runtime credential. Use `-SkipLifecycle` only when you are splitting bootstrap
 from a separately orchestrated worker/retrieval verification.
 
+For the isolated real-stack product gate, run:
+
+```powershell
+pwsh -File scripts/stele-product-verify.ps1
+```
+
+This creates a unique Compose project and generated credentials, runs the
+bootstrap/lifecycle smoke, and removes only its own containers, network, and
+volume. On a developer machine without Docker or a running daemon it exits with
+status `2` and prints `SKIP`; this is explicitly not a pass. CI sets
+`STELE_PRODUCT_VERIFY_CI=1`, where missing Docker prerequisites fail the job.
+Use `-KeepResources` only to retain the uniquely named verification resources
+for bounded diagnostics.
+
 Treat `.stele-smoke-credentials` as secret material: move the values into an
 operator-managed secret store and remove the directory after the smoke run.
 

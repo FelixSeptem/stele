@@ -49,7 +49,7 @@
 - [ ] 6.3 Add black-box negative cases for ungranted-scope denial, unauthorized admin access, idempotency-key replay/conflict, and lifecycle-safe absence of cross-scope retrieval disclosure.
 - [ ] 6.4 Add black-box signal/drain/restart tests for API, worker, and scheduler that prove readiness transition, bounded termination, no duplicate raw event, and durable continuation of eligible background work.
 - [ ] 6.5 Add black-box migration-upgrade and disposable backup/restore verification cases using only harness-owned databases and compare restored scoped behavior with the source fixture.
-- [ ] 6.6 Provide one documented local product-verification entrypoint with explicit non-pass skip behavior when container prerequisites are absent, plus CI wiring that treats the real-stack suite as mandatory for release builds.
+- [x] 6.6 Provide one documented local product-verification entrypoint with explicit non-pass skip behavior when container prerequisites are absent, plus CI wiring that treats the real-stack suite as mandatory for release builds.
 
 ## 7. Release Evidence and Completion Gate
 
