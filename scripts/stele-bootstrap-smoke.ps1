@@ -69,6 +69,7 @@ if (-not $SkipLifecycle) {
     Invoke-Json GET "/v1/memories?limit=5" $runtimeHeaders $null | Out-Null
     Invoke-Json POST "/v1/memories/search" $runtimeHeaders @{ query = "bootstrap smoke lifecycle fixture"; top_k = 5 } | Out-Null
     Invoke-Json POST "/v1/context/assemble" $runtimeHeaders @{ query = "bootstrap smoke lifecycle fixture"; budget = 1200; include_diagnostics = $true } | Out-Null
+    Invoke-Json POST "/v1/admin/scope-proofs" $adminHeaders @{ checks = @("scope_resolution", "ingestion", "governance", "retrieval", "context"); fixture_mode = "smoke"; actor = "bootstrap-smoke-admin"; reason = "same-scope product smoke proof" } | Out-Null
 }
 
 Write-Host "Verifying bootstrap credential is no longer accepted after durable admin creation..."

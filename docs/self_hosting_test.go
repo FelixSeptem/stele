@@ -68,7 +68,7 @@ func TestBootstrapSmokeScriptIsDocumentedAndConstrained(t *testing.T) {
 		t.Fatalf("read bootstrap smoke script: %v", err)
 	}
 	content := string(script)
-	for _, want := range []string{"CredentialOutputDirectory", "/v1/admin/principals", "/grants", "bootstrap credential was still accepted", "/openapi.yaml", "/version", "/v1/events", "Idempotency-Key", "/v1/memories/search", "/v1/context/assemble"} {
+	for _, want := range []string{"CredentialOutputDirectory", "/v1/admin/principals", "/grants", "bootstrap credential was still accepted", "/openapi.yaml", "/version", "/v1/events", "Idempotency-Key", "/v1/memories/search", "/v1/context/assemble", "/v1/admin/scope-proofs", "same-scope product smoke proof"} {
 		if !strings.Contains(content, want) {
 			t.Fatalf("bootstrap smoke script missing %q", want)
 		}

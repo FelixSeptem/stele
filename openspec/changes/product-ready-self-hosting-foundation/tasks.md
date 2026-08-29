@@ -30,7 +30,7 @@
 - [x] 4.1 Refactor `docker-compose.yml` into documented local-evaluation wiring that uses only accepted bootstrap-admin authorization settings and one consistent configuration set across API, worker, and scheduler.
 - [x] 4.2 Add a non-secret environment example and production configuration reference that distinguish local bundled PostgreSQL from external operator-managed PostgreSQL, secret injection, migration policy, and reverse-proxy/TLS responsibilities.
 - [x] 4.3 Create a repeatable bootstrap smoke command/script that creates the first durable admin, least-privilege runtime principal and exact grant, securely captures one-time credentials, and verifies bootstrap deactivation semantics.
-- [ ] 4.4 Extend the smoke flow to prove migration status, OpenAPI/version discovery, idempotent ingest, async governance, retrieval, context assembly, and same-scope assurance evidence using the runtime principal.
+- [x] 4.4 Extend the smoke flow to prove migration status, OpenAPI/version discovery, idempotent ingest, async governance, retrieval, context assembly, and same-scope assurance evidence using the runtime principal.
 - [x] 4.5 Update README and self-hosting documentation to make the canonical bootstrap and product smoke path authoritative, remove live obsolete allow-list examples, and document failure diagnostics by stage.
 - [x] 4.6 Add documentation/deployment contract tests that reject obsolete auth settings and validate referenced environment variables, commands, routes, and smoke script sequence against the running configuration/OpenAPI contract.
 
