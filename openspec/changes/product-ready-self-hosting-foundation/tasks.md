@@ -53,6 +53,6 @@
 
 ## 7. Release Evidence and Completion Gate
 
-- [ ] 7.1 Update observability and self-hosted assurance docs/fixtures for migration, startup/drain, product verification, and restore-proof evidence; verify all new telemetry remains low-cardinality and redacted.
+- [x] 7.1 Update observability and self-hosted assurance docs/fixtures for migration, startup/drain, product verification, and restore-proof evidence; verify all new telemetry remains low-cardinality and redacted.
 - [ ] 7.2 Run focused unit tests, real PostgreSQL integration tests, Compose/product verification, migration upgrade/recovery checks, documentation contract checks, OpenAPI validation, and `openspec validate product-ready-self-hosting-foundation --strict`; fix every failure before marking tasks complete.
 - [ ] 7.3 Execute the documented fresh-install, restart, and restore-drill runbooks from a clean harness environment; capture bounded reproducible release evidence and verify no user workspace volume, unlabelled database, or credential-bearing artifact was modified or committed.

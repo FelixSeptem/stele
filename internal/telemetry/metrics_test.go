@@ -54,6 +54,31 @@ func TestMetricsObserverExportsOperationsBacklogsAndAdmission(t *testing.T) {
 	}
 }
 
+func TestRuntimeLifecycleMetricsRemainBoundedAndRedacted(t *testing.T) {
+	observer := NewMetricsObserver()
+	observer.RecordOperation(context.Background(), OperationEvent{
+		Mode: "api", Component: "runtime", Operation: "migration_validation", Status: "failure",
+		Error: "postgres://user:secret@example.invalid/db tenant-a project-a namespace-a",
+	})
+	observer.RecordOperation(context.Background(), OperationEvent{
+		Mode: "api", Component: "runtime", Operation: "drain", Status: "success",
+	})
+	metrics := observer.RenderPrometheus()
+	for _, want := range []string{
+		`stele_operations_total{component="runtime",mode="api",operation="drain",status="success"} 1`,
+		`stele_operations_total{component="runtime",mode="api",operation="migration_validation",status="failure"} 1`,
+	} {
+		if !strings.Contains(metrics, want) {
+			t.Fatalf("metrics missing %q\n%s", want, metrics)
+		}
+	}
+	for _, forbidden := range []string{"postgres://", "secret", "tenant-a", "project-a", "namespace-a", `error="`} {
+		if strings.Contains(metrics, forbidden) {
+			t.Fatalf("runtime lifecycle metrics leaked %q\n%s", forbidden, metrics)
+		}
+	}
+}
+
 func TestMetricsObserverExportsEmbeddingCutoverAndProviderReadinessSignals(t *testing.T) {
 	observer := NewMetricsObserver()
 	ctx := context.Background()

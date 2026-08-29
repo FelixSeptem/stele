@@ -131,6 +131,19 @@ func TestProductVerificationEntryPointDocumentsPrerequisiteAndOwnershipGuards(t 
 	}
 }
 
+func TestSelfHostingDocsDescribeBoundedRuntimeTelemetry(t *testing.T) {
+	contentBytes, err := os.ReadFile("self-hosting.md")
+	if err != nil {
+		t.Fatalf("read self-hosting.md: %v", err)
+	}
+	content := string(contentBytes)
+	for _, want := range []string{"Runtime startup and drain telemetry", "migration validation", "readiness/drain", "without emitting DSNs", "Product verification emits", "only phase/result categories"} {
+		if !strings.Contains(content, want) {
+			t.Fatalf("self-hosting docs missing bounded telemetry contract %q", want)
+		}
+	}
+}
+
 func TestSelfHostingDocsIncludeMemoryQualityRepairLoop(t *testing.T) {
 	contentBytes, err := os.ReadFile("self-hosting.md")
 	if err != nil {

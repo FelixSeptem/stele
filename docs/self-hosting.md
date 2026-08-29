@@ -662,6 +662,13 @@ curl -X POST http://localhost:8080/v1/admin/assurance/recovery-verifications \
 
 Metrics and lifecycle logs intentionally exclude tenant, project, namespace, record ids, actor, reason text, query text, webhook URL, and recipient fields. Use the admin inspection routes above for scoped record details.
 
+Runtime startup and drain telemetry is also bounded to `mode`, `component`,
+`operation`, and `status`. It records migration validation, startup, signal,
+readiness/drain, timeout, and cleanup outcomes without emitting DSNs,
+credentials, scopes, principals, or raw error text. Product verification emits
+only phase/result categories; detailed diagnostics remain in the local test
+output or explicitly retained owned Compose resources.
+
 Remaining product gaps after this service loop are explicit: SDK/UI onboarding, external agent runtime integration, vendor-specific alert routing, hosted incident management, and adaptive scoring calibration remain outside the service-owned scope.
 
 ### Baseline startup
