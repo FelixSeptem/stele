@@ -143,6 +143,7 @@ func (r *EvaluationRunner) Replay(ctx context.Context, fixture EvaluationFixture
 		result, err := r.searcher.Search(ctx, SearchInput{
 			Scope:                 item.Scope,
 			Query:                 item.Query,
+			LexicalMatchMode:      metadata.LexicalMatchMode,
 			TopK:                  evaluationReplayTopK,
 			IncludeSummaries:      true,
 			IncludeRelations:      true,

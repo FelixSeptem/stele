@@ -17,6 +17,7 @@ type SearchInput struct {
 	Scope                      memory.Scope
 	Query                      string
 	QueryEmbedding             []float32
+	LexicalMatchMode           LexicalMatchMode
 	Classes                    []memory.MemoryClass
 	rankingSurface             memory.RankingRolloutSurface
 	rankingPolicyDisabled      bool
@@ -29,12 +30,24 @@ type SearchInput struct {
 	FeedbackAwareRanking       bool
 }
 
+// LexicalMatchMode selects the full-text query composition used by an internal
+// retrieval caller. Ordinary search keeps the all-terms default.
+type LexicalMatchMode string
+
+const (
+	LexicalMatchAllTerms LexicalMatchMode = "all_terms"
+	LexicalMatchAnyTerms LexicalMatchMode = "any_terms"
+)
+
 func (i SearchInput) Validate() error {
 	if err := i.Scope.Validate(); err != nil {
 		return err
 	}
 	if strings.TrimSpace(i.Query) == "" {
 		return fmt.Errorf("query is required")
+	}
+	if i.LexicalMatchMode != "" && i.LexicalMatchMode != LexicalMatchAllTerms && i.LexicalMatchMode != LexicalMatchAnyTerms {
+		return fmt.Errorf("unsupported lexical match mode %q", i.LexicalMatchMode)
 	}
 	if !i.TimeFrom.IsZero() && !i.TimeTo.IsZero() && i.TimeFrom.After(i.TimeTo) {
 		return fmt.Errorf("time_from must be before or equal to time_to")

@@ -27,8 +27,8 @@
 - [x] 4.1 Implement an idempotent benchmark corpus loader that replays normalized events through the existing ingestion/consolidation or equivalent controlled fixture path.
 - [x] 4.2 Add run-scoped project, tenant, namespace, and session derivation with collision-resistant run ids and cleanup support.
 - [x] 4.3 Persist bidirectional source-turn/evidence mappings so every retrieved memory can be traced to dataset provenance.
-- [ ] 4.4 Enforce scope predicates and default lifecycle filtering for suppressed, forgotten, and deleted memories in benchmark retrieval.
-- [ ] 4.5 Add PostgreSQL + pgvector integration tests for repeated import, cross-run leakage, lifecycle exclusion, and tenant/namespace isolation.
+- [x] 4.4 Enforce scope predicates and default lifecycle filtering for suppressed, forgotten, and deleted memories in benchmark retrieval.
+- [x] 4.5 Add PostgreSQL + pgvector integration tests for repeated import, cross-run leakage, lifecycle exclusion, and tenant/namespace isolation.
 
 ## 5. Offline execution and embedding profiles
 

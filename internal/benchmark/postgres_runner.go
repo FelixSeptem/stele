@@ -93,7 +93,7 @@ func RunLoCoMoPostgresSmoke(ctx context.Context, dsn string, baseScope memory.Sc
 }
 
 func defaultRetrievalMetadata(manifest DatasetManifest) RetrievalEvaluationMetadata {
-	return RetrievalEvaluationMetadata{FixtureVersion: manifest.Name + "-" + manifest.Version, RepresentationVersion: "normalized-" + SchemaVersion, RankingVersion: "benchmark-lexical-v1", EmbeddingRevision: manifest.Embedding.Name, PolicyVersion: "benchmark-safety-v1"}
+	return RetrievalEvaluationMetadata{FixtureVersion: manifest.Name + "-" + manifest.Version, RepresentationVersion: "normalized-" + SchemaVersion, RankingVersion: "benchmark-lexical-any-terms-v1", EmbeddingRevision: manifest.Embedding.Name, LexicalMatchMode: retrieval.LexicalMatchAnyTerms, PolicyVersion: "benchmark-safety-v1"}
 }
 
 func postgresRuntimeIdentity(ctx context.Context, pool *pgxpool.Pool) (PostgresRuntimeIdentity, error) {

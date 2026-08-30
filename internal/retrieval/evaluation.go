@@ -43,11 +43,12 @@ type EvaluationSource struct {
 // EvaluationRankingMetadata identifies an evaluation report without exposing
 // environment-specific provider settings or database connection information.
 type EvaluationRankingMetadata struct {
-	FixtureVersion              string `json:"fixture_version"`
-	RepresentationVersion       string `json:"representation_version"`
-	RankingVersion              string `json:"ranking_version"`
-	CompatibleEmbeddingRevision string `json:"compatible_embedding_revision"`
-	PolicyVersion               string `json:"policy_version"`
+	FixtureVersion              string           `json:"fixture_version"`
+	RepresentationVersion       string           `json:"representation_version"`
+	RankingVersion              string           `json:"ranking_version"`
+	CompatibleEmbeddingRevision string           `json:"compatible_embedding_revision"`
+	LexicalMatchMode            LexicalMatchMode `json:"lexical_match_mode,omitempty"`
+	PolicyVersion               string           `json:"policy_version"`
 }
 
 // EvaluationSafetyFailureCategory is a stable non-sensitive failure reason.
@@ -181,6 +182,9 @@ func (m EvaluationRankingMetadata) Validate() error {
 	}
 	if strings.TrimSpace(m.CompatibleEmbeddingRevision) == "" {
 		return fmt.Errorf("compatible embedding revision is required")
+	}
+	if m.LexicalMatchMode != "" && m.LexicalMatchMode != LexicalMatchAllTerms && m.LexicalMatchMode != LexicalMatchAnyTerms {
+		return fmt.Errorf("unsupported lexical match mode %q", m.LexicalMatchMode)
 	}
 	if strings.TrimSpace(m.PolicyVersion) == "" {
 		return fmt.Errorf("policy version is required")

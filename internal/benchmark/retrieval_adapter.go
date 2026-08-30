@@ -21,6 +21,7 @@ type RetrievalEvaluationMetadata struct {
 	RepresentationVersion string
 	RankingVersion        string
 	EmbeddingRevision     string
+	LexicalMatchMode      retrieval.LexicalMatchMode
 	PolicyVersion         string
 }
 
@@ -37,7 +38,7 @@ func BuildRetrievalEvaluationFixture(corpus NormalizedCorpus, mappings map[strin
 	result := PreparedRetrievalEvaluation{
 		Fixture:  retrieval.EvaluationFixture{Version: strings.TrimSpace(metadata.FixtureVersion), Cases: make([]retrieval.EvaluationCase, 0, len(corpus.Queries))},
 		Seed:     retrieval.EvaluationFixtureSeed{FixtureVersion: strings.TrimSpace(metadata.FixtureVersion)},
-		Metadata: retrieval.EvaluationRankingMetadata{FixtureVersion: strings.TrimSpace(metadata.FixtureVersion), RepresentationVersion: strings.TrimSpace(metadata.RepresentationVersion), RankingVersion: strings.TrimSpace(metadata.RankingVersion), CompatibleEmbeddingRevision: strings.TrimSpace(metadata.EmbeddingRevision), PolicyVersion: strings.TrimSpace(metadata.PolicyVersion)},
+		Metadata: retrieval.EvaluationRankingMetadata{FixtureVersion: strings.TrimSpace(metadata.FixtureVersion), RepresentationVersion: strings.TrimSpace(metadata.RepresentationVersion), RankingVersion: strings.TrimSpace(metadata.RankingVersion), CompatibleEmbeddingRevision: strings.TrimSpace(metadata.EmbeddingRevision), LexicalMatchMode: metadata.LexicalMatchMode, PolicyVersion: strings.TrimSpace(metadata.PolicyVersion)},
 	}
 	if err := result.Metadata.Validate(); err != nil {
 		return PreparedRetrievalEvaluation{}, err
