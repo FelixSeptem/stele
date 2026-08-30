@@ -1,6 +1,7 @@
 package main
 
 import (
+	"bytes"
 	"context"
 	"errors"
 	"testing"
@@ -12,6 +13,29 @@ import (
 type stubRunner struct {
 	called bool
 	err    error
+}
+
+func TestRunBenchmarkListPrintsDatasetSupportStates(t *testing.T) {
+	var stdout bytes.Buffer
+	var stderr bytes.Buffer
+	if err := runBenchmark([]string{"list"}, &stdout, &stderr); err != nil {
+		t.Fatal(err)
+	}
+	if !bytes.Contains(stdout.Bytes(), []byte("locomo")) || !bytes.Contains(stdout.Bytes(), []byte("metadata-only")) {
+		t.Fatalf("unexpected benchmark list: %s", stdout.String())
+	}
+}
+
+func TestRunBenchmarkSmokeWritesOfflineReport(t *testing.T) {
+	t.Setenv("STELE_BENCHMARK_DATA_DIR", t.TempDir())
+	var stdout bytes.Buffer
+	var stderr bytes.Buffer
+	if err := runBenchmark([]string{"run-smoke"}, &stdout, &stderr); err != nil {
+		t.Fatal(err)
+	}
+	if !bytes.Contains(stdout.Bytes(), []byte(`"status":"success"`)) || !bytes.Contains(stdout.Bytes(), []byte(`"offline":true`)) {
+		t.Fatalf("unexpected smoke output: %s", stdout.String())
+	}
 }
 
 func (s *stubRunner) Start(ctx context.Context) error {

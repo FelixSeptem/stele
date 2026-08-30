@@ -1,0 +1,40 @@
+{
+  "samples": [
+    {
+      "id": "synthetic-locomo-smoke-1",
+      "sessions": [
+        {
+          "id": "session-1",
+          "turns": [
+            {
+              "id": "turn-1",
+              "speaker": "Avery",
+              "text": "My favorite breakfast is congee.",
+              "timestamp": "2025-01-02T09:00:00Z"
+            },
+            {
+              "id": "turn-2",
+              "speaker": "Blake",
+              "text": "I work at the neighborhood library.",
+              "timestamp": "2025-01-02T09:05:00Z"
+            }
+          ]
+        }
+      ],
+      "questions": [
+        {
+          "id": "preference-1",
+          "text": "What breakfast does Avery prefer?",
+          "category": "preference",
+          "evidence_turn_ids": ["turn-1"]
+        },
+        {
+          "id": "multi-hop-1",
+          "text": "Where does Blake work and what breakfast does Avery prefer?",
+          "category": "multi-hop",
+          "evidence_turn_ids": ["turn-1", "turn-2"]
+        }
+      ]
+    }
+  ]
+}
