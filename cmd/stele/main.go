@@ -4,13 +4,16 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"io"
 	"log"
 	"os"
 	"os/signal"
 	"syscall"
 
 	"github.com/FelixSeptem/stele/internal/app"
+	"github.com/FelixSeptem/stele/internal/benchmark"
 	"github.com/FelixSeptem/stele/internal/config"
+	"github.com/FelixSeptem/stele/internal/memory"
 	"github.com/FelixSeptem/stele/internal/storage/postgres"
 )
 
@@ -22,11 +25,38 @@ func main() {
 	}
 }
 
+func runBenchmark(args []string, stdout, stderr io.Writer) error {
+	if len(args) != 1 {
+		return fmt.Errorf("benchmark command must be one of: list, run-smoke")
+	}
+	encoder := json.NewEncoder(stdout)
+	switch args[0] {
+	case "list":
+		return encoder.Encode(benchmark.DefaultRegistry().List())
+	case "run-smoke":
+		dataDir := os.Getenv("STELE_BENCHMARK_DATA_DIR")
+		if dataDir == "" {
+			return fmt.Errorf("STELE_BENCHMARK_DATA_DIR is required for benchmark run-smoke")
+		}
+		result, err := benchmark.RunLoCoMoSmoke(benchmark.NewCache(dataDir), memory.Scope{Tenant: "benchmark", Project: "locomo-smoke", Namespace: "offline"})
+		if err != nil {
+			return err
+		}
+		return encoder.Encode(result)
+	default:
+		_, _ = fmt.Fprintln(stderr, "benchmark command must be one of: list, run-smoke")
+		return fmt.Errorf("unsupported benchmark command %q", args[0])
+	}
+}
+
 func run() error {
 	return runArgs(os.Args[1:])
 }
 
 func runArgs(args []string) error {
+	if len(args) > 0 && args[0] == "benchmark" {
+		return runBenchmark(args[1:], os.Stdout, os.Stderr)
+	}
 	if len(args) > 0 && args[0] == "migrate" {
 		return runMigrate(args[1:])
 	}
