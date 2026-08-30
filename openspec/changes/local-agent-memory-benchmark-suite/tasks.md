@@ -41,7 +41,7 @@
 
 ## 6. Evaluation integration and qrels/reporting
 
-- [ ] 6.1 Add an adapter from normalized queries/qrels to the retrieval evaluation baseline replay interface without changing `/v1/memories/search` or context assembly contracts.
+- [x] 6.1 Add an adapter from normalized queries/qrels to the retrieval evaluation baseline replay interface without changing `/v1/memories/search` or context assembly contracts.
 - [x] 6.2 Implement graded relevance, multiple evidence groups, multi-hop completeness, query reuse, and must-not-return evaluation logic.
 - [x] 6.3 Extend metric aggregation with Recall@k, MRR, nDCG, group/multi-hop hit rate, query coverage, p50/p95 latency, and safety failures.
 - [ ] 6.4 Extend strategy comparison for lexical, semantic, hybrid, chunk, and hybrid-rank configurations with aligned dataset/run provenance.

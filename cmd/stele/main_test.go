@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"errors"
+	"strings"
 	"testing"
 
 	"github.com/FelixSeptem/stele/internal/app"
@@ -35,6 +36,16 @@ func TestRunBenchmarkSmokeWritesOfflineReport(t *testing.T) {
 	}
 	if !bytes.Contains(stdout.Bytes(), []byte(`"status":"success"`)) || !bytes.Contains(stdout.Bytes(), []byte(`"offline":true`)) {
 		t.Fatalf("unexpected smoke output: %s", stdout.String())
+	}
+}
+
+func TestRunBenchmarkPostgresSmokeRequiresDSN(t *testing.T) {
+	t.Setenv("STELE_POSTGRES_DSN", "")
+	var stdout bytes.Buffer
+	var stderr bytes.Buffer
+	err := runBenchmark([]string{"run-postgres-smoke"}, &stdout, &stderr)
+	if err == nil || !strings.Contains(err.Error(), "STELE_POSTGRES_DSN") {
+		t.Fatalf("expected DSN prerequisite error, got %v", err)
 	}
 }
 

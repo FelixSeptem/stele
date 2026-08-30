@@ -84,18 +84,30 @@ func (s *EvaluationFixtureSeeder) Seed(ctx context.Context, fixture retrieval.Ev
 		FixtureVersion: fixture.Version,
 		Aliases:        make([]retrieval.EvaluationSeededAlias, 0),
 	}
-	globalAliases := make(map[string]struct{})
+	globalAliases := make(map[string]retrieval.EvaluationSeededAlias)
 	for caseIndex, item := range fixture.Cases {
 		for sourceIndex, source := range item.Sources {
-			if _, exists := globalAliases[source.Alias]; exists {
-				return retrieval.EvaluationFixtureSeed{}, fmt.Errorf("duplicate fixture alias across cases")
+			if existing, exists := globalAliases[source.Alias]; exists {
+				if existing.Scope.Normalized() != item.Scope.Normalized() {
+					return retrieval.EvaluationFixtureSeed{}, fmt.Errorf("duplicate fixture alias scope mismatch across cases")
+				}
+				seed.Aliases = append(seed.Aliases, retrieval.EvaluationSeededAlias{
+					CaseID:      item.ID,
+					Alias:       source.Alias,
+					Scope:       existing.Scope,
+					MemoryID:    existing.MemoryID,
+					RawEventID:  existing.RawEventID,
+					State:       existing.State,
+					FactCluster: existing.FactCluster,
+				})
+				continue
 			}
-			globalAliases[source.Alias] = struct{}{}
 
 			record, err := s.seedSource(ctx, fixture.Version, item, source, caseIndex, sourceIndex)
 			if err != nil {
 				return retrieval.EvaluationFixtureSeed{}, err
 			}
+			globalAliases[source.Alias] = record
 			seed.Aliases = append(seed.Aliases, record)
 		}
 	}
@@ -229,7 +241,13 @@ func (s *EvaluationFixtureSeeder) applySourceState(ctx context.Context, canonica
 
 func isOwnedEvaluationFixtureScope(scope memory.Scope) bool {
 	normalized := scope.Normalized()
-	return normalized.Tenant == evaluationFixtureTenant && normalized.Project == evaluationFixtureProject && strings.TrimSpace(normalized.Namespace) != ""
+	if strings.TrimSpace(normalized.Tenant) == "" || strings.TrimSpace(normalized.Namespace) == "" {
+		return false
+	}
+	if normalized.Tenant == evaluationFixtureTenant && normalized.Project == evaluationFixtureProject {
+		return true
+	}
+	return strings.HasPrefix(normalized.Project, "benchmark-")
 }
 
 func evaluationFixtureTimestamp(sourceTimestamp time.Time, caseIndex, sourceIndex int) time.Time {

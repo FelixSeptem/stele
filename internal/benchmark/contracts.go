@@ -143,6 +143,10 @@ func checksumBytes(data []byte) string {
 	return hex.EncodeToString(digest[:])
 }
 
+func checksumCanonicalText(data []byte) string {
+	return checksumBytes(bytes.ReplaceAll(data, []byte("\r\n"), []byte("\n")))
+}
+
 type ConversationTurn struct {
 	ID        string `json:"id"`
 	Speaker   string `json:"speaker,omitempty"`

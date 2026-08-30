@@ -27,7 +27,7 @@ func main() {
 
 func runBenchmark(args []string, stdout, stderr io.Writer) error {
 	if len(args) != 1 {
-		return fmt.Errorf("benchmark command must be one of: list, run-smoke")
+		return fmt.Errorf("benchmark command must be one of: list, run-smoke, run-postgres-smoke")
 	}
 	encoder := json.NewEncoder(stdout)
 	switch args[0] {
@@ -43,8 +43,18 @@ func runBenchmark(args []string, stdout, stderr io.Writer) error {
 			return err
 		}
 		return encoder.Encode(result)
+	case "run-postgres-smoke":
+		dsn := os.Getenv("STELE_POSTGRES_DSN")
+		if dsn == "" {
+			return fmt.Errorf("STELE_POSTGRES_DSN is required for benchmark run-postgres-smoke")
+		}
+		result, err := benchmark.RunLoCoMoPostgresSmoke(context.Background(), dsn, memory.Scope{Tenant: "benchmark", Project: "locomo", Namespace: "local"})
+		if err != nil {
+			return err
+		}
+		return encoder.Encode(result)
 	default:
-		_, _ = fmt.Fprintln(stderr, "benchmark command must be one of: list, run-smoke")
+		_, _ = fmt.Fprintln(stderr, "benchmark command must be one of: list, run-smoke, run-postgres-smoke")
 		return fmt.Errorf("unsupported benchmark command %q", args[0])
 	}
 }

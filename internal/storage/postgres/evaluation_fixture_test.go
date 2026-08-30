@@ -31,6 +31,15 @@ func TestEvaluationFixtureSeederRejectsForeignScopeBeforeWriting(t *testing.T) {
 	}
 }
 
+func TestEvaluationFixtureScopeAllowsDedicatedBenchmarkProject(t *testing.T) {
+	if !isOwnedEvaluationFixtureScope(memory.Scope{Tenant: "benchmark", Project: "benchmark-locomo", Namespace: "run-local"}) {
+		t.Fatal("expected benchmark-owned scope to be allowed")
+	}
+	if isOwnedEvaluationFixtureScope(memory.Scope{Tenant: "benchmark", Project: "production", Namespace: "run-local"}) {
+		t.Fatal("expected non-benchmark project to remain disallowed")
+	}
+}
+
 func TestEvaluationFixtureSeederSeedsOwnedPostgresFixture(t *testing.T) {
 	dsn := os.Getenv("STELE_TEST_RETRIEVAL_EVALUATION_DSN")
 	if dsn == "" {

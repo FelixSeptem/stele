@@ -33,8 +33,8 @@ func RunLoCoMoSmoke(cache Cache, scope memory.Scope) (SmokeRunResult, error) {
 	if err != nil {
 		return SmokeRunResult{}, err
 	}
-	fixtureBytes := loCoMoSmokeFixture
-	if checksumBytes(fixtureBytes) != manifest.SHA256 {
+	fixtureBytes := bytes.ReplaceAll(loCoMoSmokeFixture, []byte("\r\n"), []byte("\n"))
+	if checksumCanonicalText(fixtureBytes) != manifest.SHA256 {
 		return SmokeRunResult{}, &StatusError{Status: StatusChecksumMismatch, Message: "locomo smoke fixture checksum does not match manifest"}
 	}
 	if _, err := cache.StoreVerifiedRaw(manifest, bytes.NewReader(fixtureBytes)); err != nil {

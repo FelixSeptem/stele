@@ -4,7 +4,7 @@ Stele's benchmark suite evaluates retrieval evidence, not generated answers. It 
 
 ## Dataset policy
 
-The repository contains only a synthetic, repository-owned LoCoMo-shaped smoke fixture. It does not redistribute the LoCoMo, LongMemEval, Multi-Session Chat, PersonaChat, HotpotQA, TimeQA, or BEIR full corpora.
+The repository contains only a synthetic, repository-owned LoCoMo-shaped smoke fixture. Its manifest checksum is calculated over canonical LF text so Git checkout line endings do not change smoke verification. It does not redistribute the LoCoMo, LongMemEval, Multi-Session Chat, PersonaChat, HotpotQA, TimeQA, or BEIR full corpora.
 
 Before fetching a full external dataset, review its current license and upstream terms. Create a manifest that locks the dataset name, version, upstream URL, upstream revision, SHA256, conversion version, split, and embedding profile. Keep the downloaded files under a local cache; do not add them to Git unless redistribution is explicitly permitted.
 

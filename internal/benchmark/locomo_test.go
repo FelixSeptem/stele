@@ -69,7 +69,7 @@ func TestLoCoMoSmokeManifestMatchesFixtureChecksum(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if checksumBytes(data) != manifest.SHA256 {
+	if checksumCanonicalText(data) != manifest.SHA256 {
 		t.Fatalf("manifest checksum %s does not match fixture", manifest.SHA256)
 	}
 }
