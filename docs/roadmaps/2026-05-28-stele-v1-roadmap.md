@@ -64,6 +64,20 @@ Exit signal:
 - admin inspection surfaces exist
 - deploy assets and bootstrap docs are usable
 
+### M5: Retrieval Quality And Memory Representation
+
+Goal: improve retrieval quality without weakening the existing governance, provenance,
+scope-isolation, or PostgreSQL system-of-record boundaries.
+
+Exit signal:
+
+- memory representation preserves raw-event provenance while exposing bounded,
+  independently retrievable facts
+- lexical, semantic, and relation candidates are fused with calibrated and
+  observable ranking behavior
+- duplicate and low-diversity context packing is measured and controlled
+- ranking changes are evaluated offline and can be rolled out or rolled back by scope
+
 ## Phase Breakdown
 
 ## Phase 1: Foundation
@@ -448,6 +462,249 @@ Done when:
 
 - operators can inspect service health and backlog status
 
+## Phase 6: Retrieval Quality And Memory Representation
+
+This phase is an evolvable quality track layered on top of the existing memory,
+governance, and retrieval contracts. It must not replace PostgreSQL as the system of
+record, bypass lifecycle visibility rules, or make raw events mutable. Each step is
+independently deployable and has a default-off or shadow mode until its acceptance
+criteria are met.
+
+### Task 6.1: Retrieval evaluation baseline
+
+Purpose: establish a repeatable measurement loop before changing ranking behavior.
+
+- Define an internal evaluation fixture with single-fact, multi-hop, temporal,
+  procedural, profile, contradiction, noisy-neighbor, and hidden-memory cases.
+- Store expected evidence IDs and acceptable evidence groups without storing model
+  answers as memory records.
+- Measure `Recall@1/5/10`, `MRR`, `nDCG@k`, multi-hop evidence coverage, duplicate
+  rate, cross-scope leakage rate, p50/p95 latency, and candidate-pool size.
+- Add a deterministic replay command that runs the same fixture against a selected
+  ranking version.
+
+Outputs:
+
+- versioned retrieval evaluation fixture
+- baseline report for the current ranking implementation
+- redacted ranking diagnostics suitable for local and CI runs
+
+Done when:
+
+- every ranking change can be compared with a prior baseline
+- cross-scope leakage is a hard zero-tolerance assertion
+- latency and quality regressions have explicit thresholds
+
+Dependencies:
+
+- Tasks 3.5, 4.2, 4.3, and 4.4
+
+Rollback:
+
+- no production behavior changes; this task is measurement-only
+
+### Task 6.2: Hierarchical memory representation and bounded chunking
+
+Purpose: improve retrieval granularity while preserving complete source evidence.
+
+- Keep raw events immutable and introduce derived source-chunk metadata: parent
+  event/memory ID, ordinal, source message range, session ID, extraction version,
+  character/token bounds, and timestamps.
+- Prefer message, sentence, paragraph, list, and code boundaries before applying a
+  bounded maximum size.
+- Generate chunks as derived candidates; never treat a chunk as a replacement for
+  the canonical memory or its provenance.
+- Support parent-child lookup so a hit can receive a small, bounded amount of adjacent
+  or parent context.
+- Apply memory-class-specific granularity: atomic facts for profile, event units for
+  episodic, rule/step groups for procedural, larger coverage units for summaries,
+  and relation facts for relation memory.
+
+Outputs:
+
+- chunk metadata schema and repository contract
+- deterministic chunker with configurable size bounds
+- parent-child retrieval and provenance tests
+
+Done when:
+
+- every derived chunk resolves to an authorized source event and canonical memory
+- chunks do not cross tenant, project, namespace, session, or user boundaries
+- chunking improves evidence coverage without increasing duplicate rate beyond the
+  evaluation threshold
+
+Rollback:
+
+- retain the previous canonical-memory retrieval path and disable chunk candidates
+  through a versioned feature flag
+
+### Task 6.3: Stable hybrid candidate fusion
+
+Purpose: remove score-scale coupling between lexical, semantic, and relation paths.
+
+- Retrieve bounded candidate pools from lexical, semantic, and optional relation
+  searchers before final truncation.
+- Add Reciprocal Rank Fusion as the default merge strategy so each channel contributes
+  by rank rather than incomparable raw score ranges.
+- Keep normalized weighted fusion as an experimental strategy for offline comparison;
+  do not make weights implicit in code.
+- Preserve per-channel ranks and bounded score diagnostics for explainability without
+  exposing internal data through public responses.
+- Use deterministic tie-breaking by score, memory class policy, source timestamp, and
+  stable memory ID.
+
+Outputs:
+
+- versioned fusion strategy interface
+- RRF default implementation and normalized-fusion experiment
+- ranking diagnostics and regression tests
+
+Done when:
+
+- changing an embedding model or lexical score distribution does not silently change
+  channel dominance
+- hybrid ranking improves or maintains Recall@k and MRR against the baseline
+- default ranking remains safe when one optional channel is unavailable
+
+Rollback:
+
+- scoped ranking rollout returns to the previous fusion strategy without schema
+  rollback or data rewrite
+
+### Task 6.4: Evidence deduplication and diversity-aware packing
+
+Purpose: maximize useful evidence per context token and prevent one fact cluster from
+occupying the entire result set.
+
+- Deduplicate by canonical memory ID, source event, parent memory, and configurable
+  semantic-similarity clusters.
+- Add bounded diversity selection across memory class, source session, entity, and
+  time slice.
+- Use maximal marginal relevance or an equivalent deterministic selection policy after
+  candidate fusion and before final context packing.
+- Preserve citations for all selected evidence and record omitted-by-duplicate or
+  omitted-by-diversity diagnostics.
+- Keep profile, episodic, procedural, summary, and relation packing policies explicit
+  in context assembly.
+
+Outputs:
+
+- deduplication and diversity policy interface
+- context-packing implementation with bounded token accounting
+- duplicate-rate and evidence-coverage tests
+
+Done when:
+
+- repeated versions or near-identical memories do not crowd out independent evidence
+- selected context remains within its declared budget
+- hidden, suppressed, forgotten, and out-of-scope records remain excluded before and
+  after diversity selection
+
+Rollback:
+
+- disable diversity selection while retaining identity deduplication and lifecycle
+  filtering
+
+### Task 6.5: Query understanding and multi-signal retrieval
+
+Purpose: improve recall for implicit, temporal, entity-centric, and multi-hop queries
+without replacing the caller's original query.
+
+- Preserve the original query as an immutable retrieval signal.
+- Add bounded normalization for whitespace, aliases, terms, and mixed-language input.
+- Extract optional entities, time windows, memory-class hints, and query intent as
+  additional signals.
+- Support bounded subquery decomposition for multi-hop queries; cap the number of
+  subqueries and merge their evidence through the same fusion and isolation path.
+- Treat query rewrites as additional candidates, never as a replacement for the
+  original query.
+- Return only memory evidence; intermediate query plans and reasoning remain internal
+  diagnostics.
+
+Outputs:
+
+- query-analysis interface with provider-independent contracts
+- bounded multi-signal retrieval orchestration
+- temporal, multi-hop, and ambiguous-query evaluation fixtures
+
+Done when:
+
+- query understanding improves multi-hop and temporal evidence coverage without
+  reducing simple factual recall
+- malformed or adversarial query analysis fails closed to the original-query path
+- query analysis does not expand scope or expose hidden retrieval metadata
+
+Rollback:
+
+- disable query analysis and continue with the original query through the stable
+  fusion path
+
+### Task 6.6: Quality-aware signals and controlled reranking
+
+Purpose: use feedback, task outcomes, and optional rerankers only after evidence and
+evaluation thresholds are established.
+
+- Convert usefulness and task-evaluation signals into confidence-weighted features that
+  account for evidence count, freshness, source reliability, and conflict state.
+- Keep insufficient evidence, diagnostics-only, dry-run, scoped rollout, and default
+  states explicit.
+- Add optional deterministic feature reranking before considering an online model or
+  cross-encoder reranker.
+- If a model reranker is introduced later, enforce provider, model, timeout, cost,
+  privacy, and fallback contracts and keep it disabled by default until shadow results
+  meet the evaluation gate.
+- Mine hard negatives from false positives and duplicate clusters without copying
+  evaluation data into training or product analytics stores.
+
+Outputs:
+
+- confidence-aware quality feature model
+- shadow and scoped rollout reports
+- explicit fallback and timeout behavior for optional rerankers
+
+Done when:
+
+- feedback cannot dominate ranking with a single low-confidence signal
+- quality gains persist across memory classes and query categories
+- every rollout has a reversible version, owner, evidence minimum, and stop condition
+
+Rollback:
+
+- revert to the last approved fusion strategy and disable all quality adjustments
+
+### Task 6.7: Retrieval release gate and long-term maintenance
+
+Purpose: make retrieval quality a maintained product contract rather than a one-time
+tuning exercise.
+
+- Run the evaluation fixture in CI for ranking, chunking, isolation, and latency
+  regressions within bounded test budgets.
+- Publish a redacted retrieval-quality report with every ranking or representation
+  version.
+- Add migration and re-indexing runbooks for chunk metadata, embedding revisions, and
+  duplicate clusters; never require destructive down migrations.
+- Define retention and deletion behavior for derived chunks, query diagnostics, and
+  evaluation fixtures.
+- Schedule periodic review of thresholds, stale memories, embedding drift, and query
+  category coverage.
+
+Outputs:
+
+- retrieval release checklist
+- re-index/rebuild and rollback runbooks
+- versioned quality report and maintenance ownership
+
+Done when:
+
+- no retrieval change can ship without quality, isolation, latency, and rollback
+  evidence
+- derived representations can be rebuilt from durable source records
+- cleanup removes evaluation and diagnostic artifacts according to documented policy
+
+Dependencies:
+
+- Tasks 6.1 through 6.6
+
 ### Task 5.4: Admin and inspection endpoints
 
 - Add admin surfaces for job status, memory history inspection, and operational diagnostics.
@@ -662,6 +919,10 @@ Recommended build order:
 5. Phase 3 Tasks 3.4 to 3.5
 6. Phase 4 Tasks 4.5 to 4.6
 7. Phase 5
+8. Phase 6 Task 6.1
+9. Phase 6 Tasks 6.2 to 6.4
+10. Phase 6 Task 6.5
+11. Phase 6 Tasks 6.6 to 6.7
 
 Reasoning:
 
@@ -669,6 +930,10 @@ Reasoning:
 - governance must exist before retrieval can be trustworthy.
 - context assembly and graph enhancement should sit after the base retrieval path is stable.
 - operations hardening should happen after the core runtime surfaces exist.
+- retrieval quality work should begin with measurement, then representation, fusion,
+  diversity, query understanding, and only then feedback or model-based reranking.
+- every representation or ranking change must remain reversible and must not bypass
+  lifecycle or scope enforcement.
 
 ## Review Gates
 
@@ -678,7 +943,23 @@ Before moving between phases, verify:
 - Phase 2 to 3: event ingest path persists raw events with scope and provenance intact.
 - Phase 3 to 4: active memory promotion and suppression behavior are test-covered.
 - Phase 4 to 5: retrieval and context assembly exclude hidden memory and respect scope boundaries.
+- Phase 5 to 6.1: runtime and storage behavior are stable enough to produce a repeatable
+  retrieval baseline.
+- Phase 6.1 to 6.2: the evaluation fixture and hard isolation gates are green before
+  changing memory representation.
+- Phase 6.2 to 6.3: chunk provenance, rebuildability, and parent-child scope tests are
+  green before changing ranking.
+- Phase 6.3 to 6.4: hybrid fusion is stable before diversity or context packing changes.
+- Phase 6.4 to 6.5: duplicate-rate and budget gates are green before query decomposition.
+- Phase 6.5 to 6.6: query analysis has a fail-closed fallback before quality signals or
+  optional rerankers are enabled.
+- Phase 6.6 to 6.7: every rollout has a measured gain, no isolation regression, and a
+  tested rollback path before becoming a release requirement.
 
 ## Immediate Next Step
 
-If implementation begins next, start with Phase 1 Task 1.1 and 1.2 together, then move through Phase 1 in order before touching memory-specific logic.
+If implementation begins next, start with Phase 6 Task 6.1 on the current product
+baseline. Do not change chunking or ranking until the baseline fixture, metrics, and
+zero-leakage assertions are reproducible. The original foundation sequence remains the
+required path for a fresh implementation; Phase 6 is the next quality track for the
+current product.

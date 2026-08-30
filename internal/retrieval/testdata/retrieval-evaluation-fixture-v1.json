@@ -1,0 +1,145 @@
+{
+  "version": "retrieval-fixture-v1",
+  "cases": [
+    {
+      "id": "single-fact-postgres-system-of-record",
+      "category": "single-fact",
+      "scope": {"tenant": "eval", "project": "retrieval-baseline", "namespace": "single-fact"},
+      "query": "Which database is the system of record?",
+      "sources": [
+        {"alias": "postgres-system-of-record", "event_type": "fixture", "content": "PostgreSQL is the only system of record for Stele.", "class": "procedural"}
+      ],
+      "expected_evidence_groups": [["postgres-system-of-record"]]
+    },
+    {
+      "id": "multi-hop-database-and-lifecycle",
+      "category": "multi-hop",
+      "scope": {"tenant": "eval", "project": "retrieval-baseline", "namespace": "multi-hop"},
+      "query": "What persistence system and lifecycle rule apply to memory?",
+      "sources": [
+        {"alias": "multi-hop-database", "event_type": "fixture", "content": "PostgreSQL stores canonical memory records.", "class": "procedural"},
+        {"alias": "multi-hop-lifecycle", "event_type": "fixture", "content": "Canonical memory is versioned instead of overwritten in place.", "class": "procedural"}
+      ],
+      "expected_evidence_groups": [["multi-hop-database"], ["multi-hop-lifecycle"]]
+    },
+    {
+      "id": "temporal-current-embedding-policy",
+      "category": "temporal",
+      "scope": {"tenant": "eval", "project": "retrieval-baseline", "namespace": "temporal"},
+      "query": "What is the current embedding rebuild policy?",
+      "sources": [
+        {"alias": "embedding-policy-previous", "event_type": "fixture", "content": "The previous embedding policy permitted manual rebuilds only.", "class": "summary", "state": "suppressed", "source_timestamp": "2026-01-02T00:00:00Z"},
+        {"alias": "embedding-policy-current", "event_type": "fixture", "content": "The current embedding policy uses asynchronous rebuilds after active vector revisions change.", "class": "summary", "source_timestamp": "2026-02-02T00:00:00Z"}
+      ],
+      "expected_evidence_groups": [["embedding-policy-current"]],
+      "excluded_aliases": ["embedding-policy-previous"]
+    },
+    {
+      "id": "profile-operator-preference",
+      "category": "profile",
+      "scope": {"tenant": "eval", "project": "retrieval-baseline", "namespace": "profile"},
+      "query": "What retrieval safety preference does the operator have?",
+      "sources": [
+        {"alias": "profile-safety-preference", "event_type": "fixture", "content": "The operator prefers scope isolation and lifecycle safety over aggregate recall gains.", "class": "profile"}
+      ],
+      "expected_evidence_groups": [["profile-safety-preference"]]
+    },
+    {
+      "id": "episodic-consolidation-event",
+      "category": "episodic",
+      "scope": {"tenant": "eval", "project": "retrieval-baseline", "namespace": "episodic"},
+      "query": "What happened after the memory consolidation worker ran?",
+      "sources": [
+        {"alias": "episodic-consolidation", "event_type": "fixture", "content": "The consolidation worker promoted a reviewed candidate into an active canonical memory version.", "class": "episodic", "source_timestamp": "2026-02-15T10:00:00Z"}
+      ],
+      "expected_evidence_groups": [["episodic-consolidation"]]
+    },
+    {
+      "id": "procedural-forward-migrations",
+      "category": "procedural",
+      "scope": {"tenant": "eval", "project": "retrieval-baseline", "namespace": "procedural"},
+      "query": "How must database migrations be applied?",
+      "sources": [
+        {"alias": "forward-only-migrations", "event_type": "fixture", "content": "Database migrations are append-only and move forward; schema history is never rewritten.", "class": "procedural"}
+      ],
+      "expected_evidence_groups": [["forward-only-migrations"]]
+    },
+    {
+      "id": "summary-retrieval-contract",
+      "category": "summary",
+      "scope": {"tenant": "eval", "project": "retrieval-baseline", "namespace": "summary"},
+      "query": "Summarize the default retrieval visibility contract.",
+      "sources": [
+        {"alias": "summary-visible-only", "event_type": "fixture", "content": "Default retrieval returns only active lifecycle-visible memories in the requested scope.", "class": "summary"}
+      ],
+      "expected_evidence_groups": [["summary-visible-only"]]
+    },
+    {
+      "id": "relation-project-ownership",
+      "category": "relation",
+      "scope": {"tenant": "eval", "project": "retrieval-baseline", "namespace": "relation"},
+      "query": "Which retrieval capability is owned by PostgreSQL full-text search?",
+      "sources": [
+        {"alias": "relation-fts-lexical", "event_type": "fixture", "content": "PostgreSQL full-text search provides the lexical retrieval channel.", "class": "relation"}
+      ],
+      "expected_evidence_groups": [["relation-fts-lexical"]]
+    },
+    {
+      "id": "contradiction-current-policy",
+      "category": "contradiction",
+      "scope": {"tenant": "eval", "project": "retrieval-baseline", "namespace": "contradiction"},
+      "query": "Does default retrieval return forgotten memory?",
+      "sources": [
+        {"alias": "contradiction-unsafe", "event_type": "fixture", "content": "Default retrieval returns forgotten memory for debugging.", "class": "procedural", "state": "suppressed"},
+        {"alias": "contradiction-safe", "event_type": "fixture", "content": "Default retrieval excludes forgotten and suppressed memory unless an explicit authorized path requests it.", "class": "procedural"}
+      ],
+      "expected_evidence_groups": [["contradiction-safe"]],
+      "excluded_aliases": ["contradiction-unsafe"]
+    },
+    {
+      "id": "noisy-neighbor-precision",
+      "category": "noisy-neighbor",
+      "scope": {"tenant": "eval", "project": "retrieval-baseline", "namespace": "noisy-neighbor"},
+      "query": "Which operation creates a memory candidate from a raw event?",
+      "sources": [
+        {"alias": "candidate-creation", "event_type": "fixture", "content": "Ingestion records an append-only raw event before asynchronous consolidation creates a memory candidate.", "class": "procedural"},
+        {"alias": "noisy-neighbor-metrics", "event_type": "fixture", "content": "The metrics worker records operation duration and count for retrieval service calls.", "class": "episodic"}
+      ],
+      "expected_evidence_groups": [["candidate-creation"]]
+    },
+    {
+      "id": "duplicate-evidence-cluster",
+      "category": "duplicate",
+      "scope": {"tenant": "eval", "project": "retrieval-baseline", "namespace": "duplicate"},
+      "query": "Which system stores semantic vectors?",
+      "sources": [
+        {"alias": "vector-storage-primary", "event_type": "fixture", "content": "pgvector stores semantic vectors alongside PostgreSQL memory records.", "class": "procedural", "fact_cluster": "vector-storage"},
+        {"alias": "vector-storage-duplicate", "event_type": "fixture", "content": "Semantic retrieval uses pgvector columns in PostgreSQL.", "class": "summary", "fact_cluster": "vector-storage"}
+      ],
+      "expected_evidence_groups": [["vector-storage-primary"]]
+    },
+    {
+      "id": "hidden-lifecycle-exclusion",
+      "category": "hidden-lifecycle",
+      "scope": {"tenant": "eval", "project": "retrieval-baseline", "namespace": "hidden-lifecycle"},
+      "query": "What memory state is returned by default retrieval?",
+      "sources": [
+        {"alias": "visible-active-memory", "event_type": "fixture", "content": "Default retrieval returns active memory in the requested scope.", "class": "summary"},
+        {"alias": "hidden-forgotten-memory", "event_type": "fixture", "content": "Forgotten memory must never appear in ordinary retrieval results.", "class": "summary", "state": "forgotten"}
+      ],
+      "expected_evidence_groups": [["visible-active-memory"]],
+      "excluded_aliases": ["hidden-forgotten-memory"]
+    },
+    {
+      "id": "cross-scope-isolation",
+      "category": "cross-scope",
+      "scope": {"tenant": "eval", "project": "retrieval-baseline", "namespace": "cross-scope"},
+      "query": "Which namespace may this query return memory from?",
+      "sources": [
+        {"alias": "same-scope-record", "event_type": "fixture", "content": "This query may return only active memory from its explicit tenant project and namespace.", "class": "procedural"}
+      ],
+      "expected_evidence_groups": [["same-scope-record"]],
+      "excluded_aliases": ["foreign-scope-probe"]
+    }
+  ]
+}

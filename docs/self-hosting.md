@@ -1883,6 +1883,44 @@ Stele does not provide SDK/UI surfaces, external agent execution, model invocati
 
 ## Operational Notes
 
+## Retrieval Quality Evaluation
+
+Stele keeps a repository-owned retrieval fixture at
+`internal/retrieval/testdata/retrieval-evaluation-fixture-v1.json`. It covers
+single-fact, multi-hop, temporal, memory-class, contradiction, noise, duplicate,
+lifecycle, and scope-isolation cases. Fixture sources are test-only and are never
+production data or generated answers.
+
+Run deterministic unit coverage from the repository root:
+
+```powershell
+go test ./internal/retrieval ./internal/telemetry -count=1
+```
+
+The real PostgreSQL replay is intentionally opt-in and requires a disposable,
+harness-owned DSN in `STELE_TEST_RETRIEVAL_EVALUATION_DSN`:
+
+```powershell
+$env:STELE_TEST_RETRIEVAL_EVALUATION_DSN = '<owned-test-dsn>'
+pwsh -File scripts/retrieval-evaluation.ps1
+```
+
+Without that variable the command prints
+`SKIP_RETRIEVAL_EVALUATION_DSN_REQUIRED` and exits with code `2`; it never falls
+back to `STELE_POSTGRES_DSN` or another ambient database. The seeder uses the
+reserved `eval` tenant and `retrieval-baseline` project, writes through normal
+raw-event/candidate/canonical/provenance/lifecycle paths, and tags records with
+the fixture version for ownership. Use a disposable database and remove its
+fixture scope after replay; never point this command at an operator or production
+database.
+
+Reports record `fixture_version`, `representation_version`, `ranking_version`,
+compatible embedding revision, policy version, evidence-group metrics, candidate
+pool size, and bounded latency. Safety failures for cross-scope or hidden lifecycle
+results override all quality scores. Threshold edits require a new policy version;
+baseline and candidate reports must use compatible fixture and representation
+versions before comparison.
+
 - `api` logs request completion and panic recovery in structured key-value style.
 - `GET /livez`, `GET /readyz`, and `GET /metrics` provide process liveness, mode-aware readiness, and Prometheus-style runtime metrics for self-hosted orchestration.
 - `worker` logs polling loop failures and successful batch execution.

@@ -1527,7 +1527,7 @@ RETURNING id, tenant, project, namespace, class, state, content, created_at, upd
 		}
 
 		if err := writeProvenance(ctx, tx, memory.ProvenanceRecord{
-			ID:                input.VersionID + "_prov",
+			ID:                promotionProvenanceID(input.VersionID),
 			Scope:             input.Candidate.Scope,
 			RawEventID:        input.Candidate.SourceRawEventID,
 			CandidateMemoryID: input.Candidate.ID,
@@ -1585,7 +1585,7 @@ RETURNING id, tenant, project, namespace, class, state, content, created_at, upd
 	}
 
 	if err := writeProvenance(ctx, tx, memory.ProvenanceRecord{
-		ID:                input.VersionID + "_prov",
+		ID:                promotionProvenanceID(input.VersionID),
 		Scope:             input.Candidate.Scope,
 		RawEventID:        input.Candidate.SourceRawEventID,
 		CandidateMemoryID: input.Candidate.ID,
@@ -1641,6 +1641,13 @@ RETURNING id, memory_id, version, state, content, created_at, modified_by
 	}
 
 	return version, nil
+}
+
+func promotionProvenanceID(versionID string) string {
+	if _, err := uuid.Parse(versionID); err == nil {
+		return uuid.NewSHA1(uuid.NameSpaceURL, []byte("stele:promotion-provenance:"+versionID)).String()
+	}
+	return versionID + "_prov"
 }
 
 func (r *Repository) CreateSummaryMemory(ctx context.Context, input governance.SummaryMemoryRecord) (memory.CanonicalMemory, memory.MemoryVersion, error) {
