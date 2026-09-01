@@ -22,3 +22,9 @@ jobs:
           STELE_BENCHMARK_OFFLINE: "true"
           STELE_BENCHMARK_DATA_DIR: ${{ runner.temp }}/stele-benchmark
         run: go run ./cmd/stele benchmark run-smoke
+      - name: Run expansion offline smoke tracks
+        env:
+          STELE_BENCHMARK_OFFLINE: "true"
+        run: |
+          go run ./cmd/stele benchmark specialized
+          go run ./cmd/stele benchmark stress --dataset needle --max-context-tokens 8192

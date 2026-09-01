@@ -63,19 +63,23 @@ type SplitSpec struct {
 }
 
 type DatasetManifest struct {
-	SchemaVersion     string               `json:"schema_version"`
-	Name              string               `json:"name"`
-	Version           string               `json:"version"`
-	License           string               `json:"license"`
-	UpstreamURL       string               `json:"upstream_url"`
-	UpstreamRevision  string               `json:"upstream_revision"`
-	SHA256            string               `json:"sha256"`
-	SourcePath        string               `json:"source_path"`
-	ConversionVersion string               `json:"conversion_version"`
-	Redistribution    RedistributionStatus `json:"redistribution"`
-	Support           SupportState         `json:"support"`
-	Splits            map[string]SplitSpec `json:"splits"`
-	Embedding         EmbeddingProfile     `json:"embedding"`
+	SchemaVersion      string               `json:"schema_version"`
+	Name               string               `json:"name"`
+	Family             string               `json:"family,omitempty"`
+	Version            string               `json:"version"`
+	License            string               `json:"license"`
+	UpstreamURL        string               `json:"upstream_url"`
+	UpstreamRevision   string               `json:"upstream_revision"`
+	SHA256             string               `json:"sha256"`
+	SourcePath         string               `json:"source_path"`
+	ConversionVersion  string               `json:"conversion_version"`
+	SplitIdentity      string               `json:"split_identity,omitempty"`
+	QRELChecksum       string               `json:"qrels_checksum,omitempty"`
+	LocalPrerequisites []string             `json:"local_prerequisites,omitempty"`
+	Redistribution     RedistributionStatus `json:"redistribution"`
+	Support            SupportState         `json:"support"`
+	Splits             map[string]SplitSpec `json:"splits"`
+	Embedding          EmbeddingProfile     `json:"embedding"`
 }
 
 var sha256Pattern = regexp.MustCompile(`^[a-fA-F0-9]{64}$`)
@@ -92,6 +96,12 @@ func (m DatasetManifest) Validate() error {
 		if strings.TrimSpace(value) == "" {
 			return fmt.Errorf("%s is required", name)
 		}
+	}
+	if strings.TrimSpace(m.Family) != "" && !validBenchmarkFamily(m.Family) {
+		return fmt.Errorf("unsupported benchmark family %q", m.Family)
+	}
+	if m.QRELChecksum != "" && !sha256Pattern.MatchString(m.QRELChecksum) {
+		return errors.New("qrels_checksum must be a 64-character hexadecimal digest")
 	}
 	if !sha256Pattern.MatchString(m.SHA256) {
 		return errors.New("sha256 must be a 64-character hexadecimal digest")

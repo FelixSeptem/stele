@@ -10,6 +10,7 @@ import (
 type DatasetRegistration struct {
 	Layer       int             `json:"layer"`
 	Description string          `json:"description"`
+	Family      string          `json:"family"`
 	Manifest    DatasetManifest `json:"manifest"`
 }
 
@@ -25,6 +26,7 @@ type DatasetAdapter interface {
 // registry support state or silently substituting another dataset.
 type AdapterOptions struct {
 	EnableLongMemEvalSpike bool
+	LongMemEvalSubset      string
 }
 
 func DefaultRegistry() Registry {
@@ -32,21 +34,43 @@ func DefaultRegistry() Registry {
 		"stele-fixture":      registration(0, "Repository-owned lifecycle and isolation regression fixture", "stele-fixture", SupportRunnable, RedistributionPermitted),
 		"locomo":             registration(1, "Long-term conversational memory benchmark", "locomo", SupportRunnable, RedistributionRestricted),
 		"longmemeval":        registration(2, "Long-term memory update and conflict benchmark", "longmemeval", SupportMetadataOnly, RedistributionRestricted),
+		"bfcl-memory":        registration(2, "Offline agent memory provider contract", "bfcl-memory", SupportRunnable, RedistributionRestricted),
 		"multi-session-chat": registration(3, "Cross-session conversation and profile benchmark", "multi-session-chat", SupportMetadataOnly, RedistributionRestricted),
 		"personachat":        registration(3, "Persona and preference benchmark", "personachat", SupportMetadataOnly, RedistributionRestricted),
 		"hotpotqa":           registration(4, "Multi-hop retrieval pressure benchmark", "hotpotqa", SupportMetadataOnly, RedistributionRestricted),
 		"timeqa":             registration(4, "Temporal retrieval pressure benchmark", "timeqa", SupportMetadataOnly, RedistributionRestricted),
 		"beir":               registration(4, "General information retrieval pressure benchmark", "beir", SupportMetadataOnly, RedistributionRestricted),
+		"c-mteb":             registration(4, "Chinese general retrieval subset", "c-mteb", SupportMetadataOnly, RedistributionRestricted),
+		"mteb":               registration(4, "General retrieval subset", "mteb", SupportMetadataOnly, RedistributionRestricted),
+		"needle":             registration(5, "Controlled long-context needle stress", "needle", SupportPlanned, RedistributionUnknown),
+		"mrcr":               registration(5, "OpenAI multi-round context stress", "mrcr", SupportPlanned, RedistributionUnknown),
+		"longbench-v2":       registration(5, "Long-context task stress subset", "longbench-v2", SupportPlanned, RedistributionUnknown),
+		"vtcbench":           registration(5, "Visual/text context stress subset", "vtcbench", SupportPlanned, RedistributionUnknown),
 	}}
 }
 
 func registration(layer int, description, name string, support SupportState, redistribution RedistributionStatus) DatasetRegistration {
+	family := "memory"
+	switch name {
+	case "longmemeval", "locomo":
+		family = "memory"
+	case "bfcl-memory":
+		family = "provider_contract"
+	case "multi-session-chat", "personachat", "hotpotqa", "timeqa":
+		family = "specialized_retrieval"
+	case "beir", "c-mteb", "mteb":
+		family = "generic_retrieval"
+	case "needle", "mrcr", "longbench-v2", "vtcbench":
+		family = "stress"
+	}
 	return DatasetRegistration{
 		Layer:       layer,
 		Description: description,
+		Family:      family,
 		Manifest: DatasetManifest{
 			SchemaVersion:     SchemaVersion,
 			Name:              name,
+			Family:            family,
 			Version:           "unlocked",
 			License:           "verify-upstream-license-before-fetch",
 			UpstreamURL:       "https://example.invalid/" + name,
@@ -101,7 +125,7 @@ func (r Registry) AdapterWithOptions(name string, options AdapterOptions) (Datas
 		if !options.EnableLongMemEvalSpike {
 			return nil, &StatusError{Status: StatusPrerequisiteMissing, Message: "longmemeval adapter feature flag is disabled"}
 		}
-		return LongMemEvalAdapter{Enabled: true}, nil
+		return LongMemEvalAdapter{Enabled: true, Subset: options.LongMemEvalSubset}, nil
 	default:
 		return nil, &StatusError{Status: StatusPrerequisiteMissing, Message: "benchmark adapter is not implemented"}
 	}

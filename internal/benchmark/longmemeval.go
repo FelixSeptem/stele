@@ -1,6 +1,8 @@
 package benchmark
 
 import (
+	"bufio"
+	"bytes"
 	"encoding/json"
 	"fmt"
 	"sort"
@@ -14,6 +16,7 @@ import (
 // quality gate are validated.
 type LongMemEvalAdapter struct {
 	Enabled bool
+	Subset  string
 }
 
 type LongMemEvalDataset struct {
@@ -21,6 +24,7 @@ type LongMemEvalDataset struct {
 }
 
 type LongMemEvalSample struct {
+	Subset             string               `json:"subset,omitempty"`
 	QuestionID         string               `json:"question_id"`
 	QuestionType       string               `json:"question_type,omitempty"`
 	Question           string               `json:"question"`
@@ -47,12 +51,75 @@ type LongMemEvalTurn struct {
 
 func LoadLongMemEvalDatasetFromBytes(source []byte) (LongMemEvalDataset, error) {
 	var dataset LongMemEvalDataset
-	if err := json.Unmarshal(source, &dataset); err != nil {
-		return LongMemEvalDataset{}, fmt.Errorf("decode longmemeval dataset: %w", err)
+	trimmed := bytes.TrimSpace(source)
+	if len(trimmed) == 0 {
+		return LongMemEvalDataset{}, fmt.Errorf("decode longmemeval dataset: empty source")
+	}
+	if err := json.Unmarshal(trimmed, &dataset); err != nil {
+		var samples []LongMemEvalSample
+		if arrayErr := json.Unmarshal(trimmed, &samples); arrayErr != nil {
+			return LongMemEvalDataset{}, fmt.Errorf("decode longmemeval dataset: %w", err)
+		}
+		dataset.Samples = samples
 	}
 	if len(dataset.Samples) == 0 {
 		return LongMemEvalDataset{}, fmt.Errorf("longmemeval dataset must include at least one sample")
 	}
+	return dataset, nil
+}
+
+// LoadLongMemEvalSubset accepts the object, array, and JSONL forms used by
+// local dataset mirrors and applies an explicit s/m/oracle subset filter.
+func LoadLongMemEvalSubset(source []byte, subset string) (LongMemEvalDataset, error) {
+	var dataset LongMemEvalDataset
+	trimmed := bytes.TrimSpace(source)
+	if bytes.HasPrefix(trimmed, []byte("{")) || bytes.HasPrefix(trimmed, []byte("[")) {
+		loaded, err := LoadLongMemEvalDatasetFromBytes(trimmed)
+		if err == nil {
+			dataset = loaded
+		} else if !bytes.Contains(trimmed, []byte("\n")) {
+			return dataset, err
+		}
+	}
+	if len(dataset.Samples) == 0 {
+		scanner := bufio.NewScanner(bytes.NewReader(source))
+		scanner.Buffer(make([]byte, 1024), 16*1024*1024)
+		for scanner.Scan() {
+			line := bytes.TrimSpace(scanner.Bytes())
+			if len(line) == 0 {
+				continue
+			}
+			var sample LongMemEvalSample
+			if err := json.Unmarshal(line, &sample); err != nil {
+				return dataset, fmt.Errorf("decode longmemeval jsonl: %w", err)
+			}
+			dataset.Samples = append(dataset.Samples, sample)
+		}
+		if err := scanner.Err(); err != nil {
+			return dataset, err
+		}
+		if len(dataset.Samples) == 0 {
+			return dataset, fmt.Errorf("longmemeval dataset must include at least one sample")
+		}
+	}
+	subset = strings.ToLower(strings.TrimSpace(subset))
+	if subset == "" {
+		return dataset, nil
+	}
+	if subset != "s" && subset != "m" && subset != "oracle" {
+		return LongMemEvalDataset{}, &StatusError{Status: StatusInvalidManifest, Message: "longmemeval subset must be s, m, or oracle"}
+	}
+	filtered := dataset.Samples[:0]
+	for _, sample := range dataset.Samples {
+		value := strings.ToLower(strings.TrimSpace(sample.Subset))
+		if value == "" || value == subset || (subset == "oracle" && (value == "s" || value == "m")) {
+			filtered = append(filtered, sample)
+		}
+	}
+	if len(filtered) == 0 {
+		return LongMemEvalDataset{}, &StatusError{Status: StatusPrerequisiteMissing, Message: "requested longmemeval subset is empty"}
+	}
+	dataset.Samples = filtered
 	return dataset, nil
 }
 
@@ -63,7 +130,7 @@ func (a LongMemEvalAdapter) NormalizeLocal(scope memory.Scope, source []byte) (N
 	if err := scope.Validate(); err != nil {
 		return NormalizedCorpus{}, fmt.Errorf("longmemeval scope: %w", err)
 	}
-	dataset, err := LoadLongMemEvalDatasetFromBytes(source)
+	dataset, err := LoadLongMemEvalSubset(source, a.Subset)
 	if err != nil {
 		return NormalizedCorpus{}, err
 	}
@@ -147,8 +214,15 @@ func normalizeLongMemEval(dataset LongMemEvalDataset, scope memory.Scope) (Norma
 		for sessionID := range obsolete {
 			for _, evidenceID := range sessionEvents[sessionID] {
 				corpus.QRELs = append(corpus.QRELs, QREL{QueryID: questionID, EvidenceID: evidenceID, Grade: 0, Role: "obsolete", Expectation: "forgotten"})
+				query.MustNotReturnIDs = append(query.MustNotReturnIDs, evidenceID)
 			}
 		}
+		for sessionID := range conflicts {
+			for _, evidenceID := range sessionEvents[sessionID] {
+				query.MustNotReturnIDs = append(query.MustNotReturnIDs, evidenceID)
+			}
+		}
+		sort.Strings(query.MustNotReturnIDs)
 		corpus.Queries = append(corpus.Queries, query)
 	}
 	if err := corpus.Validate(); err != nil {

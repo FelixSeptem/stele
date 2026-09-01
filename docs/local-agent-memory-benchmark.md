@@ -6,6 +6,30 @@ Stele's benchmark suite evaluates retrieval evidence, not generated answers. It 
 
 The repository contains only a synthetic, repository-owned LoCoMo-shaped smoke fixture. Its manifest checksum is calculated over canonical LF text so Git checkout line endings do not change smoke verification. It does not redistribute the LoCoMo, LongMemEval, Multi-Session Chat, PersonaChat, HotpotQA, TimeQA, or BEIR full corpora.
 
+## Benchmark expansion tracks
+
+The local runner keeps benchmark families separate. `memory` covers LoCoMo and
+LongMemEval retrieval, `provider_contract` replays BFCL-shaped memory operations,
+`specialized_retrieval` covers profile, temporal, and multi-hop fixtures,
+`generic_retrieval` is reserved for C-MTEB/MTEB/BEIR strategy comparisons, and
+`stress` reports controlled long-context or multimodal degradation. Family labels
+are part of every manifest/report and results from different families are not
+aggregated into one quality score.
+
+The default remains offline. Prepare restricted datasets in a local cache with a
+checksum-locked manifest, then use `benchmark fetch`, `benchmark normalize`, and
+`benchmark run`. No command silently downloads a model or substitutes another
+dataset. `benchmark contract --fixture <path>`, `benchmark specialized`, and
+`benchmark stress` provide repository-owned offline checks for the expansion
+tracks. Use `benchmark clean --dataset <name> --version <version> --run-id <id>`
+to remove run-scoped artifacts while retaining reports by default.
+
+For reproducibility, retain the manifest SHA256, upstream revision, conversion
+version, normalized checksum, qrels checksum, embedding and strategy profiles,
+PostgreSQL/pgvector versions, run scope, and report path together. Missing or
+drifting inputs are prerequisite failures; the runner never repairs them with an
+implicit download. Restricted source files stay outside Git under the cache.
+
 Before fetching a full external dataset, review its current license and upstream terms. Create a manifest that locks the dataset name, version, upstream URL, upstream revision, SHA256, conversion version, split, and embedding profile. Keep the downloaded files under a local cache; do not add them to Git unless redistribution is explicitly permitted.
 
 ## Local cache

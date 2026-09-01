@@ -111,6 +111,31 @@ func (c Cache) CleanupBenchmarkRun(manifest DatasetManifest, runID string, prese
 	return nil
 }
 
+// CleanupBenchmarkFamily removes only a dataset/version cache owned by the
+// benchmark subsystem. It intentionally refuses production-like path names.
+func (c Cache) CleanupBenchmarkFamily(manifest DatasetManifest, preserveReports bool) error {
+	if err := manifest.Validate(); err != nil {
+		return &StatusError{Status: StatusInvalidManifest, Message: "validate dataset manifest", Cause: err}
+	}
+	if strings.ContainsAny(manifest.Name, `/\\`) || strings.ContainsAny(manifest.Version, `/\\`) {
+		return &StatusError{Status: StatusInvalidManifest, Message: "unsafe benchmark family path"}
+	}
+	paths, err := c.Paths(manifest.Name, manifest.Version)
+	if err != nil {
+		return err
+	}
+	targets := []string{paths.Raw, paths.Normalized, paths.Embeddings}
+	if !preserveReports {
+		targets = append(targets, paths.Reports)
+	}
+	for _, target := range targets {
+		if err := os.RemoveAll(target); err != nil {
+			return fmt.Errorf("cleanup benchmark family artifact: %w", err)
+		}
+	}
+	return nil
+}
+
 func validateBenchmarkRunID(runID string) error {
 	runID = strings.TrimSpace(runID)
 	if runID == "" || runID == "." || runID == ".." || filepath.Base(runID) != runID || strings.ContainsAny(runID, `/\\`) {

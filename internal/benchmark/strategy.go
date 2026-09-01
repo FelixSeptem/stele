@@ -27,6 +27,7 @@ func (p StrategyProfile) Validate() error {
 }
 
 type StrategyReport struct {
+	Family             BenchmarkFamily            `json:"family"`
 	Dataset            string                     `json:"dataset"`
 	Version            string                     `json:"version"`
 	NormalizedChecksum string                     `json:"normalized_checksum"`
@@ -36,6 +37,9 @@ type StrategyReport struct {
 }
 
 func CompareStrategyReports(baseline, candidate StrategyReport, protectedCategories []string) (retrieval.EvaluationComparison, error) {
+	if baseline.Family != "" && candidate.Family != "" && baseline.Family != candidate.Family {
+		return retrieval.EvaluationComparison{}, fmt.Errorf("incompatible benchmark families")
+	}
 	if strings.TrimSpace(baseline.Dataset) == "" || strings.TrimSpace(candidate.Dataset) == "" || baseline.Dataset != candidate.Dataset {
 		return retrieval.EvaluationComparison{}, fmt.Errorf("incompatible benchmark dataset")
 	}

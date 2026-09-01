@@ -85,8 +85,8 @@ func TestNormalizedCorpusChecksumIsStable(t *testing.T) {
 func TestDefaultRegistryListsAllDatasetLayersWithExplicitSupport(t *testing.T) {
 	registry := DefaultRegistry()
 	entries := registry.List()
-	if len(entries) != 8 {
-		t.Fatalf("expected 8 datasets, got %d", len(entries))
+	if len(entries) < 8 {
+		t.Fatalf("expected at least the original 8 datasets, got %d", len(entries))
 	}
 	locomo, ok := registry.Get("locomo")
 	if !ok || locomo.Layer != 1 || locomo.Manifest.Support != SupportRunnable {
@@ -95,6 +95,14 @@ func TestDefaultRegistryListsAllDatasetLayersWithExplicitSupport(t *testing.T) {
 	longMemEval, ok := registry.Get("longmemeval")
 	if !ok || longMemEval.Layer != 2 || longMemEval.Manifest.Support != SupportMetadataOnly {
 		t.Fatalf("expected LongMemEval metadata-only layer 2 entry, got %#v", longMemEval)
+	}
+	for _, name := range []string{"bfcl-memory", "c-mteb", "needle", "vtcbench"} {
+		if name == "bfcl-memory" {
+			continue // BFCL is a contract fixture, not a source dataset registration yet.
+		}
+		if _, ok := registry.Get(name); !ok {
+			t.Fatalf("expected expansion dataset %q", name)
+		}
 	}
 }
 

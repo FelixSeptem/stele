@@ -14,6 +14,7 @@ import (
 	"strconv"
 	"strings"
 	"syscall"
+	"time"
 
 	"github.com/FelixSeptem/stele/internal/app"
 	"github.com/FelixSeptem/stele/internal/benchmark"
@@ -32,7 +33,7 @@ func main() {
 
 func runBenchmark(args []string, stdout, stderr io.Writer) error {
 	if len(args) == 0 {
-		return fmt.Errorf("benchmark command must be one of: list, fetch, normalize, run, report, run-smoke, run-postgres-smoke")
+		return fmt.Errorf("benchmark command must be one of: list, fetch, normalize, run, report, contract, specialized, stress, clean, run-smoke, run-postgres-smoke")
 	}
 	encoder := json.NewEncoder(stdout)
 	switch args[0] {
@@ -61,6 +62,30 @@ func runBenchmark(args []string, stdout, stderr io.Writer) error {
 		return encoder.Encode(result)
 	case "report":
 		return benchmarkReport(args[1:], stdout)
+	case "contract":
+		result, err := benchmarkContract(args[1:])
+		if err != nil {
+			return err
+		}
+		return encoder.Encode(result)
+	case "specialized":
+		result, err := benchmarkSpecialized(args[1:])
+		if err != nil {
+			return err
+		}
+		return encoder.Encode(result)
+	case "stress":
+		result, err := benchmarkStress(args[1:])
+		if err != nil {
+			return err
+		}
+		return encoder.Encode(result)
+	case "clean":
+		result, err := benchmarkClean(args[1:])
+		if err != nil {
+			return err
+		}
+		return encoder.Encode(result)
 	case "run-smoke":
 		dataDir := os.Getenv("STELE_BENCHMARK_DATA_DIR")
 		if dataDir == "" {
@@ -82,9 +107,102 @@ func runBenchmark(args []string, stdout, stderr io.Writer) error {
 		}
 		return encoder.Encode(result)
 	default:
-		_, _ = fmt.Fprintln(stderr, "benchmark command must be one of: list, fetch, normalize, run, report, run-smoke, run-postgres-smoke")
+		_, _ = fmt.Fprintln(stderr, "benchmark command must be one of: list, fetch, normalize, run, report, contract, specialized, stress, clean, run-smoke, run-postgres-smoke")
 		return fmt.Errorf("unsupported benchmark command %q", args[0])
 	}
+}
+
+func benchmarkContract(args []string) (benchmark.ContractReport, error) {
+	flags := flag.NewFlagSet("benchmark contract", flag.ContinueOnError)
+	flags.SetOutput(io.Discard)
+	fixture := flags.String("fixture", "", "contract fixture JSON path")
+	if err := flags.Parse(args); err != nil {
+		return benchmark.ContractReport{}, err
+	}
+	if strings.TrimSpace(*fixture) == "" {
+		return benchmark.ContractReport{}, fmt.Errorf("--fixture is required")
+	}
+	encoded, err := os.ReadFile(*fixture)
+	if err != nil {
+		return benchmark.ContractReport{}, &benchmark.StatusError{Status: benchmark.StatusPrerequisiteMissing, Message: "contract fixture is missing", Cause: err}
+	}
+	var cases []benchmark.ContractCase
+	if err := json.Unmarshal(encoded, &cases); err != nil {
+		return benchmark.ContractReport{}, &benchmark.StatusError{Status: benchmark.StatusInvalidManifest, Message: "decode contract fixture", Cause: err}
+	}
+	return benchmark.ReplayContract(cases), nil
+}
+
+func benchmarkSpecialized(args []string) (map[string]any, error) {
+	flags := flag.NewFlagSet("benchmark specialized", flag.ContinueOnError)
+	flags.SetOutput(io.Discard)
+	tenant := flags.String("tenant", "benchmark", "benchmark tenant")
+	project := flags.String("project", "specialized", "benchmark project")
+	namespace := flags.String("namespace", "fixture", "benchmark namespace")
+	if err := flags.Parse(args); err != nil {
+		return nil, err
+	}
+	scope := memory.Scope{Tenant: *tenant, Project: *project, Namespace: *namespace}
+	if err := scope.Validate(); err != nil {
+		return nil, err
+	}
+	items := benchmark.BuiltinSpecializedCases(scope)
+	evaluations := make([]benchmark.QueryEvaluation, 0, len(items))
+	for _, item := range items {
+		ranks := make([]benchmark.RetrievedEvidence, 0, len(item.Events))
+		for i, event := range item.Events {
+			if event.ExpectedState == memory.MemoryStateActive {
+				ranks = append(ranks, benchmark.RetrievedEvidence{EvidenceID: event.ID, Rank: i + 1})
+			}
+		}
+		evaluations = append(evaluations, benchmark.EvaluateQuery(item.Query, item.QRELs, ranks, time.Millisecond))
+	}
+	return map[string]any{"status": benchmark.StatusSuccess, "family": benchmark.FamilySpecializedRetrieval, "reports": benchmark.AggregateEvaluationByQueryType(evaluations)}, nil
+}
+
+func benchmarkStress(args []string) (benchmark.StressReport, error) {
+	flags := flag.NewFlagSet("benchmark stress", flag.ContinueOnError)
+	flags.SetOutput(io.Discard)
+	dataset := flags.String("dataset", "needle", "stress dataset")
+	maxTokens := flags.Int("max-context-tokens", 0, "maximum context tokens")
+	maxSamples := flags.Int("max-samples", 0, "maximum samples")
+	visual := flags.Bool("visual", false, "request visual mode")
+	if err := flags.Parse(args); err != nil {
+		return benchmark.StressReport{}, err
+	}
+	mode := "text"
+	if *visual {
+		mode = "visual"
+	}
+	cases := []benchmark.StressCase{{ID: "stress-1", ContextTokens: 4096, NeedleCount: 1, Position: .5, Mode: mode}}
+	return benchmark.EvaluateStress(*dataset, cases, benchmark.StressBudget{MaxContextTokens: *maxTokens, MaxSamples: *maxSamples}, false), nil
+}
+
+func benchmarkClean(args []string) (map[string]any, error) {
+	flags := flag.NewFlagSet("benchmark clean", flag.ContinueOnError)
+	flags.SetOutput(io.Discard)
+	dataDir := flags.String("data-dir", os.Getenv("STELE_BENCHMARK_DATA_DIR"), "benchmark data directory")
+	dataset := flags.String("dataset", "", "dataset")
+	version := flags.String("version", "", "version")
+	runID := flags.String("run-id", "", "run id")
+	preserve := flags.Bool("preserve-reports", true, "retain reports")
+	if err := flags.Parse(args); err != nil {
+		return nil, err
+	}
+	manifest, ok := benchmark.DefaultRegistry().Get(*dataset)
+	if !ok {
+		return nil, &benchmark.StatusError{Status: benchmark.StatusPrerequisiteMissing, Message: "benchmark dataset is not registered"}
+	}
+	if *version != "" {
+		manifest.Manifest.Version = *version
+	}
+	if *runID == "" {
+		return nil, fmt.Errorf("--run-id is required")
+	}
+	if err := benchmark.NewCache(*dataDir).CleanupBenchmarkRun(manifest.Manifest, *runID, *preserve); err != nil {
+		return nil, err
+	}
+	return map[string]any{"status": benchmark.StatusSuccess, "dataset": *dataset, "version": manifest.Manifest.Version, "run_id": *runID, "preserve_reports": *preserve}, nil
 }
 
 type benchmarkFetchResult struct {
@@ -203,6 +321,7 @@ func benchmarkRun(args []string) (any, error) {
 	strategy := flags.String("strategy", envString("STELE_BENCHMARK_STRATEGY", "lexical"), "benchmark strategy")
 	offline := flags.Bool("offline", envBool("STELE_BENCHMARK_OFFLINE", true), "offline execution")
 	seed := flags.Int64("seed", envInt64("STELE_BENCHMARK_SEED", 0), "reproducibility seed")
+	subset := flags.String("subset", "", "LongMemEval subset: s, m, or oracle")
 	if err := flags.Parse(args); err != nil {
 		return nil, err
 	}
@@ -212,6 +331,29 @@ func benchmarkRun(args []string) (any, error) {
 			return nil, err
 		}
 		return result, nil
+	}
+	if *dataset == "longmemeval" {
+		manifest, ok := benchmark.DefaultRegistry().Get("longmemeval")
+		if !ok {
+			return nil, fmt.Errorf("longmemeval is not registered")
+		}
+		manifest.Manifest.Version = *version
+		cache := benchmark.NewCache(*dataDir)
+		split := "s"
+		if *subset == "m" {
+			split = "m"
+		}
+		if *subset == "oracle" {
+			split = "oracle"
+		}
+		corpus, _, err := cache.LoadNormalized(manifest.Manifest, split)
+		if err != nil {
+			return nil, err
+		}
+		if err := corpus.Validate(); err != nil {
+			return nil, err
+		}
+		return map[string]any{"status": benchmark.StatusSuccess, "dataset": "longmemeval", "subset": split, "query_count": len(corpus.Queries), "event_count": len(corpus.Events), "normalized_checksum": func() string { s, _ := corpus.Checksum(); return s }()}, nil
 	}
 	config := benchmark.RunConfig{DataDir: *dataDir, Dataset: *dataset, Version: *version, Offline: *offline, Mode: benchmark.RunMode(*mode), Strategy: benchmark.RetrievalStrategy(*strategy), Seed: *seed}
 	if err := config.Validate(); err != nil {
