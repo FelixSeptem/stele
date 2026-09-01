@@ -5,6 +5,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"strings"
 
 	"github.com/FelixSeptem/stele/internal/memory"
 	"github.com/FelixSeptem/stele/internal/retrieval"
@@ -30,6 +31,22 @@ type PostgresSmokeRunResult struct {
 	RetrievalReport    retrieval.EvaluationReport `json:"retrieval_report"`
 	NormalizedChecksum string                     `json:"normalized_checksum,omitempty"`
 	QRELChecksum       string                     `json:"qrels_checksum,omitempty"`
+}
+
+// RunLongMemEvalPostgres executes a locked normalized LongMemEval split through
+// the same PostgreSQL + pgvector fixture path as the LoCoMo gate.
+func RunLongMemEvalPostgres(ctx context.Context, dsn string, manifest DatasetManifest, corpus NormalizedCorpus, baseScope memory.Scope, split string) (PostgresSmokeRunResult, error) {
+	if manifest.Name != "longmemeval" {
+		return PostgresSmokeRunResult{}, &StatusError{Status: StatusInvalidManifest, Message: "LongMemEval runner requires longmemeval manifest"}
+	}
+	if strings.TrimSpace(split) == "" {
+		split = "s"
+	}
+	run, err := NewRunScope(baseScope, manifest.Name, "longmemeval-"+split)
+	if err != nil {
+		return PostgresSmokeRunResult{}, err
+	}
+	return RunPostgresCorpus(ctx, dsn, manifest, corpus, run, false)
 }
 
 func RunLoCoMoPostgresSmoke(ctx context.Context, dsn string, baseScope memory.Scope) (PostgresSmokeRunResult, error) {
@@ -142,7 +159,10 @@ func partitionCorpusForRetrieval(corpus NormalizedCorpus, base memory.Scope) (No
 	copy.Events = append([]MemoryEventRecord(nil), corpus.Events...)
 	copy.Queries = append([]BenchmarkQuery(nil), corpus.Queries...)
 	for index := range copy.Events {
-		sample := benchmarkSampleID(copy.Events[index].SessionID)
+		sample := copy.Events[index].Provenance["question_id"]
+		if sample == "" {
+			sample = benchmarkSampleID(copy.Events[index].SessionID)
+		}
 		if sample == "" {
 			return NormalizedCorpus{}, fmt.Errorf("benchmark event %s has no sample session id", copy.Events[index].ID)
 		}

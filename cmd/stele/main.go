@@ -353,6 +353,9 @@ func benchmarkRun(args []string) (any, error) {
 		if err := corpus.Validate(); err != nil {
 			return nil, err
 		}
+		if dsn := strings.TrimSpace(os.Getenv("STELE_POSTGRES_DSN")); dsn != "" {
+			return benchmark.RunLongMemEvalPostgres(context.Background(), dsn, manifest.Manifest, corpus, memory.Scope{Tenant: "benchmark", Project: "longmemeval", Namespace: "local"}, split)
+		}
 		return map[string]any{"status": benchmark.StatusSuccess, "dataset": "longmemeval", "subset": split, "query_count": len(corpus.Queries), "event_count": len(corpus.Events), "normalized_checksum": func() string { s, _ := corpus.Checksum(); return s }()}, nil
 	}
 	config := benchmark.RunConfig{DataDir: *dataDir, Dataset: *dataset, Version: *version, Offline: *offline, Mode: benchmark.RunMode(*mode), Strategy: benchmark.RetrievalStrategy(*strategy), Seed: *seed}

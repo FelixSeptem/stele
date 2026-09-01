@@ -11,13 +11,13 @@
 - [x] 2.2 Normalize LongMemEval sessions, turns, timestamps, question dates, question types, answer session IDs, and provenance into the benchmark intermediate schema.
 - [x] 2.3 Map update/conflict, preference, temporal, and abstention questions into expected lifecycle state, graded qrels, evidence groups, and must-not-return metadata.
 - [x] 2.4 Add deterministic golden normalization tests, including repeated conversion, missing answer session, unmapped evidence, duplicate IDs, and abstention cases.
-- [ ] 2.5 Add a retrieval-only LongMemEval runner that does not require an LLM judge and records oracle/retrieval-log modes as distinct comparison modes.
+- [x] 2.5 Add a retrieval-only LongMemEval runner that does not require an LLM judge and records oracle/retrieval-log modes as distinct comparison modes.
 
 ## 3. LongMemEval PostgreSQL and product gate
 
-- [ ] 3.1 Import normalized LongMemEval data through the controlled benchmark ingestion path with benchmark-only project, tenant, namespace, and run scopes.
+- [x] 3.1 Import normalized LongMemEval data through the controlled benchmark ingestion path with benchmark-only project, tenant, namespace, and run scopes.
 - [ ] 3.2 Add PostgreSQL + pgvector integration tests for repeated import, cross-run leakage, lifecycle exclusion, session boundaries, and answer-session qrels alignment.
-- [ ] 3.3 Add local capacity preflight, subset limits, batch controls, and cleanup verification for the standard `s` subset and explicit larger runs.
+- [x] 3.3 Add local capacity preflight, subset limits, batch controls, and cleanup verification for the standard `s` subset and explicit larger runs.
 - [ ] 3.4 Execute one non-synthetic checksum-locked LongMemEval retrieval run on local PostgreSQL 18 + pgvector and retain its machine-readable report as the core completion artifact.
 
 ## 4. BFCL memory provider contract

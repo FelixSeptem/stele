@@ -199,7 +199,7 @@ func normalizeLongMemEval(dataset LongMemEvalDataset, scope memory.Scope) (Norma
 				return NormalizedCorpus{}, fmt.Errorf("longmemeval question %s references missing answer session %s", questionID, answerSessionID)
 			}
 		}
-		query := BenchmarkQuery{ID: questionID, Scope: scope, Text: strings.TrimSpace(sample.Question), QueryType: normalizedLongMemEvalQuestionType(sample.QuestionType), QuestionDate: sample.QuestionDate, AnswerSessionIDs: append([]string(nil), sample.AnswerSessionIDs...), AbstentionExpected: sample.Abstention, UpdateType: normalizedLongMemEvalUpdateType(sample.QuestionType)}
+		query := BenchmarkQuery{ID: questionID, Scope: scope, SessionID: questionID, Text: strings.TrimSpace(sample.Question), QueryType: normalizedLongMemEvalQuestionType(sample.QuestionType), QuestionDate: sample.QuestionDate, AnswerSessionIDs: append([]string(nil), sample.AnswerSessionIDs...), AbstentionExpected: sample.Abstention, UpdateType: normalizedLongMemEvalUpdateType(sample.QuestionType)}
 		answerIDs := append([]string(nil), sample.AnswerSessionIDs...)
 		sort.Strings(answerIDs)
 		for index, sessionID := range answerIDs {
