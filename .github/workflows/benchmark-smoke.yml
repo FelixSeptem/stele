@@ -1,0 +1,24 @@
+name: benchmark-smoke
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+jobs:
+  repository-owned-smoke:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+      - name: Run benchmark package tests without external services
+        run: go test ./internal/benchmark ./cmd/stele -count=1
+      - name: Run repository-owned offline smoke
+        env:
+          STELE_BENCHMARK_OFFLINE: "true"
+          STELE_BENCHMARK_DATA_DIR: ${{ runner.temp }}/stele-benchmark
+        run: go run ./cmd/stele benchmark run-smoke

@@ -24,6 +24,7 @@ type QueryMetrics struct {
 
 type QueryEvaluation struct {
 	QueryID        string        `json:"query_id"`
+	QueryType      string        `json:"query_type,omitempty"`
 	Metrics        QueryMetrics  `json:"metrics"`
 	SafetyFailures int           `json:"safety_failures"`
 	Duration       time.Duration `json:"-"`
@@ -87,8 +88,26 @@ func EvaluateQuery(query BenchmarkQuery, qrels []QREL, candidates []RetrievedEvi
 			metrics.MustNotReturnViolations++
 		}
 	}
-	result := QueryEvaluation{QueryID: query.ID, Metrics: metrics, Duration: duration, LatencyMS: float64(duration) / float64(time.Millisecond)}
+	result := QueryEvaluation{QueryID: query.ID, QueryType: query.QueryType, Metrics: metrics, Duration: duration, LatencyMS: float64(duration) / float64(time.Millisecond)}
 	result.SafetyFailures = metrics.MustNotReturnViolations
+	return result
+}
+
+// AggregateEvaluationByQueryType preserves family-specific metrics so generic
+// retrieval results cannot be mistaken for agent-memory quality metrics.
+func AggregateEvaluationByQueryType(items []QueryEvaluation) map[string]EvaluationReport {
+	groups := make(map[string][]QueryEvaluation)
+	for _, item := range items {
+		queryType := item.QueryType
+		if queryType == "" {
+			queryType = "unspecified"
+		}
+		groups[queryType] = append(groups[queryType], item)
+	}
+	result := make(map[string]EvaluationReport, len(groups))
+	for queryType, evaluations := range groups {
+		result[queryType] = AggregateEvaluation(evaluations)
+	}
 	return result
 }
 

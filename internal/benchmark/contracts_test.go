@@ -108,6 +108,17 @@ func TestRegistryOnlyResolvesAdaptersForRunnableDatasets(t *testing.T) {
 	}
 }
 
+func TestRegistryResolvesLongMemEvalOnlyWithExplicitSpikeFlag(t *testing.T) {
+	registry := DefaultRegistry()
+	adapter, err := registry.AdapterWithOptions("longmemeval", AdapterOptions{EnableLongMemEvalSpike: true})
+	if err != nil {
+		t.Fatalf("enabled LongMemEval spike should resolve: %v", err)
+	}
+	if _, ok := adapter.(LongMemEvalAdapter); !ok {
+		t.Fatalf("resolved adapter = %T, want LongMemEvalAdapter", adapter)
+	}
+}
+
 func validManifest() DatasetManifest {
 	return DatasetManifest{
 		SchemaVersion:     SchemaVersion,

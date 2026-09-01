@@ -1,0 +1,192 @@
+package benchmark
+
+import (
+	"encoding/json"
+	"fmt"
+	"sort"
+	"strings"
+
+	"github.com/FelixSeptem/stele/internal/memory"
+)
+
+// LongMemEvalAdapter is an intentionally gated normalization spike. The
+// upstream dataset remains metadata-only until its full schema and retrieval
+// quality gate are validated.
+type LongMemEvalAdapter struct {
+	Enabled bool
+}
+
+type LongMemEvalDataset struct {
+	Samples []LongMemEvalSample `json:"samples"`
+}
+
+type LongMemEvalSample struct {
+	QuestionID         string               `json:"question_id"`
+	QuestionType       string               `json:"question_type,omitempty"`
+	Question           string               `json:"question"`
+	QuestionDate       string               `json:"question_date,omitempty"`
+	AnswerSessionIDs   []string             `json:"answer_session_ids,omitempty"`
+	ObsoleteSessionIDs []string             `json:"obsolete_session_ids,omitempty"`
+	ConflictSessionIDs []string             `json:"conflict_session_ids,omitempty"`
+	Abstention         bool                 `json:"abstention,omitempty"`
+	Sessions           []LongMemEvalSession `json:"sessions"`
+}
+
+type LongMemEvalSession struct {
+	SessionID string            `json:"session_id"`
+	Date      string            `json:"date,omitempty"`
+	Turns     []LongMemEvalTurn `json:"turns"`
+}
+
+type LongMemEvalTurn struct {
+	ID        string `json:"id,omitempty"`
+	Speaker   string `json:"speaker,omitempty"`
+	Text      string `json:"text"`
+	Timestamp string `json:"timestamp,omitempty"`
+}
+
+func LoadLongMemEvalDatasetFromBytes(source []byte) (LongMemEvalDataset, error) {
+	var dataset LongMemEvalDataset
+	if err := json.Unmarshal(source, &dataset); err != nil {
+		return LongMemEvalDataset{}, fmt.Errorf("decode longmemeval dataset: %w", err)
+	}
+	if len(dataset.Samples) == 0 {
+		return LongMemEvalDataset{}, fmt.Errorf("longmemeval dataset must include at least one sample")
+	}
+	return dataset, nil
+}
+
+func (a LongMemEvalAdapter) NormalizeLocal(scope memory.Scope, source []byte) (NormalizedCorpus, error) {
+	if !a.Enabled {
+		return NormalizedCorpus{}, &StatusError{Status: StatusPrerequisiteMissing, Message: "longmemeval adapter feature flag is disabled"}
+	}
+	if err := scope.Validate(); err != nil {
+		return NormalizedCorpus{}, fmt.Errorf("longmemeval scope: %w", err)
+	}
+	dataset, err := LoadLongMemEvalDatasetFromBytes(source)
+	if err != nil {
+		return NormalizedCorpus{}, err
+	}
+	return normalizeLongMemEval(dataset, scope)
+}
+
+func normalizeLongMemEval(dataset LongMemEvalDataset, scope memory.Scope) (NormalizedCorpus, error) {
+	samples := append([]LongMemEvalSample(nil), dataset.Samples...)
+	sort.SliceStable(samples, func(i, j int) bool { return samples[i].QuestionID < samples[j].QuestionID })
+	corpus := NormalizedCorpus{SchemaVersion: SchemaVersion}
+	for _, sample := range samples {
+		questionID := strings.TrimSpace(sample.QuestionID)
+		if questionID == "" || strings.TrimSpace(sample.Question) == "" {
+			return NormalizedCorpus{}, fmt.Errorf("longmemeval question id and text are required")
+		}
+		obsolete := stringSet(sample.ObsoleteSessionIDs)
+		conflicts := stringSet(sample.ConflictSessionIDs)
+		answers := stringSet(sample.AnswerSessionIDs)
+		sessions := append([]LongMemEvalSession(nil), sample.Sessions...)
+		sort.SliceStable(sessions, func(i, j int) bool { return sessions[i].SessionID < sessions[j].SessionID })
+		sessionEvents := make(map[string][]string, len(sessions))
+		seenSessions := make(map[string]struct{}, len(sessions))
+		for _, session := range sessions {
+			sessionID := strings.TrimSpace(session.SessionID)
+			if sessionID == "" {
+				return NormalizedCorpus{}, fmt.Errorf("longmemeval question %s session id is required", questionID)
+			}
+			if _, exists := seenSessions[sessionID]; exists {
+				return NormalizedCorpus{}, fmt.Errorf("longmemeval question %s has duplicate session %s", questionID, sessionID)
+			}
+			seenSessions[sessionID] = struct{}{}
+			conversationID := longMemEvalID(questionID, sessionID)
+			conversation := ConversationRecord{ID: conversationID, Scope: scope, Provenance: map[string]string{"dataset": "longmemeval", "question_id": questionID, "session_id": sessionID, "session_date": session.Date}}
+			turns := append([]LongMemEvalTurn(nil), session.Turns...)
+			for index, turn := range turns {
+				text := strings.TrimSpace(turn.Text)
+				if text == "" {
+					return NormalizedCorpus{}, fmt.Errorf("longmemeval question %s session %s has malformed turn", questionID, sessionID)
+				}
+				turnID := strings.TrimSpace(turn.ID)
+				if turnID == "" {
+					turnID = fmt.Sprintf("turn-%04d", index)
+				}
+				eventID := fmt.Sprintf("%s:%s", conversationID, turnID)
+				state := memory.MemoryStateActive
+				expectation := "active"
+				if _, isObsolete := obsolete[sessionID]; isObsolete {
+					state = memory.MemoryStateForgotten
+					expectation = "obsolete"
+				} else if _, isConflict := conflicts[sessionID]; isConflict {
+					state = memory.MemoryStateCandidate
+					expectation = "conflict"
+				}
+				conversation.Turns = append(conversation.Turns, ConversationTurn{ID: turnID, Speaker: turn.Speaker, Text: text, Timestamp: turn.Timestamp, Source: eventID})
+				class := memory.MemoryClassEpisodic
+				if isProfileQuestion(sample.QuestionType) {
+					class = memory.MemoryClassProfile
+				}
+				corpus.Events = append(corpus.Events, MemoryEventRecord{ID: eventID, Scope: scope, SessionID: sessionID, SourceTurnID: turnID, Class: class, Text: text, ObservedAt: turn.Timestamp, ExpectedState: state, Provenance: map[string]string{"dataset": "longmemeval", "question_id": questionID, "session_id": sessionID, "session_date": session.Date, "question_date": sample.QuestionDate, "expectation": expectation}})
+				sessionEvents[sessionID] = append(sessionEvents[sessionID], eventID)
+			}
+			corpus.Conversations = append(corpus.Conversations, conversation)
+		}
+		for answerSessionID := range answers {
+			if _, found := sessionEvents[answerSessionID]; !found {
+				return NormalizedCorpus{}, fmt.Errorf("longmemeval question %s references missing answer session %s", questionID, answerSessionID)
+			}
+		}
+		query := BenchmarkQuery{ID: questionID, Scope: scope, Text: strings.TrimSpace(sample.Question), QueryType: normalizedLongMemEvalQuestionType(sample.QuestionType), QuestionDate: sample.QuestionDate, AnswerSessionIDs: append([]string(nil), sample.AnswerSessionIDs...), AbstentionExpected: sample.Abstention, UpdateType: normalizedLongMemEvalUpdateType(sample.QuestionType)}
+		answerIDs := append([]string(nil), sample.AnswerSessionIDs...)
+		sort.Strings(answerIDs)
+		for index, sessionID := range answerIDs {
+			ids := append([]string(nil), sessionEvents[sessionID]...)
+			sort.Strings(ids)
+			groupID := fmt.Sprintf("%s-answer-%02d", questionID, index)
+			query.EvidenceGroups = append(query.EvidenceGroups, EvidenceGroup{ID: groupID, EvidenceIDs: ids, Required: true})
+			for _, evidenceID := range ids {
+				corpus.QRELs = append(corpus.QRELs, QREL{QueryID: questionID, EvidenceID: evidenceID, Grade: 2, Role: "answer-session", GroupID: groupID, Expectation: "active"})
+			}
+		}
+		for sessionID := range obsolete {
+			for _, evidenceID := range sessionEvents[sessionID] {
+				corpus.QRELs = append(corpus.QRELs, QREL{QueryID: questionID, EvidenceID: evidenceID, Grade: 0, Role: "obsolete", Expectation: "forgotten"})
+			}
+		}
+		corpus.Queries = append(corpus.Queries, query)
+	}
+	if err := corpus.Validate(); err != nil {
+		return NormalizedCorpus{}, err
+	}
+	return corpus.Canonical(), nil
+}
+
+func longMemEvalID(questionID, sessionID string) string {
+	return "longmemeval:" + questionID + ":" + sessionID
+}
+
+func stringSet(values []string) map[string]struct{} {
+	result := make(map[string]struct{}, len(values))
+	for _, value := range values {
+		if value = strings.TrimSpace(value); value != "" {
+			result[value] = struct{}{}
+		}
+	}
+	return result
+}
+
+func isProfileQuestion(questionType string) bool {
+	value := strings.ToLower(questionType)
+	return strings.Contains(value, "profile") || strings.Contains(value, "preference") || strings.Contains(value, "persona")
+}
+
+func normalizedLongMemEvalQuestionType(questionType string) string {
+	if value := strings.TrimSpace(strings.ToLower(questionType)); value != "" {
+		return value
+	}
+	return "retrieval"
+}
+
+func normalizedLongMemEvalUpdateType(questionType string) string {
+	value := strings.ToLower(questionType)
+	if strings.Contains(value, "update") || strings.Contains(value, "conflict") {
+		return "update"
+	}
+	return ""
+}

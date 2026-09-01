@@ -32,10 +32,10 @@
 
 ## 5. Offline execution and embedding profiles
 
-- [ ] 5.1 Implement `list`, `fetch`, `normalize`, `run`, and `report` CLI subcommands with explicit config flags and `STELE_BENCHMARK_*` environment variables.
+- [x] 5.1 Implement `list`, `fetch`, `normalize`, `run`, and `report` CLI subcommands with explicit config flags and `STELE_BENCHMARK_*` environment variables.
 - [x] 5.2 Implement offline-by-default prerequisite admission that checks local dataset, normalized corpus, vectors, model revision, dimensions, normalization, and qrels compatibility.
-- [ ] 5.3 Add local-model and pre-cached-vector embedding profile loaders with deterministic metadata and no implicit network downloads.
-- [ ] 5.4 Implement smoke, local-full, and reproducible-extended mode policies, including query budgets, split selection, and random seed handling.
+- [x] 5.3 Add local-model and pre-cached-vector embedding profile loaders with deterministic metadata and no implicit network downloads.
+- [x] 5.4 Implement smoke, local-full, and reproducible-extended mode policies, including query budgets, split selection, and random seed handling.
 - [x] 5.5 Implement explicit lexical-only smoke mode and reject silent semantic/hybrid downgrade when embedding prerequisites are absent.
 - [x] 5.6 Add tests that block network access in offline mode and assert stable `prerequisite_missing`, `invalid_manifest`, and `checksum_mismatch` outcomes.
 
@@ -44,21 +44,21 @@
 - [x] 6.1 Add an adapter from normalized queries/qrels to the retrieval evaluation baseline replay interface without changing `/v1/memories/search` or context assembly contracts.
 - [x] 6.2 Implement graded relevance, multiple evidence groups, multi-hop completeness, query reuse, and must-not-return evaluation logic.
 - [x] 6.3 Extend metric aggregation with Recall@k, MRR, nDCG, group/multi-hop hit rate, query coverage, p50/p95 latency, and safety failures.
-- [ ] 6.4 Extend strategy comparison for lexical, semantic, hybrid, chunk, and hybrid-rank configurations with aligned dataset/run provenance.
-- [ ] 6.5 Implement deterministic machine-readable report JSON containing inputs, checksums, model profile, scope, skipped prerequisites, per-query rows, aggregates, and quality/safety gate outcomes.
-- [ ] 6.6 Add unit and integration tests for graded qrels, partial versus complete evidence groups, forbidden returns, deterministic ordering, and release-policy rejection.
+- [x] 6.4 Extend strategy comparison for lexical, semantic, hybrid, chunk, and hybrid-rank configurations with aligned dataset/run provenance.
+- [x] 6.5 Implement deterministic machine-readable report JSON containing inputs, checksums, model profile, scope, skipped prerequisites, per-query rows, aggregates, and quality/safety gate outcomes.
+- [x] 6.6 Add unit and integration tests for graded qrels, partial versus complete evidence groups, forbidden returns, deterministic ordering, and release-policy rejection.
 
 ## 7. Extended dataset registration and operations
 
 - [x] 7.1 Add metadata-only registry entries and adapter interfaces for LongMemEval, Multi-Session Chat/PersonaChat, HotpotQA, TimeQA, and BEIR with license and readiness notes.
-- [ ] 7.2 Add a LongMemEval adapter spike behind a feature/support flag, including update/conflict and cross-session normalization tests before marking it runnable.
-- [ ] 7.3 Add profile/preference and generic retrieval adapter test fixtures that verify their query types are reported separately from Agent Memory metrics.
-- [ ] 7.4 Add capacity checks, batch import controls, run namespace cleanup, and clear operator diagnostics for local PostgreSQL/disk constraints.
+- [x] 7.2 Add a LongMemEval adapter spike behind a feature/support flag, including update/conflict and cross-session normalization tests before marking it runnable.
+- [x] 7.3 Add profile/preference and generic retrieval adapter test fixtures that verify their query types are reported separately from Agent Memory metrics.
+- [x] 7.4 Add capacity checks, batch import controls, run namespace cleanup, and clear operator diagnostics for local PostgreSQL/disk constraints.
 
 ## 8. Documentation, CI, and release gate
 
 - [x] 8.1 Document dataset acquisition, license obligations, cache preparation, local embedding options, PostgreSQL + pgvector prerequisites, and offline commands.
-- [ ] 8.2 Add a CI smoke workflow using only repository-owned fixtures; ensure full external datasets and remote services are never required for default tests.
+- [x] 8.2 Add a CI smoke workflow using only repository-owned fixtures; ensure full external datasets and remote services are never required for default tests.
 - [x] 8.3 Add benchmark quality-gate examples and a troubleshooting matrix for missing data, checksum mismatch, model mismatch, isolation failures, and safety failures.
-- [ ] 8.4 Run `go test ./...`, relevant race/integration tests, benchmark smoke against PostgreSQL 18 + pgvector, and `openspec validate local-agent-memory-benchmark-suite --strict`.
-- [ ] 8.5 Completion gate: run the checksum-locked LoCoMo benchmark end to end through local PostgreSQL + pgvector retrieval, retain an auditable machine-readable report with runtime/input/strategy/quality/safety identity, and review API, security, license, and operational readiness. Synthetic smoke alone does not satisfy this task or permit archive.
+- [x] 8.4 Run `go test ./...`, relevant race/integration tests, benchmark smoke against PostgreSQL 18 + pgvector, and `openspec validate local-agent-memory-benchmark-suite --strict`.
+- [x] 8.5 Completion gate: run the checksum-locked LoCoMo benchmark end to end through local PostgreSQL + pgvector retrieval, retain an auditable machine-readable report with runtime/input/strategy/quality/safety identity, and review API, security, license, and operational readiness. Synthetic smoke alone does not satisfy this task or permit archive.

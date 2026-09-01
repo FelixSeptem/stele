@@ -41,3 +41,32 @@ func TestBuildRetrievalEvaluationFixtureRejectsUnknownEvidenceMapping(t *testing
 		t.Fatal("expected missing evidence mapping to fail")
 	}
 }
+
+func TestBuildRetrievalEvaluationFixtureBoundsCandidatesToQuerySession(t *testing.T) {
+	scope := memory.Scope{Tenant: "benchmark", Project: "locomo", Namespace: "run-1"}
+	corpus := NormalizedCorpus{
+		Events: []MemoryEventRecord{
+			{ID: "sample-a/event-1", Scope: scope, SessionID: "sample-a/session-1", Text: "relevant"},
+			{ID: "sample-a/event-2", Scope: scope, SessionID: "sample-a/session-2", Text: "same sample"},
+			{ID: "sample-b/event-1", Scope: scope, SessionID: "sample-b/session-1", Text: "foreign sample"},
+		},
+		Queries: []BenchmarkQuery{{ID: "q-a", Scope: scope, SessionID: "sample-a", Text: "question", EvidenceGroups: []EvidenceGroup{{ID: "g-a", EvidenceIDs: []string{"sample-a/event-1"}, Required: true}}}},
+	}
+	mappings := map[string]RetrievalEvidenceMapping{
+		"sample-a/event-1": {MemoryID: "memory-a1", Scope: scope, State: memory.MemoryStateActive},
+		"sample-a/event-2": {MemoryID: "memory-a2", Scope: scope, State: memory.MemoryStateActive},
+		"sample-b/event-1": {MemoryID: "memory-b1", Scope: scope, State: memory.MemoryStateActive},
+	}
+	prepared, err := BuildRetrievalEvaluationFixture(corpus, mappings, RetrievalEvaluationMetadata{FixtureVersion: "fixture-v1", RepresentationVersion: "normalized-v1", RankingVersion: "lexical-v1", EmbeddingRevision: "lexical-only", PolicyVersion: "policy-v1"})
+	if err != nil {
+		t.Fatalf("BuildRetrievalEvaluationFixture() error = %v", err)
+	}
+	if len(prepared.Fixture.Cases) != 1 || len(prepared.Fixture.Cases[0].Sources) != 2 {
+		t.Fatalf("query candidate pool should be bounded to sample session: %#v", prepared.Fixture.Cases)
+	}
+	for _, source := range prepared.Fixture.Cases[0].Sources {
+		if source.Alias == "sample-b/event-1" {
+			t.Fatalf("foreign sample leaked into query candidate pool: %#v", prepared.Fixture.Cases[0].Sources)
+		}
+	}
+}

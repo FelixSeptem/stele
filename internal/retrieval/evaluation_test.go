@@ -301,3 +301,24 @@ func TestEvaluateReleasePolicyRejectsProtectedRegressionAndAcceptsCandidate(t *t
 		t.Fatalf("accepted decision = %+v, want eligible candidate", decision)
 	}
 }
+
+func TestEvaluateReleasePolicyRejectsSafetyFailureEvenWhenQualityImproves(t *testing.T) {
+	policy := EvaluationReleasePolicy{
+		Version:                       "quality-policy-v1",
+		ProtectedCutoffs:              []int{1, 5, 10},
+		MaxRecallRegression:           0,
+		MaxMultiHopCoverageRegression: 0,
+		MaxP95LatencyMS:               500,
+	}
+	baseline := evaluationComparisonReport("retrieval-fixture-v1", "baseline-v1", 0.5)
+	candidate := evaluationComparisonReport("retrieval-fixture-v1", "candidate-v1", 1)
+	candidate.SafetyFailures = []EvaluationSafetyFailure{{Category: EvaluationSafetyFailureLifecycleVisibility, Count: 1}}
+
+	decision, err := EvaluateReleasePolicy(policy, baseline, candidate)
+	if err != nil {
+		t.Fatalf("EvaluateReleasePolicy() error = %v", err)
+	}
+	if decision.Eligible || len(decision.HardFailures) != 1 || decision.HardFailures[0] != "safety_failure" {
+		t.Fatalf("safety failure must reject release before quality gains: %+v", decision)
+	}
+}

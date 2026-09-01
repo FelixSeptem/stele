@@ -108,3 +108,24 @@ func TestLoCoMoAdapterRejectsDuplicateTurnID(t *testing.T) {
 		t.Fatal("expected duplicate turn id to fail")
 	}
 }
+
+func TestLoCoMoAdapterAllowsTurnIDsReusedByDifferentSamples(t *testing.T) {
+	corpus, err := NewLoCoMoAdapter().Normalize(LoCoMoDataset{Samples: []LoCoMoSample{
+		{
+			ID:        "sample-a",
+			Sessions:  []LoCoMoSession{{ID: "session", Turns: []LoCoMoTurn{{ID: "D1:1", Text: "A fact"}}}},
+			Questions: []LoCoMoQuestion{{ID: "q", Text: "What is A?", EvidenceTurnIDs: []string{"D1:1"}}},
+		},
+		{
+			ID:        "sample-b",
+			Sessions:  []LoCoMoSession{{ID: "session", Turns: []LoCoMoTurn{{ID: "D1:1", Text: "B fact"}}}},
+			Questions: []LoCoMoQuestion{{ID: "q", Text: "What is B?", EvidenceTurnIDs: []string{"D1:1"}}},
+		},
+	}}, memoryScope())
+	if err != nil {
+		t.Fatalf("Normalize() rejected sample-local IDs: %v", err)
+	}
+	if len(corpus.Events) != 2 || len(corpus.QRELs) != 2 || corpus.QRELs[0].EvidenceID == corpus.QRELs[1].EvidenceID {
+		t.Fatalf("sample-local evidence mapping is not distinct: %#v", corpus)
+	}
+}

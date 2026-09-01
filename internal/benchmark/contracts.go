@@ -181,13 +181,17 @@ type EvidenceGroup struct {
 }
 
 type BenchmarkQuery struct {
-	ID               string          `json:"id"`
-	Scope            memory.Scope    `json:"scope"`
-	SessionID        string          `json:"session_id,omitempty"`
-	Text             string          `json:"text"`
-	QueryType        string          `json:"query_type,omitempty"`
-	EvidenceGroups   []EvidenceGroup `json:"evidence_groups,omitempty"`
-	MustNotReturnIDs []string        `json:"must_not_return_ids,omitempty"`
+	ID                 string          `json:"id"`
+	Scope              memory.Scope    `json:"scope"`
+	SessionID          string          `json:"session_id,omitempty"`
+	Text               string          `json:"text"`
+	QueryType          string          `json:"query_type,omitempty"`
+	QuestionDate       string          `json:"question_date,omitempty"`
+	AnswerSessionIDs   []string        `json:"answer_session_ids,omitempty"`
+	AbstentionExpected bool            `json:"abstention_expected,omitempty"`
+	UpdateType         string          `json:"update_type,omitempty"`
+	EvidenceGroups     []EvidenceGroup `json:"evidence_groups,omitempty"`
+	MustNotReturnIDs   []string        `json:"must_not_return_ids,omitempty"`
 }
 
 type QREL struct {

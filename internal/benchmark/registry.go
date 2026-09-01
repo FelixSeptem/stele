@@ -21,6 +21,12 @@ type DatasetAdapter interface {
 	NormalizeLocal(scope memory.Scope, source []byte) (NormalizedCorpus, error)
 }
 
+// AdapterOptions gates experimental adapters without changing the default
+// registry support state or silently substituting another dataset.
+type AdapterOptions struct {
+	EnableLongMemEvalSpike bool
+}
+
 func DefaultRegistry() Registry {
 	return Registry{entries: map[string]DatasetRegistration{
 		"stele-fixture":      registration(0, "Repository-owned lifecycle and isolation regression fixture", "stele-fixture", SupportRunnable, RedistributionPermitted),
@@ -76,16 +82,26 @@ func (r Registry) List() []DatasetRegistration {
 }
 
 func (r Registry) Adapter(name string) (DatasetAdapter, error) {
+	return r.AdapterWithOptions(name, AdapterOptions{})
+}
+
+func (r Registry) AdapterWithOptions(name string, options AdapterOptions) (DatasetAdapter, error) {
 	entry, ok := r.Get(name)
 	if !ok {
 		return nil, &StatusError{Status: StatusPrerequisiteMissing, Message: "benchmark dataset is not registered"}
 	}
-	if entry.Manifest.Support != SupportRunnable {
+	spikeEnabled := name == "longmemeval" && options.EnableLongMemEvalSpike
+	if entry.Manifest.Support != SupportRunnable && !spikeEnabled {
 		return nil, &StatusError{Status: StatusPrerequisiteMissing, Message: fmt.Sprintf("benchmark dataset %s is %s", name, entry.Manifest.Support)}
 	}
 	switch name {
 	case "locomo":
 		return loCoMoRegistryAdapter{}, nil
+	case "longmemeval":
+		if !options.EnableLongMemEvalSpike {
+			return nil, &StatusError{Status: StatusPrerequisiteMissing, Message: "longmemeval adapter feature flag is disabled"}
+		}
+		return LongMemEvalAdapter{Enabled: true}, nil
 	default:
 		return nil, &StatusError{Status: StatusPrerequisiteMissing, Message: "benchmark adapter is not implemented"}
 	}

@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"os"
 	"path/filepath"
+	"reflect"
 	"strings"
 	"testing"
 	"time"
@@ -28,6 +29,17 @@ func TestEvaluationFixtureSeederRejectsForeignScopeBeforeWriting(t *testing.T) {
 	_, err := NewEvaluationFixtureSeeder(nil).Seed(context.Background(), fixture)
 	if err == nil || !strings.Contains(err.Error(), "evaluation fixture scope is not owned") {
 		t.Fatalf("Seed() error = %v, want evaluation fixture scope is not owned", err)
+	}
+}
+
+func TestEvaluationSeedRecordIDsDeduplicatesAndOrdersKeys(t *testing.T) {
+	raw, memories := evaluationSeedRecordIDs(retrieval.EvaluationFixtureSeed{Aliases: []retrieval.EvaluationSeededAlias{
+		{RawEventID: "raw-b", MemoryID: "memory-b"},
+		{RawEventID: "raw-a", MemoryID: "memory-a"},
+		{RawEventID: "raw-b", MemoryID: "memory-b"},
+	}})
+	if !reflect.DeepEqual(raw, []string{"raw-a", "raw-b"}) || !reflect.DeepEqual(memories, []string{"memory-a", "memory-b"}) {
+		t.Fatalf("seed record IDs raw=%#v memories=%#v", raw, memories)
 	}
 }
 

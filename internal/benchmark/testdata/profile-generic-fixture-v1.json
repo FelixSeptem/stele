@@ -1,0 +1,18 @@
+{
+  "schema_version": "v1",
+  "events": [
+    {"id":"event-generic","scope":{"tenant":"bench","project":"profile-generic","namespace":"fixture"},"class":"episodic","text":"The repository uses PostgreSQL."},
+    {"id":"event-preference","scope":{"tenant":"bench","project":"profile-generic","namespace":"fixture"},"class":"profile","text":"The user prefers concise answers."},
+    {"id":"event-profile","scope":{"tenant":"bench","project":"profile-generic","namespace":"fixture"},"class":"profile","text":"The user works on developer tools."}
+  ],
+  "queries": [
+    {"id":"generic-1","scope":{"tenant":"bench","project":"profile-generic","namespace":"fixture"},"text":"What database does the repository use?","query_type":"generic_retrieval","evidence_groups":[{"id":"g-generic","evidence_ids":["event-generic"],"required":true}]},
+    {"id":"preference-1","scope":{"tenant":"bench","project":"profile-generic","namespace":"fixture"},"text":"How should answers be written?","query_type":"preference","evidence_groups":[{"id":"g-preference","evidence_ids":["event-preference"],"required":true}]},
+    {"id":"profile-1","scope":{"tenant":"bench","project":"profile-generic","namespace":"fixture"},"text":"What does the user work on?","query_type":"profile","evidence_groups":[{"id":"g-profile","evidence_ids":["event-profile"],"required":true}]}
+  ],
+  "qrels": [
+    {"query_id":"generic-1","evidence_id":"event-generic","grade":1,"role":"supporting","group_id":"g-generic"},
+    {"query_id":"preference-1","evidence_id":"event-preference","grade":2,"role":"supporting","group_id":"g-preference"},
+    {"query_id":"profile-1","evidence_id":"event-profile","grade":2,"role":"supporting","group_id":"g-profile"}
+  ]
+}

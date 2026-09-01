@@ -22,6 +22,7 @@ const (
 	StatusPrerequisiteMissing Status = "prerequisite_missing"
 	StatusInvalidManifest     Status = "invalid_manifest"
 	StatusChecksumMismatch    Status = "checksum_mismatch"
+	StatusCapacityRefused     Status = "capacity_refused"
 	StatusInternalError       Status = "internal_error"
 )
 
@@ -59,6 +60,63 @@ type CachePaths struct {
 	Normalized string
 	Embeddings string
 	Reports    string
+}
+
+// EnsureRunLayout creates run-scoped artifact directories below a validated
+// dataset/version cache. Run ids are kept out of production paths by callers.
+func (c Cache) EnsureRunLayout(manifest DatasetManifest, runID string) (CachePaths, error) {
+	if err := manifest.Validate(); err != nil {
+		return CachePaths{}, &StatusError{Status: StatusInvalidManifest, Message: "validate dataset manifest", Cause: err}
+	}
+	if err := validateBenchmarkRunID(runID); err != nil {
+		return CachePaths{}, err
+	}
+	paths, err := c.EnsureLayout(manifest.Name, manifest.Version)
+	if err != nil {
+		return CachePaths{}, err
+	}
+	paths.Normalized = filepath.Join(paths.Normalized, runID)
+	paths.Embeddings = filepath.Join(paths.Embeddings, runID)
+	paths.Reports = filepath.Join(paths.Reports, runID)
+	for _, path := range []string{paths.Normalized, paths.Embeddings, paths.Reports} {
+		if err := os.MkdirAll(path, 0o755); err != nil {
+			return CachePaths{}, fmt.Errorf("create benchmark run layout: %w", err)
+		}
+	}
+	return paths, nil
+}
+
+// CleanupBenchmarkRun removes only run-scoped normalized and embedding
+// artifacts. Reports can be retained as audit evidence.
+func (c Cache) CleanupBenchmarkRun(manifest DatasetManifest, runID string, preserveReports bool) error {
+	if err := manifest.Validate(); err != nil {
+		return &StatusError{Status: StatusInvalidManifest, Message: "validate dataset manifest", Cause: err}
+	}
+	if err := validateBenchmarkRunID(runID); err != nil {
+		return err
+	}
+	paths, err := c.Paths(manifest.Name, manifest.Version)
+	if err != nil {
+		return err
+	}
+	targets := []string{filepath.Join(paths.Normalized, runID), filepath.Join(paths.Embeddings, runID)}
+	if !preserveReports {
+		targets = append(targets, filepath.Join(paths.Reports, runID))
+	}
+	for _, target := range targets {
+		if err := os.RemoveAll(target); err != nil {
+			return fmt.Errorf("cleanup benchmark run artifact: %w", err)
+		}
+	}
+	return nil
+}
+
+func validateBenchmarkRunID(runID string) error {
+	runID = strings.TrimSpace(runID)
+	if runID == "" || runID == "." || runID == ".." || filepath.Base(runID) != runID || strings.ContainsAny(runID, `/\\`) {
+		return &StatusError{Status: StatusInvalidManifest, Message: "benchmark run id must be a single safe path component"}
+	}
+	return nil
 }
 
 type NormalizedMetadata struct {

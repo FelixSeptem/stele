@@ -50,6 +50,9 @@ func BuildRetrievalEvaluationFixture(corpus NormalizedCorpus, mappings map[strin
 	for _, query := range queries {
 		caseSources := make([]retrieval.EvaluationSource, 0, len(events))
 		for _, event := range events {
+			if !eventBelongsToQuerySession(event, query) {
+				continue
+			}
 			mapping, found := mappings[event.ID]
 			if !found || strings.TrimSpace(mapping.MemoryID) == "" {
 				return PreparedRetrievalEvaluation{}, fmt.Errorf("missing retrieval mapping for benchmark evidence %s", event.ID)
@@ -86,4 +89,11 @@ func BuildRetrievalEvaluationFixture(corpus NormalizedCorpus, mappings map[strin
 		return PreparedRetrievalEvaluation{}, err
 	}
 	return result, nil
+}
+
+func eventBelongsToQuerySession(event MemoryEventRecord, query BenchmarkQuery) bool {
+	if strings.TrimSpace(query.SessionID) == "" {
+		return true
+	}
+	return event.SessionID == query.SessionID || strings.HasPrefix(event.SessionID, query.SessionID+"/")
 }

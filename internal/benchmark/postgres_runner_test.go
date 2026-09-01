@@ -1,8 +1,11 @@
 package benchmark
 
 import (
+	"bytes"
 	"context"
+	"encoding/json"
 	"os"
+	"path/filepath"
 	"testing"
 	"time"
 
@@ -32,6 +35,112 @@ func TestRunLoCoMoPostgresSmokeReturnsLexicalCandidates(t *testing.T) {
 		if item.CandidatePoolSize == 0 {
 			t.Fatalf("evaluation case %q returned no lexical candidates", item.CaseID)
 		}
+	}
+}
+
+func TestRunPostgresCorpusReturnsAuditableIdentity(t *testing.T) {
+	dsn := os.Getenv("STELE_TEST_BENCHMARK_DSN")
+	if dsn == "" {
+		t.Skip("STELE_TEST_BENCHMARK_DSN is not configured; skipping real PostgreSQL corpus runner test")
+	}
+	manifest, err := LoadDatasetManifest(bytes.NewReader(loCoMoSmokeManifest))
+	if err != nil {
+		t.Fatal(err)
+	}
+	dataset, err := LoadLoCoMoDatasetFromBytes(bytes.ReplaceAll(loCoMoSmokeFixture, []byte("\r\n"), []byte("\n")))
+	if err != nil {
+		t.Fatal(err)
+	}
+	run, err := NewRunScope(memory.Scope{Tenant: "benchmark", Project: "locomo", Namespace: "corpus-runner-test"}, manifest.Name, "auditable-runner-v1")
+	if err != nil {
+		t.Fatal(err)
+	}
+	corpus, err := NewLoCoMoAdapter().Normalize(dataset, run.Scope)
+	if err != nil {
+		t.Fatal(err)
+	}
+	result, err := RunPostgresCorpus(context.Background(), dsn, manifest, corpus, run, false)
+	if err != nil {
+		t.Fatalf("RunPostgresCorpus() error = %v", err)
+	}
+	if result.SyntheticFixture || result.NormalizedChecksum == "" || result.QRELChecksum == "" || result.Runtime.PostgreSQLVersion == "" || result.Runtime.PGVectorVersion == "" || len(result.RetrievalReport.Cases) == 0 {
+		t.Fatalf("runner result is not auditable: %#v", result)
+	}
+}
+
+func TestPartitionCorpusForRetrievalUsesSessionBoundedScopes(t *testing.T) {
+	base := memory.Scope{Tenant: "benchmark", Project: "benchmark-locomo", Namespace: "run-full"}
+	corpus := NormalizedCorpus{
+		Events:  []MemoryEventRecord{{ID: "a", Scope: base, SessionID: "sample-a/session-1", Text: "a"}, {ID: "b", Scope: base, SessionID: "sample-b/session-1", Text: "b"}},
+		Queries: []BenchmarkQuery{{ID: "qa", Scope: base, SessionID: "sample-a", Text: "qa"}, {ID: "qb", Scope: base, SessionID: "sample-b", Text: "qb"}},
+	}
+	partitioned, err := partitionCorpusForRetrieval(corpus, base)
+	if err != nil {
+		t.Fatalf("partitionCorpusForRetrieval() error = %v", err)
+	}
+	if partitioned.Events[0].Scope.Normalized() == partitioned.Events[1].Scope.Normalized() {
+		t.Fatalf("different samples must have different retrieval scopes: %#v", partitioned.Events)
+	}
+	if partitioned.Events[0].Scope.Normalized() != partitioned.Queries[0].Scope.Normalized() || partitioned.Events[1].Scope.Normalized() != partitioned.Queries[1].Scope.Normalized() {
+		t.Fatalf("query and source scopes must align: events=%#v queries=%#v", partitioned.Events, partitioned.Queries)
+	}
+}
+
+// TestRunLoCoMoLocalFullWhenConfigured is intentionally opt-in: it consumes a
+// user-provided, checksum-locked LoCoMo source and writes the bounded report
+// requested by STELE_TEST_BENCHMARK_REPORT_PATH. CI never configures it.
+func TestRunLoCoMoLocalFullWhenConfigured(t *testing.T) {
+	dsn := os.Getenv("STELE_TEST_BENCHMARK_DSN")
+	manifestPath := os.Getenv("STELE_TEST_BENCHMARK_MANIFEST")
+	sourcePath := os.Getenv("STELE_TEST_BENCHMARK_LOCOMO_SOURCE")
+	reportPath := os.Getenv("STELE_TEST_BENCHMARK_REPORT_PATH")
+	if dsn == "" || manifestPath == "" || sourcePath == "" || reportPath == "" {
+		t.Skip("local full LoCoMo benchmark inputs are not configured")
+	}
+	manifestData, err := os.ReadFile(manifestPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	manifest, err := LoadDatasetManifest(bytes.NewReader(manifestData))
+	if err != nil {
+		t.Fatal(err)
+	}
+	source, err := os.ReadFile(sourcePath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if checksumBytes(source) != manifest.SHA256 {
+		t.Fatalf("configured source checksum does not match manifest")
+	}
+	dataset, err := LoadLoCoMoDatasetFromBytes(source)
+	if err != nil {
+		t.Fatal(err)
+	}
+	runID := os.Getenv("STELE_TEST_BENCHMARK_RUN_ID")
+	if runID == "" {
+		runID = "locomo-modelscope-local-full-v1"
+	}
+	run, err := NewRunScope(memory.Scope{Tenant: "benchmark", Project: "locomo", Namespace: "local-full"}, manifest.Name, runID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	corpus, err := NewLoCoMoAdapter().Normalize(dataset, run.Scope)
+	if err != nil {
+		t.Fatal(err)
+	}
+	result, err := RunPostgresCorpus(context.Background(), dsn, manifest, corpus, run, false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	encoded, err := json.MarshalIndent(result, "", "  ")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.MkdirAll(filepath.Dir(reportPath), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(reportPath, append(encoded, '\n'), 0o644); err != nil {
+		t.Fatal(err)
 	}
 }
 

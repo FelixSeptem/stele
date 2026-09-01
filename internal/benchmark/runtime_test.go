@@ -86,6 +86,31 @@ func TestLocalFullAndExtendedUseFullSplit(t *testing.T) {
 	}
 }
 
+func TestSelectQueriesHonorsSplitBudgetDeterministically(t *testing.T) {
+	queries := []BenchmarkQuery{
+		{ID: "q-3", Scope: memoryScope(), Text: "three"},
+		{ID: "q-1", Scope: memoryScope(), Text: "one"},
+		{ID: "q-2", Scope: memoryScope(), Text: "two"},
+	}
+	selected, err := SelectQueries(queries, SplitSpec{Source: "smoke", MaxQueries: 2}, RunConfig{DataDir: "data", Dataset: "fixture", Version: "v1", Mode: RunModeSmoke, Strategy: StrategyLexical, Seed: 42})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(selected) != 2 || selected[0].ID != "q-1" || selected[1].ID != "q-2" {
+		t.Fatalf("unexpected deterministic selection: %#v", selected)
+	}
+}
+
+func TestRunPolicyRecordsSplitAndSeed(t *testing.T) {
+	policy, err := BuildRunPolicy(DatasetManifest{Splits: map[string]SplitSpec{"full": {Source: "full"}}}, RunConfig{DataDir: "data", Dataset: "fixture", Version: "v1", Mode: RunModeReproducibleExtended, Strategy: StrategyLexical, Seed: 7})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if policy.Split != "full" || policy.Seed != 7 || !policy.Reproducible {
+		t.Fatalf("unexpected run policy: %#v", policy)
+	}
+}
+
 func TestAdmissionRejectsQrelsThatReferenceUnknownQueryOrEvidence(t *testing.T) {
 	cache := NewCache(t.TempDir())
 	manifest := validManifest()

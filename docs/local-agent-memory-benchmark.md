@@ -55,6 +55,25 @@ Lexical-only smoke is allowed only when explicitly selected. The runner does not
 - `local-full`: full locally cached dataset and vectors; no network fallback.
 - `reproducible-extended`: full data plus locked model/profile, strategy/chunk settings, qrels and random seed metadata.
 
+## Experimental adapters and operations
+
+LongMemEval is currently a metadata-only dataset. Its normalization spike is
+available only through the Go registry with
+`AdapterOptions{EnableLongMemEvalSpike: true}`; the default registry and CLI
+continue to return `prerequisite_missing`, so it cannot be mistaken for a
+runnable quality result. The spike preserves question date, question type,
+answer session ids, abstention, update/conflict state, and source session
+provenance.
+
+Before importing a large local corpus, run a capacity preflight and choose an
+explicit event batch size. A refusal is reported as `capacity_refused` with a
+bounded diagnostic; no PostgreSQL import is attempted. Run-scoped normalized
+and embedding artifacts can be removed with `CleanupBenchmarkRun`, while
+retaining report artifacts for audit.
+
+The CI smoke workflow uses only the checked-in fixture. It does not download
+external corpora, models, vectors, or judges and does not require PostgreSQL.
+
 ## Troubleshooting
 
 | Status | Meaning | Action |
@@ -64,7 +83,15 @@ Lexical-only smoke is allowed only when explicitly selected. The runner does not
 | `invalid_manifest` | Version, license, provenance, split or embedding profile is incomplete. | Fix and re-lock the manifest before running. |
 | safety failure | A forbidden, cross-scope or non-active memory was returned. | Treat the run as non-releasable and inspect scope/lifecycle filters. |
 | quality gate failure | Metrics regressed without a safety violation. | Compare the report using the same corpus, qrels and embedding profile before changing ranking or chunking policy. |
+| `capacity_refused` | The local event/query/byte budget is too small for the selected corpus. | Increase the explicit local budget or choose a bounded split/batch; do not bypass the refusal by importing into a production scope. |
 
 ## PostgreSQL and pgvector
 
 The end-to-end full benchmark uses Stele's PostgreSQL + pgvector retrieval path and must run against the supported local PostgreSQL version. Keep benchmark runs in an isolated benchmark project/namespace. Do not import public benchmark corpus data into a production tenant or namespace. The baseline replay integration and full PostgreSQL proof are tracked in the active `local-agent-memory-benchmark-suite` OpenSpec change.
+
+The change is not complete until a non-synthetic LoCoMo run has retained a
+machine-readable report containing PostgreSQL and pgvector versions, source,
+normalized-corpus and qrels checksums, embedding/strategy profile, run scope,
+quality metrics, and separate safety-gate results. Repository-owned smoke and
+synthetic PostgreSQL runs are useful regression checks but do not satisfy this
+gate.

@@ -3,6 +3,7 @@ package postgres
 import (
 	"context"
 	"fmt"
+	"sort"
 	"strings"
 	"time"
 
@@ -37,23 +38,24 @@ func (s *EvaluationFixtureSeeder) Cleanup(ctx context.Context, seed retrieval.Ev
 		return fmt.Errorf("begin evaluation fixture cleanup: %w", err)
 	}
 	defer tx.Rollback(ctx)
-	for _, record := range seed.Aliases {
-		if _, err := tx.Exec(ctx, `DELETE FROM provenance_links WHERE memory_id = $1 OR raw_event_id = $2 OR candidate_memory_id = $3`, record.MemoryID, record.RawEventID, evaluationFixtureID(seed.FixtureVersion+":"+record.CaseID+":"+record.Alias+":candidate")); err != nil {
+	rawEventIDs, memoryIDs := evaluationSeedRecordIDs(seed)
+	if len(rawEventIDs) > 0 {
+		if _, err := tx.Exec(ctx, `DELETE FROM provenance_links WHERE memory_id = ANY($1) OR raw_event_id = ANY($2) OR candidate_memory_id IN (SELECT id FROM candidate_memories WHERE source_raw_event_id = ANY($2))`, memoryIDs, rawEventIDs); err != nil {
 			return fmt.Errorf("cleanup evaluation provenance: %w", err)
 		}
-		if _, err := tx.Exec(ctx, `DELETE FROM relation_projections WHERE memory_id = $1`, record.MemoryID); err != nil {
+		if _, err := tx.Exec(ctx, `DELETE FROM relation_projections WHERE memory_id = ANY($1)`, memoryIDs); err != nil {
 			return fmt.Errorf("cleanup evaluation relation: %w", err)
 		}
-		if _, err := tx.Exec(ctx, `DELETE FROM memory_versions WHERE memory_id = $1`, record.MemoryID); err != nil {
+		if _, err := tx.Exec(ctx, `DELETE FROM memory_versions WHERE memory_id = ANY($1)`, memoryIDs); err != nil {
 			return fmt.Errorf("cleanup evaluation versions: %w", err)
 		}
-		if _, err := tx.Exec(ctx, `DELETE FROM canonical_memories WHERE id = $1`, record.MemoryID); err != nil {
+		if _, err := tx.Exec(ctx, `DELETE FROM canonical_memories WHERE id = ANY($1)`, memoryIDs); err != nil {
 			return fmt.Errorf("cleanup evaluation canonical memory: %w", err)
 		}
-		if _, err := tx.Exec(ctx, `DELETE FROM candidate_memories WHERE id = $1`, evaluationFixtureID(seed.FixtureVersion+":"+record.CaseID+":"+record.Alias+":candidate")); err != nil {
+		if _, err := tx.Exec(ctx, `DELETE FROM candidate_memories WHERE source_raw_event_id = ANY($1)`, rawEventIDs); err != nil {
 			return fmt.Errorf("cleanup evaluation candidate: %w", err)
 		}
-		if _, err := tx.Exec(ctx, `DELETE FROM raw_events WHERE id = $1`, record.RawEventID); err != nil {
+		if _, err := tx.Exec(ctx, `DELETE FROM raw_events WHERE id = ANY($1)`, rawEventIDs); err != nil {
 			return fmt.Errorf("cleanup evaluation raw event: %w", err)
 		}
 	}
@@ -61,6 +63,30 @@ func (s *EvaluationFixtureSeeder) Cleanup(ctx context.Context, seed retrieval.Ev
 		return fmt.Errorf("commit evaluation fixture cleanup: %w", err)
 	}
 	return nil
+}
+
+func evaluationSeedRecordIDs(seed retrieval.EvaluationFixtureSeed) ([]string, []string) {
+	rawEvents := make(map[string]struct{}, len(seed.Aliases))
+	memories := make(map[string]struct{}, len(seed.Aliases))
+	for _, record := range seed.Aliases {
+		if record.RawEventID != "" {
+			rawEvents[record.RawEventID] = struct{}{}
+		}
+		if record.MemoryID != "" {
+			memories[record.MemoryID] = struct{}{}
+		}
+	}
+	rawEventIDs := make([]string, 0, len(rawEvents))
+	memoryIDs := make([]string, 0, len(memories))
+	for id := range rawEvents {
+		rawEventIDs = append(rawEventIDs, id)
+	}
+	for id := range memories {
+		memoryIDs = append(memoryIDs, id)
+	}
+	sort.Strings(rawEventIDs)
+	sort.Strings(memoryIDs)
+	return rawEventIDs, memoryIDs
 }
 
 func NewEvaluationFixtureSeeder(repository *Repository) *EvaluationFixtureSeeder {

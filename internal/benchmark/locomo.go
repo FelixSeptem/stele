@@ -70,12 +70,11 @@ func (LoCoMoAdapter) Normalize(dataset LoCoMoDataset, scope memory.Scope) (Norma
 		return NormalizedCorpus{}, fmt.Errorf("validate benchmark scope: %w", err)
 	}
 	corpus := NormalizedCorpus{SchemaVersion: SchemaVersion}
-	turnEvents := make(map[string]string)
-	turnScopes := make(map[string]memory.Scope)
 	for _, sample := range dataset.Samples {
 		if strings.TrimSpace(sample.ID) == "" {
 			return NormalizedCorpus{}, fmt.Errorf("locomo sample id is required")
 		}
+		turnEvents := make(map[string]string)
 		for _, session := range sample.Sessions {
 			if strings.TrimSpace(session.ID) == "" {
 				return NormalizedCorpus{}, fmt.Errorf("locomo sample %s has session without id", sample.ID)
@@ -87,13 +86,12 @@ func (LoCoMoAdapter) Normalize(dataset LoCoMoDataset, scope memory.Scope) (Norma
 					return NormalizedCorpus{}, fmt.Errorf("locomo session %s has malformed turn", conversationID)
 				}
 				if _, exists := turnEvents[turn.ID]; exists {
-					return NormalizedCorpus{}, fmt.Errorf("locomo turn id %q is not globally unique", turn.ID)
+					return NormalizedCorpus{}, fmt.Errorf("locomo sample %s turn id %q is not unique", sample.ID, turn.ID)
 				}
 				source := sample.ID + "/" + session.ID + "/" + turn.ID
 				conversation.Turns = append(conversation.Turns, ConversationTurn{ID: turn.ID, Speaker: turn.Speaker, Text: turn.Text, Timestamp: turn.Timestamp, Source: source})
 				eventID := "event/" + source
 				turnEvents[turn.ID] = eventID
-				turnScopes[turn.ID] = scope
 				corpus.Events = append(corpus.Events, MemoryEventRecord{ID: eventID, Scope: scope, SessionID: conversationID, SourceTurnID: turn.ID, Class: loCoMoMemoryClass(turn), Text: turn.Text, ObservedAt: turn.Timestamp, ExpectedState: memory.MemoryStateActive, Provenance: map[string]string{"dataset": "locomo", "source": source}})
 			}
 			corpus.Conversations = append(corpus.Conversations, conversation)
@@ -111,15 +109,12 @@ func (LoCoMoAdapter) Normalize(dataset LoCoMoDataset, scope memory.Scope) (Norma
 				if !ok {
 					return NormalizedCorpus{}, fmt.Errorf("locomo question %s references unmapped evidence turn %s", question.ID, turnID)
 				}
-				if turnScopes[turnID] != scope {
-					return NormalizedCorpus{}, fmt.Errorf("locomo question %s evidence scope mismatch", question.ID)
-				}
 				evidenceIDs = append(evidenceIDs, eventID)
 			}
 			sort.Strings(evidenceIDs)
 			queryID := "query/" + sample.ID + "/" + question.ID
 			groupID := queryID + "/evidence"
-			query := BenchmarkQuery{ID: queryID, Scope: scope, Text: question.Text, QueryType: normalizedQueryType(question.Category), EvidenceGroups: []EvidenceGroup{{ID: groupID, EvidenceIDs: evidenceIDs, Required: true}}, MustNotReturnIDs: append([]string(nil), question.MustNotReturnIDs...)}
+			query := BenchmarkQuery{ID: queryID, Scope: scope, SessionID: sample.ID, Text: question.Text, QueryType: normalizedQueryType(question.Category), EvidenceGroups: []EvidenceGroup{{ID: groupID, EvidenceIDs: evidenceIDs, Required: true}}, MustNotReturnIDs: append([]string(nil), question.MustNotReturnIDs...)}
 			corpus.Queries = append(corpus.Queries, query)
 			for _, evidenceID := range evidenceIDs {
 				corpus.QRELs = append(corpus.QRELs, QREL{QueryID: queryID, EvidenceID: evidenceID, Grade: 1, Role: "supporting", GroupID: groupID, Expectation: "active"})
