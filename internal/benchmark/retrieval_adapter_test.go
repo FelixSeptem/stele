@@ -1,6 +1,7 @@
 package benchmark
 
 import (
+	"fmt"
 	"testing"
 
 	"github.com/FelixSeptem/stele/internal/memory"
@@ -68,5 +69,34 @@ func TestBuildRetrievalEvaluationFixtureBoundsCandidatesToQuerySession(t *testin
 		if source.Alias == "sample-b/event-1" {
 			t.Fatalf("foreign sample leaked into query candidate pool: %#v", prepared.Fixture.Cases[0].Sources)
 		}
+	}
+}
+
+func TestBuildRetrievalEvaluationFixtureUsesQuestionProvenanceForLongMemEval(t *testing.T) {
+	scope := memory.Scope{Tenant: "benchmark", Project: "longmemeval", Namespace: "run"}
+	corpus := NormalizedCorpus{SchemaVersion: SchemaVersion, Events: []MemoryEventRecord{{ID: "event", Scope: scope, SessionID: "answer-session", Class: memory.MemoryClassEpisodic, Text: "answer", ExpectedState: memory.MemoryStateActive, Provenance: map[string]string{"question_id": "question"}}}, Queries: []BenchmarkQuery{{ID: "question", Scope: scope, SessionID: "question", Text: "question", EvidenceGroups: []EvidenceGroup{{ID: "evidence", EvidenceIDs: []string{"event"}, Required: true}}}}, QRELs: []QREL{{QueryID: "question", EvidenceID: "event", Grade: 1}}}
+	prepared, err := BuildRetrievalEvaluationFixture(corpus, map[string]RetrievalEvidenceMapping{"event": {MemoryID: "memory", Scope: scope, State: memory.MemoryStateActive}}, RetrievalEvaluationMetadata{FixtureVersion: "longmemeval", RepresentationVersion: "normalized", RankingVersion: "lexical", EmbeddingRevision: "lexical", PolicyVersion: "policy"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(prepared.Fixture.Cases) != 1 || len(prepared.Fixture.Cases[0].Sources) != 1 {
+		t.Fatalf("fixture=%#v", prepared.Fixture)
+	}
+}
+
+func TestBuildRetrievalEvaluationFixtureIndexesQuestionProvenance(t *testing.T) {
+	scope := memory.Scope{Tenant: "benchmark", Project: "longmemeval", Namespace: "run"}
+	events := make([]MemoryEventRecord, 0, 100)
+	for i := 0; i < 99; i++ {
+		events = append(events, MemoryEventRecord{ID: fmt.Sprintf("other-%d", i), Scope: scope, SessionID: "other", Class: memory.MemoryClassEpisodic, Text: "other", ExpectedState: memory.MemoryStateActive, Provenance: map[string]string{"question_id": "other"}})
+	}
+	events = append(events, MemoryEventRecord{ID: "target", Scope: scope, SessionID: "answer", Class: memory.MemoryClassEpisodic, Text: "target", ExpectedState: memory.MemoryStateActive, Provenance: map[string]string{"question_id": "target-question"}})
+	corpus := NormalizedCorpus{SchemaVersion: SchemaVersion, Events: events, Queries: []BenchmarkQuery{{ID: "target-question", Scope: scope, SessionID: "target-question", Text: "target", EvidenceGroups: []EvidenceGroup{{ID: "g", EvidenceIDs: []string{"target"}, Required: true}}}}, QRELs: []QREL{{QueryID: "target-question", EvidenceID: "target", Grade: 1}}}
+	prepared, err := BuildRetrievalEvaluationFixture(corpus, map[string]RetrievalEvidenceMapping{"target": {MemoryID: "memory", Scope: scope, State: memory.MemoryStateActive}}, RetrievalEvaluationMetadata{FixtureVersion: "index", RepresentationVersion: "normalized", RankingVersion: "lexical", EmbeddingRevision: "lexical", PolicyVersion: "policy"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := len(prepared.Fixture.Cases[0].Sources); got != 1 {
+		t.Fatalf("sources=%d, want 1", got)
 	}
 }

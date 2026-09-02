@@ -266,6 +266,7 @@ func benchmarkNormalize(args []string) (benchmarkNormalizeResult, error) {
 	manifestPath := flags.String("manifest", "", "dataset manifest path")
 	dataDir := flags.String("data-dir", os.Getenv("STELE_BENCHMARK_DATA_DIR"), "benchmark data directory")
 	split := flags.String("split", "smoke", "declared dataset split")
+	longMemEvalSubset := flags.String("longmemeval-subset", "", "LongMemEval subset: s, m, or oracle")
 	tenant := flags.String("tenant", "benchmark", "benchmark tenant")
 	project := flags.String("project", "", "benchmark project")
 	namespace := flags.String("namespace", "", "benchmark namespace")
@@ -296,7 +297,7 @@ func benchmarkNormalize(args []string) (benchmarkNormalizeResult, error) {
 	if err != nil {
 		return benchmarkNormalizeResult{}, &benchmark.StatusError{Status: benchmark.StatusPrerequisiteMissing, Message: "raw dataset is missing", Cause: err}
 	}
-	adapter, err := benchmark.DefaultRegistry().Adapter(manifest.Name)
+	adapter, err := benchmark.DefaultRegistry().AdapterWithOptions(manifest.Name, benchmark.AdapterOptions{EnableLongMemEvalSpike: strings.TrimSpace(*longMemEvalSubset) != "", LongMemEvalSubset: *longMemEvalSubset})
 	if err != nil {
 		return benchmarkNormalizeResult{}, err
 	}

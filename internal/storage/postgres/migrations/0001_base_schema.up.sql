@@ -1205,6 +1205,12 @@ CREATE INDEX IF NOT EXISTS embedding_rebuilds_scope_status_idx
 
 CREATE INDEX IF NOT EXISTS provenance_links_scope_created_at_idx
     ON provenance_links (tenant, project, namespace, created_at DESC);
+CREATE INDEX IF NOT EXISTS provenance_links_candidate_memory_idx
+    ON provenance_links (candidate_memory_id);
+CREATE INDEX IF NOT EXISTS provenance_links_raw_event_idx
+    ON provenance_links (raw_event_id);
+CREATE INDEX IF NOT EXISTS provenance_links_memory_idx
+    ON provenance_links (memory_id);
 
 CREATE INDEX IF NOT EXISTS vector_revisions_memory_generated_at_idx
     ON vector_revisions (memory_id, generated_at DESC);

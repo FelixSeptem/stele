@@ -45,11 +45,31 @@ func BuildRetrievalEvaluationFixture(corpus NormalizedCorpus, mappings map[strin
 	}
 	events := append([]MemoryEventRecord(nil), corpus.Events...)
 	sort.Slice(events, func(i, j int) bool { return events[i].ID < events[j].ID })
+	eventsByQuery := make(map[string][]MemoryEventRecord)
+	allEvents := make([]MemoryEventRecord, 0, len(events))
+	for _, event := range events {
+		questionID := ""
+		if event.Provenance != nil {
+			questionID = event.Provenance["question_id"]
+		}
+		if questionID != "" {
+			eventsByQuery[questionID] = append(eventsByQuery[questionID], event)
+		} else {
+			allEvents = append(allEvents, event)
+		}
+	}
 	queries := append([]BenchmarkQuery(nil), corpus.Queries...)
 	sort.Slice(queries, func(i, j int) bool { return queries[i].ID < queries[j].ID })
 	for _, query := range queries {
-		caseSources := make([]retrieval.EvaluationSource, 0, len(events))
-		for _, event := range events {
+		candidateEvents := events
+		if strings.TrimSpace(query.SessionID) != "" {
+			candidateEvents = eventsByQuery[query.SessionID]
+			if len(candidateEvents) == 0 {
+				candidateEvents = allEvents
+			}
+		}
+		caseSources := make([]retrieval.EvaluationSource, 0, len(candidateEvents))
+		for _, event := range candidateEvents {
 			if !eventBelongsToQuerySession(event, query) {
 				continue
 			}
@@ -93,6 +113,9 @@ func BuildRetrievalEvaluationFixture(corpus NormalizedCorpus, mappings map[strin
 
 func eventBelongsToQuerySession(event MemoryEventRecord, query BenchmarkQuery) bool {
 	if strings.TrimSpace(query.SessionID) == "" {
+		return true
+	}
+	if event.Provenance != nil && event.Provenance["question_id"] == query.SessionID {
 		return true
 	}
 	return event.SessionID == query.SessionID || strings.HasPrefix(event.SessionID, query.SessionID+"/")

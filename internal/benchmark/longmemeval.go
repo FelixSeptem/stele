@@ -34,6 +34,9 @@ type LongMemEvalSample struct {
 	ConflictSessionIDs []string             `json:"conflict_session_ids,omitempty"`
 	Abstention         bool                 `json:"abstention,omitempty"`
 	Sessions           []LongMemEvalSession `json:"sessions"`
+	HaystackDates      []string             `json:"haystack_dates,omitempty"`
+	HaystackSessionIDs []string             `json:"haystack_session_ids,omitempty"`
+	HaystackSessions   [][]LongMemEvalTurn  `json:"haystack_sessions,omitempty"`
 }
 
 type LongMemEvalSession struct {
@@ -46,6 +49,7 @@ type LongMemEvalTurn struct {
 	ID        string `json:"id,omitempty"`
 	Speaker   string `json:"speaker,omitempty"`
 	Text      string `json:"text"`
+	Content   string `json:"content,omitempty"`
 	Timestamp string `json:"timestamp,omitempty"`
 }
 
@@ -149,17 +153,31 @@ func normalizeLongMemEval(dataset LongMemEvalDataset, scope memory.Scope) (Norma
 		obsolete := stringSet(sample.ObsoleteSessionIDs)
 		conflicts := stringSet(sample.ConflictSessionIDs)
 		answers := stringSet(sample.AnswerSessionIDs)
-		sessions := append([]LongMemEvalSession(nil), sample.Sessions...)
+		sessions, err := longMemEvalSessions(sample)
+		if err != nil && len(sample.AnswerSessionIDs) == 0 {
+			return NormalizedCorpus{}, fmt.Errorf("longmemeval question %s: %w", questionID, err)
+		}
+		if err != nil {
+			sessions = nil
+		}
+		haystackSource := len(sample.HaystackSessions) > 0
 		sort.SliceStable(sessions, func(i, j int) bool { return sessions[i].SessionID < sessions[j].SessionID })
 		sessionEvents := make(map[string][]string, len(sessions))
 		seenSessions := make(map[string]struct{}, len(sessions))
+		sessionOccurrences := make(map[string]int, len(sessions))
 		for _, session := range sessions {
-			sessionID := strings.TrimSpace(session.SessionID)
+			sourceSessionID := strings.TrimSpace(session.SessionID)
+			sessionID := sourceSessionID
 			if sessionID == "" {
 				return NormalizedCorpus{}, fmt.Errorf("longmemeval question %s session id is required", questionID)
 			}
+			sessionOccurrences[sourceSessionID]++
 			if _, exists := seenSessions[sessionID]; exists {
-				return NormalizedCorpus{}, fmt.Errorf("longmemeval question %s has duplicate session %s", questionID, sessionID)
+				if len(sample.HaystackSessions) > 0 {
+					sessionID = fmt.Sprintf("%s#%02d", sourceSessionID, sessionOccurrences[sourceSessionID])
+				} else {
+					return NormalizedCorpus{}, fmt.Errorf("longmemeval question %s has duplicate session %s", questionID, sessionID)
+				}
 			}
 			seenSessions[sessionID] = struct{}{}
 			conversationID := longMemEvalID(questionID, sessionID)
@@ -168,6 +186,12 @@ func normalizeLongMemEval(dataset LongMemEvalDataset, scope memory.Scope) (Norma
 			for index, turn := range turns {
 				text := strings.TrimSpace(turn.Text)
 				if text == "" {
+					text = strings.TrimSpace(turn.Content)
+				}
+				if text == "" {
+					if haystackSource {
+						continue
+					}
 					return NormalizedCorpus{}, fmt.Errorf("longmemeval question %s session %s has malformed turn", questionID, sessionID)
 				}
 				turnID := strings.TrimSpace(turn.ID)
@@ -190,7 +214,7 @@ func normalizeLongMemEval(dataset LongMemEvalDataset, scope memory.Scope) (Norma
 					class = memory.MemoryClassProfile
 				}
 				corpus.Events = append(corpus.Events, MemoryEventRecord{ID: eventID, Scope: scope, SessionID: sessionID, SourceTurnID: turnID, Class: class, Text: text, ObservedAt: turn.Timestamp, ExpectedState: state, Provenance: map[string]string{"dataset": "longmemeval", "question_id": questionID, "session_id": sessionID, "session_date": session.Date, "question_date": sample.QuestionDate, "expectation": expectation}})
-				sessionEvents[sessionID] = append(sessionEvents[sessionID], eventID)
+				sessionEvents[sourceSessionID] = append(sessionEvents[sourceSessionID], eventID)
 			}
 			corpus.Conversations = append(corpus.Conversations, conversation)
 		}
@@ -263,4 +287,28 @@ func normalizedLongMemEvalUpdateType(questionType string) string {
 		return "update"
 	}
 	return ""
+}
+
+func longMemEvalSessions(sample LongMemEvalSample) ([]LongMemEvalSession, error) {
+	if len(sample.Sessions) > 0 {
+		return append([]LongMemEvalSession(nil), sample.Sessions...), nil
+	}
+	if len(sample.HaystackSessions) == 0 {
+		return nil, fmt.Errorf("sessions are required")
+	}
+	if len(sample.HaystackSessionIDs) != len(sample.HaystackSessions) {
+		return nil, fmt.Errorf("haystack session ids do not match sessions")
+	}
+	if len(sample.HaystackDates) != 0 && len(sample.HaystackDates) != len(sample.HaystackSessions) {
+		return nil, fmt.Errorf("haystack dates do not match sessions")
+	}
+	result := make([]LongMemEvalSession, 0, len(sample.HaystackSessions))
+	for index, turns := range sample.HaystackSessions {
+		date := ""
+		if len(sample.HaystackDates) > 0 {
+			date = sample.HaystackDates[index]
+		}
+		result = append(result, LongMemEvalSession{SessionID: sample.HaystackSessionIDs[index], Date: date, Turns: turns})
+	}
+	return result, nil
 }

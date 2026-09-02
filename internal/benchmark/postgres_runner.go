@@ -101,6 +101,7 @@ func RunPostgresCorpus(ctx context.Context, dsn string, manifest DatasetManifest
 	if err != nil {
 		return PostgresSmokeRunResult{}, err
 	}
+	retrievalCorpus = filterNonRetrievalQueries(retrievalCorpus)
 	pool, err := postgres.OpenPool(ctx, dsn)
 	if err != nil {
 		return PostgresSmokeRunResult{}, err
@@ -149,6 +150,26 @@ func RunPostgresCorpus(ctx context.Context, dsn string, manifest DatasetManifest
 		return PostgresSmokeRunResult{}, err
 	}
 	return PostgresSmokeRunResult{Status: StatusSuccess, Dataset: manifest.Name, Version: manifest.Version, RunID: run.ID, ManifestChecksum: manifestChecksum, Strategy: StrategyProfileLexical, SyntheticFixture: syntheticFixture, Runtime: runtime, Scope: run.Scope, RetrievalReport: report, NormalizedChecksum: normalizedChecksum, QRELChecksum: qrelChecksum}, nil
+}
+
+func filterNonRetrievalQueries(corpus NormalizedCorpus) NormalizedCorpus {
+	filtered := corpus
+	filtered.Queries = make([]BenchmarkQuery, 0, len(corpus.Queries))
+	allowed := map[string]struct{}{}
+	for _, query := range corpus.Queries {
+		if len(query.EvidenceGroups) == 0 && query.AbstentionExpected {
+			continue
+		}
+		filtered.Queries = append(filtered.Queries, query)
+		allowed[query.ID] = struct{}{}
+	}
+	filtered.QRELs = filtered.QRELs[:0]
+	for _, qrel := range corpus.QRELs {
+		if _, ok := allowed[qrel.QueryID]; ok {
+			filtered.QRELs = append(filtered.QRELs, qrel)
+		}
+	}
+	return filtered
 }
 
 // partitionCorpusForRetrieval derives per-sample benchmark namespaces only for
