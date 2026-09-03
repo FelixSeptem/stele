@@ -16,9 +16,9 @@
 ## 3. LongMemEval PostgreSQL and product gate
 
 - [x] 3.1 Import normalized LongMemEval data through the controlled benchmark ingestion path with benchmark-only project, tenant, namespace, and run scopes.
-- [ ] 3.2 Add PostgreSQL + pgvector integration tests for repeated import, cross-run leakage, lifecycle exclusion, session boundaries, and answer-session qrels alignment.
+- [x] 3.2 Add PostgreSQL + pgvector integration tests for repeated import, cross-run leakage, lifecycle exclusion, session boundaries, and answer-session qrels alignment.
 - [x] 3.3 Add local capacity preflight, subset limits, batch controls, and cleanup verification for the standard `s` subset and explicit larger runs.
-- [ ] 3.4 Execute one non-synthetic checksum-locked LongMemEval retrieval run on local PostgreSQL 18 + pgvector and retain its machine-readable report as the core completion artifact.
+- [x] 3.4 Execute one non-synthetic checksum-locked LongMemEval retrieval run on local PostgreSQL 18 + pgvector and retain its machine-readable report as the core completion artifact.
 
 ## 4. BFCL memory provider contract
 
@@ -42,7 +42,7 @@
 - [x] 6.2 Implement generic retrieval normalization and qrels loading under a `generic_retrieval` family identity.
 - [x] 6.3 Add deterministic strategy profiles for lexical, semantic, hybrid, chunk variants, hybrid-rank, and optional reranker paths.
 - [x] 6.4 Implement same-corpus strategy comparison with Recall@k, MRR, nDCG, candidate pool size, latency, and comparability checks.
-- [ ] 6.5 Add tests proving incompatible corpus/qrels/embedding identities cannot be aggregated and generic runs cannot access production scopes.
+- [x] 6.5 Add tests proving incompatible corpus/qrels/embedding identities cannot be aggregated and generic runs cannot access production scopes.
 
 ## 7. Long-context and multimodal stress suites
 

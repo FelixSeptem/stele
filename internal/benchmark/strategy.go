@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"strings"
 
+	"github.com/FelixSeptem/stele/internal/memory"
 	"github.com/FelixSeptem/stele/internal/retrieval"
 )
 
@@ -27,13 +28,16 @@ func (p StrategyProfile) Validate() error {
 }
 
 type StrategyReport struct {
-	Family             BenchmarkFamily            `json:"family"`
-	Dataset            string                     `json:"dataset"`
-	Version            string                     `json:"version"`
-	NormalizedChecksum string                     `json:"normalized_checksum"`
-	QRELChecksum       string                     `json:"qrels_checksum"`
-	Profile            StrategyProfile            `json:"profile"`
-	Report             retrieval.EvaluationReport `json:"report"`
+	Family                BenchmarkFamily            `json:"family"`
+	Dataset               string                     `json:"dataset"`
+	Version               string                     `json:"version"`
+	NormalizedChecksum    string                     `json:"normalized_checksum"`
+	QRELChecksum          string                     `json:"qrels_checksum"`
+	Profile               StrategyProfile            `json:"profile"`
+	EmbeddingIdentity     string                     `json:"embedding_identity,omitempty"`
+	NormalizationIdentity string                     `json:"normalization_identity,omitempty"`
+	Scope                 memory.Scope               `json:"scope"`
+	Report                retrieval.EvaluationReport `json:"report"`
 }
 
 func CompareStrategyReports(baseline, candidate StrategyReport, protectedCategories []string) (retrieval.EvaluationComparison, error) {
@@ -52,6 +56,18 @@ func CompareStrategyReports(baseline, candidate StrategyReport, protectedCategor
 	if strings.TrimSpace(baseline.QRELChecksum) == "" || baseline.QRELChecksum != candidate.QRELChecksum {
 		return retrieval.EvaluationComparison{}, fmt.Errorf("incompatible qrels checksum")
 	}
+	if baseline.EmbeddingIdentity != candidate.EmbeddingIdentity {
+		return retrieval.EvaluationComparison{}, fmt.Errorf("incompatible embedding identity")
+	}
+	if baseline.NormalizationIdentity != candidate.NormalizationIdentity {
+		return retrieval.EvaluationComparison{}, fmt.Errorf("incompatible normalization identity")
+	}
+	if err := validateGenericBenchmarkScope(baseline.Scope); err != nil {
+		return retrieval.EvaluationComparison{}, err
+	}
+	if err := validateGenericBenchmarkScope(candidate.Scope); err != nil {
+		return retrieval.EvaluationComparison{}, err
+	}
 	if err := baseline.Profile.Validate(); err != nil {
 		return retrieval.EvaluationComparison{}, err
 	}
@@ -59,4 +75,20 @@ func CompareStrategyReports(baseline, candidate StrategyReport, protectedCategor
 		return retrieval.EvaluationComparison{}, err
 	}
 	return retrieval.CompareEvaluationReports(baseline.Report, candidate.Report, protectedCategories)
+}
+
+func validateGenericBenchmarkScope(scope memory.Scope) error {
+	if scope == (memory.Scope{}) {
+		return nil
+	}
+	if err := scope.Validate(); err != nil {
+		return fmt.Errorf("invalid generic benchmark scope: %w", err)
+	}
+	if strings.EqualFold(scope.Project, "production") || strings.EqualFold(scope.Namespace, "production") {
+		return fmt.Errorf("generic benchmark cannot access production scope")
+	}
+	if !strings.HasPrefix(strings.ToLower(scope.Project), "benchmark-") && !strings.HasPrefix(strings.ToLower(scope.Project), "bench-") {
+		return fmt.Errorf("generic benchmark scope must use benchmark project")
+	}
+	return nil
 }

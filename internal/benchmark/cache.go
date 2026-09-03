@@ -86,6 +86,28 @@ func (c Cache) EnsureRunLayout(manifest DatasetManifest, runID string) (CachePat
 	return paths, nil
 }
 
+// StoreRunReport writes a bounded machine-readable completion artifact under
+// the benchmark run directory. The report name is constrained to one path
+// component so a run cannot write outside its retained report namespace.
+func (c Cache) StoreRunReport(manifest DatasetManifest, runID, name string, report any) (string, error) {
+	if filepath.Base(name) != name || strings.TrimSpace(name) == "" {
+		return "", &StatusError{Status: StatusInvalidManifest, Message: "benchmark report name must be a single safe path component"}
+	}
+	paths, err := c.EnsureRunLayout(manifest, runID)
+	if err != nil {
+		return "", err
+	}
+	encoded, err := json.Marshal(report)
+	if err != nil {
+		return "", fmt.Errorf("marshal benchmark run report: %w", err)
+	}
+	path := filepath.Join(paths.Reports, name)
+	if err := writeAtomic(path, append(encoded, '\n')); err != nil {
+		return "", fmt.Errorf("write benchmark run report: %w", err)
+	}
+	return path, nil
+}
+
 // CleanupBenchmarkRun removes only run-scoped normalized and embedding
 // artifacts. Reports can be retained as audit evidence.
 func (c Cache) CleanupBenchmarkRun(manifest DatasetManifest, runID string, preserveReports bool) error {

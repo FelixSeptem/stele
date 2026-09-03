@@ -112,3 +112,23 @@ func TestWriteAndLoadNormalizedCorpusIsDeterministic(t *testing.T) {
 		t.Fatalf("expected stable normalized checksum, write=%s read=%s metadata=%s", first, second, metadata.Checksum)
 	}
 }
+
+func TestStoreRunReportPersistsMachineReadableArtifact(t *testing.T) {
+	cache := NewCache(t.TempDir())
+	manifest := validManifest()
+	manifest.Version = "report-v1"
+	path, err := cache.StoreRunReport(manifest, "local-run", "retrieval.json", map[string]any{"status": "success", "query_count": 2})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if path != filepath.Join(cache.DataDir, manifest.Name, manifest.Version, "reports", "local-run", "retrieval.json") {
+		t.Fatalf("report path = %q", path)
+	}
+	encoded, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(encoded) != "{\"query_count\":2,\"status\":\"success\"}\n" {
+		t.Fatalf("report content = %q", encoded)
+	}
+}

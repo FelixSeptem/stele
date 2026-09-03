@@ -31,6 +31,7 @@ type PostgresSmokeRunResult struct {
 	RetrievalReport    retrieval.EvaluationReport `json:"retrieval_report"`
 	NormalizedChecksum string                     `json:"normalized_checksum,omitempty"`
 	QRELChecksum       string                     `json:"qrels_checksum,omitempty"`
+	ArtifactPath       string                     `json:"artifact_path,omitempty"`
 }
 
 // RunLongMemEvalPostgres executes a locked normalized LongMemEval split through
@@ -125,7 +126,7 @@ func RunPostgresCorpus(ctx context.Context, dsn string, manifest DatasetManifest
 	}
 	repo := postgres.NewRepository(pool)
 	seeder := postgres.NewEvaluationFixtureSeeder(repo)
-	seed, err := seeder.Seed(ctx, draft.Fixture)
+	seed, err := seeder.SeedBatch(ctx, draft.Fixture, 1000)
 	if err != nil {
 		return PostgresSmokeRunResult{}, err
 	}

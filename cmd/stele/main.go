@@ -355,7 +355,20 @@ func benchmarkRun(args []string) (any, error) {
 			return nil, err
 		}
 		if dsn := strings.TrimSpace(os.Getenv("STELE_POSTGRES_DSN")); dsn != "" {
-			return benchmark.RunLongMemEvalPostgres(context.Background(), dsn, manifest.Manifest, corpus, memory.Scope{Tenant: "benchmark", Project: "longmemeval", Namespace: "local"}, split)
+			result, runErr := benchmark.RunLongMemEvalPostgres(context.Background(), dsn, manifest.Manifest, corpus, memory.Scope{Tenant: "benchmark", Project: "longmemeval", Namespace: "local"}, split)
+			if runErr != nil {
+				return nil, runErr
+			}
+			artifactPath, storeErr := cache.StoreRunReport(manifest.Manifest, result.RunID, "retrieval.json", result)
+			if storeErr != nil {
+				return nil, storeErr
+			}
+			result.ArtifactPath = artifactPath
+			// Persist the artifact path too, so the retained JSON is self-describing.
+			if _, storeErr = cache.StoreRunReport(manifest.Manifest, result.RunID, "retrieval.json", result); storeErr != nil {
+				return nil, storeErr
+			}
+			return result, nil
 		}
 		return map[string]any{"status": benchmark.StatusSuccess, "dataset": "longmemeval", "subset": split, "query_count": len(corpus.Queries), "event_count": len(corpus.Events), "normalized_checksum": func() string { s, _ := corpus.Checksum(); return s }()}, nil
 	}

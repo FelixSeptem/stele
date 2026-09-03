@@ -73,9 +73,9 @@ func TestEvaluationFixtureSeederSeedsOwnedPostgresFixture(t *testing.T) {
 
 	repo := NewRepository(pool)
 	seeder := NewEvaluationFixtureSeeder(repo)
-	seeded, err := seeder.Seed(ctx, fixture)
+	seeded, err := seeder.SeedBatch(ctx, fixture, 2)
 	if err != nil {
-		t.Fatalf("Seed() error = %v", err)
+		t.Fatalf("SeedBatch() error = %v", err)
 	}
 	defer func() {
 		if cleanupErr := seeder.Cleanup(context.Background(), seeded); cleanupErr != nil {
@@ -84,6 +84,13 @@ func TestEvaluationFixtureSeederSeedsOwnedPostgresFixture(t *testing.T) {
 	}()
 	if len(seeded.Aliases) != fixtureSourceCount(fixture) {
 		t.Fatalf("seeded aliases = %d, want %d", len(seeded.Aliases), fixtureSourceCount(fixture))
+	}
+	repeated, err := seeder.SeedBatch(ctx, fixture, 2)
+	if err != nil {
+		t.Fatalf("repeat SeedBatch() error = %v", err)
+	}
+	if !reflect.DeepEqual(seeded, repeated) {
+		t.Fatalf("repeated SeedBatch() result differs: first=%#v second=%#v", seeded, repeated)
 	}
 
 	retrievalService := retrieval.NewService(retrieval.ServiceDependencies{
