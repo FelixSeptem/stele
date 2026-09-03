@@ -68,6 +68,19 @@ func TestRunPostgresCorpusReturnsAuditableIdentity(t *testing.T) {
 	}
 }
 
+func TestPostgresSmokeRunResultCarriesUnifiedReportIdentity(t *testing.T) {
+	result := PostgresSmokeRunResult{Dataset: "longmemeval", Version: "s-v1", Split: "s", Family: FamilyMemory, QRELVersion: "qrels-v1", Errors: []string{}, SafetyOutcomes: map[string]any{"scope_isolation": "pass"}, ArtifactPaths: []string{"reports/retrieval.json"}}
+	encoded, err := json.Marshal(result)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, field := range []string{"family", "split", "qrels_version", "errors", "safety_outcomes", "artifact_paths"} {
+		if !bytes.Contains(encoded, []byte(`"`+field+`"`)) {
+			t.Fatalf("report missing unified field %q: %s", field, encoded)
+		}
+	}
+}
+
 func TestPartitionCorpusForRetrievalUsesSessionBoundedScopes(t *testing.T) {
 	base := memory.Scope{Tenant: "benchmark", Project: "benchmark-locomo", Namespace: "run-full"}
 	corpus := NormalizedCorpus{

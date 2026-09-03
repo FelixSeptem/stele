@@ -364,6 +364,9 @@ func benchmarkRun(args []string) (any, error) {
 				return nil, storeErr
 			}
 			result.ArtifactPath = artifactPath
+			result.ArtifactPaths = []string{artifactPath}
+			result.Split = split
+			result.QRELVersion = manifest.Manifest.Version
 			// Persist the artifact path too, so the retained JSON is self-describing.
 			if _, storeErr = cache.StoreRunReport(manifest.Manifest, result.RunID, "retrieval.json", result); storeErr != nil {
 				return nil, storeErr

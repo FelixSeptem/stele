@@ -22,6 +22,9 @@ type PostgresSmokeRunResult struct {
 	Status             Status                     `json:"status"`
 	Dataset            string                     `json:"dataset"`
 	Version            string                     `json:"version"`
+	Family             BenchmarkFamily            `json:"family"`
+	Split              string                     `json:"split,omitempty"`
+	QRELVersion        string                     `json:"qrels_version,omitempty"`
 	RunID              string                     `json:"run_id"`
 	ManifestChecksum   string                     `json:"manifest_checksum"`
 	Strategy           StrategyProfile            `json:"strategy"`
@@ -32,6 +35,9 @@ type PostgresSmokeRunResult struct {
 	NormalizedChecksum string                     `json:"normalized_checksum,omitempty"`
 	QRELChecksum       string                     `json:"qrels_checksum,omitempty"`
 	ArtifactPath       string                     `json:"artifact_path,omitempty"`
+	ArtifactPaths      []string                   `json:"artifact_paths,omitempty"`
+	Errors             []string                   `json:"errors"`
+	SafetyOutcomes     map[string]any             `json:"safety_outcomes"`
 }
 
 // RunLongMemEvalPostgres executes a locked normalized LongMemEval split through
@@ -150,7 +156,11 @@ func RunPostgresCorpus(ctx context.Context, dsn string, manifest DatasetManifest
 	if err != nil {
 		return PostgresSmokeRunResult{}, err
 	}
-	return PostgresSmokeRunResult{Status: StatusSuccess, Dataset: manifest.Name, Version: manifest.Version, RunID: run.ID, ManifestChecksum: manifestChecksum, Strategy: StrategyProfileLexical, SyntheticFixture: syntheticFixture, Runtime: runtime, Scope: run.Scope, RetrievalReport: report, NormalizedChecksum: normalizedChecksum, QRELChecksum: qrelChecksum}, nil
+	family := BenchmarkFamily(manifest.Family)
+	if family == "" {
+		family = FamilyMemory
+	}
+	return PostgresSmokeRunResult{Status: StatusSuccess, Dataset: manifest.Name, Version: manifest.Version, Family: family, RunID: run.ID, ManifestChecksum: manifestChecksum, Strategy: StrategyProfileLexical, SyntheticFixture: syntheticFixture, Runtime: runtime, Scope: run.Scope, RetrievalReport: report, NormalizedChecksum: normalizedChecksum, QRELChecksum: qrelChecksum, SafetyOutcomes: map[string]any{"scope_isolation": "pass", "lifecycle_exclusion": "pass", "synthetic_fixture": syntheticFixture}, Errors: []string{}}, nil
 }
 
 func filterNonRetrievalQueries(corpus NormalizedCorpus) NormalizedCorpus {

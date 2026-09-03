@@ -55,7 +55,7 @@
 ## 8. Unified reporting, governance, and CLI
 
 - [x] 8.1 Extend benchmark CLI commands to list, fetch, normalize, run, report, and clean by dataset family while preserving offline defaults.
-- [ ] 8.2 Extend report schema with dataset/family identity, all input checksums, qrels/version, runtime identity, embedding/strategy profile, run scope, metrics, errors, safety outcomes, and artifact paths.
+- [x] 8.2 Extend report schema with dataset/family identity, all input checksums, qrels/version, runtime identity, embedding/strategy profile, run scope, metrics, errors, safety outcomes, and artifact paths.
 - [x] 8.3 Implement stable statuses for success, quality-gate failure, prerequisite missing, invalid manifest, checksum mismatch, capacity refusal, and internal error.
 - [ ] 8.4 Add family-level report rendering and explicit non-comparability rules for memory, contract, specialized, generic IR, and stress results.
 - [x] 8.5 Add cleanup commands and tests proving benchmark cleanup preserves retained manifests/reports and leaves production scopes unchanged.
