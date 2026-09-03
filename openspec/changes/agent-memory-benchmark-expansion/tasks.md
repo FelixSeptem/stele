@@ -62,8 +62,8 @@
 
 ## 9. Documentation, CI, and verification
 
-- [ ] 9.1 Document local dataset acquisition, license review, ModelScope cache preparation, offline execution, embedding profiles, resource budgets, and cleanup.
+- [x] 9.1 Document local dataset acquisition, license review, ModelScope cache preparation, offline execution, embedding profiles, resource budgets, and cleanup.
 - [x] 9.2 Add CI smoke coverage using repository-owned fixtures only, including manifest validation, adapter golden tests, report schema, and offline network blocking.
-- [ ] 9.3 Add local integration instructions and a reproducibility checklist for PostgreSQL 18 + pgvector, dataset checksums, qrels, strategy identity, and report retention.
+- [x] 9.3 Add local integration instructions and a reproducibility checklist for PostgreSQL 18 + pgvector, dataset checksums, qrels, strategy identity, and report retention.
 - [ ] 9.4 Run `go test ./...`, benchmark integration tests, OpenSpec strict validation, and the real LongMemEval gate; record failures and residual prerequisites in reports.
 - [ ] 9.5 Review API, security, license, capacity, isolation, lifecycle, and operational readiness before marking the change complete or archivable.

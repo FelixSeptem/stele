@@ -81,13 +81,31 @@ Lexical-only smoke is allowed only when explicitly selected. The runner does not
 
 ## Experimental adapters and operations
 
-LongMemEval is currently a metadata-only dataset. Its normalization spike is
-available only through the Go registry with
-`AdapterOptions{EnableLongMemEvalSpike: true}`; the default registry and CLI
-continue to return `prerequisite_missing`, so it cannot be mistaken for a
-runnable quality result. The spike preserves question date, question type,
-answer session ids, abstention, update/conflict state, and source session
-provenance.
+LongMemEval `s` is runnable when its local manifest and raw/normalized cache
+are present. The adapter accepts the cleaned ModelScope haystack format and
+preserves question date, question type, answer session IDs, abstention,
+update/conflict state, and source-session provenance. `m` and `oracle` remain
+explicitly selected subsets; omitting `--subset` does not silently choose one.
+
+Example using the locked local cache:
+
+```powershell
+$env:STELE_POSTGRES_DSN = "postgres://stele:stele@127.0.0.1:55432/stele?sslmode=disable"
+go run ./cmd/stele benchmark run `
+  --data-dir D:\stele-benchmark-data `
+  --dataset longmemeval `
+  --version modelscope-cleaned-f180315e-s `
+  --mode local-full `
+  --strategy lexical `
+  --subset s
+```
+
+The command is offline after normalization and writes a run-scoped
+`reports/<run-id>/retrieval.json` artifact. A successful real run records
+`synthetic_fixture: false`, PostgreSQL/pgvector identity, normalized and qrels
+checksums, scope, safety outcomes, and artifact paths. The benchmark-owned
+database scope is cleaned after replay; retained report and manifest files are
+not deleted by default.
 
 Before importing a large local corpus, run a capacity preflight and choose an
 explicit event batch size. A refusal is reported as `capacity_refused` with a
@@ -111,11 +129,31 @@ external corpora, models, vectors, or judges and does not require PostgreSQL.
 
 ## PostgreSQL and pgvector
 
-The end-to-end full benchmark uses Stele's PostgreSQL + pgvector retrieval path and must run against the supported local PostgreSQL version. Keep benchmark runs in an isolated benchmark project/namespace. Do not import public benchmark corpus data into a production tenant or namespace. The baseline replay integration and full PostgreSQL proof are tracked in the active `local-agent-memory-benchmark-suite` OpenSpec change.
+The end-to-end full benchmark uses Stele's PostgreSQL + pgvector retrieval path and must run against the supported local PostgreSQL version. Keep benchmark runs in an isolated benchmark project/namespace. Do not import public benchmark corpus data into a production tenant or namespace. The batch fixture seeder uses deterministic IDs and bounded transactions so interrupted imports can be cleaned and rerun safely.
 
-The change is not complete until a non-synthetic LoCoMo run has retained a
+The expansion change is not complete until a non-synthetic LongMemEval run has retained a
 machine-readable report containing PostgreSQL and pgvector versions, source,
 normalized-corpus and qrels checksums, embedding/strategy profile, run scope,
 quality metrics, and separate safety-gate results. Repository-owned smoke and
 synthetic PostgreSQL runs are useful regression checks but do not satisfy this
 gate.
+
+## Reproducibility checklist
+
+Before sharing or comparing a report, retain all of the following together:
+
+- [ ] PostgreSQL major/minor version and `pgvector` extension version.
+- [ ] Manifest JSON, upstream revision, license decision, source SHA256, and
+      conversion version.
+- [ ] Normalized split checksum and qrels checksum/version.
+- [ ] Embedding profile (or explicit `lexical-only`) and strategy/chunk/rank
+      configuration.
+- [ ] Dataset family, subset, run ID, benchmark tenant/project/namespace, and
+      local capacity limits.
+- [ ] Machine-readable report path, status, metrics, errors, safety outcomes,
+      and cleanup result.
+
+For a fresh local PostgreSQL 18 container, the project uses the pgvector image
+`docker.1ms.run/pgvector/pgvector:pg18` and maps it to an unused host port. Run
+`go test ./...`, the opt-in PostgreSQL benchmark tests, and
+`openspec validate --specs --strict` before treating a report as reproducible.
