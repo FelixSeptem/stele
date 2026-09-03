@@ -14,7 +14,6 @@ import (
 	"strconv"
 	"strings"
 	"syscall"
-	"time"
 
 	"github.com/FelixSeptem/stele/internal/app"
 	"github.com/FelixSeptem/stele/internal/benchmark"
@@ -147,17 +146,21 @@ func benchmarkSpecialized(args []string) (map[string]any, error) {
 		return nil, err
 	}
 	items := benchmark.BuiltinSpecializedCases(scope)
-	evaluations := make([]benchmark.QueryEvaluation, 0, len(items))
+	ranks := make(map[string][]benchmark.RetrievedEvidence, len(items))
 	for _, item := range items {
-		ranks := make([]benchmark.RetrievedEvidence, 0, len(item.Events))
+		caseRanks := make([]benchmark.RetrievedEvidence, 0, len(item.Events))
 		for i, event := range item.Events {
 			if event.ExpectedState == memory.MemoryStateActive {
-				ranks = append(ranks, benchmark.RetrievedEvidence{EvidenceID: event.ID, Rank: i + 1})
+				caseRanks = append(caseRanks, benchmark.RetrievedEvidence{EvidenceID: event.ID, Rank: i + 1})
 			}
 		}
-		evaluations = append(evaluations, benchmark.EvaluateQuery(item.Query, item.QRELs, ranks, time.Millisecond))
+		ranks[item.Query.ID] = caseRanks
 	}
-	return map[string]any{"status": benchmark.StatusSuccess, "family": benchmark.FamilySpecializedRetrieval, "reports": benchmark.AggregateEvaluationByQueryType(evaluations)}, nil
+	reports, err := benchmark.EvaluateSpecializedCases(items, ranks)
+	if err != nil {
+		return nil, err
+	}
+	return map[string]any{"status": benchmark.StatusSuccess, "family": benchmark.FamilySpecializedRetrieval, "reports": reports}, nil
 }
 
 func benchmarkStress(args []string) (benchmark.StressReport, error) {

@@ -30,11 +30,11 @@
 
 ## 5. Profile, preference, temporal, and multi-hop suites
 
-- [ ] 5.1 Add a license-safe PersonaChat or Multi-Session Chat fixture and adapter with explicit profile facts, preference updates, session IDs, and provenance.
-- [ ] 5.2 Add profile recall, preference consistency, current-versus-historical preference, and session isolation qrels and metrics.
-- [ ] 5.3 Add TimeQA-style temporal fixtures covering date-bounded answers, stale-fact suppression, and update precedence.
-- [ ] 5.4 Add HotpotQA-style multi-hop fixtures with grouped supporting evidence, graded qrels, partial coverage, and complete evidence-group metrics.
-- [ ] 5.5 Add normalization, retrieval, lifecycle, and isolation tests for all specialized suites and retain representative reports.
+- [x] 5.1 Add a license-safe PersonaChat or Multi-Session Chat fixture and adapter with explicit profile facts, preference updates, session IDs, and provenance.
+- [x] 5.2 Add profile recall, preference consistency, current-versus-historical preference, and session isolation qrels and metrics.
+- [x] 5.3 Add TimeQA-style temporal fixtures covering date-bounded answers, stale-fact suppression, and update precedence.
+- [x] 5.4 Add HotpotQA-style multi-hop fixtures with grouped supporting evidence, graded qrels, partial coverage, and complete evidence-group metrics.
+- [x] 5.5 Add normalization, retrieval, lifecycle, and isolation tests for all specialized suites and retain representative reports.
 
 ## 6. Generic retrieval strategy regression
 
@@ -57,7 +57,7 @@
 - [x] 8.1 Extend benchmark CLI commands to list, fetch, normalize, run, report, and clean by dataset family while preserving offline defaults.
 - [x] 8.2 Extend report schema with dataset/family identity, all input checksums, qrels/version, runtime identity, embedding/strategy profile, run scope, metrics, errors, safety outcomes, and artifact paths.
 - [x] 8.3 Implement stable statuses for success, quality-gate failure, prerequisite missing, invalid manifest, checksum mismatch, capacity refusal, and internal error.
-- [ ] 8.4 Add family-level report rendering and explicit non-comparability rules for memory, contract, specialized, generic IR, and stress results.
+- [x] 8.4 Add family-level report rendering and explicit non-comparability rules for memory, contract, specialized, generic IR, and stress results.
 - [x] 8.5 Add cleanup commands and tests proving benchmark cleanup preserves retained manifests/reports and leaves production scopes unchanged.
 
 ## 9. Documentation, CI, and verification
