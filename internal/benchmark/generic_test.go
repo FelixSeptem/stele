@@ -19,6 +19,18 @@ func TestCompareStrategyReportsRejectsEmbeddingAndScopeMismatch(t *testing.T) {
 	}
 }
 
+func TestLockedGenericSubsetCatalogContainsLocalBudgetAndLicense(t *testing.T) {
+	items := LockedGenericSubsetCatalog()
+	if len(items) < 2 {
+		t.Fatalf("expected at least two locked generic subsets, got %#v", items)
+	}
+	for _, item := range items {
+		if item.Dataset == "" || item.Subset == "" || item.License == "" || item.Language == "" || item.StorageBudgetMB <= 0 || item.CorpusSize <= 0 {
+			t.Fatalf("incomplete generic subset lock: %#v", item)
+		}
+	}
+}
+
 func TestNormalizeGenericRetrievalAndRejectForeignQREL(t *testing.T) {
 	scope := memory.Scope{Tenant: "bench", Project: "generic", Namespace: "run"}
 	source := []byte(`{"documents":[{"id":"d1","text":"PostgreSQL"}],"queries":[{"id":"q1","text":"database"}],"qrels":[{"query_id":"q1","evidence_id":"d1","grade":2}]}`)

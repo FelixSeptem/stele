@@ -57,3 +57,14 @@ func TestLongMemEvalJSONLSubset(t *testing.T) {
 		t.Fatalf("subset=%#v", dataset)
 	}
 }
+
+func TestControlledStressSubsetGenerationAndLongBenchCapacityGate(t *testing.T) {
+	needle := GenerateNeedleStressCases("needle", []int{1024, 4096}, 2)
+	if len(needle) != 4 || needle[0].NeedleCount != 2 {
+		t.Fatalf("unexpected needle cases: %#v", needle)
+	}
+	longbench := LongBenchSubset{Dataset: "longbench-v2", Subset: "short-local", ContextTokens: 8192, SampleCount: 4, License: "upstream-review-required"}
+	if report := EvaluateLongBenchCapacity(longbench, StressBudget{MaxContextTokens: 4096, MaxSamples: 10}); report.Status != StatusCapacityRefused || !report.NonGating {
+		t.Fatalf("expected explicit longbench capacity refusal: %#v", report)
+	}
+}
