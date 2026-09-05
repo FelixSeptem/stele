@@ -24,6 +24,13 @@ import (
 
 var newRunner = app.NewRunner
 
+type migrationCommandRunner interface {
+	Status(context.Context, string) (postgres.MigrationState, error)
+	Apply(context.Context, string) error
+}
+
+var newMigrationCommandRunner = func() migrationCommandRunner { return postgres.NewMigrationRunner() }
+
 func main() {
 	if err := run(); err != nil {
 		log.Fatal(err)
@@ -490,6 +497,10 @@ func runArgs(args []string) error {
 }
 
 func runMigrate(args []string) error {
+	return runMigrateWithOutput(args, os.Stdout)
+}
+
+func runMigrateWithOutput(args []string, stdout io.Writer) error {
 	if len(args) != 1 || (args[0] != "status" && args[0] != "up") {
 		return fmt.Errorf("usage: stele migrate <status|up>")
 	}
@@ -497,7 +508,7 @@ func runMigrate(args []string) error {
 	if dsn == "" {
 		return fmt.Errorf("STELE_POSTGRES_DSN is required")
 	}
-	runner := postgres.NewMigrationRunner()
+	runner := newMigrationCommandRunner()
 	ctx := context.Background()
 	if args[0] == "status" {
 		state, err := runner.Status(ctx, dsn)
@@ -505,9 +516,9 @@ func runMigrate(args []string) error {
 			return err
 		}
 		if os.Getenv("STELE_MIGRATION_OUTPUT") == "json" {
-			return json.NewEncoder(os.Stdout).Encode(state)
+			return json.NewEncoder(stdout).Encode(state)
 		}
-		fmt.Fprintf(os.Stdout, "status=%s current_version=%d latest_version=%d dirty=%t pending=%t\n", state.Status, state.CurrentVersion, state.LatestVersion, state.Dirty, state.Pending)
+		fmt.Fprintf(stdout, "status=%s integrity_status=%s integrity_rows=%d current_version=%d latest_version=%d dirty=%t pending=%t\n", state.Status, state.IntegrityStatus, state.IntegrityRows, state.CurrentVersion, state.LatestVersion, state.Dirty, state.Pending)
 		return nil
 	}
 	return runner.Apply(ctx, dsn)

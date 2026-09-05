@@ -59,14 +59,23 @@ STELE_MIGRATION_OUTPUT=json STELE_POSTGRES_DSN='<operator-managed-dsn>' stele mi
 `migrate up` is forward-only and uses the same PostgreSQL migration ledger and
 serialization as runtime startup. It never performs an automatic downgrade.
 
+`migrate status` reports the driver state (`status`, `current_version`,
+`latest_version`, `dirty`, and `pending`) together with
+`integrity_status`/`integrity_rows`. A `verified` integrity status means every
+applied numbered migration has the expected embedded SHA-256 record in
+`stele_schema_migration_ledger`. A clean older supported deployment can report
+`legacy` until the next serialized `migrate up` records that immutable prefix;
+do not accept runtime traffic under validate-only policy until status is both
+`current` and `verified`.
+
 If `migrate status` reports `dirty`, `incompatible`, or `divergent`, do not
-restart the application modes with `auto` and do not edit the migration ledger
-by hand. Stop the deployment, preserve a PostgreSQL backup, inspect the bounded
-diagnostic, and either run the documented forward-remediation migration or
-restore the verified backup into an explicit target. Automatic down migration
-is prohibited; an older image may only be used when its schema compatibility is
-confirmed. A failed migration must be repaired or restored before readiness is
-considered valid.
+restart the application modes with `auto` and do not edit a historical
+migration asset or either migration ledger by hand. Stop the deployment,
+preserve a PostgreSQL backup, inspect the bounded diagnostic, and either run
+the documented forward-remediation migration or restore the verified backup
+into an explicit target. Automatic down migration is prohibited; an older image
+may only be used when its schema compatibility is confirmed. A failed migration
+must be repaired or restored before readiness is considered valid.
 
 ## PostgreSQL Backup, Restore, And Verification
 

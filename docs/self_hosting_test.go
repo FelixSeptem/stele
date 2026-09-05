@@ -118,6 +118,24 @@ func TestBackupRecoveryScriptsExposeSafetyGuards(t *testing.T) {
 	}
 }
 
+func TestSelfHostingDocsDescribeChecksummedMigrationIntegrity(t *testing.T) {
+	content, err := os.ReadFile("self-hosting.md")
+	if err != nil {
+		t.Fatalf("read self-hosting.md: %v", err)
+	}
+	for _, want := range []string{
+		"integrity_status",
+		"stele_schema_migration_ledger",
+		"SHA-256",
+		"forward-remediation",
+		"Automatic down migration is prohibited",
+	} {
+		if !strings.Contains(string(content), want) {
+			t.Fatalf("self-hosting guide missing migration integrity guidance %q", want)
+		}
+	}
+}
+
 func TestProductVerificationEntryPointDocumentsPrerequisiteAndOwnershipGuards(t *testing.T) {
 	contentBytes, err := os.ReadFile("../scripts/stele-product-verify.ps1")
 	if err != nil {
