@@ -46,6 +46,9 @@ func TestMigrationRunnerSerializesConcurrentApply(t *testing.T) {
 	if state.Status != MigrationStatusCurrent || state.Dirty || state.Pending {
 		t.Fatalf("state after concurrent apply = %+v, want current clean schema", state)
 	}
+	if state.IntegrityStatus != MigrationIntegrityVerified || state.IntegrityRows != int(CurrentMigrationVersion) {
+		t.Fatalf("integrity state after concurrent apply = %+v, want verified complete ledger", state)
+	}
 	db, err := runner.openDB(dsn)
 	if err != nil {
 		t.Fatalf("open migration database after concurrent apply: %v", err)

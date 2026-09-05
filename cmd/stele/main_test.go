@@ -15,11 +15,28 @@ import (
 	"github.com/FelixSeptem/stele/internal/app"
 	"github.com/FelixSeptem/stele/internal/benchmark"
 	"github.com/FelixSeptem/stele/internal/config"
+	"github.com/FelixSeptem/stele/internal/storage/postgres"
 )
 
 type stubRunner struct {
 	called bool
 	err    error
+}
+
+type stubMigrationCommandRunner struct {
+	state     postgres.MigrationState
+	statusErr error
+	applyErr  error
+	applied   bool
+}
+
+func (s *stubMigrationCommandRunner) Status(context.Context, string) (postgres.MigrationState, error) {
+	return s.state, s.statusErr
+}
+
+func (s *stubMigrationCommandRunner) Apply(context.Context, string) error {
+	s.applied = true
+	return s.applyErr
 }
 
 func TestRunBenchmarkListPrintsDatasetSupportStates(t *testing.T) {
@@ -244,5 +261,58 @@ func TestRunMigrateRejectsUnknownSubcommand(t *testing.T) {
 	t.Setenv("STELE_POSTGRES_DSN", "postgres://example")
 	if err := runArgs([]string{"migrate", "unknown"}); err == nil {
 		t.Fatal("runArgs() error = nil, want unknown migrate subcommand error")
+	}
+}
+
+func TestRunMigrateStatusIncludesBoundedIntegrityFacts(t *testing.T) {
+	original := newMigrationCommandRunner
+	defer func() { newMigrationCommandRunner = original }()
+	newMigrationCommandRunner = func() migrationCommandRunner {
+		return &stubMigrationCommandRunner{state: postgres.MigrationState{
+			Status:          postgres.MigrationStatusCurrent,
+			IntegrityStatus: postgres.MigrationIntegrityVerified,
+			IntegrityRows:   1,
+			CurrentVersion:  1,
+			LatestVersion:   1,
+		}}
+	}
+	t.Setenv("STELE_POSTGRES_DSN", "postgres://example")
+	var output bytes.Buffer
+	if err := runMigrateWithOutput([]string{"status"}, &output); err != nil {
+		t.Fatalf("runMigrateWithOutput() error = %v", err)
+	}
+	if !strings.Contains(output.String(), "integrity_status=verified") || !strings.Contains(output.String(), "integrity_rows=1") {
+		t.Fatalf("status output = %q, want bounded integrity facts", output.String())
+	}
+}
+
+func TestRunMigrateJSONStatusIncludesIntegrityFacts(t *testing.T) {
+	original := newMigrationCommandRunner
+	defer func() { newMigrationCommandRunner = original }()
+	newMigrationCommandRunner = func() migrationCommandRunner {
+		return &stubMigrationCommandRunner{state: postgres.MigrationState{Status: postgres.MigrationStatusDivergent, IntegrityStatus: postgres.MigrationIntegrityUnknown, CurrentVersion: 1, LatestVersion: 1}}
+	}
+	t.Setenv("STELE_POSTGRES_DSN", "postgres://example")
+	t.Setenv("STELE_MIGRATION_OUTPUT", "json")
+	var output bytes.Buffer
+	if err := runMigrateWithOutput([]string{"status"}, &output); err != nil {
+		t.Fatalf("runMigrateWithOutput() error = %v", err)
+	}
+	if !bytes.Contains(output.Bytes(), []byte(`"integrity_status":"unknown"`)) || !bytes.Contains(output.Bytes(), []byte(`"status":"divergent"`)) {
+		t.Fatalf("JSON status output = %s, want integrity and divergent facts", output.String())
+	}
+}
+
+func TestRunMigrateUpReturnsDivergentIntegrityFailure(t *testing.T) {
+	original := newMigrationCommandRunner
+	defer func() { newMigrationCommandRunner = original }()
+	stub := &stubMigrationCommandRunner{applyErr: errors.New("migration validation failed: status=divergent integrity_status=unknown")}
+	newMigrationCommandRunner = func() migrationCommandRunner { return stub }
+	t.Setenv("STELE_POSTGRES_DSN", "postgres://example")
+	if err := runMigrateWithOutput([]string{"up"}, &bytes.Buffer{}); err == nil || !strings.Contains(err.Error(), "status=divergent") {
+		t.Fatalf("runMigrateWithOutput(up) error = %v, want divergent failure", err)
+	}
+	if !stub.applied {
+		t.Fatal("migration up did not delegate to shared integrity-gated runner")
 	}
 }

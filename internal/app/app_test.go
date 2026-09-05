@@ -1340,7 +1340,7 @@ func TestBuildWorkerAndSchedulerRuntimeDefaultMigrationPolicyRunsBeforeWork(t *t
 }
 
 func TestRuntimeStartupRejectsMigrationValidationFailureBeforeWork(t *testing.T) {
-	validationErr := errors.New("migration validation failed: status=pending current_version=0 latest_version=1 dirty=false")
+	validationErr := errors.New("migration validation failed: status=divergent integrity_status=unknown current_version=1 latest_version=1 dirty=false")
 	apiServer := &stubAPIServer{err: http.ErrServerClosed}
 	apiMock, err := pgxmock.NewPool()
 	if err != nil {
@@ -1355,8 +1355,8 @@ func TestRuntimeStartupRejectsMigrationValidationFailureBeforeWork(t *testing.T)
 	if err != nil {
 		t.Fatalf("buildAPIRuntime() error = %v", err)
 	}
-	if err := runAPIRuntime(context.Background(), apiRuntime); !errors.Is(err, validationErr) && !strings.Contains(err.Error(), "status=pending") {
-		t.Fatalf("runAPIRuntime() error = %v, want pending migration failure", err)
+	if err := runAPIRuntime(context.Background(), apiRuntime); !errors.Is(err, validationErr) && !strings.Contains(err.Error(), "status=divergent") {
+		t.Fatalf("runAPIRuntime() error = %v, want divergent migration failure", err)
 	}
 	if apiServer.called {
 		t.Fatal("api server started despite migration validation failure")
@@ -1394,8 +1394,8 @@ func TestRuntimeStartupRejectsMigrationValidationFailureBeforeWork(t *testing.T)
 		}
 		return r, err
 	}}
-	if err := workerRunner.Start(context.Background()); !strings.Contains(err.Error(), "status=pending") {
-		t.Fatalf("worker Start() error = %v, want pending migration failure", err)
+	if err := workerRunner.Start(context.Background()); !strings.Contains(err.Error(), "status=divergent") {
+		t.Fatalf("worker Start() error = %v, want divergent migration failure", err)
 	}
 
 	schedulerMock, err := pgxmock.NewPool()
@@ -1413,8 +1413,8 @@ func TestRuntimeStartupRejectsMigrationValidationFailureBeforeWork(t *testing.T)
 		}
 		return r, err
 	}}
-	if err := schedulerRunner.Start(context.Background()); !strings.Contains(err.Error(), "status=pending") {
-		t.Fatalf("scheduler Start() error = %v, want pending migration failure", err)
+	if err := schedulerRunner.Start(context.Background()); !strings.Contains(err.Error(), "status=divergent") {
+		t.Fatalf("scheduler Start() error = %v, want divergent migration failure", err)
 	}
 }
 

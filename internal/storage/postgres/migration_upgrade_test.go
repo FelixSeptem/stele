@@ -67,6 +67,22 @@ func TestMigrationRunnerUpgradesPopulatedPriorRelease(t *testing.T) {
 	if state.Status != MigrationStatusCurrent || state.Dirty || state.Pending || state.CurrentVersion != CurrentMigrationVersion {
 		t.Fatalf("migration state after upgrade = %+v, want current clean version %d", state, CurrentMigrationVersion)
 	}
+	if state.IntegrityStatus != MigrationIntegrityVerified || state.IntegrityRows != int(CurrentMigrationVersion) {
+		t.Fatalf("migration integrity after upgrade = %+v, want verified entries through version %d", state, CurrentMigrationVersion)
+	}
+	manifest, err := MigrationManifest()
+	if err != nil {
+		t.Fatalf("MigrationManifest() error = %v", err)
+	}
+	for _, asset := range manifest {
+		var name, checksum string
+		if err := pool.QueryRow(ctx, `SELECT migration_name, checksum_sha256 FROM stele_schema_migration_ledger WHERE version = $1`, asset.Version).Scan(&name, &checksum); err != nil {
+			t.Fatalf("read integrity row %d: %v", asset.Version, err)
+		}
+		if name != asset.Name || checksum != asset.ChecksumSHA256 {
+			t.Fatalf("integrity row %d = %q %q, want %q %q", asset.Version, name, checksum, asset.Name, asset.ChecksumSHA256)
+		}
+	}
 
 	repo := NewRepository(pool)
 	principal, credential, err := repo.ReadPrincipalCredential(ctx, fixture.CredentialID)
