@@ -1,0 +1,51 @@
+[
+  {
+    "dataset": "MTEB/scifact",
+    "family": "generic_retrieval",
+    "upstream_url": "https://www.modelscope.cn/datasets/MTEB/scifact",
+    "upstream_revision": "817e29a1e23c4a82a92bd97c2f78e0fae52c3d54",
+    "license": "Apache-2.0 (ModelScope metadata; dataset card currently says unknown)",
+    "license_status": "needs_review",
+    "language": "en",
+    "subset": "test",
+    "corpus_records": 5183,
+    "query_records": 1109,
+    "qrel_records": 339,
+    "raw_bytes": 8178052,
+    "estimated_normalized_bytes": 12000000,
+    "local_storage_budget_bytes": 30000000,
+    "embedding_profile": "operator-configured; lexical-only baseline permitted",
+    "redistribution": "restricted",
+    "support": "metadata-only",
+    "files": [
+      {"path": "corpus.jsonl", "role": "corpus", "revision": "817e29a1e23c4a82a92bd97c2f78e0fae52c3d54", "size_bytes": 8023638, "sha256": "f0d32db0d156b526d75921ed7a76f2cb912902631c87248c5c97c617bad0b60c"},
+      {"path": "queries.jsonl", "role": "queries", "revision": "817e29a1e23c4a82a92bd97c2f78e0fae52c3d54", "size_bytes": 129085, "sha256": "9db7df096f7414435d52bafcbacf814c30cea50eb565c1e8fa6d11440759bba8"},
+      {"path": "qrels/test.jsonl", "role": "qrels", "revision": "817e29a1e23c4a82a92bd97c2f78e0fae52c3d54", "size_bytes": 19940, "sha256": "da33fc0edc7447d43908ea92bf11de010e361ac43228295f09bdcd33ce14730c"},
+      {"path": "qrels/test.tsv", "role": "qrels-export", "revision": "817e29a1e23c4a82a92bd97c2f78e0fae52c3d54", "size_bytes": 5389, "sha256": "0864bb985e0ca2367ba217977e72004d549054b2b06666ed9d4825ac7c21284c"}
+    ]
+  },
+  {
+    "dataset": "C-MTEB/BQ",
+    "family": "generic_retrieval",
+    "upstream_url": "https://www.modelscope.cn/datasets/C-MTEB/BQ",
+    "upstream_revision": "ba129a2170701a233c15533e61a010c3ae0d1b1c",
+    "license": "Apache-2.0 (ModelScope metadata; verify upstream terms before redistribution)",
+    "license_status": "needs_review",
+    "language": "zh",
+    "subset": "test",
+    "corpus_records": 10000,
+    "query_records": 10000,
+    "qrel_records": 10000,
+    "raw_bytes": 5588828,
+    "estimated_normalized_bytes": 4000000,
+    "local_storage_budget_bytes": 12000000,
+    "embedding_profile": "operator-configured; pairwise reranking profile",
+    "redistribution": "restricted",
+    "support": "metadata-only",
+    "files": [
+      {"path": "data/test-00000-of-00001-27441f0c8fdc9664.parquet", "role": "test-pairs", "revision": "ba129a2170701a233c15533e61a010c3ae0d1b1c", "size_bytes": 437779, "sha256": "adfd2f9f439f9b367c3844e83fbd43057a6af7c7717fabe5cfd8d602466c99a5"},
+      {"path": "data/train-00000-of-00001-eec36d2dc3f2a1c2.parquet", "role": "train-pairs", "revision": "ba129a2170701a233c15533e61a010c3ae0d1b1c", "size_bytes": 4707734, "sha256": "5aaa5f2ded5691ecd0f7f9b12f7b21aa47cfe350be380eca23bb26a215bb9964"},
+      {"path": "data/validation-00000-of-00001-7f96017a1c50f024.parquet", "role": "validation-pairs", "revision": "ba129a2170701a233c15533e61a010c3ae0d1b1c", "size_bytes": 443315, "sha256": "8b4dba8af79606d49b31019b72b9bf3e59bcc9c97f3063c9c36f345ed9e8e064"}
+    ]
+  }
+]

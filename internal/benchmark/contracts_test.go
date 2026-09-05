@@ -13,15 +13,17 @@ func TestDatasetManifestValidateRequiresAuditFields(t *testing.T) {
 		t.Fatal("expected incomplete manifest to be rejected")
 	}
 	manifest.License = "research-only"
+	manifest.Family = FamilyAgentMemory
 	manifest.UpstreamURL = "https://example.test/locomo"
 	manifest.UpstreamRevision = "v1"
 	manifest.SHA256 = "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"
+	manifest.QRELChecksum = "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"
 	manifest.SourcePath = "raw/data.json"
 	manifest.ConversionVersion = "locomo-v1"
 	manifest.Redistribution = RedistributionRestricted
 	manifest.Support = SupportRunnable
 	manifest.Embedding = EmbeddingProfile{Name: "lexical-only", Normalization: "none"}
-	manifest.Splits = map[string]SplitSpec{"smoke": {Source: "smoke.jsonl", MaxQueries: 2}}
+	manifest.Splits = map[string]SplitSpec{"smoke": {Identity: "locomo/smoke", Source: "smoke.jsonl", MaxQueries: 2}}
 	if err := manifest.Validate(); err != nil {
 		t.Fatalf("expected complete manifest, got %v", err)
 	}
@@ -85,8 +87,8 @@ func TestNormalizedCorpusChecksumIsStable(t *testing.T) {
 func TestDefaultRegistryListsAllDatasetLayersWithExplicitSupport(t *testing.T) {
 	registry := DefaultRegistry()
 	entries := registry.List()
-	if len(entries) != 8 {
-		t.Fatalf("expected 8 datasets, got %d", len(entries))
+	if len(entries) != 15 {
+		t.Fatalf("expected 15 datasets, got %d", len(entries))
 	}
 	locomo, ok := registry.Get("locomo")
 	if !ok || locomo.Layer != 1 || locomo.Manifest.Support != SupportRunnable {
@@ -111,17 +113,19 @@ func TestRegistryOnlyResolvesAdaptersForRunnableDatasets(t *testing.T) {
 func validManifest() DatasetManifest {
 	return DatasetManifest{
 		SchemaVersion:     SchemaVersion,
+		Family:            FamilyAgentMemory,
 		Name:              "locomo",
 		Version:           "1",
 		License:           "research-only",
 		UpstreamURL:       "https://example.test/locomo",
 		UpstreamRevision:  "v1",
 		SHA256:            "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
+		QRELChecksum:      "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
 		SourcePath:        "raw/data.json",
 		ConversionVersion: "locomo-v1",
 		Redistribution:    RedistributionRestricted,
 		Support:           SupportRunnable,
-		Splits:            map[string]SplitSpec{"smoke": {Source: "smoke.jsonl"}},
+		Splits:            map[string]SplitSpec{"smoke": {Identity: "locomo/smoke", Source: "smoke.jsonl"}},
 		Embedding:         EmbeddingProfile{Name: "lexical-only", Dimensions: 0, Normalization: "none"},
 	}
 }

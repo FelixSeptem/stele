@@ -33,6 +33,28 @@ const (
 	SupportPlanned      SupportState = "planned"
 )
 
+// DatasetFamily keeps metrics and cache artifacts from fundamentally different
+// benchmark types separate. Results from different families are never directly
+// comparable.
+type DatasetFamily string
+
+const (
+	FamilyAgentMemory      DatasetFamily = "agent_memory"
+	FamilyContract         DatasetFamily = "contract"
+	FamilySpecialized      DatasetFamily = "specialized"
+	FamilyGenericRetrieval DatasetFamily = "generic_retrieval"
+	FamilyStress           DatasetFamily = "stress"
+)
+
+func (f DatasetFamily) Valid() bool {
+	switch f {
+	case FamilyAgentMemory, FamilyContract, FamilySpecialized, FamilyGenericRetrieval, FamilyStress:
+		return true
+	default:
+		return false
+	}
+}
+
 type EmbeddingProfile struct {
 	Name          string `json:"name"`
 	Provider      string `json:"provider,omitempty"`
@@ -57,6 +79,7 @@ func (p EmbeddingProfile) Validate() error {
 }
 
 type SplitSpec struct {
+	Identity   string `json:"identity"`
 	Source     string `json:"source"`
 	MaxQueries int    `json:"max_queries,omitempty"`
 	Checksum   string `json:"sha256,omitempty"`
@@ -64,12 +87,14 @@ type SplitSpec struct {
 
 type DatasetManifest struct {
 	SchemaVersion     string               `json:"schema_version"`
+	Family            DatasetFamily        `json:"family"`
 	Name              string               `json:"name"`
 	Version           string               `json:"version"`
 	License           string               `json:"license"`
 	UpstreamURL       string               `json:"upstream_url"`
 	UpstreamRevision  string               `json:"upstream_revision"`
 	SHA256            string               `json:"sha256"`
+	QRELChecksum      string               `json:"qrels_checksum"`
 	SourcePath        string               `json:"source_path"`
 	ConversionVersion string               `json:"conversion_version"`
 	Redistribution    RedistributionStatus `json:"redistribution"`
@@ -84,6 +109,9 @@ func (m DatasetManifest) Validate() error {
 	if m.SchemaVersion != SchemaVersion {
 		return fmt.Errorf("unsupported manifest schema %q", m.SchemaVersion)
 	}
+	if !m.Family.Valid() {
+		return fmt.Errorf("unsupported dataset family %q", m.Family)
+	}
 	for name, value := range map[string]string{
 		"name": m.Name, "version": m.Version, "license": m.License,
 		"upstream_url": m.UpstreamURL, "upstream_revision": m.UpstreamRevision,
@@ -96,6 +124,9 @@ func (m DatasetManifest) Validate() error {
 	if !sha256Pattern.MatchString(m.SHA256) {
 		return errors.New("sha256 must be a 64-character hexadecimal digest")
 	}
+	if !sha256Pattern.MatchString(m.QRELChecksum) {
+		return errors.New("qrels_checksum must be a 64-character hexadecimal digest")
+	}
 	if m.Redistribution == "" {
 		return errors.New("redistribution status is required")
 	}
@@ -106,8 +137,8 @@ func (m DatasetManifest) Validate() error {
 		return errors.New("at least one split is required")
 	}
 	for name, split := range m.Splits {
-		if strings.TrimSpace(name) == "" || strings.TrimSpace(split.Source) == "" {
-			return errors.New("split name and source are required")
+		if strings.TrimSpace(name) == "" || strings.TrimSpace(split.Identity) == "" || strings.TrimSpace(split.Source) == "" {
+			return errors.New("split name, identity, and source are required")
 		}
 		if split.MaxQueries < 0 {
 			return fmt.Errorf("split %q max_queries cannot be negative", name)
@@ -184,6 +215,10 @@ type BenchmarkQuery struct {
 	QueryType        string          `json:"query_type,omitempty"`
 	EvidenceGroups   []EvidenceGroup `json:"evidence_groups,omitempty"`
 	MustNotReturnIDs []string        `json:"must_not_return_ids,omitempty"`
+	// Metadata preserves benchmark-specific query semantics (for example a
+	// LongMemEval question date and abstention expectation) without changing
+	// Stele's public memory model.
+	Metadata map[string]string `json:"metadata,omitempty"`
 }
 
 type QREL struct {

@@ -73,7 +73,7 @@ func TestLexicalSmokeAllowsAbsentEmbeddingProfile(t *testing.T) {
 func TestLocalFullAndExtendedUseFullSplit(t *testing.T) {
 	cache := NewCache(t.TempDir())
 	manifest := validManifest()
-	manifest.Splits["full"] = SplitSpec{Source: "full.jsonl"}
+	manifest.Splits["full"] = SplitSpec{Identity: "locomo/full", Source: "full.jsonl"}
 	corpus := NormalizedCorpus{Events: []MemoryEventRecord{{ID: "e1", Scope: memoryScope(), Text: "fact"}}}
 	if _, err := cache.WriteNormalized(manifest, "full", corpus); err != nil {
 		t.Fatal(err)

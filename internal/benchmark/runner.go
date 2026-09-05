@@ -76,7 +76,7 @@ func RunLoCoMoSmoke(cache Cache, scope memory.Scope) (SmokeRunResult, error) {
 }
 
 func writeSmokeReport(cache Cache, manifest DatasetManifest, report EvaluationReport) (string, error) {
-	paths, err := cache.EnsureLayout(manifest.Name, manifest.Version)
+	paths, err := cache.EnsureManifestLayout(manifest)
 	if err != nil {
 		return "", err
 	}

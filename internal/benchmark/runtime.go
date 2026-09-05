@@ -19,9 +19,12 @@ const (
 type RetrievalStrategy string
 
 const (
-	StrategyLexical  RetrievalStrategy = "lexical"
-	StrategySemantic RetrievalStrategy = "semantic"
-	StrategyHybrid   RetrievalStrategy = "hybrid"
+	StrategyLexical    RetrievalStrategy = "lexical"
+	StrategySemantic   RetrievalStrategy = "semantic"
+	StrategyHybrid     RetrievalStrategy = "hybrid"
+	StrategyChunk      RetrievalStrategy = "chunk"
+	StrategyHybridRank RetrievalStrategy = "hybrid-rank"
+	StrategyReranker   RetrievalStrategy = "reranker"
 )
 
 type RunConfig struct {
@@ -81,7 +84,7 @@ func (c RunConfig) Validate() error {
 		return fmt.Errorf("unsupported benchmark run mode %q", c.Mode)
 	}
 	switch c.Strategy {
-	case StrategyLexical, StrategySemantic, StrategyHybrid:
+	case StrategyLexical, StrategySemantic, StrategyHybrid, StrategyChunk, StrategyHybridRank, StrategyReranker:
 	default:
 		return fmt.Errorf("unsupported benchmark strategy %q", c.Strategy)
 	}
@@ -120,7 +123,7 @@ func AdmitRun(cache Cache, manifest DatasetManifest, config RunConfig) Admission
 	if err := embeddingCompatible(manifest.Embedding, config.Embedding); err != nil {
 		return AdmissionResult{Status: StatusPrerequisiteMissing, Prerequisites: []string{err.Error()}}
 	}
-	paths, err := cache.Paths(manifest.Name, manifest.Version)
+	paths, err := cache.ManifestPaths(manifest)
 	if err != nil {
 		return AdmissionResult{Status: StatusOf(err), Prerequisites: []string{err.Error()}}
 	}

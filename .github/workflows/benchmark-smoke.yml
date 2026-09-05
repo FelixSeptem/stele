@@ -1,0 +1,23 @@
+name: benchmark-smoke
+
+on:
+  push:
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  repository-owned-offline-fixtures:
+    runs-on: ubuntu-latest
+    env:
+      STELE_BENCHMARK_OFFLINE: "true"
+      STELE_BENCHMARK_DATA_DIR: ${{ runner.temp }}/stele-benchmark-cache
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-go@v6
+        with:
+          go-version: "1.25.0"
+          cache: true
+      - name: Run offline benchmark smoke regressions
+        run: go test ./internal/benchmark ./cmd/stele -count=1

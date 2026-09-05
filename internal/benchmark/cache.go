@@ -12,6 +12,8 @@ import (
 	"path/filepath"
 	"strings"
 	"time"
+
+	"github.com/FelixSeptem/stele/internal/memory"
 )
 
 type Status string
@@ -22,6 +24,7 @@ const (
 	StatusPrerequisiteMissing Status = "prerequisite_missing"
 	StatusInvalidManifest     Status = "invalid_manifest"
 	StatusChecksumMismatch    Status = "checksum_mismatch"
+	StatusCapacityRefused     Status = "capacity_refused"
 	StatusInternalError       Status = "internal_error"
 )
 
@@ -55,6 +58,7 @@ type Cache struct {
 
 type CachePaths struct {
 	Root       string
+	Family     string
 	Raw        string
 	Normalized string
 	Embeddings string
@@ -62,11 +66,13 @@ type CachePaths struct {
 }
 
 type NormalizedMetadata struct {
-	SchemaVersion string `json:"schema_version"`
-	Dataset       string `json:"dataset"`
-	Version       string `json:"version"`
-	Split         string `json:"split"`
-	Checksum      string `json:"checksum"`
+	SchemaVersion string        `json:"schema_version"`
+	Family        DatasetFamily `json:"family"`
+	Dataset       string        `json:"dataset"`
+	Version       string        `json:"version"`
+	Split         string        `json:"split"`
+	Checksum      string        `json:"checksum"`
+	QRELChecksum  string        `json:"qrels_checksum"`
 }
 
 type CacheLock struct {
@@ -77,6 +83,11 @@ type CacheLock struct {
 	UpstreamURL      string `json:"upstream_url"`
 	UpstreamRevision string `json:"upstream_revision"`
 	FetchedAt        string `json:"fetched_at"`
+}
+
+type RunCleanupResult struct {
+	EmbeddingsRemoved bool `json:"embeddings_removed"`
+	ReportRetained    bool `json:"report_retained"`
 }
 
 func NewCache(dataDir string) Cache {
@@ -104,6 +115,166 @@ func (c Cache) EnsureLayout(dataset, version string) (CachePaths, error) {
 	return paths, nil
 }
 
+// ManifestPaths is the family-aware cache layout used by new benchmark
+// families. The legacy Paths method remains available for pre-family callers.
+func (c Cache) ManifestPaths(manifest DatasetManifest) (CachePaths, error) {
+	if err := manifest.Validate(); err != nil {
+		return CachePaths{}, &StatusError{Status: StatusInvalidManifest, Message: "validate dataset manifest", Cause: err}
+	}
+	if strings.TrimSpace(c.DataDir) == "" {
+		return CachePaths{}, &StatusError{Status: StatusInvalidManifest, Message: "benchmark data directory is required"}
+	}
+	root := filepath.Join(c.DataDir, string(manifest.Family), manifest.Name, manifest.Version)
+	return CachePaths{Root: root, Family: string(manifest.Family), Raw: filepath.Join(root, "raw"), Normalized: filepath.Join(root, "normalized"), Embeddings: filepath.Join(root, "embeddings"), Reports: filepath.Join(root, "reports")}, nil
+}
+
+func (c Cache) EnsureManifestLayout(manifest DatasetManifest) (CachePaths, error) {
+	paths, err := c.ManifestPaths(manifest)
+	if err != nil {
+		return CachePaths{}, err
+	}
+	for _, path := range []string{paths.Raw, paths.Normalized, paths.Embeddings, paths.Reports} {
+		if err := os.MkdirAll(path, 0o755); err != nil {
+			return CachePaths{}, fmt.Errorf("create family benchmark cache layout: %w", err)
+		}
+	}
+	return paths, nil
+}
+
+// CleanRunArtifacts removes only the named run's embedding directory. Locked
+// raw inputs and normalized shared corpus are never targets; reports stay in
+// place when retention is requested. Database scope cleanup remains owned by
+// the benchmark runtime, not this filesystem-only cache helper.
+func (c Cache) CleanRunArtifacts(manifest DatasetManifest, runID string, retainReport bool) (RunCleanupResult, error) {
+	if !safeRunArtifactID(runID) {
+		return RunCleanupResult{}, &StatusError{Status: StatusInvalidManifest, Message: "benchmark run id is unsafe"}
+	}
+	paths, err := c.ManifestPaths(manifest)
+	if err != nil {
+		return RunCleanupResult{}, err
+	}
+	target := filepath.Join(paths.Embeddings, runID)
+	relative, err := filepath.Rel(paths.Embeddings, target)
+	if err != nil || relative == "." || strings.HasPrefix(relative, "..") || filepath.IsAbs(relative) {
+		return RunCleanupResult{}, &StatusError{Status: StatusInvalidManifest, Message: "benchmark cleanup target escaped embeddings directory"}
+	}
+	result := RunCleanupResult{}
+	if _, err := os.Stat(target); err == nil {
+		if err := os.RemoveAll(target); err != nil {
+			return RunCleanupResult{}, fmt.Errorf("remove benchmark run embeddings: %w", err)
+		}
+		result.EmbeddingsRemoved = true
+	} else if !errors.Is(err, os.ErrNotExist) {
+		return RunCleanupResult{}, fmt.Errorf("stat benchmark run embeddings: %w", err)
+	}
+	reportPath := filepath.Join(paths.Reports, runID+".json")
+	if retainReport {
+		if _, err := os.Stat(reportPath); err == nil {
+			result.ReportRetained = true
+		} else if !errors.Is(err, os.ErrNotExist) {
+			return RunCleanupResult{}, fmt.Errorf("stat retained benchmark report: %w", err)
+		}
+	} else if err := os.Remove(reportPath); err != nil && !errors.Is(err, os.ErrNotExist) {
+		return RunCleanupResult{}, fmt.Errorf("remove benchmark report: %w", err)
+	}
+	return result, nil
+}
+
+// WriteFamilyReport stores one machine-readable report under the manifest's
+// family-specific cache path. Reports are accepted only for a scope derived by
+// NewRunScope, so a benchmark artifact can never be retained on behalf of a
+// production project or namespace.
+func (c Cache) WriteFamilyReport(manifest DatasetManifest, runID string, report FamilyReport) (string, error) {
+	if err := manifest.Validate(); err != nil {
+		return "", &StatusError{Status: StatusInvalidManifest, Message: "validate dataset manifest", Cause: err}
+	}
+	if !safeRunArtifactID(runID) {
+		return "", &StatusError{Status: StatusInvalidManifest, Message: "benchmark run id is unsafe"}
+	}
+	if _, found := manifest.Splits[report.Split]; !found {
+		return "", &StatusError{Status: StatusInvalidManifest, Message: "report split is not declared by manifest"}
+	}
+	if report.Family != manifest.Family {
+		return "", &StatusError{Status: StatusInvalidManifest, Message: "report family does not match manifest"}
+	}
+	if err := report.ValidateAgainst(manifest); err != nil {
+		return "", err
+	}
+	expectedRun, err := NewRunScope(memory.Scope{Tenant: report.Scope.Tenant, Project: "benchmark-base", Namespace: "benchmark-base"}, manifest.Name, runID)
+	if err != nil {
+		return "", &StatusError{Status: StatusInvalidManifest, Message: "derive benchmark report scope", Cause: err}
+	}
+	if report.Scope != expectedRun.Scope {
+		return "", &StatusError{Status: StatusInvalidManifest, Message: "report scope is not the derived benchmark run scope"}
+	}
+	paths, err := c.EnsureManifestLayout(manifest)
+	if err != nil {
+		return "", err
+	}
+	target := filepath.Join(paths.Reports, runID+".json")
+	report.ArtifactPaths = []string{target}
+	encoded, err := json.Marshal(report)
+	if err != nil {
+		return "", fmt.Errorf("marshal benchmark family report: %w", err)
+	}
+	if err := writeAtomic(target, encoded); err != nil {
+		return "", fmt.Errorf("write benchmark family report: %w", err)
+	}
+	return target, nil
+}
+
+// LoadFamilyReport reads a retained report only when it still matches the
+// supplied locked manifest and the exact derived benchmark run scope.
+func (c Cache) LoadFamilyReport(manifest DatasetManifest, runID string) (FamilyReport, error) {
+	if err := manifest.Validate(); err != nil {
+		return FamilyReport{}, &StatusError{Status: StatusInvalidManifest, Message: "validate dataset manifest", Cause: err}
+	}
+	if !safeRunArtifactID(runID) {
+		return FamilyReport{}, &StatusError{Status: StatusInvalidManifest, Message: "benchmark run id is unsafe"}
+	}
+	paths, err := c.ManifestPaths(manifest)
+	if err != nil {
+		return FamilyReport{}, err
+	}
+	encoded, err := os.ReadFile(filepath.Join(paths.Reports, runID+".json"))
+	if errors.Is(err, os.ErrNotExist) {
+		return FamilyReport{}, &StatusError{Status: StatusPrerequisiteMissing, Message: "retained benchmark report is missing"}
+	}
+	if err != nil {
+		return FamilyReport{}, fmt.Errorf("read benchmark family report: %w", err)
+	}
+	var report FamilyReport
+	if err := json.Unmarshal(encoded, &report); err != nil {
+		return FamilyReport{}, &StatusError{Status: StatusInvalidManifest, Message: "decode benchmark family report", Cause: err}
+	}
+	if report.Family != manifest.Family {
+		return FamilyReport{}, &StatusError{Status: StatusInvalidManifest, Message: "report family does not match manifest"}
+	}
+	if err := report.ValidateAgainst(manifest); err != nil {
+		return FamilyReport{}, err
+	}
+	expectedRun, err := NewRunScope(memory.Scope{Tenant: report.Scope.Tenant, Project: "benchmark-base", Namespace: "benchmark-base"}, manifest.Name, runID)
+	if err != nil {
+		return FamilyReport{}, &StatusError{Status: StatusInvalidManifest, Message: "derive benchmark report scope", Cause: err}
+	}
+	if report.Scope != expectedRun.Scope {
+		return FamilyReport{}, &StatusError{Status: StatusInvalidManifest, Message: "report scope is not the derived benchmark run scope"}
+	}
+	return report, nil
+}
+
+func safeRunArtifactID(value string) bool {
+	if strings.TrimSpace(value) == "" || value != filepath.Base(value) || value == "." || value == ".." {
+		return false
+	}
+	for _, character := range value {
+		if !(character >= 'a' && character <= 'z') && !(character >= 'A' && character <= 'Z') && !(character >= '0' && character <= '9') && character != '-' && character != '_' {
+			return false
+		}
+	}
+	return true
+}
+
 func (c Cache) StoreVerifiedRaw(manifest DatasetManifest, source io.Reader) (string, error) {
 	if err := manifest.Validate(); err != nil {
 		return "", &StatusError{Status: StatusInvalidManifest, Message: "validate dataset manifest", Cause: err}
@@ -111,7 +282,7 @@ func (c Cache) StoreVerifiedRaw(manifest DatasetManifest, source io.Reader) (str
 	if source == nil {
 		return "", &StatusError{Status: StatusPrerequisiteMissing, Message: "raw source is required"}
 	}
-	paths, err := c.EnsureLayout(manifest.Name, manifest.Version)
+	paths, err := c.EnsureManifestLayout(manifest)
 	if err != nil {
 		return "", err
 	}
@@ -148,7 +319,7 @@ func (c Cache) StoreVerifiedRaw(manifest DatasetManifest, source io.Reader) (str
 }
 
 func (c Cache) LoadCacheLock(manifest DatasetManifest) (CacheLock, error) {
-	paths, err := c.Paths(manifest.Name, manifest.Version)
+	paths, err := c.ManifestPaths(manifest)
 	if err != nil {
 		return CacheLock{}, err
 	}
@@ -211,7 +382,7 @@ func (c Cache) WriteNormalized(manifest DatasetManifest, split string, corpus No
 	if err != nil {
 		return "", err
 	}
-	paths, err := c.EnsureLayout(manifest.Name, manifest.Version)
+	paths, err := c.EnsureManifestLayout(manifest)
 	if err != nil {
 		return "", err
 	}
@@ -220,7 +391,7 @@ func (c Cache) WriteNormalized(manifest DatasetManifest, split string, corpus No
 	if err != nil {
 		return "", fmt.Errorf("marshal normalized corpus: %w", err)
 	}
-	metadata, err := json.Marshal(NormalizedMetadata{SchemaVersion: SchemaVersion, Dataset: manifest.Name, Version: manifest.Version, Split: split, Checksum: checksum})
+	metadata, err := json.Marshal(NormalizedMetadata{SchemaVersion: SchemaVersion, Family: manifest.Family, Dataset: manifest.Name, Version: manifest.Version, Split: split, Checksum: checksum, QRELChecksum: manifest.QRELChecksum})
 	if err != nil {
 		return "", fmt.Errorf("marshal normalized metadata: %w", err)
 	}
@@ -237,7 +408,7 @@ func (c Cache) LoadNormalized(manifest DatasetManifest, split string) (Normalize
 	if err := manifest.Validate(); err != nil {
 		return NormalizedCorpus{}, NormalizedMetadata{}, &StatusError{Status: StatusInvalidManifest, Message: "validate dataset manifest", Cause: err}
 	}
-	paths, err := c.Paths(manifest.Name, manifest.Version)
+	paths, err := c.ManifestPaths(manifest)
 	if err != nil {
 		return NormalizedCorpus{}, NormalizedMetadata{}, err
 	}
@@ -267,7 +438,7 @@ func (c Cache) LoadNormalized(manifest DatasetManifest, split string) (Normalize
 	if err != nil {
 		return NormalizedCorpus{}, NormalizedMetadata{}, err
 	}
-	if metadata.SchemaVersion != SchemaVersion || metadata.Dataset != manifest.Name || metadata.Version != manifest.Version || metadata.Split != split || metadata.Checksum != checksum {
+	if metadata.SchemaVersion != SchemaVersion || metadata.Family != manifest.Family || metadata.Dataset != manifest.Name || metadata.Version != manifest.Version || metadata.Split != split || metadata.Checksum != checksum || !strings.EqualFold(metadata.QRELChecksum, manifest.QRELChecksum) {
 		return NormalizedCorpus{}, NormalizedMetadata{}, &StatusError{Status: StatusChecksumMismatch, Message: "normalized corpus metadata does not match corpus"}
 	}
 	return corpus, metadata, nil
