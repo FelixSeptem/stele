@@ -518,14 +518,16 @@ func buildAPIRuntime(ctx context.Context, cfg config.Config, deps apiRuntimeDepe
 		NewVersionID: newID,
 	}
 	retrievalService := retrieval.NewService(retrieval.ServiceDependencies{
-		Lexical:                    repo,
-		Semantic:                   repo,
-		Relations:                  repo,
-		Citations:                  repo,
-		Insights:                   repo,
-		UsefulnessSummarizer:       repo,
-		TaskEvaluationSummarizer:   repo,
-		RankingRolloutPolicyReader: repo,
+		Lexical:                      repo,
+		Semantic:                     repo,
+		Relations:                    repo,
+		Citations:                    repo,
+		Insights:                     repo,
+		UsefulnessSummarizer:         repo,
+		TaskEvaluationSummarizer:     repo,
+		RankingRolloutPolicyReader:   repo,
+		Projections:                  repo,
+		ProjectionConsumptionEnabled: cfg.ContextProjectionConsumptionEnabled,
 	}, deps.observer)
 	httpDeps := httpDependenciesFromConfigWithIngestor(cfg, ingestor)
 	durableAuthorizer := auth.NewPrincipalService(repo, time.Now)
@@ -568,6 +570,7 @@ func buildAPIRuntime(ctx context.Context, cfg config.Config, deps apiRuntimeDepe
 		observer: deps.observer,
 	}
 	httpDeps.GovernanceAdmin = repo
+	httpDeps.ContextProjectionAdmin = memory.NewContextProjectionMaintenanceService(repo)
 	httpDeps.DerivedInsightAdmin = repo
 	httpDeps.UsefulnessFeedback = repo
 	replayService := insights.ReplayService{
@@ -712,14 +715,16 @@ func buildWorkerRuntime(ctx context.Context, cfg config.Config, deps workerRunti
 	}
 	ingestor := memory.NewService(repo, now, deps.observer)
 	retrievalService := retrieval.NewService(retrieval.ServiceDependencies{
-		Lexical:                    repo,
-		Semantic:                   repo,
-		Relations:                  repo,
-		Citations:                  repo,
-		Insights:                   repo,
-		UsefulnessSummarizer:       repo,
-		TaskEvaluationSummarizer:   repo,
-		RankingRolloutPolicyReader: repo,
+		Lexical:                      repo,
+		Semantic:                     repo,
+		Relations:                    repo,
+		Citations:                    repo,
+		Insights:                     repo,
+		UsefulnessSummarizer:         repo,
+		TaskEvaluationSummarizer:     repo,
+		RankingRolloutPolicyReader:   repo,
+		Projections:                  repo,
+		ProjectionConsumptionEnabled: cfg.ContextProjectionConsumptionEnabled,
 	}, deps.observer)
 
 	worker := jobs.GovernanceWorker{

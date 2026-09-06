@@ -62,11 +62,13 @@ type AssembleContextInput struct {
 	Scope                      memory.Scope
 	Query                      string
 	Budget                     int
+	CharacterBudget            int
 	IncludeRelations           bool
 	IncludeExperienceInsights  bool
 	IncludeDiagnostics         bool
 	IncludeFeedbackDiagnostics bool
 	FeedbackAwareRanking       bool
+	UseProjections             bool
 }
 
 func (i AssembleContextInput) Validate() error {
@@ -78,6 +80,9 @@ func (i AssembleContextInput) Validate() error {
 	}
 	if i.Budget <= 0 {
 		return fmt.Errorf("budget must be greater than zero")
+	}
+	if i.CharacterBudget < 0 {
+		return fmt.Errorf("character_budget must be greater than or equal to zero")
 	}
 	return nil
 }
@@ -180,6 +185,12 @@ type RankingRolloutPolicyReader interface {
 	ReadActiveRankingRolloutPolicy(ctx context.Context, input memory.ReadActiveRankingRolloutPolicyInput) (memory.RankingRolloutPolicy, error)
 }
 
+// ContextProjectionReader is optional so existing deployments can roll back
+// projection consumption without changing the live retrieval path.
+type ContextProjectionReader interface {
+	ReadLatestContextProjection(ctx context.Context, scope memory.Scope, kind memory.ContextProjectionKind) (memory.ContextProjection, error)
+}
+
 type rankingRolloutMetricObserver interface {
 	RecordRankingRollout(ctx context.Context, event telemetry.RankingRolloutEvent)
 }
@@ -193,26 +204,30 @@ type ContextAssembler interface {
 }
 
 type ServiceDependencies struct {
-	Lexical                    LexicalSearcher
-	Semantic                   SemanticSearcher
-	Relations                  RelationSearcher
-	Citations                  CitationLister
-	Insights                   DerivedInsightLister
-	UsefulnessSummarizer       UsefulnessSummarizer
-	TaskEvaluationSummarizer   TaskEvaluationSummarizer
-	RankingRolloutPolicyReader RankingRolloutPolicyReader
+	Lexical                      LexicalSearcher
+	Semantic                     SemanticSearcher
+	Relations                    RelationSearcher
+	Citations                    CitationLister
+	Insights                     DerivedInsightLister
+	UsefulnessSummarizer         UsefulnessSummarizer
+	TaskEvaluationSummarizer     TaskEvaluationSummarizer
+	RankingRolloutPolicyReader   RankingRolloutPolicyReader
+	Projections                  ContextProjectionReader
+	ProjectionConsumptionEnabled bool
 }
 
 type Service struct {
-	lexical                    LexicalSearcher
-	semantic                   SemanticSearcher
-	relations                  RelationSearcher
-	citations                  CitationLister
-	insights                   DerivedInsightLister
-	usefulnessSummarizer       UsefulnessSummarizer
-	taskEvaluationSummarizer   TaskEvaluationSummarizer
-	rankingRolloutPolicyReader RankingRolloutPolicyReader
-	observer                   telemetry.Observer
+	lexical                      LexicalSearcher
+	semantic                     SemanticSearcher
+	relations                    RelationSearcher
+	citations                    CitationLister
+	insights                     DerivedInsightLister
+	usefulnessSummarizer         UsefulnessSummarizer
+	taskEvaluationSummarizer     TaskEvaluationSummarizer
+	rankingRolloutPolicyReader   RankingRolloutPolicyReader
+	projections                  ContextProjectionReader
+	projectionConsumptionEnabled bool
+	observer                     telemetry.Observer
 }
 
 func NewService(deps ServiceDependencies, observers ...telemetry.Observer) *Service {
@@ -225,15 +240,17 @@ func NewService(deps ServiceDependencies, observers ...telemetry.Observer) *Serv
 	}
 
 	return &Service{
-		lexical:                    deps.Lexical,
-		semantic:                   deps.Semantic,
-		relations:                  deps.Relations,
-		citations:                  deps.Citations,
-		insights:                   deps.Insights,
-		usefulnessSummarizer:       deps.UsefulnessSummarizer,
-		taskEvaluationSummarizer:   deps.TaskEvaluationSummarizer,
-		rankingRolloutPolicyReader: deps.RankingRolloutPolicyReader,
-		observer:                   observer,
+		lexical:                      deps.Lexical,
+		semantic:                     deps.Semantic,
+		relations:                    deps.Relations,
+		citations:                    deps.Citations,
+		insights:                     deps.Insights,
+		usefulnessSummarizer:         deps.UsefulnessSummarizer,
+		taskEvaluationSummarizer:     deps.TaskEvaluationSummarizer,
+		rankingRolloutPolicyReader:   deps.RankingRolloutPolicyReader,
+		projections:                  deps.Projections,
+		projectionConsumptionEnabled: deps.ProjectionConsumptionEnabled,
+		observer:                     observer,
 	}
 }
 
@@ -692,6 +709,10 @@ func (s *Service) AssembleContext(ctx context.Context, input AssembleContextInpu
 	if err != nil {
 		return AssembledContext{}, err
 	}
+	projectionHits, projectionDiagnostics := s.readProjectionHits(ctx, input)
+	if len(projectionHits) > 0 {
+		result.Hits = append(projectionHits, result.Hits...)
+	}
 	adjusted, policyDiagnostics, err := s.applyRankingRolloutPolicy(ctx, input.Scope, memory.RankingRolloutSurfaceContext, input.FeedbackAwareRanking, result.Hits)
 	if err != nil {
 		return AssembledContext{}, err
@@ -718,6 +739,7 @@ func (s *Service) AssembleContext(ctx context.Context, input AssembleContextInpu
 	if input.IncludeDiagnostics {
 		output.Diagnostics = append(output.Diagnostics, result.Diagnostics...)
 		output.Diagnostics = append(output.Diagnostics, policyDiagnostics...)
+		output.Diagnostics = append(output.Diagnostics, projectionDiagnostics...)
 	}
 
 	profiles := make([]SearchHit, 0)
@@ -795,6 +817,55 @@ func (s *Service) AssembleContext(ctx context.Context, input AssembleContextInpu
 	}
 
 	return output, nil
+}
+
+func (s *Service) readProjectionHits(ctx context.Context, input AssembleContextInput) ([]SearchHit, []ContextDiagnostic) {
+	if (!input.UseProjections && !s.projectionConsumptionEnabled) || s.projections == nil {
+		return nil, nil
+	}
+	hits := make([]SearchHit, 0)
+	diagnostics := make([]ContextDiagnostic, 0, 2)
+	for _, kind := range []memory.ContextProjectionKind{memory.ContextProjectionKindAlwaysVisible, memory.ContextProjectionKindSession} {
+		projection, err := s.projections.ReadLatestContextProjection(ctx, input.Scope, kind)
+		section := "profile"
+		if kind == memory.ContextProjectionKindSession {
+			section = "recent_session"
+		}
+		if err != nil {
+			diagnostics = append(diagnostics, ContextDiagnostic{Section: section, Status: "projection_unavailable", Reason: "projection read failed closed"})
+			continue
+		}
+		included, omitted, budgetOmitted := 0, 0, 0
+		usedBytes := 0
+		for _, item := range projection.Items {
+			if item.Source.Scope.Normalized() != input.Scope.Normalized() || item.LifecycleState != memory.MemoryStateActive {
+				omitted++
+				continue
+			}
+			itemBytes := len([]byte(item.Text))
+			if itemBytes == 0 || (input.CharacterBudget > 0 && usedBytes+itemBytes > input.CharacterBudget) {
+				budgetOmitted++
+				continue
+			}
+			memoryID := item.Source.MemoryID
+			if memoryID == "" && item.Source.Kind == memory.ContextProjectionSourceCanonicalVersion {
+				memoryID = item.Source.ID
+			}
+			hit := SearchHit{Memory: memory.CanonicalMemory{ID: memoryID, Scope: input.Scope, Class: item.Class, State: memory.MemoryStateActive, Content: item.Text}, Citations: []Citation{{MemoryID: item.Citation.MemoryID, RawEventID: item.Citation.RawEventID, Operation: item.Citation.Operation}}}
+			hits = append(hits, hit)
+			included++
+			usedBytes += itemBytes
+		}
+		status := "no_visible_items"
+		if included > 0 {
+			status = "included"
+		}
+		diagnostics = append(diagnostics, ContextDiagnostic{Section: section, Status: status, Included: included, Omitted: omitted})
+		if budgetOmitted > 0 {
+			diagnostics = append(diagnostics, ContextDiagnostic{Section: section, Status: "omitted_by_budget", Reason: "projection item exceeds remaining context character budget", Omitted: budgetOmitted})
+		}
+	}
+	return hits, diagnostics
 }
 
 func (s *Service) appendExperienceInsights(ctx context.Context, scope memory.Scope, includeDiagnostics bool, output *AssembledContext, remaining *int) error {

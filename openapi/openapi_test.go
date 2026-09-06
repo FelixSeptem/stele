@@ -150,6 +150,20 @@ func TestSpecYAMLIncludesEmbeddingAdminInspectionSchemas(t *testing.T) {
 	}
 }
 
+func TestSpecYAMLIncludesContextProjectionRebuildContract(t *testing.T) {
+	for _, want := range []string{
+		"/v1/admin/context-projections:rebuild",
+		"ContextProjectionRebuildRequest",
+		"ContextProjection",
+		"always_visible",
+		"archival_history",
+	} {
+		if !strings.Contains(SpecYAML(), want) {
+			t.Fatalf("SpecYAML() missing %q", want)
+		}
+	}
+}
+
 func TestSpecYAMLIncludesDerivedInsightAdminRoutesAndSchemas(t *testing.T) {
 	for _, want := range []string{
 		"/v1/admin/derived-insights",

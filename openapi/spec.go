@@ -2637,6 +2637,31 @@ paths:
           description: Invalid request
         '401':
           description: Missing or invalid admin API key
+  /v1/admin/context-projections:rebuild:
+    post:
+      operationId: rebuildAdminContextProjection
+      parameters:
+        - $ref: '#/components/parameters/AdminAPIKey'
+        - $ref: '#/components/parameters/TenantHeader'
+        - $ref: '#/components/parameters/ProjectHeader'
+        - $ref: '#/components/parameters/NamespaceHeader'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/ContextProjectionRebuildRequest'
+      responses:
+        '201':
+          description: Append-only context projection rebuild completed
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ContextProjection'
+        '400':
+          description: Invalid scoped rebuild request
+        '401':
+          description: Missing or invalid admin API key
   /v1/admin/embedding/rebuilds/{memory_id}:retry:
     post:
       operationId: retryAdminEmbeddingRebuild
@@ -6231,6 +6256,63 @@ components:
         modified_at:
           type: string
           format: date-time
+    ContextProjectionRebuildRequest:
+      type: object
+      required: [kind, limit, schema_version, policy_version, renderer_version]
+      properties:
+        kind:
+          type: string
+          enum: [always_visible, session, retrieval, archival_history]
+        limit:
+          type: integer
+          minimum: 1
+        schema_version:
+          type: string
+        policy_version:
+          type: string
+        renderer_version:
+          type: string
+    ContextProjection:
+      type: object
+      required: [id, scope, kind, version, schema_version, policy_version, renderer_version, source_watermark, status, items]
+      properties:
+        id:
+          type: string
+          format: uuid
+        scope:
+          $ref: '#/components/schemas/Scope'
+        kind:
+          type: string
+          enum: [always_visible, session, retrieval, archival_history]
+        version:
+          type: integer
+          format: int64
+        schema_version:
+          type: string
+        policy_version:
+          type: string
+        renderer_version:
+          type: string
+        source_watermark:
+          type: object
+        status:
+          type: string
+          enum: [building, active, superseded, failed]
+        items:
+          type: array
+          items:
+            type: object
+            properties:
+              id:
+                type: string
+              text:
+                type: string
+              class:
+                type: string
+              lifecycle_state:
+                type: string
+              sort_key:
+                type: string
     MemoryListResponse:
       type: object
       required:

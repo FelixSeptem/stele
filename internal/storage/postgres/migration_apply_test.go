@@ -10,11 +10,11 @@ func TestMigrationAssetsExposeImmutableInitialMigration(t *testing.T) {
 	if err != nil {
 		t.Fatalf("MigrationAssets() error = %v", err)
 	}
-	if len(migrations) != 2 {
-		t.Fatalf("migration assets = %v, want initial up and down assets", migrations)
+	if len(migrations) != 4 {
+		t.Fatalf("migration assets = %v, want two up/down migration pairs", migrations)
 	}
-	if migrations[0] != "0001_base_schema.down.sql" || migrations[1] != "0001_base_schema.up.sql" {
-		t.Fatalf("migration assets = %v, want stable initial migration names", migrations)
+	if migrations[0] != "0001_base_schema.down.sql" || migrations[1] != "0001_base_schema.up.sql" || migrations[2] != "0002_context_projections.down.sql" || migrations[3] != "0002_context_projections.up.sql" {
+		t.Fatalf("migration assets = %v, want stable migration names", migrations)
 	}
 }
 
