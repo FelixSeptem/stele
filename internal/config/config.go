@@ -134,7 +134,15 @@ func LoadFromEnv() (Config, error) {
 	}
 	contextProjectionConsumptionEnabled := loadBoolEnv("STELE_CONTEXT_PROJECTION_CONSUMPTION_ENABLED")
 
-	migrationPolicy := MigrationPolicy(getEnvOrDefault("STELE_DATABASE_MIGRATION_POLICY", string(MigrationPolicyAuto)))
+	// Accept the short policy name introduced by the migration contract while
+	// retaining the database-qualified name used by the product configuration.
+	// The short name takes precedence when both are supplied so callers can
+	// explicitly override a deployment-wide database default.
+	migrationPolicyRaw := strings.TrimSpace(os.Getenv("STELE_MIGRATION_POLICY"))
+	if migrationPolicyRaw == "" {
+		migrationPolicyRaw = getEnvOrDefault("STELE_DATABASE_MIGRATION_POLICY", string(MigrationPolicyAuto))
+	}
+	migrationPolicy := MigrationPolicy(migrationPolicyRaw)
 	switch migrationPolicy {
 	case MigrationPolicyAuto, MigrationPolicyValidate, MigrationPolicyOff:
 	default:
