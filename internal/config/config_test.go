@@ -190,3 +190,44 @@ func TestLoadFromEnvRejectsUnsafeWorkflowMaintenanceSettings(t *testing.T) {
 		t.Fatal("LoadFromEnv() error = nil, want unsafe workflow stale window rejection")
 	}
 }
+
+func TestLoadFromEnvDefaultsMigrationPolicyToAuto(t *testing.T) {
+	t.Setenv("STELE_MODE", "api")
+	t.Setenv("STELE_POSTGRES_DSN", "postgres://example")
+
+	cfg, err := LoadFromEnv()
+	if err != nil {
+		t.Fatalf("LoadFromEnv() error = %v", err)
+	}
+	if cfg.Migrations.Policy != MigrationPolicyAuto {
+		t.Fatalf("migration policy = %q, want %q", cfg.Migrations.Policy, MigrationPolicyAuto)
+	}
+}
+
+func TestLoadFromEnvParsesMigrationPolicy(t *testing.T) {
+	for _, policy := range []string{"auto", "validate", "off"} {
+		t.Run(policy, func(t *testing.T) {
+			t.Setenv("STELE_MODE", "worker")
+			t.Setenv("STELE_POSTGRES_DSN", "postgres://example")
+			t.Setenv("STELE_MIGRATION_POLICY", policy)
+
+			cfg, err := LoadFromEnv()
+			if err != nil {
+				t.Fatalf("LoadFromEnv() error = %v", err)
+			}
+			if string(cfg.Migrations.Policy) != policy {
+				t.Fatalf("migration policy = %q, want %q", cfg.Migrations.Policy, policy)
+			}
+		})
+	}
+}
+
+func TestLoadFromEnvRejectsUnknownMigrationPolicy(t *testing.T) {
+	t.Setenv("STELE_MODE", "scheduler")
+	t.Setenv("STELE_POSTGRES_DSN", "postgres://example")
+	t.Setenv("STELE_MIGRATION_POLICY", "downgrade")
+
+	if _, err := LoadFromEnv(); err == nil {
+		t.Fatal("LoadFromEnv() error = nil, want invalid migration policy error")
+	}
+}
