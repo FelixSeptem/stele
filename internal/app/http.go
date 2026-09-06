@@ -56,11 +56,16 @@ type HTTPDependencies struct {
 	TaskEvaluations           TaskEvaluationService
 	RankingRollout            RankingRolloutAdminService
 	AssuranceAdmin            AssuranceAdminService
+	ContextProjectionAdmin    ContextProjectionAdminService
 	Workflow                  WorkflowService
 	MemoryHistoryRead         MemoryHistoryReader
 	JobExecutionRead          JobExecutionReader
 	Metrics                   MetricsRecorder
 	Logger                    *log.Logger
+}
+
+type ContextProjectionAdminService interface {
+	RebuildContextProjection(context.Context, memory.ContextProjectionRebuildRequest) (memory.ContextProjection, error)
 }
 
 type RuntimeContract struct {
@@ -579,6 +584,14 @@ type repairPlanVerifyRequest struct {
 type governanceRecoveryRequest struct {
 	Reason       string `json:"reason"`
 	ScheduledFor string `json:"scheduled_for"`
+}
+
+type contextProjectionRebuildRequest struct {
+	Kind            memory.ContextProjectionKind `json:"kind"`
+	Limit           int                          `json:"limit"`
+	SchemaVersion   string                       `json:"schema_version"`
+	PolicyVersion   string                       `json:"policy_version"`
+	RendererVersion string                       `json:"renderer_version"`
 }
 
 type embeddingCutoverCreateRequest struct {
@@ -1277,6 +1290,15 @@ func NewHTTPHandler(deps HTTPDependencies) http.Handler {
 		),
 	)
 	mux.Handle("POST /v1/admin/embedding/rebuilds/{embedding_action}", adminEmbeddingRebuildAction)
+
+	adminContextProjectionRebuild := auth.APIKeyMiddleware(deps.AdminAPIKeys)(
+		auth.ScopeMiddleware()(
+			http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				handleAdminContextProjectionRebuild(w, r, deps.ContextProjectionAdmin)
+			}),
+		),
+	)
+	mux.Handle("POST /v1/admin/context-projections:rebuild", adminContextProjectionRebuild)
 
 	adminEmbeddingCutovers := auth.APIKeyMiddleware(deps.AdminAPIKeys)(
 		auth.ScopeMiddleware()(

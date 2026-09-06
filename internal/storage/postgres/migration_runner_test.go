@@ -16,20 +16,23 @@ func TestInspectMigrationStateReportsCurrentVersion(t *testing.T) {
 	defer mock.Close()
 
 	mock.ExpectQuery(`SELECT version, dirty FROM schema_migrations`).
-		WillReturnRows(pgxmock.NewRows([]string{"version", "dirty"}).AddRow(int64(1), false))
+		WillReturnRows(pgxmock.NewRows([]string{"version", "dirty"}).AddRow(CurrentMigrationVersion, false))
 	manifest, err := MigrationManifest()
 	if err != nil {
 		t.Fatalf("MigrationManifest() error = %v", err)
 	}
-	mock.ExpectQuery(`SELECT version, migration_name, checksum_sha256 FROM stele_schema_migration_ledger`).
-		WillReturnRows(pgxmock.NewRows([]string{"version", "migration_name", "checksum_sha256"}).AddRow(manifest[0].Version, manifest[0].Name, manifest[0].ChecksumSHA256))
+	ledgerRows := pgxmock.NewRows([]string{"version", "migration_name", "checksum_sha256"})
+	for _, asset := range manifest {
+		ledgerRows.AddRow(asset.Version, asset.Name, asset.ChecksumSHA256)
+	}
+	mock.ExpectQuery(`SELECT version, migration_name, checksum_sha256 FROM stele_schema_migration_ledger`).WillReturnRows(ledgerRows)
 
 	state, err := InspectMigrationState(context.Background(), mock)
 	if err != nil {
 		t.Fatalf("InspectMigrationState() error = %v", err)
 	}
-	if state.CurrentVersion != 1 || state.Dirty || state.Pending || state.IntegrityStatus != MigrationIntegrityVerified {
-		t.Fatalf("state = %+v, want clean version 1 with no pending migration", state)
+	if state.CurrentVersion != CurrentMigrationVersion || state.Dirty || state.Pending || state.IntegrityStatus != MigrationIntegrityVerified {
+		t.Fatalf("state = %+v, want clean current migration version", state)
 	}
 	if err := mock.ExpectationsWereMet(); err != nil {
 		t.Fatalf("expectations: %v", err)

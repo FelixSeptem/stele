@@ -31,15 +31,16 @@ type MigrationConfig struct {
 }
 
 type Config struct {
-	Mode        Mode
-	HTTPAddr    string
-	HTTP        HTTPConfig
-	PostgresDSN string
-	Migrations  MigrationConfig
-	Auth        AuthConfig
-	Embedding   EmbeddingConfig
-	Jobs        JobConfig
-	Assurance   AssuranceConfig
+	Mode                                Mode
+	HTTPAddr                            string
+	HTTP                                HTTPConfig
+	PostgresDSN                         string
+	Migrations                          MigrationConfig
+	ContextProjectionConsumptionEnabled bool
+	Auth                                AuthConfig
+	Embedding                           EmbeddingConfig
+	Jobs                                JobConfig
+	Assurance                           AssuranceConfig
 }
 
 type HTTPConfig struct {
@@ -131,6 +132,7 @@ func LoadFromEnv() (Config, error) {
 	if postgresDSN == "" {
 		return Config{}, fmt.Errorf("STELE_POSTGRES_DSN is required")
 	}
+	contextProjectionConsumptionEnabled := loadBoolEnv("STELE_CONTEXT_PROJECTION_CONSUMPTION_ENABLED")
 
 	migrationPolicy := MigrationPolicy(getEnvOrDefault("STELE_DATABASE_MIGRATION_POLICY", string(MigrationPolicyAuto)))
 	switch migrationPolicy {
@@ -365,8 +367,9 @@ func LoadFromEnv() (Config, error) {
 			IdleTimeout:         idleTimeout,
 			ShutdownTimeout:     shutdownTimeout,
 		},
-		PostgresDSN: postgresDSN,
-		Migrations:  MigrationConfig{Policy: migrationPolicy},
+		PostgresDSN:                         postgresDSN,
+		Migrations:                          MigrationConfig{Policy: migrationPolicy},
+		ContextProjectionConsumptionEnabled: contextProjectionConsumptionEnabled,
 		Auth: AuthConfig{
 			BootstrapAdminKey: bootstrapAdminKey,
 			DefaultTenant:     defaultTenant,
