@@ -82,6 +82,7 @@ type EvaluationReplayCandidate struct {
 	lexicalScore  float64
 	semanticScore float64
 	relationScore float64
+	ChunkDerived  bool
 }
 
 func (r *EvaluationRunner) Replay(ctx context.Context, fixture EvaluationFixture, seed EvaluationFixtureSeed, metadata EvaluationRankingMetadata) (run EvaluationReplay, replayErr error) {
@@ -178,6 +179,7 @@ func (r *EvaluationRunner) Replay(ctx context.Context, fixture EvaluationFixture
 				lexicalScore:  hit.Score.Lexical,
 				semanticScore: hit.Score.Semantic,
 				relationScore: hit.Score.Relation,
+				ChunkDerived:  hit.Chunk != nil,
 			})
 		}
 		caseRun.Diagnostics = evaluationCandidateDiagnostics(caseRun.Candidates)

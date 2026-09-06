@@ -104,6 +104,11 @@ type SearchHit struct {
 	Memory    memory.CanonicalMemory `json:"memory"`
 	Score     ScoreBreakdown         `json:"score"`
 	Citations []Citation             `json:"citations"`
+
+	// Chunk is intentionally not part of the public response shape.  It lets
+	// context assembly account for derived evidence while citations continue to
+	// point at the canonical parent or immutable source.
+	Chunk *memory.MemoryChunk `json:"-"`
 }
 
 type SearchResult struct {
@@ -165,6 +170,34 @@ type RelationSearcher interface {
 	SearchRelations(ctx context.Context, input SearchInput) ([]ScoredMemory, error)
 }
 
+// ChunkSearchInput is deliberately separate from SearchInput. Chunk stores may
+// use a different physical representation, but must receive the exact resolved
+// scope and the same query constraints as canonical retrieval.
+type ChunkSearchInput struct {
+	Scope          memory.Scope
+	Query          string
+	QueryEmbedding []float32
+	Classes        []memory.MemoryClass
+	TopK           int
+}
+
+// ChunkCandidate is a derived retrieval candidate. Parent is the validated
+// canonical representation used to preserve the existing public hit contract;
+// the chunk itself remains internal evidence metadata.
+type ChunkCandidate struct {
+	Chunk     memory.MemoryChunk
+	Parent    memory.CanonicalMemory
+	Score     ScoreBreakdown
+	Citations []Citation
+}
+
+// ChunkCandidateSearcher returns only candidates it can prove are visible.
+// Service repeats the scope and lifecycle checks, so an implementation error
+// cannot widen ordinary retrieval.
+type ChunkCandidateSearcher interface {
+	SearchChunks(ctx context.Context, input ChunkSearchInput) ([]ChunkCandidate, error)
+}
+
 type CitationLister interface {
 	ListCitations(ctx context.Context, scope memory.Scope, memoryIDs []string) (map[string][]Citation, error)
 }
@@ -214,6 +247,10 @@ type ServiceDependencies struct {
 	RankingRolloutPolicyReader   RankingRolloutPolicyReader
 	Projections                  ContextProjectionReader
 	ProjectionConsumptionEnabled bool
+	Chunks                       ChunkCandidateSearcher
+	// ChunkRollout defaults to default_off. Shadow evaluates chunk candidates
+	// only for authorized diagnostics; Active permits them to influence results.
+	ChunkRollout memory.ChunkRolloutMode
 }
 
 type Service struct {
@@ -227,6 +264,8 @@ type Service struct {
 	rankingRolloutPolicyReader   RankingRolloutPolicyReader
 	projections                  ContextProjectionReader
 	projectionConsumptionEnabled bool
+	chunks                       ChunkCandidateSearcher
+	chunkRollout                 memory.ChunkRolloutMode
 	observer                     telemetry.Observer
 }
 
@@ -239,6 +278,10 @@ func NewService(deps ServiceDependencies, observers ...telemetry.Observer) *Serv
 		observer = telemetry.NoopObserver()
 	}
 
+	chunkRollout := deps.ChunkRollout
+	if chunkRollout == "" {
+		chunkRollout = memory.ChunkRolloutModeDefaultOff
+	}
 	return &Service{
 		lexical:                      deps.Lexical,
 		semantic:                     deps.Semantic,
@@ -250,6 +293,8 @@ func NewService(deps ServiceDependencies, observers ...telemetry.Observer) *Serv
 		rankingRolloutPolicyReader:   deps.RankingRolloutPolicyReader,
 		projections:                  deps.Projections,
 		projectionConsumptionEnabled: deps.ProjectionConsumptionEnabled,
+		chunks:                       deps.Chunks,
+		chunkRollout:                 chunkRollout,
 		observer:                     observer,
 	}
 }
@@ -292,6 +337,8 @@ func (s *Service) Search(ctx context.Context, input SearchInput) (result SearchR
 
 	merged := map[string]ScoredMemory{}
 	orderedIDs := make([]string, 0)
+	chunkCitationMap := map[string][]Citation{}
+	chunkByMemoryID := map[string]*memory.MemoryChunk{}
 
 	appendHits := func(hits []ScoredMemory) {
 		for _, hit := range hits {
@@ -346,12 +393,58 @@ func (s *Service) Search(ctx context.Context, input SearchInput) (result SearchR
 		appendHits(hits)
 	}
 
+	// Derived chunks are strictly opt-in. In shadow mode we execute the search
+	// only to produce diagnostics for explicitly requested evaluation callers;
+	// ordinary responses remain byte-for-byte compatible with canonical retrieval.
+	chunkDiagnostics := []ContextDiagnostic(nil)
+	if s.chunks != nil && s.chunkRollout != memory.ChunkRolloutModeDefaultOff {
+		chunkCandidates, chunkErr := s.chunks.SearchChunks(ctx, ChunkSearchInput{
+			Scope: input.Scope, Query: input.Query, QueryEmbedding: input.QueryEmbedding,
+			Classes: input.Classes, TopK: input.TopK,
+		})
+		if chunkErr != nil {
+			if s.chunkRollout == memory.ChunkRolloutModeActive {
+				return SearchResult{}, chunkErr
+			}
+			if input.IncludeFeedbackDiagnostics {
+				chunkDiagnostics = append(chunkDiagnostics, ContextDiagnostic{Section: "chunk_retrieval", Status: "shadow_unavailable", Reason: "chunk candidate evaluation failed closed"})
+			}
+		} else {
+			accepted := 0
+			omitted := 0
+			for _, candidate := range chunkCandidates {
+				if err := candidate.Chunk.Validate(); err != nil || candidate.Chunk.Scope.Normalized() != input.Scope.Normalized() || candidate.Parent.Scope.Normalized() != input.Scope.Normalized() || candidate.Parent.State != memory.MemoryStateActive {
+					omitted++
+					continue
+				}
+				if !matchClassFilter(candidate.Chunk.Class, input.Classes) || (!input.IncludeSummaries && candidate.Chunk.Class == memory.MemoryClassSummary) || (!input.IncludeRelations && candidate.Chunk.Class == memory.MemoryClassRelation) {
+					omitted++
+					continue
+				}
+				accepted++
+				if s.chunkRollout == memory.ChunkRolloutModeActive {
+					// Parent memory is the public result. Keep chunk metadata private.
+					hit := ScoredMemory{Memory: candidate.Parent, LexicalScore: candidate.Score.Lexical, SemanticScore: candidate.Score.Semantic, RelationScore: candidate.Score.Relation}
+					appendHits([]ScoredMemory{hit})
+					if len(candidate.Citations) > 0 {
+						chunkCitationMap[candidate.Parent.ID] = append(chunkCitationMap[candidate.Parent.ID], candidate.Citations...)
+					}
+					chunkCopy := candidate.Chunk
+					chunkByMemoryID[candidate.Parent.ID] = &chunkCopy
+				}
+			}
+			if input.IncludeFeedbackDiagnostics && s.chunkRollout == memory.ChunkRolloutModeShadow {
+				chunkDiagnostics = append(chunkDiagnostics, ContextDiagnostic{Section: "chunk_retrieval", Status: "shadow_evaluated", Available: len(chunkCandidates), Included: accepted, Omitted: omitted})
+			}
+		}
+	}
+
 	scored := make([]SearchHit, 0, len(orderedIDs))
 	memoryIDs := make([]string, 0, len(orderedIDs))
 	for _, id := range orderedIDs {
 		hit := merged[id]
 		memoryIDs = append(memoryIDs, hit.Memory.ID)
-		scored = append(scored, SearchHit{
+		searchHit := SearchHit{
 			Memory: hit.Memory,
 			Score: ScoreBreakdown{
 				Overall:  hit.LexicalScore + hit.SemanticScore + hit.RelationScore,
@@ -359,7 +452,11 @@ func (s *Service) Search(ctx context.Context, input SearchInput) (result SearchR
 				Semantic: hit.SemanticScore,
 				Relation: hit.RelationScore,
 			},
-		})
+		}
+		if chunk := chunkByMemoryID[hit.Memory.ID]; chunk != nil {
+			searchHit.Chunk = chunk
+		}
+		scored = append(scored, searchHit)
 	}
 
 	sort.Slice(scored, func(i, j int) bool {
@@ -407,9 +504,17 @@ func (s *Service) Search(ctx context.Context, input SearchInput) (result SearchR
 		}
 		for i := range scored {
 			scored[i].Citations = citationMap[scored[i].Memory.ID]
+			scored[i].Citations = append(scored[i].Citations, chunkCitationMap[scored[i].Memory.ID]...)
+		}
+	} else {
+		for i := range scored {
+			scored[i].Citations = append(scored[i].Citations, chunkCitationMap[scored[i].Memory.ID]...)
 		}
 	}
 
+	if len(chunkDiagnostics) > 0 {
+		diagnostics = append(diagnostics, chunkDiagnostics...)
+	}
 	result = SearchResult{Hits: scored, Diagnostics: diagnostics}
 	return result, nil
 }
@@ -713,6 +818,8 @@ func (s *Service) AssembleContext(ctx context.Context, input AssembleContextInpu
 	if len(projectionHits) > 0 {
 		result.Hits = append(projectionHits, result.Hits...)
 	}
+	chunkContextDiagnostics := []ContextDiagnostic(nil)
+	result.Hits, chunkContextDiagnostics = s.boundChunkContextEvidence(input, result.Hits)
 	adjusted, policyDiagnostics, err := s.applyRankingRolloutPolicy(ctx, input.Scope, memory.RankingRolloutSurfaceContext, input.FeedbackAwareRanking, result.Hits)
 	if err != nil {
 		return AssembledContext{}, err
@@ -740,6 +847,7 @@ func (s *Service) AssembleContext(ctx context.Context, input AssembleContextInpu
 		output.Diagnostics = append(output.Diagnostics, result.Diagnostics...)
 		output.Diagnostics = append(output.Diagnostics, policyDiagnostics...)
 		output.Diagnostics = append(output.Diagnostics, projectionDiagnostics...)
+		output.Diagnostics = append(output.Diagnostics, chunkContextDiagnostics...)
 	}
 
 	profiles := make([]SearchHit, 0)
@@ -817,6 +925,42 @@ func (s *Service) AssembleContext(ctx context.Context, input AssembleContextInpu
 	}
 
 	return output, nil
+}
+
+// boundChunkContextEvidence keeps chunk-derived evidence within the existing
+// context character budget. Parent memories remain the public identity; the
+// chunk text is used only as the bounded evidence payload when it is visible.
+func (s *Service) boundChunkContextEvidence(input AssembleContextInput, hits []SearchHit) ([]SearchHit, []ContextDiagnostic) {
+	if len(hits) == 0 {
+		return hits, nil
+	}
+	used := 0
+	kept := make([]SearchHit, 0, len(hits))
+	omitted := 0
+	for _, hit := range hits {
+		if hit.Chunk == nil {
+			kept = append(kept, hit)
+			continue
+		}
+		if hit.Chunk.Scope.Normalized() != input.Scope.Normalized() || hit.Chunk.LifecycleState != memory.MemoryStateActive || hit.Memory.Scope.Normalized() != input.Scope.Normalized() || hit.Memory.State != memory.MemoryStateActive {
+			omitted++
+			continue
+		}
+		chunkBytes := len([]byte(hit.Chunk.Content))
+		if input.CharacterBudget > 0 && used+chunkBytes > input.CharacterBudget {
+			omitted++
+			continue
+		}
+		used += chunkBytes
+		// Preserve canonical identity and citations while allowing the derived
+		// bounded text to be assembled into an existing section.
+		hit.Memory.Content = hit.Chunk.Content
+		kept = append(kept, hit)
+	}
+	if omitted == 0 || !input.IncludeDiagnostics {
+		return kept, nil
+	}
+	return kept, []ContextDiagnostic{{Section: "chunk_context", Status: "omitted_by_budget_or_validation", Reason: "chunk evidence exceeded bounded context budget or failed lifecycle/scope validation", Omitted: omitted}}
 }
 
 func (s *Service) readProjectionHits(ctx context.Context, input AssembleContextInput) ([]SearchHit, []ContextDiagnostic) {

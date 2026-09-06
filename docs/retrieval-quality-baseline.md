@@ -30,3 +30,35 @@ pwsh -File scripts/retrieval-evaluation.ps1
 
 The command requires an explicitly owned disposable database and never falls back to
 `STELE_POSTGRES_DSN` or another ambient operator database.
+
+## Chunk representation shadowing
+
+The hierarchical chunk representation is a derived PostgreSQL projection over raw
+events and canonical-memory versions. It is identified by source kind/id/version,
+chunk policy, renderer, and deterministic whitespace token-counter versions. Raw
+events and canonical memory remain immutable; chunk rows are rebuildable and
+append-only.
+
+Chunk materialization and retrieval consumption are controlled independently:
+
+- `default_off` keeps the canonical-memory retrieval path unchanged;
+- `shadow` evaluates chunk candidates and emits only bounded diagnostics on an
+  authorized evaluation path;
+- `active` permits chunk-derived evidence to contribute while retaining the
+  canonical parent identity and citations.
+
+Every chunk read or parent/adjacent expansion re-checks exact
+`tenant/project/namespace` scope and active lifecycle state. Hidden, stale, or
+foreign sources fail closed. Parent and adjacent evidence is bounded by count and
+character/token budgets and never broadens a session or user boundary.
+
+Use an explicitly owned PostgreSQL + pgvector DSN for chunk integration checks:
+
+```powershell
+$env:STELE_TEST_POSTGRES_CHUNK_DSN = '<owned-test-dsn>'
+go test ./internal/storage/postgres -run MemoryChunkPostgres -count=1
+```
+
+Disable chunk materialization or consumption to roll back; no destructive migration
+or canonical-memory rewrite is required. Derived chunk retention and deletion must
+follow the source lifecycle and the operator's PostgreSQL backup/restore policy.

@@ -113,6 +113,7 @@ type EvaluationCaseReport struct {
 	SafetyFailures    []EvaluationSafetyFailure `json:"safety_failures,omitempty"`
 	CandidatePoolSize int                       `json:"candidate_pool_size"`
 	LatencyMS         float64                   `json:"latency_ms"`
+	ChunkDerivedCount int                       `json:"chunk_derived_count,omitempty"`
 }
 
 // EvaluationReport is the versioned data model rendered by local and CI replay.
