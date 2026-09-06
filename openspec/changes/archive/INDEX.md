@@ -1,6 +1,6 @@
 # Archive Index
 
-Updated: 2026-09-05 14:14:15
+Updated: 2026-09-03 21:41:03
 
 - 001 -> bootstrap-foundation-and-event-ingestion
 - 002 -> governance-pipeline-and-memory-consolidation
@@ -24,4 +24,7 @@ Updated: 2026-09-05 14:14:15
 - 020 -> task-success-evaluation-and-feedback-ranking-rollout
 - 021 -> self-hosted-assurance-and-conformance-loop
 - 022 -> integration-evidence-workflow-contract
-- 023 -> agent-memory-benchmark-expansion
+- 023 -> product-ready-self-hosting-foundation
+- 024 -> retrieval-evaluation-baseline
+- 025 -> local-agent-memory-benchmark-suite
+- 026 -> agent-memory-benchmark-expansion

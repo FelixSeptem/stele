@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"sort"
 	"strconv"
 	"strings"
 )
@@ -19,12 +20,9 @@ const (
 type RetrievalStrategy string
 
 const (
-	StrategyLexical    RetrievalStrategy = "lexical"
-	StrategySemantic   RetrievalStrategy = "semantic"
-	StrategyHybrid     RetrievalStrategy = "hybrid"
-	StrategyChunk      RetrievalStrategy = "chunk"
-	StrategyHybridRank RetrievalStrategy = "hybrid-rank"
-	StrategyReranker   RetrievalStrategy = "reranker"
+	StrategyLexical  RetrievalStrategy = "lexical"
+	StrategySemantic RetrievalStrategy = "semantic"
+	StrategyHybrid   RetrievalStrategy = "hybrid"
 )
 
 type RunConfig struct {
@@ -36,6 +34,41 @@ type RunConfig struct {
 	Strategy  RetrievalStrategy
 	Embedding EmbeddingProfile
 	Seed      int64
+}
+
+type RunPolicy struct {
+	Mode         RunMode `json:"mode"`
+	Split        string  `json:"split"`
+	Seed         int64   `json:"seed,omitempty"`
+	QueryBudget  int     `json:"query_budget,omitempty"`
+	Reproducible bool    `json:"reproducible"`
+}
+
+func BuildRunPolicy(manifest DatasetManifest, config RunConfig) (RunPolicy, error) {
+	if err := config.Validate(); err != nil {
+		return RunPolicy{}, &StatusError{Status: StatusInvalidManifest, Message: "validate benchmark run policy", Cause: err}
+	}
+	split := "smoke"
+	if config.Mode == RunModeLocalFull || config.Mode == RunModeReproducibleExtended {
+		split = "full"
+	}
+	spec, ok := manifest.Splits[split]
+	if !ok {
+		return RunPolicy{}, &StatusError{Status: StatusPrerequisiteMissing, Message: fmt.Sprintf("benchmark split %q is not declared", split)}
+	}
+	return RunPolicy{Mode: config.Mode, Split: split, Seed: config.Seed, QueryBudget: spec.MaxQueries, Reproducible: config.Mode == RunModeReproducibleExtended}, nil
+}
+
+func SelectQueries(queries []BenchmarkQuery, split SplitSpec, config RunConfig) ([]BenchmarkQuery, error) {
+	if err := config.Validate(); err != nil {
+		return nil, err
+	}
+	selected := append([]BenchmarkQuery(nil), queries...)
+	sort.SliceStable(selected, func(i, j int) bool { return selected[i].ID < selected[j].ID })
+	if split.MaxQueries > 0 && len(selected) > split.MaxQueries {
+		selected = selected[:split.MaxQueries]
+	}
+	return selected, nil
 }
 
 func LoadRunConfigFromEnv() (RunConfig, error) {
@@ -84,7 +117,7 @@ func (c RunConfig) Validate() error {
 		return fmt.Errorf("unsupported benchmark run mode %q", c.Mode)
 	}
 	switch c.Strategy {
-	case StrategyLexical, StrategySemantic, StrategyHybrid, StrategyChunk, StrategyHybridRank, StrategyReranker:
+	case StrategyLexical, StrategySemantic, StrategyHybrid:
 	default:
 		return fmt.Errorf("unsupported benchmark strategy %q", c.Strategy)
 	}
@@ -123,7 +156,7 @@ func AdmitRun(cache Cache, manifest DatasetManifest, config RunConfig) Admission
 	if err := embeddingCompatible(manifest.Embedding, config.Embedding); err != nil {
 		return AdmissionResult{Status: StatusPrerequisiteMissing, Prerequisites: []string{err.Error()}}
 	}
-	paths, err := cache.ManifestPaths(manifest)
+	paths, err := cache.Paths(manifest.Name, manifest.Version)
 	if err != nil {
 		return AdmissionResult{Status: StatusOf(err), Prerequisites: []string{err.Error()}}
 	}

@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"github.com/FelixSeptem/stele/internal/embedding"
+	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgconn"
 	pgxmock "github.com/pashagolub/pgxmock/v4"
@@ -19,6 +20,17 @@ import (
 	"github.com/FelixSeptem/stele/internal/policy"
 	"github.com/FelixSeptem/stele/internal/retrieval"
 )
+
+func TestPromotionProvenanceIDKeepsUUIDValid(t *testing.T) {
+	versionID := "7e119e2e-522b-5dbd-b8d8-598e7cc4d2a5"
+	provenanceID := promotionProvenanceID(versionID)
+	if _, err := uuid.Parse(provenanceID); err != nil {
+		t.Fatalf("promotionProvenanceID(%q) = %q, want valid UUID", versionID, provenanceID)
+	}
+	if promotionProvenanceID("version_123") != "version_123_prov" {
+		t.Fatalf("promotionProvenanceID() changed legacy textual fixture behavior")
+	}
+}
 
 func testEmbeddingRouter() embedding.Router {
 	return embedding.Router{

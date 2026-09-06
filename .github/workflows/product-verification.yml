@@ -1,0 +1,31 @@
+name: product-verification
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+jobs:
+  real-stack:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version: '1.25.x'
+      - name: Run deterministic retrieval evaluation unit coverage
+        shell: pwsh
+        run: go test ./internal/retrieval ./internal/telemetry -count=1
+      - name: Run owned PostgreSQL retrieval evaluation replay
+        if: ${{ secrets.STELE_TEST_RETRIEVAL_EVALUATION_DSN != '' }}
+        shell: pwsh
+        env:
+          STELE_TEST_RETRIEVAL_EVALUATION_DSN: ${{ secrets.STELE_TEST_RETRIEVAL_EVALUATION_DSN }}
+        run: ./scripts/retrieval-evaluation.ps1 -TestDSN $env:STELE_TEST_RETRIEVAL_EVALUATION_DSN
+      - name: Run isolated PostgreSQL/pgvector product verification
+        shell: pwsh
+        env:
+          STELE_PRODUCT_VERIFY_CI: "1"
+        run: ./scripts/stele-product-verify.ps1

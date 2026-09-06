@@ -33,28 +33,6 @@ const (
 	SupportPlanned      SupportState = "planned"
 )
 
-// DatasetFamily keeps metrics and cache artifacts from fundamentally different
-// benchmark types separate. Results from different families are never directly
-// comparable.
-type DatasetFamily string
-
-const (
-	FamilyAgentMemory      DatasetFamily = "agent_memory"
-	FamilyContract         DatasetFamily = "contract"
-	FamilySpecialized      DatasetFamily = "specialized"
-	FamilyGenericRetrieval DatasetFamily = "generic_retrieval"
-	FamilyStress           DatasetFamily = "stress"
-)
-
-func (f DatasetFamily) Valid() bool {
-	switch f {
-	case FamilyAgentMemory, FamilyContract, FamilySpecialized, FamilyGenericRetrieval, FamilyStress:
-		return true
-	default:
-		return false
-	}
-}
-
 type EmbeddingProfile struct {
 	Name          string `json:"name"`
 	Provider      string `json:"provider,omitempty"`
@@ -79,28 +57,29 @@ func (p EmbeddingProfile) Validate() error {
 }
 
 type SplitSpec struct {
-	Identity   string `json:"identity"`
 	Source     string `json:"source"`
 	MaxQueries int    `json:"max_queries,omitempty"`
 	Checksum   string `json:"sha256,omitempty"`
 }
 
 type DatasetManifest struct {
-	SchemaVersion     string               `json:"schema_version"`
-	Family            DatasetFamily        `json:"family"`
-	Name              string               `json:"name"`
-	Version           string               `json:"version"`
-	License           string               `json:"license"`
-	UpstreamURL       string               `json:"upstream_url"`
-	UpstreamRevision  string               `json:"upstream_revision"`
-	SHA256            string               `json:"sha256"`
-	QRELChecksum      string               `json:"qrels_checksum"`
-	SourcePath        string               `json:"source_path"`
-	ConversionVersion string               `json:"conversion_version"`
-	Redistribution    RedistributionStatus `json:"redistribution"`
-	Support           SupportState         `json:"support"`
-	Splits            map[string]SplitSpec `json:"splits"`
-	Embedding         EmbeddingProfile     `json:"embedding"`
+	SchemaVersion      string               `json:"schema_version"`
+	Name               string               `json:"name"`
+	Family             string               `json:"family,omitempty"`
+	Version            string               `json:"version"`
+	License            string               `json:"license"`
+	UpstreamURL        string               `json:"upstream_url"`
+	UpstreamRevision   string               `json:"upstream_revision"`
+	SHA256             string               `json:"sha256"`
+	SourcePath         string               `json:"source_path"`
+	ConversionVersion  string               `json:"conversion_version"`
+	SplitIdentity      string               `json:"split_identity,omitempty"`
+	QRELChecksum       string               `json:"qrels_checksum,omitempty"`
+	LocalPrerequisites []string             `json:"local_prerequisites,omitempty"`
+	Redistribution     RedistributionStatus `json:"redistribution"`
+	Support            SupportState         `json:"support"`
+	Splits             map[string]SplitSpec `json:"splits"`
+	Embedding          EmbeddingProfile     `json:"embedding"`
 }
 
 var sha256Pattern = regexp.MustCompile(`^[a-fA-F0-9]{64}$`)
@@ -108,9 +87,6 @@ var sha256Pattern = regexp.MustCompile(`^[a-fA-F0-9]{64}$`)
 func (m DatasetManifest) Validate() error {
 	if m.SchemaVersion != SchemaVersion {
 		return fmt.Errorf("unsupported manifest schema %q", m.SchemaVersion)
-	}
-	if !m.Family.Valid() {
-		return fmt.Errorf("unsupported dataset family %q", m.Family)
 	}
 	for name, value := range map[string]string{
 		"name": m.Name, "version": m.Version, "license": m.License,
@@ -121,11 +97,14 @@ func (m DatasetManifest) Validate() error {
 			return fmt.Errorf("%s is required", name)
 		}
 	}
+	if strings.TrimSpace(m.Family) != "" && !validBenchmarkFamily(m.Family) {
+		return fmt.Errorf("unsupported benchmark family %q", m.Family)
+	}
+	if m.QRELChecksum != "" && !sha256Pattern.MatchString(m.QRELChecksum) {
+		return errors.New("qrels_checksum must be a 64-character hexadecimal digest")
+	}
 	if !sha256Pattern.MatchString(m.SHA256) {
 		return errors.New("sha256 must be a 64-character hexadecimal digest")
-	}
-	if !sha256Pattern.MatchString(m.QRELChecksum) {
-		return errors.New("qrels_checksum must be a 64-character hexadecimal digest")
 	}
 	if m.Redistribution == "" {
 		return errors.New("redistribution status is required")
@@ -137,8 +116,8 @@ func (m DatasetManifest) Validate() error {
 		return errors.New("at least one split is required")
 	}
 	for name, split := range m.Splits {
-		if strings.TrimSpace(name) == "" || strings.TrimSpace(split.Identity) == "" || strings.TrimSpace(split.Source) == "" {
-			return errors.New("split name, identity, and source are required")
+		if strings.TrimSpace(name) == "" || strings.TrimSpace(split.Source) == "" {
+			return errors.New("split name and source are required")
 		}
 		if split.MaxQueries < 0 {
 			return fmt.Errorf("split %q max_queries cannot be negative", name)
@@ -172,6 +151,10 @@ func LoadDatasetManifest(source io.Reader) (DatasetManifest, error) {
 func checksumBytes(data []byte) string {
 	digest := sha256.Sum256(data)
 	return hex.EncodeToString(digest[:])
+}
+
+func checksumCanonicalText(data []byte) string {
+	return checksumBytes(bytes.ReplaceAll(data, []byte("\r\n"), []byte("\n")))
 }
 
 type ConversationTurn struct {
@@ -208,17 +191,17 @@ type EvidenceGroup struct {
 }
 
 type BenchmarkQuery struct {
-	ID               string          `json:"id"`
-	Scope            memory.Scope    `json:"scope"`
-	SessionID        string          `json:"session_id,omitempty"`
-	Text             string          `json:"text"`
-	QueryType        string          `json:"query_type,omitempty"`
-	EvidenceGroups   []EvidenceGroup `json:"evidence_groups,omitempty"`
-	MustNotReturnIDs []string        `json:"must_not_return_ids,omitempty"`
-	// Metadata preserves benchmark-specific query semantics (for example a
-	// LongMemEval question date and abstention expectation) without changing
-	// Stele's public memory model.
-	Metadata map[string]string `json:"metadata,omitempty"`
+	ID                 string          `json:"id"`
+	Scope              memory.Scope    `json:"scope"`
+	SessionID          string          `json:"session_id,omitempty"`
+	Text               string          `json:"text"`
+	QueryType          string          `json:"query_type,omitempty"`
+	QuestionDate       string          `json:"question_date,omitempty"`
+	AnswerSessionIDs   []string        `json:"answer_session_ids,omitempty"`
+	AbstentionExpected bool            `json:"abstention_expected,omitempty"`
+	UpdateType         string          `json:"update_type,omitempty"`
+	EvidenceGroups     []EvidenceGroup `json:"evidence_groups,omitempty"`
+	MustNotReturnIDs   []string        `json:"must_not_return_ids,omitempty"`
 }
 
 type QREL struct {

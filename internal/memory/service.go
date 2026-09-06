@@ -15,7 +15,7 @@ type IngestStore interface {
 }
 
 type IdempotentIngestStore interface {
-	IngestEventIdempotent(ctx context.Context, input IdempotentEventIngestInput, provenance ProvenanceRecord, admission AdmissionPressureReport) (IdempotentEventIngestResult, error)
+	IngestEventIdempotent(ctx context.Context, input IdempotentEventIngestInput, event IngestEventInput, provenance ProvenanceRecord, admission AdmissionPressureReport) (IdempotentEventIngestResult, error)
 }
 
 type Service struct {
@@ -173,7 +173,7 @@ func (s *Service) IngestIdempotent(ctx context.Context, input IngestEventInput, 
 			return IdempotentEventIngestResult{}, setErr(fmt.Errorf("%w: %s", ErrAdmissionRejected, admissionRejectionCategory(admission)))
 		}
 	}
-	result, err := store.IngestEventIdempotent(ctx, claim, ProvenanceRecord{ID: uuid.NewString(), Scope: input.Scope, Operation: "ingest_event", CreatedAt: observedAt}, admission)
+	result, err := store.IngestEventIdempotent(ctx, claim, input, ProvenanceRecord{ID: uuid.NewString(), Scope: input.Scope, Operation: "ingest_event", CreatedAt: observedAt}, admission)
 	if err != nil {
 		return IdempotentEventIngestResult{}, setErr(err)
 	}

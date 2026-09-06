@@ -46,14 +46,143 @@ func TestSelfHostingSmokeLoopDocumentsReplayContextAndMetrics(t *testing.T) {
 	}
 
 	for _, requiredConfig := range []string{
-		"STELE_AUTH_API_KEYS",
-		"STELE_AUTH_ADMIN_API_KEYS",
+		"STELE_AUTH_BOOTSTRAP_ADMIN_KEY",
 		"STELE_AUTH_DEFAULT_TENANT",
 		"STELE_AUTH_DEFAULT_PROJECT",
 		"STELE_AUTH_DEFAULT_NAMESPACE",
 	} {
 		if !strings.Contains(content, requiredConfig) {
 			t.Fatalf("self-hosting smoke docs missing required config %q", requiredConfig)
+		}
+	}
+	for _, obsolete := range []string{"STELE_AUTH_API_KEYS", "STELE_AUTH_ADMIN_API_KEYS"} {
+		if strings.Contains(content, obsolete+"=") {
+			t.Fatalf("self-hosting docs must not present obsolete auth setting as live configuration: %q", obsolete)
+		}
+	}
+}
+
+func TestBootstrapSmokeScriptIsDocumentedAndConstrained(t *testing.T) {
+	script, err := os.ReadFile("../scripts/stele-bootstrap-smoke.ps1")
+	if err != nil {
+		t.Fatalf("read bootstrap smoke script: %v", err)
+	}
+	content := string(script)
+	for _, want := range []string{"CredentialOutputDirectory", "/v1/admin/principals", "/grants", "bootstrap credential was still accepted", "/openapi.yaml", "/version", "/v1/events", "Idempotency-Key", "/v1/memories/search", "/v1/context/assemble", "/v1/admin/scope-proofs", "same-scope product smoke proof", "$admin.principal.id", "$runtime.principal.id", "ungranted scope read", "runtime principal admin access", "idempotency payload conflict"} {
+		if !strings.Contains(content, want) {
+			t.Fatalf("bootstrap smoke script missing %q", want)
+		}
+	}
+}
+
+func TestDeploymentContractRejectsObsoleteAuthAndRequiresBootstrapVariables(t *testing.T) {
+	compose, err := os.ReadFile("../docker-compose.yml")
+	if err != nil {
+		t.Fatalf("read docker-compose.yml: %v", err)
+	}
+	envExample, err := os.ReadFile("../.env.example")
+	if err != nil {
+		t.Fatalf("read .env.example: %v", err)
+	}
+	for _, content := range []string{string(compose), string(envExample)} {
+		for _, obsolete := range []string{"STELE_AUTH_API_KEYS", "STELE_AUTH_ADMIN_API_KEYS"} {
+			if strings.Contains(content, obsolete) {
+				t.Fatalf("deployment asset contains obsolete auth setting %q", obsolete)
+			}
+		}
+	}
+	for _, required := range []string{"STELE_AUTH_BOOTSTRAP_ADMIN_KEY", "STELE_AUTH_DEFAULT_TENANT", "STELE_AUTH_DEFAULT_PROJECT", "STELE_AUTH_DEFAULT_NAMESPACE", "STELE_DATABASE_MIGRATION_POLICY"} {
+		if !strings.Contains(string(compose), required) || !strings.Contains(string(envExample), required) {
+			t.Fatalf("deployment contract missing required variable %q", required)
+		}
+	}
+}
+
+func TestBackupRecoveryScriptsExposeSafetyGuards(t *testing.T) {
+	checks := map[string][]string{
+		"../scripts/stele-backup.ps1":         {"SourceDsn", "Destination", "pg_dump", "SHA256", "manifest"},
+		"../scripts/stele-restore.ps1":        {"Artifact", "Manifest", "TargetDsn", "ConfirmDestructive", "source-equal", "checksum mismatch", "pg_restore"},
+		"../scripts/stele-restore-verify.ps1": {"TargetDsn", "Manifest", "schema_migrations", "X-Stele-Tenant", "authorized scoped service proof", "RecordAssurance", "backup_restore_proof"},
+	}
+	for path, required := range checks {
+		contentBytes, err := os.ReadFile(path)
+		if err != nil {
+			t.Fatalf("read %s: %v", path, err)
+		}
+		content := string(contentBytes)
+		for _, want := range required {
+			if !strings.Contains(content, want) {
+				t.Fatalf("%s missing safety/verification guard %q", path, want)
+			}
+		}
+	}
+}
+
+func TestSelfHostingDocsDescribeChecksummedMigrationIntegrity(t *testing.T) {
+	content, err := os.ReadFile("self-hosting.md")
+	if err != nil {
+		t.Fatalf("read self-hosting.md: %v", err)
+	}
+	for _, want := range []string{
+		"integrity_status",
+		"stele_schema_migration_ledger",
+		"SHA-256",
+		"forward-remediation",
+		"Automatic down migration is prohibited",
+	} {
+		if !strings.Contains(string(content), want) {
+			t.Fatalf("self-hosting guide missing migration integrity guidance %q", want)
+		}
+	}
+}
+
+func TestProductVerificationEntryPointDocumentsPrerequisiteAndOwnershipGuards(t *testing.T) {
+	contentBytes, err := os.ReadFile("../scripts/stele-product-verify.ps1")
+	if err != nil {
+		t.Fatalf("read product verification script: %v", err)
+	}
+	content := string(contentBytes)
+	for _, want := range []string{"STELE_PRODUCT_VERIFY_CI", "SKIP:", "COMPOSE_PROJECT_NAME", "--build -d", "--volumes --remove-orphans", "KeepResources", "stele-bootstrap-smoke.ps1", "CREATE DATABASE", "STELE_TEST_POSTGRES_DSN", "TestMigrationRunnerSerializesConcurrentApply", "STELE_TEST_POSTGRES_UPGRADE_DSN", "TestMigrationRunnerUpgradesPopulatedPriorRelease", "$($migrationDatabase)?sslmode=disable", "docker compose", "stop -t", "readyz", "restart", "Idempotency-Key", "pending_raw_events", "pg_dump", "pg_restore", "targetDatabase", "sha256", "restored scoped behavior"} {
+		if !strings.Contains(content, want) {
+			t.Fatalf("product verification entrypoint missing %q", want)
+		}
+	}
+}
+
+func TestComposeSupportsIsolatedScopesPortsAndMirrorImageOverride(t *testing.T) {
+	contentBytes, err := os.ReadFile("../docker-compose.yml")
+	if err != nil {
+		t.Fatalf("read docker-compose.yml: %v", err)
+	}
+	content := string(contentBytes)
+	for _, want := range []string{"STELE_POSTGRES_IMAGE", "STELE_POSTGRES_HOST_PORT", "STELE_HTTP_HOST_PORT", "STELE_AUTH_DEFAULT_TENANT", "STELE_AUTH_DEFAULT_PROJECT", "STELE_AUTH_DEFAULT_NAMESPACE", "STELE_GO_IMAGE", "STELE_RUNTIME_IMAGE", "STELE_GOPROXY"} {
+		if !strings.Contains(content, want) {
+			t.Fatalf("compose missing isolated verification override %q", want)
+		}
+	}
+	if !strings.Contains(content, "stele-postgres-data:/var/lib/postgresql") {
+		t.Fatal("compose must mount PostgreSQL data at the major-version-compatible parent directory")
+	}
+	docsBytes, err := os.ReadFile("self-hosting.md")
+	if err != nil {
+		t.Fatalf("read self-hosting.md: %v", err)
+	}
+	for _, want := range []string{"docker.1ms.run/pgvector/pgvector:pg17", "docker.1ms.run/library/golang:1.25-bookworm", "docker.1ms.run/library/debian:bookworm-slim", "https://goproxy.cn,direct"} {
+		if !strings.Contains(string(docsBytes), want) {
+			t.Fatalf("self-hosting docs must include the explicit 1ms.run mirror example %q", want)
+		}
+	}
+}
+
+func TestSelfHostingDocsDescribeBoundedRuntimeTelemetry(t *testing.T) {
+	contentBytes, err := os.ReadFile("self-hosting.md")
+	if err != nil {
+		t.Fatalf("read self-hosting.md: %v", err)
+	}
+	content := string(contentBytes)
+	for _, want := range []string{"Runtime startup and drain telemetry", "migration validation", "readiness/drain", "without emitting DSNs", "Product verification emits", "only phase/result categories"} {
+		if !strings.Contains(content, want) {
+			t.Fatalf("self-hosting docs missing bounded telemetry contract %q", want)
 		}
 	}
 }

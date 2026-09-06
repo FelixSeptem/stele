@@ -1,188 +1,115 @@
 package benchmark
 
 import (
-	"bytes"
-	"context"
 	"strings"
 	"testing"
 
 	"github.com/FelixSeptem/stele/internal/memory"
 )
 
-const longMemEvalFixture = `{
-  "s": [{
-    "question_id": "q-update",
-    "question": "Where does Ana work now?",
-    "question_date": "2024-02-15",
-    "question_type": "knowledge-update",
+func TestLongMemEvalAdapterRequiresExplicitFeatureFlag(t *testing.T) {
+	adapter := LongMemEvalAdapter{}
+	_, err := adapter.NormalizeLocal(longMemEvalScope(), []byte(`{"samples":[]}`))
+	if StatusOf(err) != StatusPrerequisiteMissing || !strings.Contains(err.Error(), "feature") {
+		t.Fatalf("disabled LongMemEval spike error = %v, want prerequisite_missing feature diagnostic", err)
+	}
+}
+
+func TestLongMemEvalAdapterNormalizesSessionsUpdatesAndAbstentionDeterministically(t *testing.T) {
+	source := []byte(`{
+  "samples": [{
+    "question_id": "lm-q1",
+    "question_type": "update",
+    "question": "What is the current editor?",
+    "question_date": "2025-02-01",
     "answer_session_ids": ["session-new"],
-    "evidence_session_ids": ["session-old", "session-new"],
     "obsolete_session_ids": ["session-old"],
-    "haystack_sessions": [
-      {"session_id":"session-old","session_date":"2024-01-01","turns":[{"turn_id":"old-turn","role":"user","content":"Ana works at the museum."}]},
-      {"session_id":"session-new","session_date":"2024-02-01","turns":[{"turn_id":"new-turn","role":"user","content":"Ana works at the library now."}]}
+    "abstention": false,
+    "sessions": [
+      {"session_id":"session-old","date":"2025-01-01","turns":[{"speaker":"user","text":"I use Vim."}]},
+      {"session_id":"session-new","date":"2025-01-20","turns":[{"speaker":"user","text":"I switched to Emacs."}]}
     ]
-  }],
-  "m": [{"question_id":"q-m","question":"ignored by s","question_type":"fact","answer_session_ids":["m-session"],"haystack_sessions":[{"session_id":"m-session","turns":[{"turn_id":"m-turn","content":"m"}]}]}],
-  "oracle": [{"question_id":"q-abstain","question":"What is unknown?","question_date":"2024-03-01","question_type":"abstention","abstention":true,"haystack_sessions":[{"session_id":"o-session","turns":[{"turn_id":"o-turn","content":"unrelated"}]}]}]
-}`
-
-func TestLoadLongMemEvalDatasetSelectsLockedSubset(t *testing.T) {
-	dataset, err := LoadLongMemEvalDataset(bytes.NewBufferString(longMemEvalFixture), LongMemEvalSubsetSmall)
+  }, {
+    "question_id": "lm-q2",
+    "question_type": "abstention",
+    "question": "What is the unknown preference?",
+    "question_date": "2025-02-02",
+    "answer_session_ids": [],
+    "abstention": true,
+    "sessions": [{"session_id":"session-other","date":"2025-01-02","turns":[{"speaker":"user","text":"We discussed weather."}]}]
+  }]
+}`)
+	adapter := LongMemEvalAdapter{Enabled: true}
+	first, err := adapter.NormalizeLocal(longMemEvalScope(), source)
 	if err != nil {
-		t.Fatal(err)
+		t.Fatalf("NormalizeLocal() error = %v", err)
 	}
-	if dataset.Subset != LongMemEvalSubsetSmall || len(dataset.Samples) != 1 || dataset.Samples[0].ID != "q-update" {
-		t.Fatalf("unexpected selected dataset: %#v", dataset)
+	second, err := adapter.NormalizeLocal(longMemEvalScope(), source)
+	if err != nil {
+		t.Fatalf("second NormalizeLocal() error = %v", err)
 	}
-	if _, err := LoadLongMemEvalDataset(bytes.NewBufferString(longMemEvalFixture), "invalid"); err == nil {
-		t.Fatal("expected invalid subset to be rejected")
+	firstChecksum, err := first.Checksum()
+	if err != nil {
+		t.Fatalf("first checksum: %v", err)
+	}
+	secondChecksum, err := second.Checksum()
+	if err != nil {
+		t.Fatalf("second checksum: %v", err)
+	}
+	if firstChecksum != secondChecksum {
+		t.Fatalf("normalization checksum changed: %s != %s", firstChecksum, secondChecksum)
+	}
+	if len(first.Conversations) != 3 || len(first.Events) != 3 || len(first.Queries) != 2 {
+		t.Fatalf("unexpected normalized counts: conversations=%d events=%d queries=%d", len(first.Conversations), len(first.Events), len(first.Queries))
+	}
+	query := findLongMemEvalQuery(first, "lm-q1")
+	if query.QueryType != "update" || query.QuestionDate != "2025-02-01" || len(query.AnswerSessionIDs) != 1 || query.AnswerSessionIDs[0] != "session-new" || query.UpdateType != "update" {
+		t.Fatalf("update metadata not preserved: %#v", query)
+	}
+	if len(query.EvidenceGroups) != 1 || len(query.EvidenceGroups[0].EvidenceIDs) != 1 {
+		t.Fatalf("answer session evidence group not normalized: %#v", query.EvidenceGroups)
+	}
+	oldEvent := findLongMemEvalEvent(first, "session-old")
+	if oldEvent.ExpectedState != memory.MemoryStateForgotten || oldEvent.Provenance["session_id"] != "session-old" {
+		t.Fatalf("obsolete session state/provenance not preserved: %#v", oldEvent)
+	}
+	abstention := findLongMemEvalQuery(first, "lm-q2")
+	if !abstention.AbstentionExpected || abstention.QueryType != "abstention" || len(abstention.EvidenceGroups) != 0 {
+		t.Fatalf("abstention metadata not preserved: %#v", abstention)
 	}
 }
 
-func TestLoadLongMemEvalDatasetReadsJSONL(t *testing.T) {
-	jsonl := `{"subset":"s","question_id":"q-one","question":"one","answer_session_ids":["session-one"],"haystack_sessions":[{"session_id":"session-one","turns":[{"turn_id":"turn-one","content":"one"}]}]}` + "\n" +
-		`{"subset":"m","question_id":"q-two","question":"two","answer_session_ids":["session-two"],"haystack_sessions":[{"session_id":"session-two","turns":[{"turn_id":"turn-two","content":"two"}]}]}`
-	dataset, err := LoadLongMemEvalDataset(strings.NewReader(jsonl), LongMemEvalSubsetMedium)
-	if err != nil {
-		t.Fatal(err)
+func TestLongMemEvalAdapterRejectsDuplicateSessionsAndMissingAnswers(t *testing.T) {
+	duplicate := []byte(`{"samples":[{"question_id":"q","question":"x","sessions":[{"session_id":"s","turns":[{"text":"a"}]},{"session_id":"s","turns":[{"text":"b"}]}]}]}`)
+	_, err := (LongMemEvalAdapter{Enabled: true}).NormalizeLocal(longMemEvalScope(), duplicate)
+	if err == nil || !strings.Contains(err.Error(), "duplicate session") {
+		t.Fatalf("duplicate session error = %v", err)
 	}
-	if len(dataset.Samples) != 1 || dataset.Samples[0].ID != "q-two" {
-		t.Fatalf("unexpected JSONL selection: %#v", dataset)
-	}
-}
-
-func TestLoadLongMemEvalDatasetAcceptsNumericAnswerPayload(t *testing.T) {
-	source := `[{"question_id":"q-number","question":"How many meetings did Ana attend?","answer":17,"answer_session_ids":["session-one"],"haystack_sessions":[{"session_id":"session-one","turns":[{"turn_id":"turn-one","content":"Ana attended 17 meetings."}]}]}]`
-	dataset, err := LoadLongMemEvalDataset(bytes.NewBufferString(source), LongMemEvalSubsetSmall)
-	if err != nil {
-		t.Fatal(err)
-	}
-	corpus, err := NewLongMemEvalAdapter().Normalize(dataset, memoryScope())
-	if err != nil {
-		t.Fatal(err)
-	}
-	if len(corpus.Queries) != 1 || corpus.Queries[0].ID != "query/longmemeval/q-number" {
-		t.Fatalf("unexpected corpus normalized from numeric answer payload: %#v", corpus)
+	missing := []byte(`{"samples":[{"question_id":"q","question":"x","answer_session_ids":["missing"],"sessions":[]}]}`)
+	_, err = (LongMemEvalAdapter{Enabled: true}).NormalizeLocal(longMemEvalScope(), missing)
+	if err == nil || !strings.Contains(err.Error(), "answer session") {
+		t.Fatalf("missing answer session error = %v", err)
 	}
 }
 
-func TestLongMemEvalNormalizeSkipsEmptyDistractorSession(t *testing.T) {
-	source := `[{"question_id":"q-empty-distractor","question":"Where does Ana work?","answer_session_ids":["session-answer"],"haystack_sessions":[{"session_id":"session-empty","turns":[{"turn_id":"blank-turn","content":""}]},{"session_id":"session-answer","turns":[{"turn_id":"answer-turn","content":"Ana works at the library."}]}]}]`
-	dataset, err := LoadLongMemEvalDataset(bytes.NewBufferString(source), LongMemEvalSubsetSmall)
-	if err != nil {
-		t.Fatal(err)
-	}
-	corpus, err := NewLongMemEvalAdapter().Normalize(dataset, memoryScope())
-	if err != nil {
-		t.Fatal(err)
-	}
-	if len(corpus.Conversations) != 1 || len(corpus.Events) != 1 || corpus.Events[0].ID != "event/longmemeval/q-empty-distractor/session-answer/answer-turn" {
-		t.Fatalf("empty distractor session must not produce retrievable memory: %#v", corpus)
-	}
+func longMemEvalScope() memory.Scope {
+	return memory.Scope{Tenant: "bench", Project: "longmemeval", Namespace: "fixture"}
 }
 
-func TestLongMemEvalNormalizePreservesLifecycleEvidenceAndAbstention(t *testing.T) {
-	dataset, err := LoadLongMemEvalDataset(bytes.NewBufferString(longMemEvalFixture), LongMemEvalSubsetSmall)
-	if err != nil {
-		t.Fatal(err)
+func findLongMemEvalQuery(corpus NormalizedCorpus, id string) BenchmarkQuery {
+	for _, query := range corpus.Queries {
+		if query.ID == id {
+			return query
+		}
 	}
-	corpus, err := NewLongMemEvalAdapter().Normalize(dataset, memoryScope())
-	if err != nil {
-		t.Fatal(err)
-	}
-	if len(corpus.Conversations) != 2 || len(corpus.Events) != 2 || len(corpus.Queries) != 1 || len(corpus.QRELs) != 2 {
-		t.Fatalf("unexpected normalized corpus: %#v", corpus)
-	}
-	query := corpus.Queries[0]
-	if query.QueryType != "knowledge-update" || query.Metadata["question_date"] != "2024-02-15" || len(query.MustNotReturnIDs) != 1 {
-		t.Fatalf("missing update metadata: %#v", query)
-	}
-	qrelGrades := map[string]int{}
-	for _, qrel := range corpus.QRELs {
-		qrelGrades[qrel.EvidenceID] = qrel.Grade
-	}
-	if corpus.Events[0].ExpectedState != memory.MemoryStateSuppressed || qrelGrades[corpus.Events[0].ID] != 0 || qrelGrades[corpus.Events[1].ID] != 2 {
-		t.Fatalf("expected graded update qrels and obsolete lifecycle: %#v %#v", corpus.Events, corpus.QRELs)
-	}
-
-	oracle, err := LoadLongMemEvalDataset(bytes.NewBufferString(longMemEvalFixture), LongMemEvalSubsetOracle)
-	if err != nil {
-		t.Fatal(err)
-	}
-	abstention, err := NewLongMemEvalAdapter().Normalize(oracle, memoryScope())
-	if err != nil {
-		t.Fatal(err)
-	}
-	if len(abstention.Queries) != 1 || abstention.Queries[0].Metadata["abstention"] != "true" || len(abstention.QRELs) != 0 {
-		t.Fatalf("abstention must not invent qrels: %#v", abstention)
-	}
+	return BenchmarkQuery{}
 }
 
-func TestLongMemEvalNormalizeIsDeterministicAndRejectsBadReferences(t *testing.T) {
-	dataset, err := LoadLongMemEvalDataset(bytes.NewBufferString(longMemEvalFixture), LongMemEvalSubsetSmall)
-	if err != nil {
-		t.Fatal(err)
+func findLongMemEvalEvent(corpus NormalizedCorpus, sessionID string) MemoryEventRecord {
+	for _, event := range corpus.Events {
+		if event.SessionID == sessionID {
+			return event
+		}
 	}
-	first, err := NewLongMemEvalAdapter().Normalize(dataset, memoryScope())
-	if err != nil {
-		t.Fatal(err)
-	}
-	second, err := NewLongMemEvalAdapter().Normalize(dataset, memoryScope())
-	if err != nil {
-		t.Fatal(err)
-	}
-	firstChecksum, _ := first.Checksum()
-	secondChecksum, _ := second.Checksum()
-	const goldenChecksum = "cf66150d8bf316ce4bf8622c1de5853ba80b4062202db98624c3111e792fb103"
-	if firstChecksum != goldenChecksum || secondChecksum != goldenChecksum {
-		t.Fatalf("conversion drift: first=%s second=%s golden=%s", firstChecksum, secondChecksum, goldenChecksum)
-	}
-	bad := dataset
-	bad.Samples = append([]LongMemEvalSample(nil), dataset.Samples...)
-	bad.Samples[0].AnswerSessionIDs = []string{"missing"}
-	if _, err := NewLongMemEvalAdapter().Normalize(bad, memoryScope()); err == nil {
-		t.Fatal("expected missing answer session to be rejected")
-	}
-	bad = dataset
-	bad.Samples = append([]LongMemEvalSample(nil), dataset.Samples...)
-	bad.Samples[0].EvidenceSessionIDs = []string{"missing"}
-	if _, err := NewLongMemEvalAdapter().Normalize(bad, memoryScope()); err == nil {
-		t.Fatal("expected unmapped evidence session to be rejected")
-	}
-	bad = dataset
-	bad.Samples = append([]LongMemEvalSample(nil), dataset.Samples...)
-	bad.Samples = append(bad.Samples, bad.Samples[0])
-	if _, err := NewLongMemEvalAdapter().Normalize(bad, memoryScope()); err == nil {
-		t.Fatal("expected duplicate question ID to be rejected")
-	}
-}
-
-type longMemEvalTestRetriever struct {
-	candidates map[string][]RetrievedEvidence
-}
-
-func (r longMemEvalTestRetriever) Retrieve(_ context.Context, query BenchmarkQuery) ([]RetrievedEvidence, error) {
-	return r.candidates[query.ID], nil
-}
-
-func TestLongMemEvalRetrievalOnlyRunnerSeparatesComparisonModes(t *testing.T) {
-	dataset, err := LoadLongMemEvalDataset(bytes.NewBufferString(longMemEvalFixture), LongMemEvalSubsetSmall)
-	if err != nil {
-		t.Fatal(err)
-	}
-	corpus, err := NewLongMemEvalAdapter().Normalize(dataset, memoryScope())
-	if err != nil {
-		t.Fatal(err)
-	}
-	queryID := corpus.Queries[0].ID
-	report, err := (LongMemEvalRunner{}).Run(context.Background(), corpus, LongMemEvalComparisonOracle)
-	if err != nil || report.Mode != LongMemEvalComparisonOracle || report.Report.Metrics.RecallAt1 != 1 {
-		t.Fatalf("unexpected oracle report: %#v, %v", report, err)
-	}
-	runner := LongMemEvalRunner{Retriever: longMemEvalTestRetriever{candidates: map[string][]RetrievedEvidence{queryID: {{EvidenceID: corpus.QRELs[1].EvidenceID, Rank: 1}}}}}
-	logReport, err := runner.Run(context.Background(), corpus, LongMemEvalComparisonRetrievalLog)
-	if err != nil || logReport.Mode != LongMemEvalComparisonRetrievalLog {
-		t.Fatalf("retrieval-log must remain a distinct mode: %#v, %v", logReport, err)
-	}
+	return MemoryEventRecord{}
 }

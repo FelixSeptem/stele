@@ -31,3 +31,4 @@ The system SHALL report operation accuracy, malformed-call rate, refusal correct
 #### Scenario: Produce a contract report
 - **WHEN** all selected BFCL memory cases finish
 - **THEN** the report contains family identity, subset counts, operation metrics, safety outcomes, and artifact provenance independent of retrieval reports
+

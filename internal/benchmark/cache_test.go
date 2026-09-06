@@ -4,7 +4,6 @@ import (
 	"bytes"
 	"crypto/sha256"
 	"encoding/hex"
-	"encoding/json"
 	"os"
 	"path/filepath"
 	"testing"
@@ -52,11 +51,7 @@ func TestFetchVerifiesChecksumAndPreservesExistingRawData(t *testing.T) {
 	if _, err := cache.StoreVerifiedRaw(manifest, bytes.NewReader([]byte("tampered"))); StatusOf(err) != StatusChecksumMismatch {
 		t.Fatalf("expected checksum mismatch, got %v", err)
 	}
-	paths, err := cache.ManifestPaths(manifest)
-	if err != nil {
-		t.Fatal(err)
-	}
-	stored, err := os.ReadFile(filepath.Join(paths.Raw, filepath.Base(manifest.SourcePath)))
+	stored, err := os.ReadFile(filepath.Join(cache.DataDir, manifest.Name, manifest.Version, "raw", filepath.Base(manifest.SourcePath)))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -118,65 +113,22 @@ func TestWriteAndLoadNormalizedCorpusIsDeterministic(t *testing.T) {
 	}
 }
 
-func TestWriteFamilyReportRetainsValidatedBenchmarkReport(t *testing.T) {
+func TestStoreRunReportPersistsMachineReadableArtifact(t *testing.T) {
 	cache := NewCache(t.TempDir())
 	manifest := validManifest()
-	manifest.Family = FamilySpecialized
-	manifest.Name = "specialized-fixtures"
-	manifest.Version = "v1"
-	manifest.ConversionVersion = "specialized-v1"
-	manifest.Splits = map[string]SplitSpec{"profile": {Identity: "specialized/profile", Source: "profile.json"}}
-	run, err := NewRunScope(memory.Scope{Tenant: "tenant-a", Project: "production", Namespace: "default"}, manifest.Name, "profile-regression")
+	manifest.Version = "report-v1"
+	path, err := cache.StoreRunReport(manifest, "local-run", "retrieval.json", map[string]any{"status": "success", "query_count": 2})
 	if err != nil {
 		t.Fatal(err)
 	}
-	report := NewFamilyReport(FamilySpecialized, manifest, "profile", run.Scope).WithExecutionProvenance(FamilyReportExecution{
-		QRELVersion:     "specialized-qrels-v1",
-		StrategyProfile: "fixture-retrieval",
-		InputChecksums:  map[string]string{"normalized": "fixture-v1"},
-	})
-	report.Metrics = SpecializedReport{Family: "specialized_retrieval", Subfamily: "profile_preference", Metrics: SpecializedMetrics{ProfileRecall: 1, PreferenceConsistency: 1, UnmappedEvidenceCount: 0}}
-	report.SafetyOutcomes = SpecializedMetrics{ScopeSafetyFailures: 0, SessionIsolationViolations: 0}
-
-	path, err := cache.WriteFamilyReport(manifest, run.ID, report)
-	if err != nil {
-		t.Fatal(err)
-	}
-	paths, err := cache.ManifestPaths(manifest)
-	if err != nil {
-		t.Fatal(err)
-	}
-	wantPath := filepath.Join(paths.Reports, run.ID+".json")
-	if path != wantPath {
-		t.Fatalf("report path = %q, want %q", path, wantPath)
+	if path != filepath.Join(cache.DataDir, manifest.Name, manifest.Version, "reports", "local-run", "retrieval.json") {
+		t.Fatalf("report path = %q", path)
 	}
 	encoded, err := os.ReadFile(path)
 	if err != nil {
 		t.Fatal(err)
 	}
-	var retained FamilyReport
-	if err := json.Unmarshal(encoded, &retained); err != nil {
-		t.Fatal(err)
-	}
-	if retained.Family != FamilySpecialized || retained.Scope != run.Scope || len(retained.ArtifactPaths) != 1 || retained.ArtifactPaths[0] != path {
-		t.Fatalf("retained report lost specialized provenance: %#v", retained)
-	}
-	if result, err := cache.CleanRunArtifacts(manifest, run.ID, true); err != nil || !result.ReportRetained {
-		t.Fatalf("retained specialized report was not preserved: %#v, %v", result, err)
-	}
-}
-
-func TestWriteFamilyReportRejectsProductionScope(t *testing.T) {
-	cache := NewCache(t.TempDir())
-	manifest := validManifest()
-	manifest.Family = FamilySpecialized
-	manifest.Name = "specialized-fixtures"
-	manifest.Version = "v1"
-	manifest.ConversionVersion = "specialized-v1"
-	manifest.Splits = map[string]SplitSpec{"profile": {Identity: "specialized/profile", Source: "profile.json"}}
-	report := NewFamilyReport(FamilySpecialized, manifest, "profile", memory.Scope{Tenant: "tenant-a", Project: "production", Namespace: "default"})
-
-	if _, err := cache.WriteFamilyReport(manifest, "profile-regression", report); StatusOf(err) != StatusInvalidManifest {
-		t.Fatalf("expected production report scope rejection, got %v", err)
+	if string(encoded) != "{\"query_count\":2,\"status\":\"success\"}\n" {
+		t.Fatalf("report content = %q", encoded)
 	}
 }

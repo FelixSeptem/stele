@@ -6,6 +6,28 @@ info:
   title: Stele API
   version: 0.1.0
 paths:
+  /openapi.yaml:
+    get:
+      operationId: getOpenAPI
+      responses:
+        '200':
+          description: Authoritative OpenAPI contract for the running service
+          content:
+            application/yaml:
+              schema:
+                type: string
+        '304':
+          description: Contract has not changed since the supplied ETag
+  /version:
+    get:
+      operationId: getVersion
+      responses:
+        '200':
+          description: Bounded service and schema compatibility metadata
+          content:
+            application/json:
+              schema:
+                type: object
   /health:
     get:
       operationId: getHealth
@@ -962,6 +984,146 @@ paths:
           description: Feedback superseded while preserving audit history
         '404':
           description: Feedback not found or not visible
+  /v1/admin/ranking-rollouts:
+    get:
+      operationId: listRankingRollouts
+      parameters:
+        - $ref: '#/components/parameters/AdminAPIKey'
+        - $ref: '#/components/parameters/TenantHeader'
+        - $ref: '#/components/parameters/ProjectHeader'
+        - $ref: '#/components/parameters/NamespaceHeader'
+      responses:
+        '200':
+          description: Ranking rollout policies
+          content:
+            application/json:
+              schema: {type: object}
+    post:
+      operationId: createRankingRollout
+      parameters:
+        - $ref: '#/components/parameters/AdminAPIKey'
+        - $ref: '#/components/parameters/TenantHeader'
+        - $ref: '#/components/parameters/ProjectHeader'
+        - $ref: '#/components/parameters/NamespaceHeader'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: {type: object}
+      responses:
+        '201':
+          description: Ranking rollout created
+          content:
+            application/json:
+              schema: {type: object}
+  /v1/admin/ranking-rollouts/{policy_id}:
+    get:
+      operationId: getRankingRollout
+      parameters:
+        - in: path
+          name: policy_id
+          required: true
+          schema: {type: string}
+        - $ref: '#/components/parameters/AdminAPIKey'
+        - $ref: '#/components/parameters/TenantHeader'
+        - $ref: '#/components/parameters/ProjectHeader'
+        - $ref: '#/components/parameters/NamespaceHeader'
+      responses:
+        '200':
+          description: Ranking rollout policy
+          content:
+            application/json:
+              schema: {type: object}
+  /v1/admin/ranking-rollouts/{policy_id}/impact:
+    get:
+      operationId: getRankingRolloutImpact
+      parameters:
+        - in: path
+          name: policy_id
+          required: true
+          schema: {type: string}
+        - $ref: '#/components/parameters/AdminAPIKey'
+        - $ref: '#/components/parameters/TenantHeader'
+        - $ref: '#/components/parameters/ProjectHeader'
+        - $ref: '#/components/parameters/NamespaceHeader'
+      responses:
+        '200':
+          description: Ranking rollout impact
+          content:
+            application/json:
+              schema: {type: object}
+  /v1/admin/ranking-rollouts/{policy_id}/dry-run:
+    post:
+      operationId: dryRunRankingRollout
+      parameters:
+        - in: path
+          name: policy_id
+          required: true
+          schema: {type: string}
+        - $ref: '#/components/parameters/AdminAPIKey'
+        - $ref: '#/components/parameters/TenantHeader'
+        - $ref: '#/components/parameters/ProjectHeader'
+        - $ref: '#/components/parameters/NamespaceHeader'
+      responses:
+        '200':
+          description: Ranking rollout dry run
+          content:
+            application/json:
+              schema: {type: object}
+  /v1/admin/ranking-rollouts/{policy_id}/activate:
+    post:
+      operationId: activateRankingRollout
+      parameters:
+        - in: path
+          name: policy_id
+          required: true
+          schema: {type: string}
+        - $ref: '#/components/parameters/AdminAPIKey'
+        - $ref: '#/components/parameters/TenantHeader'
+        - $ref: '#/components/parameters/ProjectHeader'
+        - $ref: '#/components/parameters/NamespaceHeader'
+      responses:
+        '200':
+          description: Ranking rollout activated
+          content:
+            application/json:
+              schema: {type: object}
+  /v1/admin/ranking-rollouts/{policy_id}/disable:
+    post:
+      operationId: disableRankingRollout
+      parameters:
+        - in: path
+          name: policy_id
+          required: true
+          schema: {type: string}
+        - $ref: '#/components/parameters/AdminAPIKey'
+        - $ref: '#/components/parameters/TenantHeader'
+        - $ref: '#/components/parameters/ProjectHeader'
+        - $ref: '#/components/parameters/NamespaceHeader'
+      responses:
+        '200':
+          description: Ranking rollout disabled
+          content:
+            application/json:
+              schema: {type: object}
+  /v1/admin/ranking-rollouts/{policy_id}/rollback:
+    post:
+      operationId: rollbackRankingRollout
+      parameters:
+        - in: path
+          name: policy_id
+          required: true
+          schema: {type: string}
+        - $ref: '#/components/parameters/AdminAPIKey'
+        - $ref: '#/components/parameters/TenantHeader'
+        - $ref: '#/components/parameters/ProjectHeader'
+        - $ref: '#/components/parameters/NamespaceHeader'
+      responses:
+        '200':
+          description: Ranking rollout rolled back
+          content:
+            application/json:
+              schema: {type: object}
   /v1/admin/assurance/health-evaluations:
     get:
       operationId: listAdminAssuranceHealthEvaluations
@@ -2413,6 +2575,23 @@ paths:
             application/json:
               schema:
                 $ref: '#/components/schemas/RepairPlan'
+  /v1/admin/memory-quality/diagnostics:
+    get:
+      operationId: getMemoryQualityDiagnostics
+      parameters:
+        - $ref: '#/components/parameters/AdminAPIKey'
+        - $ref: '#/components/parameters/TenantHeader'
+        - $ref: '#/components/parameters/ProjectHeader'
+        - $ref: '#/components/parameters/NamespaceHeader'
+      responses:
+        '200':
+          description: Bounded memory quality diagnostics
+          content:
+            application/json:
+              schema:
+                type: object
+        '401':
+          description: Missing or invalid admin API key
   /v1/admin/embedding/rebuilds:
     get:
       operationId: listAdminEmbeddingRebuilds
@@ -2456,6 +2635,31 @@ paths:
                 $ref: '#/components/schemas/EmbeddingRebuildListResponse'
         '400':
           description: Invalid request
+        '401':
+          description: Missing or invalid admin API key
+  /v1/admin/context-projections:rebuild:
+    post:
+      operationId: rebuildAdminContextProjection
+      parameters:
+        - $ref: '#/components/parameters/AdminAPIKey'
+        - $ref: '#/components/parameters/TenantHeader'
+        - $ref: '#/components/parameters/ProjectHeader'
+        - $ref: '#/components/parameters/NamespaceHeader'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/ContextProjectionRebuildRequest'
+      responses:
+        '201':
+          description: Append-only context projection rebuild completed
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ContextProjection'
+        '400':
+          description: Invalid scoped rebuild request
         '401':
           description: Missing or invalid admin API key
   /v1/admin/embedding/rebuilds/{memory_id}:retry:
@@ -6052,6 +6256,63 @@ components:
         modified_at:
           type: string
           format: date-time
+    ContextProjectionRebuildRequest:
+      type: object
+      required: [kind, limit, schema_version, policy_version, renderer_version]
+      properties:
+        kind:
+          type: string
+          enum: [always_visible, session, retrieval, archival_history]
+        limit:
+          type: integer
+          minimum: 1
+        schema_version:
+          type: string
+        policy_version:
+          type: string
+        renderer_version:
+          type: string
+    ContextProjection:
+      type: object
+      required: [id, scope, kind, version, schema_version, policy_version, renderer_version, source_watermark, status, items]
+      properties:
+        id:
+          type: string
+          format: uuid
+        scope:
+          $ref: '#/components/schemas/Scope'
+        kind:
+          type: string
+          enum: [always_visible, session, retrieval, archival_history]
+        version:
+          type: integer
+          format: int64
+        schema_version:
+          type: string
+        policy_version:
+          type: string
+        renderer_version:
+          type: string
+        source_watermark:
+          type: object
+        status:
+          type: string
+          enum: [building, active, superseded, failed]
+        items:
+          type: array
+          items:
+            type: object
+            properties:
+              id:
+                type: string
+              text:
+                type: string
+              class:
+                type: string
+              lifecycle_state:
+                type: string
+              sort_key:
+                type: string
     MemoryListResponse:
       type: object
       required:

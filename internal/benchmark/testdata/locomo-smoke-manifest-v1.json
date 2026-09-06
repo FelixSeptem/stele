@@ -1,20 +1,17 @@
 {
   "schema_version": "v1",
-  "family": "agent_memory",
   "name": "locomo",
   "version": "synthetic-smoke-v1",
   "license": "repository-owned-synthetic-fixture",
   "upstream_url": "https://github.com/snap-research/locomo",
   "upstream_revision": "documentation-reference-only",
   "sha256": "9abb92e00f50e57798ef6856dccd7117ee8f421251f82a3fbb5c0b58557d68e9",
-  "qrels_checksum": "0000000000000000000000000000000000000000000000000000000000000000",
   "source_path": "locomo-smoke-fixture-v1.json",
   "conversion_version": "locomo-adapter-v1",
   "redistribution": "permitted",
   "support": "runnable",
   "splits": {
     "smoke": {
-      "identity": "locomo/synthetic-smoke-v1",
       "source": "locomo-smoke-fixture-v1.json",
       "max_queries": 2
     }

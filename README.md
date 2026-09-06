@@ -15,6 +15,8 @@ In addition to event ingest, search, and context assembly, the API now exposes d
 Run the full self-hosted stack:
 
 ```bash
+Copy-Item .env.example .env
+# Replace the placeholder secrets in .env before sharing the environment.
 docker compose up --build -d
 ```
 
@@ -25,4 +27,9 @@ curl http://localhost:8080/health
 curl http://localhost:8080/ready
 ```
 
-`/ready` confirms baseline dependency readiness only. Self-hosting details, provider-backed versus lexical-only embedding configuration, and semantic rebuild smoke checks live in [docs/self-hosting.md](docs/self-hosting.md).
+`/ready` confirms baseline dependency readiness only. On a fresh database, use
+the bootstrap-admin key from `.env` to create a durable admin and a scoped
+runtime principal before calling protected memory APIs. The complete
+bootstrap-first smoke flow, provider-backed versus lexical-only embedding
+configuration, migration policy, and semantic rebuild checks live in
+[docs/self-hosting.md](docs/self-hosting.md).

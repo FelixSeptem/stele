@@ -64,75 +64,6 @@ func NewCorpusLoader(ingestor memory.EventIngestor) CorpusLoader {
 	return CorpusLoader{ingestor: ingestor}
 }
 
-// LongMemEvalImport is the audit boundary between normalized LongMemEval
-// inputs and Stele's ingestion path. Its run scope is always freshly derived
-// from the caller tenant; it cannot retain a production project or namespace.
-type LongMemEvalImport struct {
-	Run      BenchmarkRunScope          `json:"run"`
-	Evidence map[string]EvidenceMapping `json:"evidence"`
-}
-
-type LongMemEvalImporter struct {
-	loader CorpusLoader
-}
-
-// BenchmarkScopeCleaner is implemented by the database-backed benchmark
-// runtime. It intentionally accepts only a derived benchmark scope so cache
-// cleanup can never request deletion of a caller's production scope.
-type BenchmarkScopeCleaner interface {
-	CleanBenchmarkScope(context.Context, memory.Scope) error
-}
-
-type LongMemEvalCleanupResult struct {
-	DatabaseScopeCleaned bool             `json:"database_scope_cleaned"`
-	Artifacts            RunCleanupResult `json:"artifacts"`
-}
-
-type LongMemEvalRunCleaner struct {
-	cache        Cache
-	scopeCleaner BenchmarkScopeCleaner
-}
-
-func NewLongMemEvalRunCleaner(cache Cache, scopeCleaner BenchmarkScopeCleaner) LongMemEvalRunCleaner {
-	return LongMemEvalRunCleaner{cache: cache, scopeCleaner: scopeCleaner}
-}
-
-func NewLongMemEvalImporter(ingestor memory.EventIngestor) LongMemEvalImporter {
-	return LongMemEvalImporter{loader: NewCorpusLoader(ingestor)}
-}
-
-func (i LongMemEvalImporter) Import(ctx context.Context, base memory.Scope, runID string, corpus NormalizedCorpus) (LongMemEvalImport, error) {
-	run, err := NewRunScope(base, "longmemeval", runID)
-	if err != nil {
-		return LongMemEvalImport{}, fmt.Errorf("create LongMemEval benchmark scope: %w", err)
-	}
-	evidence, err := i.loader.Load(ctx, run, corpus)
-	if err != nil {
-		return LongMemEvalImport{}, fmt.Errorf("load LongMemEval benchmark corpus: %w", err)
-	}
-	return LongMemEvalImport{Run: run, Evidence: evidence}, nil
-}
-
-func (c LongMemEvalRunCleaner) Clean(ctx context.Context, manifest DatasetManifest, run BenchmarkRunScope, retainReport bool) (LongMemEvalCleanupResult, error) {
-	if c.scopeCleaner == nil {
-		return LongMemEvalCleanupResult{}, fmt.Errorf("benchmark database scope cleaner is required")
-	}
-	if run.Dataset != "longmemeval" || run.Scope.Project != "benchmark-longmemeval" || !strings.HasPrefix(run.Scope.Namespace, "run-") {
-		return LongMemEvalCleanupResult{}, &StatusError{Status: StatusInvalidManifest, Message: "LongMemEval cleanup requires a derived benchmark run scope"}
-	}
-	if manifest.Name != "longmemeval" {
-		return LongMemEvalCleanupResult{}, &StatusError{Status: StatusInvalidManifest, Message: "LongMemEval cleanup requires a LongMemEval manifest"}
-	}
-	if err := c.scopeCleaner.CleanBenchmarkScope(ctx, run.Scope); err != nil {
-		return LongMemEvalCleanupResult{}, fmt.Errorf("clean LongMemEval database scope: %w", err)
-	}
-	artifacts, err := c.cache.CleanRunArtifacts(manifest, run.ID, retainReport)
-	if err != nil {
-		return LongMemEvalCleanupResult{}, fmt.Errorf("clean LongMemEval run artifacts: %w", err)
-	}
-	return LongMemEvalCleanupResult{DatabaseScopeCleaned: true, Artifacts: artifacts}, nil
-}
-
 func (l CorpusLoader) Load(ctx context.Context, run BenchmarkRunScope, corpus NormalizedCorpus) (map[string]EvidenceMapping, error) {
 	if l.ingestor == nil {
 		return nil, fmt.Errorf("benchmark event ingestor is required")
@@ -173,11 +104,9 @@ func parseObservedAt(value string) (time.Time, error) {
 	if strings.TrimSpace(value) == "" {
 		return time.Time{}, nil
 	}
-	for _, layout := range []string{time.RFC3339, "2006-01-02", "2006/01/02 (Mon) 15:04"} {
-		parsed, err := time.Parse(layout, value)
-		if err == nil {
-			return parsed.UTC(), nil
-		}
+	parsed, err := time.Parse(time.RFC3339, value)
+	if err != nil {
+		return time.Time{}, fmt.Errorf("parse observed_at: %w", err)
 	}
-	return time.Time{}, fmt.Errorf("parse observed_at %q: unsupported timestamp format", value)
+	return parsed, nil
 }

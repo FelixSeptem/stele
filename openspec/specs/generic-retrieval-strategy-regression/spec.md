@@ -27,3 +27,4 @@ The generic retrieval runner SHALL use benchmark-only project, tenant, and names
 #### Scenario: Complete a generic IR run
 - **WHEN** a generic retrieval run imports and queries its corpus
 - **THEN** all returned records belong to the run scope and the report includes isolation and lifecycle safety outcomes
+

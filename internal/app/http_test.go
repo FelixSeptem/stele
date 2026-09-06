@@ -30,6 +30,26 @@ type stubReadinessChecker struct {
 	err error
 }
 
+type stubContextProjectionAdminService struct {
+	got memory.ContextProjectionRebuildRequest
+}
+
+type projectionReaderForHTTPTest struct {
+	projection memory.ContextProjection
+}
+
+func (r projectionReaderForHTTPTest) ReadLatestContextProjection(_ context.Context, scope memory.Scope, kind memory.ContextProjectionKind) (memory.ContextProjection, error) {
+	if kind != r.projection.Kind || scope != r.projection.Scope {
+		return memory.ContextProjection{}, pgx.ErrNoRows
+	}
+	return r.projection, nil
+}
+
+func (s *stubContextProjectionAdminService) RebuildContextProjection(_ context.Context, input memory.ContextProjectionRebuildRequest) (memory.ContextProjection, error) {
+	s.got = input
+	return memory.ContextProjection{ID: "00000000-0000-0000-0000-000000000001", Scope: input.Scope, Kind: input.Kind, Version: 2, SchemaVersion: input.SchemaVersion, PolicyVersion: input.Policy.Version, RendererVersion: input.RendererVersion, Status: memory.ContextProjectionStatusActive}, nil
+}
+
 type stubPrincipalAuthorizer struct {
 	principal auth.Principal
 	granted   bool
@@ -1070,6 +1090,25 @@ func TestNewHTTPHandlerServesHealthAndReadiness(t *testing.T) {
 	}
 }
 
+func TestNewHTTPHandlerRebuildsContextProjectionOnlyForAdminScope(t *testing.T) {
+	service := &stubContextProjectionAdminService{}
+	handler := NewHTTPHandler(HTTPDependencies{
+		AdminAPIKeys:           auth.StaticAPIKeys{"admin-key": {}},
+		ContextProjectionAdmin: service,
+	})
+	req := httptest.NewRequest(http.MethodPost, "/v1/admin/context-projections:rebuild", strings.NewReader(`{"kind":"always_visible","limit":12,"schema_version":"schema-v1","policy_version":"policy-v1","renderer_version":"renderer-v1"}`))
+	setAdminActionHeaders(req)
+	resp := httptest.NewRecorder()
+	handler.ServeHTTP(resp, req)
+	if resp.Code != http.StatusCreated {
+		t.Fatalf("status=%d body=%s, want 201", resp.Code, resp.Body.String())
+	}
+	wantScope := memory.Scope{Tenant: "tenant-a", Project: "project-a", Namespace: "namespace-a"}
+	if service.got.Scope != wantScope || service.got.Kind != memory.ContextProjectionKindAlwaysVisible || service.got.Limit != 12 || service.got.Policy.Version != "policy-v1" {
+		t.Fatalf("rebuild request = %+v, want exact scoped operator request", service.got)
+	}
+}
+
 func TestNewHTTPHandlerMarksReadinessFailure(t *testing.T) {
 	handler := NewHTTPHandler(HTTPDependencies{
 		Readiness: stubReadinessChecker{err: errors.New("db unavailable")},
@@ -1096,6 +1135,65 @@ func TestNewHTTPHandlerServesLivenessReadinessAndMetrics(t *testing.T) {
 		if rec.Code != http.StatusOK {
 			t.Fatalf("%s status = %d, want %d", path, rec.Code, http.StatusOK)
 		}
+	}
+}
+
+func TestNewHTTPHandlerServesRuntimeOpenAPIWithCacheValidator(t *testing.T) {
+	handler := NewHTTPHandler(HTTPDependencies{Contract: RuntimeContract{
+		ServiceVersion: "1.2.3",
+		BuildID:        "commit-123",
+		SchemaVersion:  1,
+	}})
+
+	req := httptest.NewRequest(http.MethodGet, "/openapi.yaml", nil)
+	rec := httptest.NewRecorder()
+	handler.ServeHTTP(rec, req)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d, want %d", rec.Code, http.StatusOK)
+	}
+	if !strings.Contains(rec.Body.String(), "openapi: 3.1.0") {
+		t.Fatalf("OpenAPI body missing authoritative document")
+	}
+	if got := rec.Header().Get("Content-Type"); !strings.Contains(got, "application/yaml") {
+		t.Fatalf("Content-Type = %q, want YAML", got)
+	}
+	etag := rec.Header().Get("ETag")
+	if etag == "" {
+		t.Fatal("OpenAPI response missing ETag")
+	}
+
+	conditional := httptest.NewRequest(http.MethodGet, "/openapi.yaml", nil)
+	conditional.Header.Set("If-None-Match", etag)
+	conditionalRec := httptest.NewRecorder()
+	handler.ServeHTTP(conditionalRec, conditional)
+	if conditionalRec.Code != http.StatusNotModified {
+		t.Fatalf("conditional status = %d, want %d", conditionalRec.Code, http.StatusNotModified)
+	}
+}
+
+func TestNewHTTPHandlerServesBoundedRuntimeVersion(t *testing.T) {
+	handler := NewHTTPHandler(HTTPDependencies{Contract: RuntimeContract{
+		ServiceVersion: "1.2.3",
+		BuildID:        "commit-123",
+		BuildTimestamp: "2026-08-27T00:00:00Z",
+		SchemaVersion:  1,
+	}})
+
+	req := httptest.NewRequest(http.MethodGet, "/version", nil)
+	rec := httptest.NewRecorder()
+	handler.ServeHTTP(rec, req)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d, want %d", rec.Code, http.StatusOK)
+	}
+	var body map[string]any
+	if err := json.Unmarshal(rec.Body.Bytes(), &body); err != nil {
+		t.Fatalf("decode version response: %v", err)
+	}
+	if body["service_version"] != "1.2.3" || body["build_id"] != "commit-123" || body["schema_version"] != float64(1) {
+		t.Fatalf("version response = %#v, want bounded contract metadata", body)
+	}
+	if _, found := body["postgres_dsn"]; found {
+		t.Fatalf("version response leaked configuration: %#v", body)
 	}
 }
 
@@ -1437,6 +1535,14 @@ func TestNewHTTPHandlerRecoversFromPanic(t *testing.T) {
 func TestNewHTTPServerUsesConfiguredAddress(t *testing.T) {
 	server := NewHTTPServer(":9090", HTTPDependencies{
 		Readiness: stubReadinessChecker{},
+		HTTP: HTTPRuntimeLimits{
+			MaxRequestBodyBytes: 12345,
+			MaxHeaderBytes:      23456,
+			ReadHeaderTimeout:   3 * time.Second,
+			ReadTimeout:         4 * time.Second,
+			WriteTimeout:        5 * time.Second,
+			IdleTimeout:         6 * time.Second,
+		},
 	})
 
 	if server.Addr != ":9090" {
@@ -1445,6 +1551,9 @@ func TestNewHTTPServerUsesConfiguredAddress(t *testing.T) {
 
 	if server.Handler == nil {
 		t.Fatal("server.Handler = nil, want handler")
+	}
+	if server.MaxHeaderBytes != 23456 || server.ReadHeaderTimeout != 3*time.Second || server.ReadTimeout != 4*time.Second || server.WriteTimeout != 5*time.Second || server.IdleTimeout != 6*time.Second {
+		t.Fatalf("server limits = %+v, want configured limits", server)
 	}
 }
 
@@ -1468,6 +1577,32 @@ func TestNewHTTPHandlerReturnsServerErrorWhenIngestFails(t *testing.T) {
 
 	if rec.Code != http.StatusInternalServerError {
 		t.Fatalf("status = %d, want %d", rec.Code, http.StatusInternalServerError)
+	}
+}
+
+func TestNewHTTPHandlerRejectsOversizedJSONBodyBeforeIngest(t *testing.T) {
+	ingestor := &stubEventIngestor{}
+	handler := NewHTTPHandler(HTTPDependencies{
+		HTTP:          HTTPRuntimeLimits{MaxRequestBodyBytes: 32},
+		APIKeys:       map[string]struct{}{"test-key": {}},
+		EventIngestor: ingestor,
+	})
+
+	req := httptest.NewRequest(http.MethodPost, "/v1/events", strings.NewReader(`{"event_type":"conversation.message","content":"this payload is larger than the configured limit"}`))
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("X-API-Key", "test-key")
+	req.Header.Set("X-Stele-Tenant", "tenant-a")
+	req.Header.Set("X-Stele-Project", "project-a")
+	req.Header.Set("X-Stele-Namespace", "namespace-a")
+	rec := httptest.NewRecorder()
+
+	handler.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusRequestEntityTooLarge {
+		t.Fatalf("status = %d, want %d", rec.Code, http.StatusRequestEntityTooLarge)
+	}
+	if ingestor.ingestCalls != 0 {
+		t.Fatal("ingestor called for oversized request")
 	}
 }
 
@@ -1622,6 +1757,102 @@ func TestNewHTTPHandlerAssemblesContext(t *testing.T) {
 	}
 	if !assembler.gotInput.IncludeFeedbackDiagnostics || !assembler.gotInput.FeedbackAwareRanking {
 		t.Fatalf("feedback flags = %v/%v, want per-request diagnostics and ranking", assembler.gotInput.IncludeFeedbackDiagnostics, assembler.gotInput.FeedbackAwareRanking)
+	}
+}
+
+func TestNewHTTPHandlerProjectionContextPreservesCitationAndSectionContracts(t *testing.T) {
+	scope := memory.Scope{Tenant: "tenant-a", Project: "project-a", Namespace: "namespace-a"}
+	projection := memory.ContextProjection{
+		ID: "projection-1", Scope: scope, Kind: memory.ContextProjectionKindAlwaysVisible,
+		Version: 2, SchemaVersion: "schema-v1", PolicyVersion: "policy-v1", RendererVersion: "renderer-v1",
+		Status: memory.ContextProjectionStatusActive,
+		Items: []memory.ContextProjectionItem{{
+			ID:     "item-1",
+			Source: memory.ContextProjectionSource{Kind: memory.ContextProjectionSourceCanonicalVersion, ID: "version-1", MemoryID: "memory-1", Version: 3, Scope: scope},
+			Class:  memory.MemoryClassProfile, LifecycleState: memory.MemoryStateActive,
+			Text: "User prefers concise answers.", SortKey: "01",
+			Citation: memory.ProjectionCitation{MemoryID: "memory-1", Operation: "context_projection"},
+		}},
+	}
+	assembler := retrieval.NewService(retrieval.ServiceDependencies{
+		Projections:                  projectionReaderForHTTPTest{projection: projection},
+		ProjectionConsumptionEnabled: true,
+	})
+	handler := NewHTTPHandler(HTTPDependencies{
+		Readiness:        stubReadinessChecker{},
+		APIKeys:          map[string]struct{}{"test-key": {}},
+		ContextAssembler: assembler,
+	})
+
+	req := httptest.NewRequest(http.MethodPost, "/v1/context/assemble", strings.NewReader(`{"query":"preferences","budget":2,"include_diagnostics":true}`))
+	setAPIScopeHeaders(req)
+	rec := httptest.NewRecorder()
+	handler.ServeHTTP(rec, req)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d body=%s, want 200", rec.Code, rec.Body.String())
+	}
+	body := rec.Body.String()
+	for _, expected := range []string{`"profile"`, `"recent_session"`, `"citations"`, `"memory-1"`, `"context_projection"`} {
+		if !strings.Contains(body, expected) {
+			t.Fatalf("body = %s, missing %q", body, expected)
+		}
+	}
+	for _, forbidden := range []string{"source_watermark", "canonical_version_content", "tenant-b", "raw_event_payload"} {
+		if strings.Contains(body, forbidden) {
+			t.Fatalf("body = %s, contains forbidden projection detail %q", body, forbidden)
+		}
+	}
+}
+
+func TestProjectionEnabledHandlerPreservesSessionAndProofScopeContracts(t *testing.T) {
+	scope := memory.Scope{Tenant: "tenant-a", Project: "project-a", Namespace: "namespace-a"}
+	projection := memory.ContextProjection{
+		ID: "projection-1", Scope: scope, Kind: memory.ContextProjectionKindAlwaysVisible,
+		Version: 1, SchemaVersion: "schema-v1", PolicyVersion: "policy-v1", RendererVersion: "renderer-v1",
+		Status: memory.ContextProjectionStatusActive,
+	}
+	sessionService := &stubMemorySessionService{}
+	proofService := &stubScopeProofAdminService{}
+	handler := NewHTTPHandler(HTTPDependencies{
+		Readiness:    stubReadinessChecker{},
+		APIKeys:      map[string]struct{}{"test-key": {}},
+		AdminAPIKeys: map[string]struct{}{"admin-key": {}},
+		ContextAssembler: retrieval.NewService(retrieval.ServiceDependencies{
+			Projections:                  projectionReaderForHTTPTest{projection: projection},
+			ProjectionConsumptionEnabled: true,
+		}),
+		MemorySession:   sessionService,
+		ScopeProofAdmin: proofService,
+	})
+
+	contextReq := httptest.NewRequest(http.MethodPost, "/v1/context/assemble", strings.NewReader(`{"query":"q","budget":1}`))
+	setAPIScopeHeaders(contextReq)
+	contextResp := httptest.NewRecorder()
+	handler.ServeHTTP(contextResp, contextReq)
+	if contextResp.Code != http.StatusOK {
+		t.Fatalf("context status = %d body=%s, want 200", contextResp.Code, contextResp.Body.String())
+	}
+
+	sessionReq := httptest.NewRequest(http.MethodGet, "/v1/memory-sessions?limit=1", nil)
+	setAPIScopeHeaders(sessionReq)
+	sessionResp := httptest.NewRecorder()
+	handler.ServeHTTP(sessionResp, sessionReq)
+	if sessionResp.Code != http.StatusOK {
+		t.Fatalf("session status = %d body=%s, want 200", sessionResp.Code, sessionResp.Body.String())
+	}
+	if sessionService.gotListInput.Scope != scope {
+		t.Fatalf("session scope = %+v, want exact request scope", sessionService.gotListInput.Scope)
+	}
+
+	proofReq := httptest.NewRequest(http.MethodGet, "/v1/admin/scope-proofs?limit=1", nil)
+	setAdminScopeHeaders(proofReq)
+	proofResp := httptest.NewRecorder()
+	handler.ServeHTTP(proofResp, proofReq)
+	if proofResp.Code != http.StatusOK {
+		t.Fatalf("proof status = %d body=%s, want 200", proofResp.Code, proofResp.Body.String())
+	}
+	if proofService.gotListInput.Scope != scope {
+		t.Fatalf("proof scope = %+v, want exact request scope", proofService.gotListInput.Scope)
 	}
 }
 

@@ -27,3 +27,4 @@ The system SHALL report context-length buckets, needle count or depth, latency, 
 #### Scenario: Produce a stress report
 - **WHEN** a stress subset completes across multiple context buckets
 - **THEN** the report includes per-bucket outcomes, run budget, input checksums, capability mode, and an explicit non-gating classification
+

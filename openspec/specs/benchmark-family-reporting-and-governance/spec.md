@@ -34,3 +34,4 @@ The expansion SHALL not be marked complete until LongMemEval has completed at le
 #### Scenario: Evaluate completion readiness
 - **WHEN** the change completion command checks benchmark artifacts
 - **THEN** it passes only when all required family evidence and provenance are present and synthetic smoke alone is rejected
+

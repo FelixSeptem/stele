@@ -2,6 +2,7 @@ package app
 
 import (
 	"context"
+	"crypto/sha256"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -21,6 +22,7 @@ import (
 	"github.com/FelixSeptem/stele/internal/retrieval"
 	"github.com/FelixSeptem/stele/internal/telemetry"
 	"github.com/FelixSeptem/stele/internal/workflow"
+	"github.com/FelixSeptem/stele/openapi"
 	"github.com/jackc/pgx/v5"
 )
 
@@ -29,6 +31,8 @@ type ReadinessChecker interface {
 }
 
 type HTTPDependencies struct {
+	HTTP                      HTTPRuntimeLimits
+	Contract                  RuntimeContract
 	Readiness                 ReadinessChecker
 	APIKeys                   auth.StaticAPIKeys
 	AdminAPIKeys              auth.StaticAPIKeys
@@ -52,11 +56,47 @@ type HTTPDependencies struct {
 	TaskEvaluations           TaskEvaluationService
 	RankingRollout            RankingRolloutAdminService
 	AssuranceAdmin            AssuranceAdminService
+	ContextProjectionAdmin    ContextProjectionAdminService
 	Workflow                  WorkflowService
 	MemoryHistoryRead         MemoryHistoryReader
 	JobExecutionRead          JobExecutionReader
 	Metrics                   MetricsRecorder
 	Logger                    *log.Logger
+}
+
+type ContextProjectionAdminService interface {
+	RebuildContextProjection(context.Context, memory.ContextProjectionRebuildRequest) (memory.ContextProjection, error)
+}
+
+type RuntimeContract struct {
+	ServiceVersion string
+	BuildID        string
+	BuildTimestamp string
+	SchemaVersion  int64
+}
+
+func (c *RuntimeContract) Normalize() {
+	if c.ServiceVersion == "" {
+		c.ServiceVersion = "unknown"
+	}
+	if c.BuildID == "" {
+		c.BuildID = "unknown"
+	}
+	if c.BuildTimestamp == "" {
+		c.BuildTimestamp = "unknown"
+	}
+	if c.SchemaVersion <= 0 {
+		c.SchemaVersion = 1
+	}
+}
+
+type HTTPRuntimeLimits struct {
+	MaxRequestBodyBytes int64
+	MaxHeaderBytes      int
+	ReadHeaderTimeout   time.Duration
+	ReadTimeout         time.Duration
+	WriteTimeout        time.Duration
+	IdleTimeout         time.Duration
 }
 
 type requestIDContextKey struct{}
@@ -546,6 +586,14 @@ type governanceRecoveryRequest struct {
 	ScheduledFor string `json:"scheduled_for"`
 }
 
+type contextProjectionRebuildRequest struct {
+	Kind            memory.ContextProjectionKind `json:"kind"`
+	Limit           int                          `json:"limit"`
+	SchemaVersion   string                       `json:"schema_version"`
+	PolicyVersion   string                       `json:"policy_version"`
+	RendererVersion string                       `json:"renderer_version"`
+}
+
 type embeddingCutoverCreateRequest struct {
 	Target   memory.EmbeddingCutoverTarget `json:"target"`
 	Classes  []memory.MemoryClass          `json:"classes"`
@@ -638,6 +686,34 @@ type contextAssembleRequest struct {
 
 func NewHTTPHandler(deps HTTPDependencies) http.Handler {
 	mux := http.NewServeMux()
+	mux.HandleFunc("GET /openapi.yaml", func(w http.ResponseWriter, r *http.Request) {
+		body := []byte(openapi.SpecYAML())
+		etag := fmt.Sprintf(`"%x"`, sha256.Sum256(body))
+		w.Header().Set("ETag", etag)
+		if r.Header.Get("If-None-Match") == etag {
+			w.WriteHeader(http.StatusNotModified)
+			return
+		}
+		w.Header().Set("Content-Type", "application/yaml; charset=utf-8")
+		w.WriteHeader(http.StatusOK)
+		_, _ = w.Write(body)
+	})
+	mux.HandleFunc("GET /version", func(w http.ResponseWriter, r *http.Request) {
+		body := []byte(openapi.SpecYAML())
+		contract := deps.Contract
+		contract.Normalize()
+		writeJSON(w, http.StatusOK, map[string]any{
+			"service_version": contract.ServiceVersion,
+			"build_id":        contract.BuildID,
+			"build_timestamp": contract.BuildTimestamp,
+			"openapi_digest":  fmt.Sprintf("sha256:%x", sha256.Sum256(body)),
+			"schema_version":  contract.SchemaVersion,
+			"migration_compatibility": map[string]any{
+				"minimum": 1,
+				"maximum": contract.SchemaVersion,
+			},
+		})
+	})
 	mux.HandleFunc("GET /health", func(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, http.StatusOK, map[string]string{"status": "ok"})
 	})
@@ -1215,6 +1291,15 @@ func NewHTTPHandler(deps HTTPDependencies) http.Handler {
 	)
 	mux.Handle("POST /v1/admin/embedding/rebuilds/{embedding_action}", adminEmbeddingRebuildAction)
 
+	adminContextProjectionRebuild := auth.APIKeyMiddleware(deps.AdminAPIKeys)(
+		auth.ScopeMiddleware()(
+			http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				handleAdminContextProjectionRebuild(w, r, deps.ContextProjectionAdmin)
+			}),
+		),
+	)
+	mux.Handle("POST /v1/admin/context-projections:rebuild", adminContextProjectionRebuild)
+
 	adminEmbeddingCutovers := auth.APIKeyMiddleware(deps.AdminAPIKeys)(
 		auth.ScopeMiddleware()(
 			http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -1313,7 +1398,19 @@ func NewHTTPHandler(deps HTTPDependencies) http.Handler {
 		}
 		handler = principalProtectedRoutes(handler, deps.PrincipalAuthorizer, observer)
 	}
-	return requestMiddleware(handler, deps.Logger)
+	return requestMiddleware(limitRequestBody(handler, deps.HTTP.MaxRequestBodyBytes), deps.Logger)
+}
+
+func limitRequestBody(next http.Handler, maxBytes int64) http.Handler {
+	if maxBytes <= 0 {
+		return next
+	}
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Body != nil {
+			r.Body = http.MaxBytesReader(w, r.Body, maxBytes)
+		}
+		next.ServeHTTP(w, r)
+	})
 }
 
 func principalProtectedRoutes(next http.Handler, authorizer auth.PrincipalAuthorizer, observer telemetry.Observer) http.Handler {
@@ -1332,8 +1429,13 @@ func principalProtectedRoutes(next http.Handler, authorizer auth.PrincipalAuthor
 
 func NewHTTPServer(addr string, deps HTTPDependencies) *http.Server {
 	return &http.Server{
-		Addr:    addr,
-		Handler: NewHTTPHandler(deps),
+		Addr:              addr,
+		Handler:           NewHTTPHandler(deps),
+		ReadHeaderTimeout: deps.HTTP.ReadHeaderTimeout,
+		ReadTimeout:       deps.HTTP.ReadTimeout,
+		WriteTimeout:      deps.HTTP.WriteTimeout,
+		IdleTimeout:       deps.HTTP.IdleTimeout,
+		MaxHeaderBytes:    deps.HTTP.MaxHeaderBytes,
 	}
 }
 
@@ -1391,7 +1493,7 @@ func handleEventIngest(w http.ResponseWriter, r *http.Request, ingestor memory.E
 	decoder := json.NewDecoder(r.Body)
 	decoder.DisallowUnknownFields()
 	if err := decoder.Decode(&req); err != nil {
-		http.Error(w, "invalid request body", http.StatusBadRequest)
+		writeJSONDecodeError(w, err)
 		return
 	}
 
@@ -5281,7 +5383,7 @@ func decodeJSONBody(w http.ResponseWriter, r *http.Request, target any) bool {
 	decoder := json.NewDecoder(r.Body)
 	decoder.DisallowUnknownFields()
 	if err := decoder.Decode(target); err != nil {
-		http.Error(w, "invalid request body", http.StatusBadRequest)
+		writeJSONDecodeError(w, err)
 		return false
 	}
 	if decoder.More() {
@@ -5290,6 +5392,15 @@ func decodeJSONBody(w http.ResponseWriter, r *http.Request, target any) bool {
 	}
 
 	return true
+}
+
+func writeJSONDecodeError(w http.ResponseWriter, err error) {
+	var maxBytesErr *http.MaxBytesError
+	if errors.As(err, &maxBytesErr) {
+		http.Error(w, "request body too large", http.StatusRequestEntityTooLarge)
+		return
+	}
+	http.Error(w, "invalid request body", http.StatusBadRequest)
 }
 
 func writeAdminManualMutationError(w http.ResponseWriter, err error, fallback string) {

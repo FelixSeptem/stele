@@ -9,17 +9,34 @@ import (
 	"errors"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 
 	"github.com/FelixSeptem/stele/internal/app"
 	"github.com/FelixSeptem/stele/internal/benchmark"
 	"github.com/FelixSeptem/stele/internal/config"
-	"github.com/FelixSeptem/stele/internal/memory"
+	"github.com/FelixSeptem/stele/internal/storage/postgres"
 )
 
 type stubRunner struct {
 	called bool
 	err    error
+}
+
+type stubMigrationCommandRunner struct {
+	state     postgres.MigrationState
+	statusErr error
+	applyErr  error
+	applied   bool
+}
+
+func (s *stubMigrationCommandRunner) Status(context.Context, string) (postgres.MigrationState, error) {
+	return s.state, s.statusErr
+}
+
+func (s *stubMigrationCommandRunner) Apply(context.Context, string) error {
+	s.applied = true
+	return s.applyErr
 }
 
 func TestRunBenchmarkListPrintsDatasetSupportStates(t *testing.T) {
@@ -45,155 +62,142 @@ func TestRunBenchmarkSmokeWritesOfflineReport(t *testing.T) {
 	}
 }
 
-func TestRunBenchmarkCleanRemovesOnlyNamedRunArtifacts(t *testing.T) {
-	dataDir := t.TempDir()
-	t.Setenv("STELE_BENCHMARK_DATA_DIR", dataDir)
-	entry, ok := benchmark.DefaultRegistry().Get("locomo")
-	if !ok {
-		t.Fatal("locomo registry entry missing")
-	}
-	paths, err := benchmark.NewCache(dataDir).EnsureManifestLayout(entry.Manifest)
-	if err != nil {
-		t.Fatal(err)
-	}
-	runEmbeddings := filepath.Join(paths.Embeddings, "run-1")
-	if err := os.MkdirAll(runEmbeddings, 0o755); err != nil {
-		t.Fatal(err)
-	}
-	if err := os.WriteFile(filepath.Join(runEmbeddings, "vectors.bin"), []byte("vectors"), 0o644); err != nil {
-		t.Fatal(err)
-	}
-	var stdout, stderr bytes.Buffer
-	if err := runBenchmark([]string{"clean", "locomo", "run-1"}, &stdout, &stderr); err != nil {
-		t.Fatal(err)
-	}
-	if !bytes.Contains(stdout.Bytes(), []byte(`"embeddings_removed":true`)) {
-		t.Fatalf("unexpected cleanup result: %s", stdout.String())
-	}
-	if _, err := os.Stat(runEmbeddings); !os.IsNotExist(err) {
-		t.Fatalf("run embeddings remain: %v", err)
+func TestRunBenchmarkPostgresSmokeRequiresDSN(t *testing.T) {
+	t.Setenv("STELE_POSTGRES_DSN", "")
+	var stdout bytes.Buffer
+	var stderr bytes.Buffer
+	err := runBenchmark([]string{"run-postgres-smoke"}, &stdout, &stderr)
+	if err == nil || !strings.Contains(err.Error(), "STELE_POSTGRES_DSN") {
+		t.Fatalf("expected DSN prerequisite error, got %v", err)
 	}
 }
 
-func TestRunBenchmarkFamilyActionsUseChecksumLockedLocalArtifacts(t *testing.T) {
-	dataDir := t.TempDir()
-	rawSource := filepath.Join("..", "..", "internal", "benchmark", "testdata", "locomo-smoke-fixture-v1.json")
-	raw, err := os.ReadFile(rawSource)
-	if err != nil {
+func TestRunBenchmarkFetchUsesExplicitManifestAndLocalSource(t *testing.T) {
+	data := []byte(`{"samples":[]}`)
+	digest := sha256.Sum256(data)
+	sourcePath := filepath.Join(t.TempDir(), "locomo.json")
+	if err := os.WriteFile(sourcePath, data, 0o600); err != nil {
 		t.Fatal(err)
 	}
-	digest := sha256.Sum256(raw)
-	manifest := benchmark.DatasetManifest{
+	manifestPath := writeBenchmarkManifest(t, benchmark.DatasetManifest{
 		SchemaVersion:     benchmark.SchemaVersion,
-		Family:            benchmark.FamilyAgentMemory,
 		Name:              "locomo",
 		Version:           "cli-v1",
-		License:           "repository-test-fixture",
-		UpstreamURL:       "https://example.test/locomo",
-		UpstreamRevision:  "cli-v1",
+		License:           "test-only",
+		UpstreamURL:       "https://example.invalid/locomo",
+		UpstreamRevision:  "test-revision",
 		SHA256:            hex.EncodeToString(digest[:]),
-		QRELChecksum:      "0000000000000000000000000000000000000000000000000000000000000000",
 		SourcePath:        "locomo.json",
-		ConversionVersion: "cli-v1",
+		ConversionVersion: "locomo-v1",
 		Redistribution:    benchmark.RedistributionPermitted,
 		Support:           benchmark.SupportRunnable,
-		Splits:            map[string]benchmark.SplitSpec{"smoke": {Identity: "locomo/cli-smoke", Source: "locomo.json"}},
-		Embedding:         benchmark.EmbeddingProfile{Name: "lexical-only", Normalization: "none"},
-	}
-	encodedManifest, err := json.Marshal(manifest)
-	if err != nil {
+		Splits:            map[string]benchmark.SplitSpec{"smoke": {Source: "locomo.json"}},
+		Embedding:         benchmark.EmbeddingProfile{Name: "none", Normalization: "none"},
+	})
+	dataDir := t.TempDir()
+	var stdout bytes.Buffer
+	var stderr bytes.Buffer
+	if err := runBenchmark([]string{"fetch", "--manifest", manifestPath, "--source", sourcePath, "--data-dir", dataDir}, &stdout, &stderr); err != nil {
 		t.Fatal(err)
 	}
-	manifestPath := filepath.Join(t.TempDir(), "manifest.json")
-	if err := os.WriteFile(manifestPath, encodedManifest, 0o600); err != nil {
-		t.Fatal(err)
+	if !bytes.Contains(stdout.Bytes(), []byte(`"status":"success"`)) || !bytes.Contains(stdout.Bytes(), []byte(`"raw_path"`)) {
+		t.Fatalf("unexpected fetch output: %s", stdout.String())
 	}
-	t.Setenv("STELE_BENCHMARK_DATA_DIR", dataDir)
-	t.Setenv("STELE_BENCHMARK_MANIFEST", manifestPath)
-	t.Setenv("STELE_BENCHMARK_RAW_SOURCE", rawSource)
-	t.Setenv("STELE_BENCHMARK_DATASET", manifest.Name)
-	t.Setenv("STELE_BENCHMARK_DATA_VERSION", manifest.Version)
-	t.Setenv("STELE_BENCHMARK_MODE", "smoke")
-	t.Setenv("STELE_BENCHMARK_STRATEGY", "lexical")
-
-	for _, command := range []string{"fetch", "normalize", "run"} {
-		var stdout, stderr bytes.Buffer
-		if err := runBenchmark([]string{command, "locomo"}, &stdout, &stderr); err != nil {
-			t.Fatalf("benchmark %s: %v", command, err)
-		}
-		if !bytes.Contains(stdout.Bytes(), []byte(`"status":"success"`)) || !bytes.Contains(stdout.Bytes(), []byte(`"family":"agent_memory"`)) {
-			t.Fatalf("unexpected benchmark %s output: %s", command, stdout.String())
-		}
-	}
-
-	run, err := benchmark.NewRunScope(memory.Scope{Tenant: "benchmark", Project: "source", Namespace: "source"}, manifest.Name, "cli-report")
-	if err != nil {
-		t.Fatal(err)
-	}
-	report := benchmark.NewFamilyReport(benchmark.FamilyAgentMemory, manifest, "smoke", run.Scope)
-	if _, err := benchmark.NewCache(dataDir).WriteFamilyReport(manifest, run.ID, report); err != nil {
-		t.Fatal(err)
-	}
-	t.Setenv("STELE_BENCHMARK_REPORT_ID", run.ID)
-	var stdout, stderr bytes.Buffer
-	if err := runBenchmark([]string{"report", "locomo"}, &stdout, &stderr); err != nil {
-		t.Fatal(err)
-	}
-	if !bytes.Contains(stdout.Bytes(), []byte(`"dataset":"locomo"`)) || !bytes.Contains(stdout.Bytes(), []byte(`"family":"agent_memory"`)) {
-		t.Fatalf("unexpected benchmark report output: %s", stdout.String())
+	if _, err := os.Stat(filepath.Join(dataDir, "locomo", "cli-v1", "raw", "locomo.json")); err != nil {
+		t.Fatalf("expected verified raw cache: %v", err)
 	}
 }
 
-func TestRunBenchmarkNormalizesChecksumLockedLongMemEvalSmallSubset(t *testing.T) {
-	dataDir := t.TempDir()
-	raw := []byte(`[{"question_id":"q-s","question":"Where does Ana work now?","question_type":"knowledge-update","answer_session_ids":["session-new"],"obsolete_session_ids":["session-old"],"haystack_sessions":[{"session_id":"session-old","session_date":"2024-01-01","turns":[{"turn_id":"old-turn","role":"user","content":"Ana works at the museum."}]},{"session_id":"session-new","session_date":"2024-02-01","turns":[{"turn_id":"new-turn","role":"user","content":"Ana works at the library now."}]}]}]`)
-	digest := sha256.Sum256(raw)
-	manifest := benchmark.DatasetManifest{
+func TestRunBenchmarkNormalizeUsesExplicitScopeAndCachedRawArtifact(t *testing.T) {
+	data := []byte(`{"samples":[{"id":"sample-1","sessions":[{"id":"session-1","turns":[{"id":"turn-1","text":"I prefer tea."}]}],"questions":[{"id":"query-1","text":"What do I prefer?","evidence_turn_ids":["turn-1"]}]}]}`)
+	digest := sha256.Sum256(data)
+	manifestPath := writeBenchmarkManifest(t, benchmark.DatasetManifest{
 		SchemaVersion:     benchmark.SchemaVersion,
-		Family:            benchmark.FamilyAgentMemory,
-		Name:              "longmemeval",
-		Version:           "cli-s-v1",
-		License:           "MIT",
-		UpstreamURL:       "https://www.modelscope.cn/datasets/evalscope/longmemeval-cleaned",
-		UpstreamRevision:  "cli-s-v1",
+		Name:              "locomo",
+		Version:           "cli-v1",
+		License:           "test-only",
+		UpstreamURL:       "https://example.invalid/locomo",
+		UpstreamRevision:  "test-revision",
 		SHA256:            hex.EncodeToString(digest[:]),
-		QRELChecksum:      hex.EncodeToString(digest[:]),
-		SourcePath:        "longmemeval_s_cleaned.json",
-		ConversionVersion: "longmemeval-cleaned-v1",
-		Redistribution:    benchmark.RedistributionRestricted,
+		SourcePath:        "locomo.json",
+		ConversionVersion: "locomo-v1",
+		Redistribution:    benchmark.RedistributionPermitted,
 		Support:           benchmark.SupportRunnable,
-		Splits:            map[string]benchmark.SplitSpec{"s": {Identity: "longmemeval/cli-s", Source: "longmemeval_s_cleaned.json", Checksum: hex.EncodeToString(digest[:])}},
-		Embedding:         benchmark.EmbeddingProfile{Name: "lexical-only", Normalization: "none"},
-	}
-	encodedManifest, err := json.Marshal(manifest)
+		Splits:            map[string]benchmark.SplitSpec{"smoke": {Source: "locomo.json"}},
+		Embedding:         benchmark.EmbeddingProfile{Name: "none", Normalization: "none"},
+	})
+	dataDir := t.TempDir()
+	cache := benchmark.NewCache(dataDir)
+	manifestFile, err := os.Open(manifestPath)
 	if err != nil {
 		t.Fatal(err)
 	}
-	manifestPath := filepath.Join(t.TempDir(), "longmemeval-s-manifest.json")
-	if err := os.WriteFile(manifestPath, encodedManifest, 0o600); err != nil {
+	manifest, err := benchmark.LoadDatasetManifest(manifestFile)
+	manifestFile.Close()
+	if err != nil {
 		t.Fatal(err)
 	}
-	rawSource := filepath.Join(t.TempDir(), "longmemeval_s_cleaned.json")
-	if err := os.WriteFile(rawSource, raw, 0o600); err != nil {
+	if _, err := cache.StoreVerifiedRaw(manifest, bytes.NewReader(data)); err != nil {
 		t.Fatal(err)
 	}
-	t.Setenv("STELE_BENCHMARK_DATA_DIR", dataDir)
-	t.Setenv("STELE_BENCHMARK_MANIFEST", manifestPath)
-	t.Setenv("STELE_BENCHMARK_RAW_SOURCE", rawSource)
-	t.Setenv("STELE_BENCHMARK_SPLIT", "s")
+	var stdout bytes.Buffer
+	var stderr bytes.Buffer
+	if err := runBenchmark([]string{"normalize", "--manifest", manifestPath, "--data-dir", dataDir, "--split", "smoke", "--tenant", "benchmark", "--project", "benchmark-cli", "--namespace", "run-cli"}, &stdout, &stderr); err != nil {
+		t.Fatal(err)
+	}
+	if !bytes.Contains(stdout.Bytes(), []byte(`"status":"success"`)) || !bytes.Contains(stdout.Bytes(), []byte(`"normalized_checksum"`)) {
+		t.Fatalf("unexpected normalize output: %s", stdout.String())
+	}
+	if _, _, err := cache.LoadNormalized(manifest, "smoke"); err != nil {
+		t.Fatalf("expected normalized cache: %v", err)
+	}
+}
 
-	for _, command := range []string{"fetch", "normalize"} {
-		var stdout, stderr bytes.Buffer
-		if err := runBenchmark([]string{command, "longmemeval"}, &stdout, &stderr); err != nil {
-			t.Fatalf("benchmark %s longmemeval: %v", command, err)
-		}
-		if !bytes.Contains(stdout.Bytes(), []byte(`"status":"success"`)) {
-			t.Fatalf("unexpected LongMemEval %s output: %s", command, stdout.String())
-		}
-		if command == "normalize" && !bytes.Contains(stdout.Bytes(), []byte(`"split":"s"`)) {
-			t.Fatalf("LongMemEval normalization must retain the locked split identity: %s", stdout.String())
-		}
+func TestRunBenchmarkRunReportsOfflineAdmission(t *testing.T) {
+	dataDir := t.TempDir()
+	t.Setenv("STELE_BENCHMARK_DATA_DIR", dataDir)
+	t.Setenv("STELE_BENCHMARK_DATASET", "locomo")
+	t.Setenv("STELE_BENCHMARK_DATA_VERSION", "synthetic-smoke-v1")
+	t.Setenv("STELE_BENCHMARK_MODE", "smoke")
+	t.Setenv("STELE_BENCHMARK_STRATEGY", "lexical")
+	var stdout bytes.Buffer
+	var stderr bytes.Buffer
+	if err := runBenchmark([]string{"run"}, &stdout, &stderr); err != nil {
+		t.Fatal(err)
 	}
+	if !bytes.Contains(stdout.Bytes(), []byte(`"status":"success"`)) || !bytes.Contains(stdout.Bytes(), []byte(`"offline":true`)) {
+		t.Fatalf("unexpected run output: %s", stdout.String())
+	}
+}
+
+func TestRunBenchmarkReportReturnsPersistedSmokeReport(t *testing.T) {
+	dataDir := t.TempDir()
+	t.Setenv("STELE_BENCHMARK_DATA_DIR", dataDir)
+	var stdout bytes.Buffer
+	var stderr bytes.Buffer
+	if err := runBenchmark([]string{"run-smoke"}, &stdout, &stderr); err != nil {
+		t.Fatal(err)
+	}
+	stdout.Reset()
+	if err := runBenchmark([]string{"report", "--dataset", "locomo", "--version", "synthetic-smoke-v1", "--name", "locomo-smoke-report-v1.json", "--data-dir", dataDir}, &stdout, &stderr); err != nil {
+		t.Fatal(err)
+	}
+	if !bytes.Contains(stdout.Bytes(), []byte(`"dataset":"locomo"`)) || !bytes.Contains(stdout.Bytes(), []byte(`"report"`)) {
+		t.Fatalf("unexpected report output: %s", stdout.String())
+	}
+}
+
+func writeBenchmarkManifest(t *testing.T, manifest benchmark.DatasetManifest) string {
+	t.Helper()
+	encoded, err := json.Marshal(manifest)
+	if err != nil {
+		t.Fatal(err)
+	}
+	path := filepath.Join(t.TempDir(), "manifest.json")
+	if err := os.WriteFile(path, encoded, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	return path
 }
 
 func (s *stubRunner) Start(ctx context.Context) error {
@@ -250,5 +254,65 @@ func TestRunReturnsRunnerConstructionFailure(t *testing.T) {
 
 	if err := run(); err == nil {
 		t.Fatal("run() error = nil, want runner construction failure")
+	}
+}
+
+func TestRunMigrateRejectsUnknownSubcommand(t *testing.T) {
+	t.Setenv("STELE_POSTGRES_DSN", "postgres://example")
+	if err := runArgs([]string{"migrate", "unknown"}); err == nil {
+		t.Fatal("runArgs() error = nil, want unknown migrate subcommand error")
+	}
+}
+
+func TestRunMigrateStatusIncludesBoundedIntegrityFacts(t *testing.T) {
+	original := newMigrationCommandRunner
+	defer func() { newMigrationCommandRunner = original }()
+	newMigrationCommandRunner = func() migrationCommandRunner {
+		return &stubMigrationCommandRunner{state: postgres.MigrationState{
+			Status:          postgres.MigrationStatusCurrent,
+			IntegrityStatus: postgres.MigrationIntegrityVerified,
+			IntegrityRows:   1,
+			CurrentVersion:  1,
+			LatestVersion:   1,
+		}}
+	}
+	t.Setenv("STELE_POSTGRES_DSN", "postgres://example")
+	var output bytes.Buffer
+	if err := runMigrateWithOutput([]string{"status"}, &output); err != nil {
+		t.Fatalf("runMigrateWithOutput() error = %v", err)
+	}
+	if !strings.Contains(output.String(), "integrity_status=verified") || !strings.Contains(output.String(), "integrity_rows=1") {
+		t.Fatalf("status output = %q, want bounded integrity facts", output.String())
+	}
+}
+
+func TestRunMigrateJSONStatusIncludesIntegrityFacts(t *testing.T) {
+	original := newMigrationCommandRunner
+	defer func() { newMigrationCommandRunner = original }()
+	newMigrationCommandRunner = func() migrationCommandRunner {
+		return &stubMigrationCommandRunner{state: postgres.MigrationState{Status: postgres.MigrationStatusDivergent, IntegrityStatus: postgres.MigrationIntegrityUnknown, CurrentVersion: 1, LatestVersion: 1}}
+	}
+	t.Setenv("STELE_POSTGRES_DSN", "postgres://example")
+	t.Setenv("STELE_MIGRATION_OUTPUT", "json")
+	var output bytes.Buffer
+	if err := runMigrateWithOutput([]string{"status"}, &output); err != nil {
+		t.Fatalf("runMigrateWithOutput() error = %v", err)
+	}
+	if !bytes.Contains(output.Bytes(), []byte(`"integrity_status":"unknown"`)) || !bytes.Contains(output.Bytes(), []byte(`"status":"divergent"`)) {
+		t.Fatalf("JSON status output = %s, want integrity and divergent facts", output.String())
+	}
+}
+
+func TestRunMigrateUpReturnsDivergentIntegrityFailure(t *testing.T) {
+	original := newMigrationCommandRunner
+	defer func() { newMigrationCommandRunner = original }()
+	stub := &stubMigrationCommandRunner{applyErr: errors.New("migration validation failed: status=divergent integrity_status=unknown")}
+	newMigrationCommandRunner = func() migrationCommandRunner { return stub }
+	t.Setenv("STELE_POSTGRES_DSN", "postgres://example")
+	if err := runMigrateWithOutput([]string{"up"}, &bytes.Buffer{}); err == nil || !strings.Contains(err.Error(), "status=divergent") {
+		t.Fatalf("runMigrateWithOutput(up) error = %v, want divergent failure", err)
+	}
+	if !stub.applied {
+		t.Fatal("migration up did not delegate to shared integrity-gated runner")
 	}
 }

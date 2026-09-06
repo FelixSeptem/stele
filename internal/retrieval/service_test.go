@@ -2,6 +2,7 @@ package retrieval
 
 import (
 	"context"
+	"fmt"
 	"testing"
 	"time"
 
@@ -115,6 +116,18 @@ type stubRankingRolloutPolicyReader struct {
 	policy memory.RankingRolloutPolicy
 	err    error
 	inputs []memory.ReadActiveRankingRolloutPolicyInput
+}
+
+type stubContextProjectionReader struct {
+	projections map[memory.ContextProjectionKind]memory.ContextProjection
+}
+
+func (s stubContextProjectionReader) ReadLatestContextProjection(ctx context.Context, scope memory.Scope, kind memory.ContextProjectionKind) (memory.ContextProjection, error) {
+	projection, ok := s.projections[kind]
+	if !ok {
+		return memory.ContextProjection{}, fmt.Errorf("projection not found")
+	}
+	return projection, nil
 }
 
 func (s *stubRankingRolloutPolicyReader) ReadActiveRankingRolloutPolicy(ctx context.Context, input memory.ReadActiveRankingRolloutPolicyInput) (memory.RankingRolloutPolicy, error) {
@@ -691,6 +704,22 @@ func TestServiceAssembleContextReturnsStructuredSections(t *testing.T) {
 
 	if len(contextResult.Citations) < 3 {
 		t.Fatalf("len(Citations) = %d, want at least %d", len(contextResult.Citations), 3)
+	}
+}
+
+func TestServiceAssembleContextConsumesExactScopeProjectionWhenOptedIn(t *testing.T) {
+	scope := memory.Scope{Tenant: "tenant-a", Project: "project-a", Namespace: "namespace-a"}
+	projection := memory.ContextProjection{ID: "projection", Scope: scope, Kind: memory.ContextProjectionKindAlwaysVisible, Version: 1, SchemaVersion: "schema-v1", PolicyVersion: "policy-v1", RendererVersion: "renderer-v1", Status: memory.ContextProjectionStatusActive, Items: []memory.ContextProjectionItem{{ID: "item", Source: memory.ContextProjectionSource{Kind: memory.ContextProjectionSourceCanonicalVersion, ID: "mem-profile", Version: 1, Scope: scope}, Class: memory.MemoryClassProfile, LifecycleState: memory.MemoryStateActive, Text: "projected preference", SortKey: "01", Citation: memory.ProjectionCitation{MemoryID: "mem-profile", Operation: "context_projection"}}}}
+	service := NewService(ServiceDependencies{Lexical: &stubLexicalSource{}, Semantic: &stubSemanticSource{}, Relations: &stubRelationSource{}, Projections: stubContextProjectionReader{projections: map[memory.ContextProjectionKind]memory.ContextProjection{memory.ContextProjectionKindAlwaysVisible: projection}}})
+	result, err := service.AssembleContext(context.Background(), AssembleContextInput{Scope: scope, Query: "preference", Budget: 1, IncludeDiagnostics: true, UseProjections: true})
+	if err != nil {
+		t.Fatalf("AssembleContext() error = %v", err)
+	}
+	if len(result.Profile) != 1 || result.Profile[0].Memory.Content != "projected preference" {
+		t.Fatalf("profile = %+v, want projection-backed profile", result.Profile)
+	}
+	if len(result.Citations) != 1 || result.Citations[0].MemoryID != "mem-profile" {
+		t.Fatalf("citations = %+v, want redacted projection citation", result.Citations)
 	}
 }
 

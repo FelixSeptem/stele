@@ -31,3 +31,4 @@ The system SHALL report profile recall/consistency, temporal update precedence, 
 #### Scenario: Report a specialized regression run
 - **WHEN** a profile, temporal, or multi-hop fixture run completes
 - **THEN** the machine-readable report identifies the subfamily, qrels version, targeted metrics, unmapped evidence count, and safety result
+

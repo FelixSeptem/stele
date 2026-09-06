@@ -114,7 +114,7 @@ SELECT i.request_fingerprint, i.status, e.id, e.tenant, e.project, e.namespace, 
 FROM event_idempotency_records i
 LEFT JOIN raw_events e ON e.id = i.raw_event_id
 WHERE i.principal_id = $1 AND i.tenant = $2 AND i.project = $3 AND i.namespace = $4 AND i.idempotency_key = $5
-FOR UPDATE
+FOR UPDATE OF i
 `
 		var fingerprint, status string
 		var event memory.RawEvent

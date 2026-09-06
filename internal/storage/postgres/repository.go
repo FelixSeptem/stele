@@ -1527,7 +1527,7 @@ RETURNING id, tenant, project, namespace, class, state, content, created_at, upd
 		}
 
 		if err := writeProvenance(ctx, tx, memory.ProvenanceRecord{
-			ID:                input.VersionID + "_prov",
+			ID:                promotionProvenanceID(input.VersionID),
 			Scope:             input.Candidate.Scope,
 			RawEventID:        input.Candidate.SourceRawEventID,
 			CandidateMemoryID: input.Candidate.ID,
@@ -1585,7 +1585,7 @@ RETURNING id, tenant, project, namespace, class, state, content, created_at, upd
 	}
 
 	if err := writeProvenance(ctx, tx, memory.ProvenanceRecord{
-		ID:                input.VersionID + "_prov",
+		ID:                promotionProvenanceID(input.VersionID),
 		Scope:             input.Candidate.Scope,
 		RawEventID:        input.Candidate.SourceRawEventID,
 		CandidateMemoryID: input.Candidate.ID,
@@ -1641,6 +1641,13 @@ RETURNING id, memory_id, version, state, content, created_at, modified_by
 	}
 
 	return version, nil
+}
+
+func promotionProvenanceID(versionID string) string {
+	if _, err := uuid.Parse(versionID); err == nil {
+		return uuid.NewSHA1(uuid.NameSpaceURL, []byte("stele:promotion-provenance:"+versionID)).String()
+	}
+	return versionID + "_prov"
 }
 
 func (r *Repository) CreateSummaryMemory(ctx context.Context, input governance.SummaryMemoryRecord) (memory.CanonicalMemory, memory.MemoryVersion, error) {
@@ -3989,7 +3996,7 @@ func (r *Repository) SearchLexical(ctx context.Context, input retrieval.SearchIn
 		limit = 10
 	}
 
-	const query = `
+	const allTermsQuery = `
 SELECT
 	id,
 	tenant,
@@ -4012,6 +4019,50 @@ WHERE tenant = $1
 ORDER BY lexical_score DESC, updated_at DESC
 LIMIT $7
 `
+	const anyTermsQuery = `
+WITH query_terms AS (
+	SELECT to_tsquery(
+		'simple',
+		NULLIF(
+			array_to_string(
+				ARRAY(
+					SELECT quote_literal(lexeme)
+					FROM unnest(tsvector_to_array(to_tsvector('simple', $4))) AS lexeme
+				),
+				' | '
+			),
+			''
+		)
+	) AS terms
+)
+SELECT
+	id,
+	tenant,
+	project,
+	namespace,
+	class,
+	state,
+	content,
+	created_at,
+	updated_at,
+	ts_rank_cd(search_text, query_terms.terms) AS lexical_score
+FROM canonical_memories
+CROSS JOIN query_terms
+WHERE tenant = $1
+	AND project = $2
+	AND namespace = $3
+	AND state NOT IN ('suppressed', 'forgotten', 'deleted')
+	AND query_terms.terms IS NOT NULL
+	AND search_text @@ query_terms.terms
+	AND ($5::timestamptz IS NULL OR updated_at >= $5)
+	AND ($6::timestamptz IS NULL OR updated_at <= $6)
+ORDER BY lexical_score DESC, updated_at DESC
+LIMIT $7
+`
+	query := allTermsQuery
+	if input.LexicalMatchMode == retrieval.LexicalMatchAnyTerms {
+		query = anyTermsQuery
+	}
 
 	rows, err := r.db.Query(ctx, query, input.Scope.Tenant, input.Scope.Project, input.Scope.Namespace, input.Query, nullableTime(input.TimeFrom), nullableTime(input.TimeTo), limit)
 	if err != nil {

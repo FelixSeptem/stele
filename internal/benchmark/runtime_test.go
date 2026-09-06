@@ -73,7 +73,7 @@ func TestLexicalSmokeAllowsAbsentEmbeddingProfile(t *testing.T) {
 func TestLocalFullAndExtendedUseFullSplit(t *testing.T) {
 	cache := NewCache(t.TempDir())
 	manifest := validManifest()
-	manifest.Splits["full"] = SplitSpec{Identity: "locomo/full", Source: "full.jsonl"}
+	manifest.Splits["full"] = SplitSpec{Source: "full.jsonl"}
 	corpus := NormalizedCorpus{Events: []MemoryEventRecord{{ID: "e1", Scope: memoryScope(), Text: "fact"}}}
 	if _, err := cache.WriteNormalized(manifest, "full", corpus); err != nil {
 		t.Fatal(err)
@@ -83,6 +83,31 @@ func TestLocalFullAndExtendedUseFullSplit(t *testing.T) {
 		if result.Status != StatusSuccess {
 			t.Fatalf("expected %s to use full split, got %#v", mode, result)
 		}
+	}
+}
+
+func TestSelectQueriesHonorsSplitBudgetDeterministically(t *testing.T) {
+	queries := []BenchmarkQuery{
+		{ID: "q-3", Scope: memoryScope(), Text: "three"},
+		{ID: "q-1", Scope: memoryScope(), Text: "one"},
+		{ID: "q-2", Scope: memoryScope(), Text: "two"},
+	}
+	selected, err := SelectQueries(queries, SplitSpec{Source: "smoke", MaxQueries: 2}, RunConfig{DataDir: "data", Dataset: "fixture", Version: "v1", Mode: RunModeSmoke, Strategy: StrategyLexical, Seed: 42})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(selected) != 2 || selected[0].ID != "q-1" || selected[1].ID != "q-2" {
+		t.Fatalf("unexpected deterministic selection: %#v", selected)
+	}
+}
+
+func TestRunPolicyRecordsSplitAndSeed(t *testing.T) {
+	policy, err := BuildRunPolicy(DatasetManifest{Splits: map[string]SplitSpec{"full": {Source: "full"}}}, RunConfig{DataDir: "data", Dataset: "fixture", Version: "v1", Mode: RunModeReproducibleExtended, Strategy: StrategyLexical, Seed: 7})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if policy.Split != "full" || policy.Seed != 7 || !policy.Reproducible {
+		t.Fatalf("unexpected run policy: %#v", policy)
 	}
 }
 

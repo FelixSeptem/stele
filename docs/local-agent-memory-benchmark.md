@@ -4,7 +4,31 @@ Stele's benchmark suite evaluates retrieval evidence, not generated answers. It 
 
 ## Dataset policy
 
-The repository contains only a synthetic, repository-owned LoCoMo-shaped smoke fixture. It does not redistribute the LoCoMo, LongMemEval, Multi-Session Chat, PersonaChat, HotpotQA, TimeQA, or BEIR full corpora.
+The repository contains only a synthetic, repository-owned LoCoMo-shaped smoke fixture. Its manifest checksum is calculated over canonical LF text so Git checkout line endings do not change smoke verification. It does not redistribute the LoCoMo, LongMemEval, Multi-Session Chat, PersonaChat, HotpotQA, TimeQA, or BEIR full corpora.
+
+## Benchmark expansion tracks
+
+The local runner keeps benchmark families separate. `memory` covers LoCoMo and
+LongMemEval retrieval, `provider_contract` replays BFCL-shaped memory operations,
+`specialized_retrieval` covers profile, temporal, and multi-hop fixtures,
+`generic_retrieval` is reserved for C-MTEB/MTEB/BEIR strategy comparisons, and
+`stress` reports controlled long-context or multimodal degradation. Family labels
+are part of every manifest/report and results from different families are not
+aggregated into one quality score.
+
+The default remains offline. Prepare restricted datasets in a local cache with a
+checksum-locked manifest, then use `benchmark fetch`, `benchmark normalize`, and
+`benchmark run`. No command silently downloads a model or substitutes another
+dataset. `benchmark contract --fixture <path>`, `benchmark specialized`, and
+`benchmark stress` provide repository-owned offline checks for the expansion
+tracks. Use `benchmark clean --dataset <name> --version <version> --run-id <id>`
+to remove run-scoped artifacts while retaining reports by default.
+
+For reproducibility, retain the manifest SHA256, upstream revision, conversion
+version, normalized checksum, qrels checksum, embedding and strategy profiles,
+PostgreSQL/pgvector versions, run scope, and report path together. Missing or
+drifting inputs are prerequisite failures; the runner never repairs them with an
+implicit download. Restricted source files stay outside Git under the cache.
 
 Before fetching a full external dataset, review its current license and upstream terms. Create a manifest that locks the dataset name, version, upstream URL, upstream revision, SHA256, conversion version, split, and embedding profile. Keep the downloaded files under a local cache; do not add them to Git unless redistribution is explicitly permitted.
 
@@ -55,6 +79,43 @@ Lexical-only smoke is allowed only when explicitly selected. The runner does not
 - `local-full`: full locally cached dataset and vectors; no network fallback.
 - `reproducible-extended`: full data plus locked model/profile, strategy/chunk settings, qrels and random seed metadata.
 
+## Experimental adapters and operations
+
+LongMemEval `s` is runnable when its local manifest and raw/normalized cache
+are present. The adapter accepts the cleaned ModelScope haystack format and
+preserves question date, question type, answer session IDs, abstention,
+update/conflict state, and source-session provenance. `m` and `oracle` remain
+explicitly selected subsets; omitting `--subset` does not silently choose one.
+
+Example using the locked local cache:
+
+```powershell
+$env:STELE_POSTGRES_DSN = "postgres://stele:stele@127.0.0.1:55432/stele?sslmode=disable"
+go run ./cmd/stele benchmark run `
+  --data-dir D:\stele-benchmark-data `
+  --dataset longmemeval `
+  --version modelscope-cleaned-f180315e-s `
+  --mode local-full `
+  --strategy lexical `
+  --subset s
+```
+
+The command is offline after normalization and writes a run-scoped
+`reports/<run-id>/retrieval.json` artifact. A successful real run records
+`synthetic_fixture: false`, PostgreSQL/pgvector identity, normalized and qrels
+checksums, scope, safety outcomes, and artifact paths. The benchmark-owned
+database scope is cleaned after replay; retained report and manifest files are
+not deleted by default.
+
+Before importing a large local corpus, run a capacity preflight and choose an
+explicit event batch size. A refusal is reported as `capacity_refused` with a
+bounded diagnostic; no PostgreSQL import is attempted. Run-scoped normalized
+and embedding artifacts can be removed with `CleanupBenchmarkRun`, while
+retaining report artifacts for audit.
+
+The CI smoke workflow uses only the checked-in fixture. It does not download
+external corpora, models, vectors, or judges and does not require PostgreSQL.
+
 ## Troubleshooting
 
 | Status | Meaning | Action |
@@ -64,7 +125,35 @@ Lexical-only smoke is allowed only when explicitly selected. The runner does not
 | `invalid_manifest` | Version, license, provenance, split or embedding profile is incomplete. | Fix and re-lock the manifest before running. |
 | safety failure | A forbidden, cross-scope or non-active memory was returned. | Treat the run as non-releasable and inspect scope/lifecycle filters. |
 | quality gate failure | Metrics regressed without a safety violation. | Compare the report using the same corpus, qrels and embedding profile before changing ranking or chunking policy. |
+| `capacity_refused` | The local event/query/byte budget is too small for the selected corpus. | Increase the explicit local budget or choose a bounded split/batch; do not bypass the refusal by importing into a production scope. |
 
 ## PostgreSQL and pgvector
 
-The end-to-end full benchmark uses Stele's PostgreSQL + pgvector retrieval path and must run against the supported local PostgreSQL version. Keep benchmark runs in an isolated benchmark project/namespace. Do not import public benchmark corpus data into a production tenant or namespace. The baseline replay integration and full PostgreSQL proof are tracked in the active `local-agent-memory-benchmark-suite` OpenSpec change.
+The end-to-end full benchmark uses Stele's PostgreSQL + pgvector retrieval path and must run against the supported local PostgreSQL version. Keep benchmark runs in an isolated benchmark project/namespace. Do not import public benchmark corpus data into a production tenant or namespace. The batch fixture seeder uses deterministic IDs and bounded transactions so interrupted imports can be cleaned and rerun safely.
+
+The expansion change is not complete until a non-synthetic LongMemEval run has retained a
+machine-readable report containing PostgreSQL and pgvector versions, source,
+normalized-corpus and qrels checksums, embedding/strategy profile, run scope,
+quality metrics, and separate safety-gate results. Repository-owned smoke and
+synthetic PostgreSQL runs are useful regression checks but do not satisfy this
+gate.
+
+## Reproducibility checklist
+
+Before sharing or comparing a report, retain all of the following together:
+
+- [ ] PostgreSQL major/minor version and `pgvector` extension version.
+- [ ] Manifest JSON, upstream revision, license decision, source SHA256, and
+      conversion version.
+- [ ] Normalized split checksum and qrels checksum/version.
+- [ ] Embedding profile (or explicit `lexical-only`) and strategy/chunk/rank
+      configuration.
+- [ ] Dataset family, subset, run ID, benchmark tenant/project/namespace, and
+      local capacity limits.
+- [ ] Machine-readable report path, status, metrics, errors, safety outcomes,
+      and cleanup result.
+
+For a fresh local PostgreSQL 18 container, the project uses the pgvector image
+`docker.1ms.run/pgvector/pgvector:pg18` and maps it to an unused host port. Run
+`go test ./...`, the opt-in PostgreSQL benchmark tests, and
+`openspec validate --specs --strict` before treating a report as reproducible.

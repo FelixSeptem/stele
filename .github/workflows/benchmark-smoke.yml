@@ -2,22 +2,29 @@ name: benchmark-smoke
 
 on:
   push:
+    branches: [main]
   pull_request:
-
-permissions:
-  contents: read
+    branches: [main]
 
 jobs:
-  repository-owned-offline-fixtures:
+  repository-owned-smoke:
     runs-on: ubuntu-latest
-    env:
-      STELE_BENCHMARK_OFFLINE: "true"
-      STELE_BENCHMARK_DATA_DIR: ${{ runner.temp }}/stele-benchmark-cache
+    timeout-minutes: 10
     steps:
-      - uses: actions/checkout@v5
-      - uses: actions/setup-go@v6
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
         with:
-          go-version: "1.25.0"
-          cache: true
-      - name: Run offline benchmark smoke regressions
+          go-version-file: go.mod
+      - name: Run benchmark package tests without external services
         run: go test ./internal/benchmark ./cmd/stele -count=1
+      - name: Run repository-owned offline smoke
+        env:
+          STELE_BENCHMARK_OFFLINE: "true"
+          STELE_BENCHMARK_DATA_DIR: ${{ runner.temp }}/stele-benchmark
+        run: go run ./cmd/stele benchmark run-smoke
+      - name: Run expansion offline smoke tracks
+        env:
+          STELE_BENCHMARK_OFFLINE: "true"
+        run: |
+          go run ./cmd/stele benchmark specialized
+          go run ./cmd/stele benchmark stress --dataset needle --max-context-tokens 8192
