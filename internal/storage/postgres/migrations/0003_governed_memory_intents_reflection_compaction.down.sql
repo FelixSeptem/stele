@@ -1,0 +1,13 @@
+DROP TRIGGER IF EXISTS compaction_evidence_identity_guard ON compaction_evidence;
+DROP TRIGGER IF EXISTS reflection_runs_identity_guard ON reflection_runs;
+DROP TRIGGER IF EXISTS reflection_review_decisions_append_only ON reflection_review_decisions;
+DROP TRIGGER IF EXISTS reflection_run_checkpoints_append_only ON reflection_run_checkpoints;
+DROP TRIGGER IF EXISTS memory_intents_append_only ON memory_intents;
+DROP FUNCTION IF EXISTS prevent_compaction_evidence_identity_mutation();
+DROP FUNCTION IF EXISTS prevent_reflection_run_identity_mutation();
+DROP FUNCTION IF EXISTS prevent_governed_audit_mutation();
+DROP TABLE IF EXISTS compaction_evidence;
+DROP TABLE IF EXISTS reflection_review_decisions;
+DROP TABLE IF EXISTS reflection_run_checkpoints;
+DROP TABLE IF EXISTS reflection_runs;
+DROP TABLE IF EXISTS memory_intents;

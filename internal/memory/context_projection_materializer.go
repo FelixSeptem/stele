@@ -17,6 +17,12 @@ type ContextProjectionCandidate struct {
 	Content    string
 	Confidence float64
 	ObservedAt time.Time
+	// Derived marks output produced by reflection/compaction rather than a
+	// canonical version or raw event. Derived output must be explicitly
+	// approved and carry active, same-scope evidence before projection.
+	Derived  bool
+	Approved bool
+	Evidence *CompactionEvidence
 }
 
 type MaterializeContextProjectionInput struct {
@@ -132,6 +138,11 @@ func MaterializeContextProjection(ctx context.Context, input MaterializeContextP
 		}
 		if candidate.Source.Scope.Normalized() != input.Scope.Normalized() {
 			continue
+		}
+		if candidate.Derived {
+			if !candidate.Approved || candidate.Evidence == nil || !candidate.Evidence.ProjectionEligible(input.Scope) {
+				continue
+			}
 		}
 		if err := candidate.Source.Validate(); err != nil {
 			continue

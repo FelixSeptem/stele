@@ -76,3 +76,19 @@ func TestRebuildContextProjectionFromStoreLoadsAuthorizedCandidates(t *testing.T
 		t.Fatalf("projection = %+v, want authorized source materialized as version 2", projection)
 	}
 }
+
+func TestRebuildContextProjectionDoesNotMutateCanonicalSourceSnapshot(t *testing.T) {
+	scope := Scope{Tenant: "t", Project: "p", Namespace: "n"}
+	source := ContextProjectionCandidate{
+		Source: ContextProjectionSource{Kind: ContextProjectionSourceCanonicalVersion, ID: "version-1", MemoryID: "memory-1", Version: 1, Scope: scope},
+		Class:  MemoryClassProfile, State: MemoryStateActive, Content: "canonical value", Confidence: 1,
+	}
+	original := source
+	store := &projectionSourceStoreStub{projectionStoreStub: projectionStoreStub{latest: ContextProjection{Version: 1}}, sources: []ContextProjectionCandidate{source}}
+	if _, err := RebuildContextProjectionFromStore(context.Background(), ContextProjectionRebuildRequest{Scope: scope, Kind: ContextProjectionKindAlwaysVisible, Limit: 10, SchemaVersion: "schema-v1", Policy: DefaultContextProjectionPolicy("policy-v1"), RendererVersion: "renderer-v1"}, store); err != nil {
+		t.Fatalf("RebuildContextProjectionFromStore() error = %v", err)
+	}
+	if store.sources[0].Content != original.Content || store.sources[0].Source.Version != original.Source.Version || store.sources[0].State != original.State {
+		t.Fatalf("canonical source snapshot mutated: got %+v want %+v", store.sources[0], original)
+	}
+}

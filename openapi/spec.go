@@ -106,6 +106,110 @@ paths:
               schema: {type: integer, minimum: 1}
         '422':
           description: Admission rejected before an event was persisted
+  /v1/memory-intents:
+    post:
+      operationId: createMemoryIntent
+      parameters:
+        - $ref: '#/components/parameters/PublicAPIKey'
+        - $ref: '#/components/parameters/TenantHeader'
+        - $ref: '#/components/parameters/ProjectHeader'
+        - $ref: '#/components/parameters/NamespaceHeader'
+        - $ref: '#/components/parameters/IdempotencyKeyHeader'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/MemoryIntentRequest'
+      responses:
+        '202':
+          description: Intent accepted into the append-only governance ledger
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/MemoryIntentRecord'
+        '400': {description: Invalid or out-of-scope intent}
+        '401': {description: Unauthorized}
+  /v1/admin/reflection-reviews:
+    post:
+      operationId: createReflectionReview
+      parameters:
+        - $ref: '#/components/parameters/AdminAPIKey'
+        - $ref: '#/components/parameters/TenantHeader'
+        - $ref: '#/components/parameters/ProjectHeader'
+        - $ref: '#/components/parameters/NamespaceHeader'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/ReflectionReviewRequest'
+      responses:
+        '201':
+          description: Review decision recorded in the append-only audit ledger
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ReflectionReviewRecord'
+        '400': {description: Invalid review decision}
+        '401': {description: Unauthorized}
+        '403': {description: Scope or role denied}
+  /v1/admin/memory-intents/{intent_id}:
+    get:
+      operationId: getAdminMemoryIntent
+      parameters:
+        - $ref: '#/components/parameters/AdminAPIKey'
+        - $ref: '#/components/parameters/TenantHeader'
+        - $ref: '#/components/parameters/ProjectHeader'
+        - $ref: '#/components/parameters/NamespaceHeader'
+        - name: intent_id
+          in: path
+          required: true
+          schema: {type: string}
+      responses:
+        '200':
+          description: Scoped memory intent and governance status
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/MemoryIntentRecord'
+        '401': {description: Unauthorized}
+        '403': {description: Scope or role denied}
+        '404': {description: Intent not found in the authorized scope}
+  /v1/admin/reflection-runs/{run_id}:
+    get:
+      operationId: getAdminReflectionRun
+      parameters:
+        - $ref: '#/components/parameters/AdminAPIKey'
+        - $ref: '#/components/parameters/TenantHeader'
+        - $ref: '#/components/parameters/ProjectHeader'
+        - $ref: '#/components/parameters/NamespaceHeader'
+        - name: run_id
+          in: path
+          required: true
+          schema: {type: string}
+      responses:
+        '200': {description: Scoped durable reflection run}
+        '401': {description: Unauthorized}
+        '403': {description: Scope or role denied}
+        '404': {description: Reflection run not found in the authorized scope}
+  /v1/admin/compaction-evidence/{evidence_id}:
+    get:
+      operationId: getAdminCompactionEvidence
+      parameters:
+        - $ref: '#/components/parameters/AdminAPIKey'
+        - $ref: '#/components/parameters/TenantHeader'
+        - $ref: '#/components/parameters/ProjectHeader'
+        - $ref: '#/components/parameters/NamespaceHeader'
+        - name: evidence_id
+          in: path
+          required: true
+          schema: {type: string}
+      responses:
+        '200': {description: Scoped compaction evidence record}
+        '401': {description: Unauthorized}
+        '403': {description: Scope or role denied}
+        '404': {description: Compaction evidence not found in the authorized scope}
   /v1/admin/principals:
     post:
       operationId: createPrincipal
@@ -4122,6 +4226,59 @@ components:
     WorkflowEvidenceLinkSupersedeRequest:
       allOf:
         - $ref: '#/components/schemas/WorkflowActorReasonRequest'
+    MemoryIntentRequest:
+      type: object
+      required: [type, reason, operation_id, idempotency_key]
+      properties:
+        type:
+          type: string
+          enum: [remember, update, forget, contradiction, feedback]
+        target_memory_id: {type: string}
+        target_version: {type: integer, minimum: 1}
+        content: {type: string}
+        reason: {type: string, maxLength: 256}
+        operation_id: {type: string, maxLength: 256}
+        idempotency_key: {type: string, maxLength: 256}
+        provenance:
+          type: object
+          additionalProperties: true
+    MemoryIntentRecord:
+      type: object
+      required: [id, scope, type, status, actor, reason, request_id, operation_id, idempotency_key, created_at]
+      properties:
+        id: {type: string}
+        scope: {$ref: '#/components/schemas/Scope'}
+        type: {type: string, enum: [remember, update, forget, contradiction, feedback]}
+        status: {type: string, enum: [accepted, candidate, active, suppressed, rejected, failed]}
+        target_memory_id: {type: string}
+        target_version: {type: integer}
+        content: {type: string}
+        actor: {type: string}
+        reason: {type: string}
+        request_id: {type: string}
+        operation_id: {type: string}
+        idempotency_key: {type: string}
+        created_at: {type: string, format: date-time}
+    ReflectionReviewRequest:
+      type: object
+      required: [candidate_id, decision, reason, policy_version]
+      properties:
+        candidate_id: {type: string}
+        decision: {type: string, enum: [accept, suppress, reject, request_more_evidence]}
+        reason: {type: string, maxLength: 256}
+        policy_version: {type: string, maxLength: 128}
+    ReflectionReviewRecord:
+      type: object
+      required: [id, scope, candidate_id, decision, reviewer, reason, policy_version, created_at]
+      properties:
+        id: {type: string}
+        scope: {$ref: '#/components/schemas/Scope'}
+        candidate_id: {type: string}
+        decision: {type: string, enum: [accept, suppress, reject, request_more_evidence]}
+        reviewer: {type: string}
+        reason: {type: string}
+        policy_version: {type: string}
+        created_at: {type: string, format: date-time}
     Scope:
       type: object
       required:
