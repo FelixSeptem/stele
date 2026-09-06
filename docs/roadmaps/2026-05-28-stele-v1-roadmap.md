@@ -1161,6 +1161,69 @@ Useful patterns to study:
 - Self-model conventions: Stash encourages agent-specific spaces for capabilities, limits, preferences, and operational lessons.
 - Fast self-hosting path: Stash documents a short Docker Compose and MCP smoke path that gets an operator from startup to first recall quickly.
 
+### Letta Code Reference Summary
+
+The active Letta implementation is now maintained in `letta-ai/letta-code`.
+The original `letta-ai/letta` repository is a landing page and historical V1
+archive; its retired server is not a production or benchmark reference.
+
+Patterns from the active codebase that are useful to Stele:
+
+- Separate agent identity, session, and conversation state so durable memory is
+  not confused with one runtime connection or one transcript.
+- Treat reflection as an asynchronous, resumable run with a versioned transcript
+  state, processed offset/watermark, retry state, and explicit completion result.
+- Treat context compaction as an observable state transition. Track bounded token
+  history, turn sequence, compaction status, and the follow-up reflection trigger
+  instead of storing only the final summary text.
+- Use deterministic reconnect synchronization: backfill durable state, emit a
+  queue/runtime snapshot, send one `sync_complete` marker, then stream deltas.
+- Resolve capabilities and limits from the server/backend rather than making the
+  client infer support by trial and error.
+- Use explicit authorization precedence and protective guards before allow/ask
+  decisions; apply the same principle to memory intents, admin mutations, and
+  provider operations.
+- Give scheduled work stable identities, leases, duplicate-fire keys, bounded
+  append-only run history, stale-lock recovery, and paginated inspection.
+- Separate telemetry surface from backend and keep error categories low-cardinality
+  and redacted, with a clear self-hosted opt-out boundary.
+
+Stele adaptations and proposal seeds:
+
+1. `governed-memory-intents`: define `remember`, `update`, `forget`,
+   `contradiction`, and feedback requests as durable, scoped, idempotent intents;
+   process them through governance rather than allowing direct canonical writes.
+2. `reflection-runs-and-transcript-watermarks`: add durable reflection runs,
+   input watermarks, replay-safe offsets, leases, retry budgets, and candidate-only
+   outputs backed by raw events, canonical versions, and session evidence.
+3. `compaction-evidence-and-context-tracking`: record bounded context pressure,
+   compaction transitions, source watermarks, summary versions, evidence coverage,
+   and follow-up reflection scheduling.
+4. `runtime-capability-and-event-sync-contract`: define provider capability/limit
+   discovery, server-resolved runtime scope, reconnect snapshots, `sync_complete`,
+   ordered event replay, duplicate suppression, and bounded event retention.
+5. `governed-operation-policy-precedence`: publish the evaluation order for scope,
+   lifecycle, grant, approval, idempotency, and governance checks across intents,
+   admin actions, and future adapters.
+6. `durable-scheduler-run-history`: close any remaining gaps in stable task IDs,
+   lease recovery, duplicate-fire prevention, append-only run history, bounded
+   retention, and operator pagination for scheduled maintenance.
+
+These seeds are implementation candidates, not independent storage systems. They
+must continue to use PostgreSQL as the system of record, preserve append-only
+canonical history and provenance, and enforce tenant/project/namespace isolation.
+
+Patterns explicitly not adopted from Letta Code:
+
+- Git/MemFS is not a second canonical store for Stele; derived memory remains in
+  PostgreSQL projections, versions, and audit records.
+- Agents or provider runtimes must not rewrite canonical memory in place; all such
+  requests enter the intent and governance pipeline.
+- MCP, WebSocket, and local listener transports remain optional adapters over the
+  OpenAPI service rather than the primary authorization or persistence boundary.
+- Letta V1 archive code is not copied into Stele; only active, contract-level
+  patterns from `letta-code` are considered.
+
 Risks and assumptions to validate before implementation:
 
 - Product claims are not Stele requirements. Stash's cognitive stages are useful vocabulary, but each stage needs a Stele-specific data model, provenance rule, lifecycle state, and operator contract before adoption.
