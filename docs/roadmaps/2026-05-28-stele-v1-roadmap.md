@@ -12,6 +12,68 @@ Scope remains unchanged:
 - built-in API key plus tenant isolation
 - governance-first memory service
 
+## Global Status And Priority (2026-09-03)
+
+The original Phase 1–5 sequence is now the historical foundation path. The
+repository has archived changes covering bootstrap and ingestion, governance,
+hybrid retrieval/context assembly, operations, memory history and mutation,
+durable worker maintenance, embedding lifecycle, governed insights, assurance,
+integration evidence, scoped principals, idempotent ingestion, and benchmark
+infrastructure. These capabilities are the current product baseline and should
+not be re-planned as new greenfield work.
+
+There are three different kinds of work in the remaining roadmap and they must
+not be conflated:
+
+- **Implemented baseline**: capability exists in the archived product changes;
+  follow-up work is limited to regression coverage or a narrowly identified gap.
+- **Proposed / pending implementation**: OpenSpec artifacts exist, but the task
+  checklist and release evidence are not complete. This is the current state of
+  `product-ready-self-hosting-foundation` and `retrieval-evaluation-baseline`.
+- **Candidate expansion**: useful post-v1 ideas that must wait until the provider
+  contract and quality gates are stable. This includes MCP adapters, namespace
+  subtree conventions, agent self-model conventions, and autonomous reasoning
+  insights.
+
+### Global priority order
+
+| Priority | Workstream | Current state | Why this order |
+| --- | --- | --- | --- |
+| P0 | Product-ready self-hosting foundation | Proposed, pending implementation | Migration ledger, startup admission, resource bounds, backup/restore, and real-stack verification are prerequisites for a dependable long-lived deployment. |
+| P1 | Retrieval evaluation baseline | Proposed, pending implementation | Establishes reproducible quality, latency, and zero-leakage measurements before changing representation or ranking. |
+| P2 | Context hierarchy and governed reflection | New Letta-inspired roadmap work | Adds always-visible/session/retrieval/history projections, memory intents, reflection runs, and compaction evidence without allowing direct canonical-memory mutation. |
+| P3 | Retrieval representation, fusion, and context diversity | Roadmap Phase 6 Tasks 6.2–6.4 | Chunking, hybrid fusion, deduplication, and diversity directly improve provider usefulness while remaining reversible. |
+| P4 | Query understanding and controlled reranking | Roadmap Phase 6 Tasks 6.5–6.6 | Higher-risk quality changes should only use the stable candidate/fusion path and measured evidence from P1/P3. |
+| P5 | Benchmark expansion, local suite, and retrieval release gate | `agent-memory-benchmark-expansion`, `local-agent-memory-benchmark-suite`, and Phase 6 Task 6.7 | Runs LongMemEval/LoCoMo and local regression families only after retrieval behavior is stable, then converts the evidence into CI, rebuild, retention, and rollback policy. |
+| P6 | Durable multi-scope maintenance follow-up | Stage 7; baseline largely implemented | Verify that every newer durable surface participates in maintenance; implement only missing discovery, lease, SLO, or recovery gaps. |
+| P7 | Agent runtime memory-provider contract and adapter | New Letta-inspired roadmap work | Defines identity/session separation, capability discovery, canonical runtime scope, citations, idempotency, event replay, and compatibility before integration. |
+| P8 | Optional adapters and governed experience insights | Candidate follow-up tracks | MCP, shared-memory conventions, agent self-model, failure-pattern/lesson insights, and reasoning providers remain outside the critical path. |
+
+### Critical path to provider readiness
+
+```text
+P0 self-hosting/runtime safety
+        ↓
+P1 deterministic retrieval evaluation
+        ↓
+P2 context hierarchy + governed reflection
+        ↓
+P3 chunking + hybrid fusion + diversity
+        ↓
+P4 query understanding + controlled reranking
+        ↓
+P5 benchmark expansion + retrieval release gate
+        ↓
+P6 durable multi-scope maintenance closure
+        ↓
+P7 agent runtime memory-provider adapter
+```
+
+P6 maintenance follow-up runs in parallel with P1–P5 when it concerns already
+implemented surfaces, but it must be complete before declaring the service
+operationally ready for unattended multi-scope deployments. P7 remains outside
+the critical path.
+
 ## Milestone View
 
 ### M0: Project Foundation
@@ -731,14 +793,22 @@ Done when:
 
 - a new operator can bring up the service from documentation alone
 
-## Near-Term Product Hardening
+## Near-Term Product Hardening And Provider Readiness
 
 The core memory, governance, retrieval, assurance, and integration-evidence
 surfaces are now present. The next work should improve the product properties
 that make those surfaces safe and dependable for multiple external integrations,
 rather than add another memory type or an end-user application feature.
 
-### Stage 1: Scoped Principal Authorization And Idempotent Ingestion
+### Stage 0: Completed Product Baseline
+
+The scoped-principal, idempotent-ingestion, benchmark, assurance, and integration
+evidence changes are treated as completed baseline capabilities when their
+corresponding changes are archived and release evidence is retained. Do not
+reopen them as broad feature work; create a focused repair change only when
+regression evidence identifies a concrete gap.
+
+### Stage 1: Scoped Principal Authorization And Idempotent Ingestion (Complete)
 
 Goal: bind every protected request to a durable principal and explicit allowed
 scope, then make public raw-event retries safe.
@@ -766,7 +836,7 @@ Exit signal:
 - Retried event writes produce one raw event, one provenance chain, and a
   stable response.
 
-### Stage 2: Versioned Migrations And Runtime Hardening
+### Stage 2: Versioned Migrations And Runtime Hardening (P0 — Next)
 
 Goal: make upgrades and public runtime exposure safe for a long-lived
 self-hosted deployment.
@@ -787,7 +857,157 @@ Exit signal:
   the applied schema version before traffic is accepted.
 - Untrusted clients cannot consume unbounded request bodies or connections.
 
-### Stage 3: Durable Multi-Scope Maintenance
+### Stage 3: Retrieval Evaluation Baseline (P1)
+
+Goal: establish a deterministic, local, safety-first measurement loop before
+changing memory representation or ranking behavior.
+
+Scope:
+
+- implement the `retrieval-evaluation-baseline` OpenSpec change;
+- seed repository-owned fixtures only into harness-owned scopes;
+- replay the real lexical, semantic, and optional relation paths;
+- publish redacted Recall/MRR/nDCG, evidence coverage, duplicate, latency, and
+  isolation results;
+- make cross-scope and hidden-lifecycle leakage hard failures.
+
+Exit signal:
+
+- a `canonical-v1` / `baseline-v1` report can be reproduced locally against an
+  explicitly owned PostgreSQL + pgvector instance;
+- every future ranking change has a comparable baseline and stable skip behavior
+  when the real-stack prerequisite is absent.
+
+### Stage 4: Context Hierarchy And Governed Reflection (P2)
+
+Goal: provide an agent-centric context contract inspired by Letta's memory
+hierarchy and dreaming workflows while retaining PostgreSQL as the system of
+record and keeping every write governed.
+
+Tasks:
+
+#### P2.1: Versioned context projections
+
+- Define a versioned `context_projection` model for `always_visible`, `session`,
+  `retrieval`, and `archival_history` projections. Every projection must point to
+  authorized canonical-memory versions or raw-event evidence and be rebuildable.
+
+#### P2.2: Memory-class projection policy
+
+- Define explicit projection policy for each memory class: profile may be
+  always-visible when confidence and size gates pass; episodic/procedural and
+  relation material remain on-demand; summaries may serve bounded session
+  context; raw history remains evidence, not canonical memory.
+
+#### P2.3: Bounded context assembly
+
+- Add token/character budgets, deterministic ordering, lifecycle filtering, and
+  redacted citation metadata to context assembly. Projection limits must fail
+  closed and never expand scope.
+
+#### P2.4: Governed memory intents
+
+- Define a `memory-intent` contract for `remember`, `update`, `forget`,
+  `contradiction`, and `feedback`. Intents are idempotent, append-only requests
+  that enter candidate/governance workflows; they cannot mutate canonical memory
+  directly.
+
+#### P2.5: Durable reflection runs
+
+- Add durable reflection runs with explicit triggers for completed sessions,
+  event/step thresholds, compaction pressure, schedules, and operator requests.
+  Persist run status, lease, input watermark, output candidates, evidence, retry
+  budget, and audit reason.
+
+#### P2.6: Reflection review
+
+- Split reflection into deterministic consolidation, bounded extraction, and
+  optional review. A review may reject, suppress, request evidence, or accept a
+  candidate but may not bypass scope, provenance, lifecycle, or version checks.
+
+#### P2.7: Compaction evidence
+
+- Add compaction evidence linking summaries to source sessions, event ranges,
+  memory versions, summarizer/version identity, and coverage diagnostics. Keep a
+  recent-tail plus summary plus retrievable evidence model.
+
+Exit signal:
+
+- a new session can request a bounded context assembled from authorized durable
+  memory and session evidence without receiving hidden lifecycle records;
+- an agent can submit a memory intent and observe a durable accepted/suppressed/
+  pending result with provenance and idempotent retry behavior;
+- reflection and compaction runs survive restart, are auditable, and can be
+  replayed or rolled back without overwriting canonical history;
+- every projection and summary is rebuildable from PostgreSQL source records.
+
+Dependencies:
+
+- Stage 2 and Stage 3;
+- existing governance, lifecycle, provenance, and context assembly contracts.
+
+Rollback:
+
+- disable new projection kinds and reflection triggers, returning to the existing
+  canonical retrieval/context path; retain all durable source and audit records.
+
+### Stage 5: Retrieval Representation, Fusion, And Context Diversity (P3)
+
+Goal: improve evidence recall and context usefulness without changing canonical
+memory or weakening provenance and scope enforcement.
+
+Scope:
+
+- Phase 6 Tasks 6.2–6.4: hierarchical bounded chunking, stable RRF-based hybrid
+  fusion, identity/semantic deduplication, and diversity-aware packing;
+- keep new representations derived, rebuildable, versioned, and default-off or
+  shadowed until the Stage 3 quality gate is green;
+- retain deterministic rollback to the prior canonical retrieval path.
+
+Exit signal:
+
+- protected recall and multi-hop coverage improve or remain within policy;
+- duplicate rate and context token budgets stay within threshold;
+- provenance, lifecycle filtering, and tenant/project/namespace isolation remain
+  zero-regression.
+
+### Stage 6: Query Understanding And Controlled Reranking (P4)
+
+Goal: add bounded temporal, entity, multi-hop, and quality-aware signals only
+after the candidate and fusion contracts are stable.
+
+Scope:
+
+- Phase 6 Tasks 6.5–6.6;
+- preserve the original query and fail closed to it on malformed or adversarial
+  analysis;
+- keep model rerankers optional, time/cost/privacy bounded, and disabled by
+  default until shadow evidence passes release policy.
+
+Exit signal:
+
+- temporal and multi-hop coverage improves without simple-fact regression;
+- every rollout has a version, owner, evidence minimum, stop condition, and
+  tested rollback.
+
+### Stage 7: Benchmark Expansion, Retrieval Release Gate And Long-Term Maintenance (P5)
+
+Goal: make retrieval quality a maintained product contract rather than a one-time
+tuning exercise.
+
+Scope:
+
+- `agent-memory-benchmark-expansion`, `local-agent-memory-benchmark-suite`, and
+  Phase 6 Task 6.7: CI quality gates, redacted reports, rebuild/re-index and
+  rollback runbooks, derived-data retention/deletion, and threshold ownership.
+
+Exit signal:
+
+- no retrieval representation or ranking change ships without quality,
+  isolation, latency, and rollback evidence;
+- all derived artifacts can be rebuilt from durable PostgreSQL source records.
+
+### Stage 8: Durable Multi-Scope Maintenance Follow-Up (P6)
 
 Goal: ensure asynchronous maintenance reaches every active product surface and
 recovers safely across replicas or process restarts.
@@ -811,20 +1031,120 @@ Exit signal:
 - Restarted or horizontally scaled workers do not strand or duplicate eligible
   workflow work.
 
+### Stage 9: Agent Runtime Memory-Provider Contract And Adapter (P7)
+
+Goal: make Stele consumable as a durable memory provider by an external agent
+runtime without moving runtime state or authorization into the adapter.
+
+Tasks:
+
+#### P7.1: Identity and session contract
+
+- Define the provider contract around `agent identity`, `session`, and
+  `conversation` separation. A session may read authorized durable memory but
+  must submit remember/update/forget behavior as governed intents.
+
+#### P7.2: Capability and canonical scope discovery
+
+- Add capability and limit discovery exposing provider version, schema version,
+  supported operations, maximum event/context/result bounds, and canonical scope.
+
+#### P7.3: Server-resolved runtime scope
+
+- Return server-resolved runtime scope (`tenant`, `project`, `namespace`, agent,
+  session, and provider instance) and require subsequent operations to use it;
+  reject caller-invented or widened scope values.
+
+#### P7.4: Operation identity and replay metadata
+
+- Standardize `request_id`, `operation_id`, `idempotency_key`, `event_seq`, and
+  `schema_version` across ingest, intents, retrieval, context assembly,
+  forgetting, reflection triggers, and benchmark runs.
+
+#### P7.5: Optional event replay adapter
+
+- Add an optional SSE/WebSocket replay adapter over the OpenAPI service. Support
+  ordered events, reconnect from `event_seq`, `sync`, duplicate suppression by
+  idempotency key, tolerant unknown-event handling, and bounded event retention.
+
+#### P7.6: Provider conformance and citations
+
+- Expose citations and provenance in provider responses while keeping internal
+  ranking diagnostics, query plans, hidden IDs, and cross-scope data private.
+- Add provider conformance tests covering bootstrap, readiness/version discovery,
+  exact grants, idempotent ingest, consolidation, retrieval, context projection,
+  forgetting, restart/drain, migration upgrade, backup/restore, and denial of
+  ungranted scope.
+
+Exit signal:
+
+- an external runtime can discover capabilities, submit an event or memory
+  intent, retrieve bounded context with citations, and reconnect/replay state
+  without maintaining a second canonical memory store;
+- provider conformance passes against the public OpenAPI contract and real
+  PostgreSQL + pgvector;
+- adapter failures fall back to the last durable state and never weaken scope,
+  lifecycle, provenance, or idempotency guarantees.
+
+Dependencies:
+
+- Stages 2–8, especially the P0 runtime gate, P1–P5 quality gates, and durable
+  maintenance/recovery proof.
+
+Rollback:
+
+- disable the adapter or replay transport while preserving the HTTP/OpenAPI
+  service and all durable state; no schema downgrade is required.
+
+### Stage 10: Optional Adapters And Governed Experience Insights (P8)
+
+Goal: add ecosystem ergonomics only after the core provider contract is stable.
+
+Candidate tasks:
+
+- build an OpenAPI-backed MCP adapter that preserves principal, grant, scope,
+  lifecycle, idempotency, and audit behavior;
+- add optional namespace/topic path conventions inside an existing scope without
+  subtree-based cross-scope expansion;
+- define scoped agent self-model conventions as ordinary governed memories;
+- implement `failure_pattern` and evidence-backed `lesson` insights as derived
+  records with provenance and optional context sections;
+- define a provider-independent reasoning boundary before considering hypothesis,
+  causal-link, contradiction, or goal inference.
+
+Exit signal:
+
+- each adapter or insight type has its own conformance/evaluation evidence and
+  can be disabled without affecting the P0–P7 critical path.
+
 ### Stage Sequencing
 
-1. `scoped-principal-auth-and-ingest-idempotency`
-2. `versioned-migrations-and-runtime-hardening`
-3. `durable-multi-scope-maintenance`
+1. `scoped-principal-auth-and-ingest-idempotency` (complete baseline)
+2. `versioned-migrations-and-runtime-hardening` (P0)
+3. `retrieval-evaluation-baseline` (P1)
+4. Stage 4 context hierarchy and governed reflection (P2)
+5. Phase 6 Tasks 6.2–6.4 (P3)
+6. Phase 6 Tasks 6.5–6.6 (P4)
+7. `agent-memory-benchmark-expansion` + `local-agent-memory-benchmark-suite` (P5a)
+8. Phase 6 Task 6.7 retrieval release gate (P5b)
+9. Stage 8 durable multi-scope maintenance follow-up (P6; parallel where safe)
+10. Stage 9 agent runtime memory-provider contract and adapter (P7)
+11. Stage 10 optional adapters and governed experience insights (P8)
 
 Reasoning:
 
 - Explicit identity and idempotent writes are the authorization boundary for
-  every existing and future public API.
-- Safe schema evolution and runtime limits must precede broad external
-  exposure.
-- Durable maintenance then makes the already implemented workflow and
-  assurance surfaces reliable across scopes and replicas.
+  every existing and future public API, and are therefore the completed baseline.
+- Safe schema evolution, startup admission, runtime limits, and recovery proof
+  must precede declaring the self-hosted service production-ready.
+- Retrieval evaluation must precede chunking, ranking, query analysis, or model
+  reranking; otherwise quality regressions cannot be distinguished from data or
+  infrastructure effects.
+- Retrieval release gates must precede the agent-runtime adapter so the provider
+  contract is both useful and measurable.
+- Durable maintenance follow-up is parallelizable only when it does not change
+  retrieval or migration contracts; its final SLO/recovery gate remains required
+  for unattended multi-scope operation.
 
 ## Reference-Informed Expansion Backlog
 
@@ -910,28 +1230,32 @@ Non-goals for the first slice:
 
 ## Execution Order
 
-Recommended build order:
+Recommended build order for the current product baseline:
 
-1. Phase 1
-2. Phase 2
-3. Phase 3 Tasks 3.1 to 3.3
-4. Phase 4 Tasks 4.1 to 4.4
-5. Phase 3 Tasks 3.4 to 3.5
-6. Phase 4 Tasks 4.5 to 4.6
-7. Phase 5
-8. Phase 6 Task 6.1
-9. Phase 6 Tasks 6.2 to 6.4
-10. Phase 6 Task 6.5
-11. Phase 6 Tasks 6.6 to 6.7
+1. P0: `product-ready-self-hosting-foundation`
+2. P1: `retrieval-evaluation-baseline`
+3. P2: context hierarchy, projections, memory intents, reflection, and compaction evidence
+4. P3: Phase 6 Tasks 6.2 to 6.4 (chunking, fusion, deduplication, diversity)
+5. P4: Phase 6 Tasks 6.5 to 6.6 (query understanding and controlled reranking)
+6. P5: `agent-memory-benchmark-expansion`, `local-agent-memory-benchmark-suite`, and Phase 6 Task 6.7
+7. P6: durable multi-scope maintenance and assurance closure
+8. P7: agent runtime memory-provider contract and adapter
+9. P8: optional MCP, shared-memory conventions, and governed experience insights
+
+The original Phase 1–5 order remains the build order for a fresh repository;
+the P0–P8 sequence is the execution order for this already-developed baseline.
 
 Reasoning:
 
 - event ingestion and canonical memory must exist before governance can do real work.
 - governance must exist before retrieval can be trustworthy.
 - context assembly and graph enhancement should sit after the base retrieval path is stable.
-- operations hardening should happen after the core runtime surfaces exist.
+- operations hardening must be complete enough to make all subsequent quality runs reproducible.
+- context hierarchy and governed reflection should consume the P1 evaluation and existing governance contracts.
 - retrieval quality work should begin with measurement, then representation, fusion,
   diversity, query understanding, and only then feedback or model-based reranking.
+- benchmark expansion belongs after ranking behavior is stable; it is evidence, not a
+  substitute for the retrieval implementation.
 - every representation or ranking change must remain reversible and must not bypass
   lifecycle or scope enforcement.
 
@@ -943,10 +1267,14 @@ Before moving between phases, verify:
 - Phase 2 to 3: event ingest path persists raw events with scope and provenance intact.
 - Phase 3 to 4: active memory promotion and suppression behavior are test-covered.
 - Phase 4 to 5: retrieval and context assembly exclude hidden memory and respect scope boundaries.
-- Phase 5 to 6.1: runtime and storage behavior are stable enough to produce a repeatable
-  retrieval baseline.
-- Phase 6.1 to 6.2: the evaluation fixture and hard isolation gates are green before
-  changing memory representation.
+- P0 migration/runtime gate: all three runtime modes fail closed on dirty or divergent schema,
+  bounded resource tests pass, and upgrade/restore verification is reproducible.
+- P0 to P1: runtime/storage behavior is stable enough to produce a repeatable retrieval
+  baseline, with explicit PostgreSQL + pgvector prerequisite handling.
+- P1 to P2: evaluation fixture, metric thresholds, and hard isolation gates are green
+  before introducing context projections or reflection writes.
+- P2 to P3: projection provenance, intent idempotency, reflection replay, and compaction
+  evidence are green before changing memory representation or ranking.
 - Phase 6.2 to 6.3: chunk provenance, rebuildability, and parent-child scope tests are
   green before changing ranking.
 - Phase 6.3 to 6.4: hybrid fusion is stable before diversity or context packing changes.
@@ -955,11 +1283,19 @@ Before moving between phases, verify:
   optional rerankers are enabled.
 - Phase 6.6 to 6.7: every rollout has a measured gain, no isolation regression, and a
   tested rollback path before becoming a release requirement.
+- Benchmark gate: LoCoMo/LongMemEval and local suites use isolated owned scopes, compatible
+  manifests, and redacted reports; synthetic smoke alone is never a release claim.
+- P5 to P6: benchmark reports and release policy are green before declaring retrieval
+  quality stable; derived artifacts remain rebuildable from PostgreSQL source records.
+- P6 to P7: every durable scope has maintenance, lease, restart, audit, and SLO evidence.
+- Provider gate: the agent-runtime adapter is tested against the public OpenAPI contract,
+  readiness/version endpoints, scoped auth, idempotent ingest, consolidation, retrieval,
+  context projection, memory intents, restart/drain, upgrade, and restore proof.
 
 ## Immediate Next Step
 
-If implementation begins next, start with Phase 6 Task 6.1 on the current product
-baseline. Do not change chunking or ranking until the baseline fixture, metrics, and
-zero-leakage assertions are reproducible. The original foundation sequence remains the
-required path for a fresh implementation; Phase 6 is the next quality track for the
-current product.
+The P0 foundation is now archived in the current product baseline. Implement
+`retrieval-evaluation-baseline` next (P1) and record the first reproducible
+`canonical-v1` / `baseline-v1` report. Do not change chunking, fusion, or reranking
+until that report and its zero-leakage assertions are green. The provider adapter
+must consume the stable contracts produced by P0–P6.
