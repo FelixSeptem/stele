@@ -69,6 +69,9 @@ type ContextProjectionSource struct {
 	Version  int64                       `json:"version,omitempty"`
 	MemoryID string                      `json:"memory_id,omitempty"`
 	Scope    Scope                       `json:"scope"`
+	// LifecycleState is optional for legacy source references. When present,
+	// only active evidence is eligible for default projection.
+	LifecycleState MemoryState `json:"lifecycle_state,omitempty"`
 }
 
 func (s ContextProjectionSource) Validate() error {
@@ -86,6 +89,9 @@ func (s ContextProjectionSource) Validate() error {
 	}
 	if s.Kind == ContextProjectionSourceRawEvent && s.Version != 0 {
 		return fmt.Errorf("raw event projection source cannot have a version")
+	}
+	if s.LifecycleState != "" && !s.LifecycleState.Valid() {
+		return fmt.Errorf("invalid projection source lifecycle state %q", s.LifecycleState)
 	}
 	return nil
 }

@@ -39,6 +39,11 @@ type HTTPDependencies struct {
 	PrincipalAuthorizer       auth.PrincipalAuthorizer
 	PrincipalAdmin            PrincipalAdministrationService
 	EventIngestor             memory.EventIngestor
+	MemoryIntent              MemoryIntentAPI
+	MemoryIntentRead          MemoryIntentReader
+	ReflectionReviewAdmin     ReflectionReviewAPI
+	ReflectionRunRead         ReflectionRunReader
+	CompactionEvidenceRead    CompactionEvidenceReader
 	MemoryQuery               MemoryQueryService
 	MemoryLifecycleAction     MemoryLifecycleActionService
 	MemoryManualMutation      ManualMemoryMutationService
@@ -133,6 +138,26 @@ type MemoryQueryService interface {
 
 type MemoryLifecycleActionService interface {
 	Apply(ctx context.Context, input memory.LifecycleActionInput) error
+}
+
+type MemoryIntentAPI interface {
+	Submit(context.Context, memory.MemoryIntentInput) (memory.MemoryIntentRecord, error)
+}
+
+type MemoryIntentReader interface {
+	ReadMemoryIntent(context.Context, memory.Scope, string) (memory.MemoryIntentRecord, error)
+}
+
+type ReflectionReviewAPI interface {
+	Decide(context.Context, memory.ReflectionReviewInput) (memory.ReflectionReviewRecord, error)
+}
+
+type ReflectionRunReader interface {
+	ReadReflectionRun(context.Context, memory.Scope, string) (memory.ReflectionRun, error)
+}
+
+type CompactionEvidenceReader interface {
+	ReadCompactionEvidence(context.Context, memory.Scope, string) (memory.CompactionEvidence, error)
 }
 
 type GovernanceAdminService interface {
@@ -929,6 +954,51 @@ func NewHTTPHandler(deps HTTPDependencies) http.Handler {
 			}),
 		))
 	mux.Handle("GET /v1/admin/access-audit", adminAccessAudit)
+
+	protectedMemoryIntent := auth.APIKeyMiddleware(deps.APIKeys)(
+		auth.ScopeMiddleware()(
+			http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				handleMemoryIntentCreate(w, r, deps.MemoryIntent)
+			}),
+		),
+	)
+	mux.Handle("POST /v1/memory-intents", protectedMemoryIntent)
+
+	adminMemoryIntentDetail := auth.APIKeyMiddleware(deps.AdminAPIKeys)(
+		auth.ScopeMiddleware()(
+			http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				handleAdminMemoryIntentDetail(w, r, deps.MemoryIntentRead)
+			}),
+		),
+	)
+	mux.Handle("GET /v1/admin/memory-intents/{intent_id}", adminMemoryIntentDetail)
+
+	adminReflectionReview := auth.APIKeyMiddleware(deps.AdminAPIKeys)(
+		auth.ScopeMiddleware()(
+			http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				handleAdminReflectionReview(w, r, deps.ReflectionReviewAdmin)
+			}),
+		),
+	)
+	mux.Handle("POST /v1/admin/reflection-reviews", adminReflectionReview)
+
+	adminReflectionRunDetail := auth.APIKeyMiddleware(deps.AdminAPIKeys)(
+		auth.ScopeMiddleware()(
+			http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				handleAdminReflectionRunDetail(w, r, deps.ReflectionRunRead)
+			}),
+		),
+	)
+	mux.Handle("GET /v1/admin/reflection-runs/{run_id}", adminReflectionRunDetail)
+
+	adminCompactionEvidenceDetail := auth.APIKeyMiddleware(deps.AdminAPIKeys)(
+		auth.ScopeMiddleware()(
+			http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				handleAdminCompactionEvidenceDetail(w, r, deps.CompactionEvidenceRead)
+			}),
+		),
+	)
+	mux.Handle("GET /v1/admin/compaction-evidence/{evidence_id}", adminCompactionEvidenceDetail)
 
 	adminGovernance := auth.APIKeyMiddleware(deps.AdminAPIKeys)(
 		http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {

@@ -30,6 +30,16 @@ const (
 	MemoryStateDeleted    MemoryState = "deleted"
 )
 
+func (s MemoryState) Valid() bool {
+	switch s {
+	case MemoryStateCandidate, MemoryStateActive, MemoryStateSuppressed,
+		MemoryStateForgotten, MemoryStateDeleted:
+		return true
+	default:
+		return false
+	}
+}
+
 type Scope struct {
 	Tenant    string `json:"tenant"`
 	Project   string `json:"project"`
