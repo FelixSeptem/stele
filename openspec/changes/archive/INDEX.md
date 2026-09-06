@@ -1,6 +1,6 @@
 # Archive Index
 
-Updated: 2026-09-03 21:41:03
+Updated: 2026-09-06 19:04:47
 
 - 001 -> bootstrap-foundation-and-event-ingestion
 - 002 -> governance-pipeline-and-memory-consolidation
@@ -28,3 +28,8 @@ Updated: 2026-09-03 21:41:03
 - 024 -> retrieval-evaluation-baseline
 - 025 -> local-agent-memory-benchmark-suite
 - 026 -> agent-memory-benchmark-expansion
+- 027 -> hierarchical-memory-representation-bounded-chunking
+- 028 -> retrieval-evaluation-baseline
+- 029 -> versioned-migrations-and-runtime-hardening
+- 030 -> versioned-context-projections-and-bounded-assembly
+- 031 -> governed-memory-intents-reflection-and-compaction-evidence

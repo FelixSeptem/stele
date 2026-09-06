@@ -31,6 +31,12 @@ func CalculateEvaluationMetrics(replay EvaluationReplay) (EvaluationReport, erro
 			safetyCounts[failure.Category] += failure.Count
 		}
 		metrics := calculateCaseEvaluationMetrics(item)
+		chunkDerivedCount := 0
+		for _, candidate := range item.Candidates {
+			if candidate.ChunkDerived {
+				chunkDerivedCount++
+			}
+		}
 		report.Cases = append(report.Cases, EvaluationCaseReport{
 			CaseID:            item.CaseID,
 			Category:          item.Category,
@@ -38,6 +44,7 @@ func CalculateEvaluationMetrics(replay EvaluationReplay) (EvaluationReport, erro
 			SafetyFailures:    safetyFailures,
 			CandidatePoolSize: item.CandidatePoolSize,
 			LatencyMS:         float64(item.Latency) / float64(1_000_000),
+			ChunkDerivedCount: chunkDerivedCount,
 		})
 		latencies = append(latencies, float64(item.Latency)/float64(1_000_000))
 		report.Metrics.RecallAt1 += metrics.RecallAt1

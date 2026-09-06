@@ -10,10 +10,10 @@ func TestMigrationAssetsExposeImmutableInitialMigration(t *testing.T) {
 	if err != nil {
 		t.Fatalf("MigrationAssets() error = %v", err)
 	}
-	if len(migrations) != 6 {
-		t.Fatalf("migration assets = %v, want three up/down migration pairs", migrations)
+	if len(migrations) != 8 {
+		t.Fatalf("migration assets = %v, want four up/down migration pairs", migrations)
 	}
-	if migrations[0] != "0001_base_schema.down.sql" || migrations[1] != "0001_base_schema.up.sql" || migrations[2] != "0002_context_projections.down.sql" || migrations[3] != "0002_context_projections.up.sql" || migrations[4] != "0003_governed_memory_intents_reflection_compaction.down.sql" || migrations[5] != "0003_governed_memory_intents_reflection_compaction.up.sql" {
+	if migrations[0] != "0001_base_schema.down.sql" || migrations[1] != "0001_base_schema.up.sql" || migrations[2] != "0002_context_projections.down.sql" || migrations[3] != "0002_context_projections.up.sql" || migrations[4] != "0003_governed_memory_intents_reflection_compaction.down.sql" || migrations[5] != "0003_governed_memory_intents_reflection_compaction.up.sql" || migrations[6] != "0004_hierarchical_memory_chunks.down.sql" || migrations[7] != "0004_hierarchical_memory_chunks.up.sql" {
 		t.Fatalf("migration assets = %v, want stable migration names", migrations)
 	}
 }
