@@ -1,6 +1,6 @@
 ## 1. Migration Foundation
 
-- [ ] 1.1 Inventory the current PostgreSQL bootstrap schema, startup call sites, and existing `golang-migrate` dependency; evaluate mature PostgreSQL migration libraries on `pkg.go.dev` and record the selected library, version, licensing, dirty-state, locking, and embedded-SQL rationale in implementation notes before adding production code.
+- [x] 1.1 Inventory the current PostgreSQL bootstrap schema, startup call sites, and existing `golang-migrate` dependency; evaluate mature PostgreSQL migration libraries on `pkg.go.dev` and record the selected library, version, licensing, dirty-state, locking, and embedded-SQL rationale in implementation notes before adding production code.
 - [ ] 1.2 Define migration configuration, bounded error categories, migration status model, and startup policy (`auto`, `validate`, and documented externally managed mode); add configuration validation and focused unit tests.
 - [ ] 1.3 Convert the current supported base schema into an immutable initial numbered migration and implement a migration ledger/status reader that reports current, pending, dirty, divergent, and incompatible states.
 - [ ] 1.4 Implement locked forward migration execution using PostgreSQL-owned serialization and tests that prove concurrent invocations cannot apply the same migration twice.

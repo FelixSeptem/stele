@@ -18,10 +18,32 @@ const (
 	ModeScheduler Mode = "scheduler"
 )
 
+type MigrationPolicy string
+
+const (
+	MigrationPolicyAuto     MigrationPolicy = "auto"
+	MigrationPolicyValidate MigrationPolicy = "validate"
+	MigrationPolicyOff      MigrationPolicy = "off"
+)
+
+func (p MigrationPolicy) Valid() bool {
+	switch p {
+	case MigrationPolicyAuto, MigrationPolicyValidate, MigrationPolicyOff:
+		return true
+	default:
+		return false
+	}
+}
+
+type MigrationConfig struct {
+	Policy MigrationPolicy
+}
+
 type Config struct {
 	Mode        Mode
 	HTTPAddr    string
 	PostgresDSN string
+	Migrations  MigrationConfig
 	Auth        AuthConfig
 	Embedding   EmbeddingConfig
 	Jobs        JobConfig
@@ -106,6 +128,11 @@ func LoadFromEnv() (Config, error) {
 	postgresDSN := os.Getenv("STELE_POSTGRES_DSN")
 	if postgresDSN == "" {
 		return Config{}, fmt.Errorf("STELE_POSTGRES_DSN is required")
+	}
+
+	migrationPolicy := MigrationPolicy(strings.TrimSpace(strings.ToLower(getEnvOrDefault("STELE_MIGRATION_POLICY", string(MigrationPolicyAuto)))))
+	if !migrationPolicy.Valid() {
+		return Config{}, fmt.Errorf("STELE_MIGRATION_POLICY is invalid: %q", migrationPolicy)
 	}
 
 	maintenanceInterval, err := loadDurationWithDefault("STELE_JOBS_MAINTENANCE_INTERVAL", 15*time.Minute)
@@ -294,6 +321,7 @@ func LoadFromEnv() (Config, error) {
 		Mode:        mode,
 		HTTPAddr:    getEnvOrDefault("STELE_HTTP_ADDR", ":8080"),
 		PostgresDSN: postgresDSN,
+		Migrations:  MigrationConfig{Policy: migrationPolicy},
 		Auth: AuthConfig{
 			BootstrapAdminKey: bootstrapAdminKey,
 			DefaultTenant:     defaultTenant,
