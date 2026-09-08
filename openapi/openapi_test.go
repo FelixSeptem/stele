@@ -618,6 +618,54 @@ func TestSpecYAMLIncludesContextExperienceInsightSections(t *testing.T) {
 	}
 }
 
+func TestRankingRolloutContractUsesExplicitFusionSchemas(t *testing.T) {
+	loader := openapi3.NewLoader()
+	doc, err := loader.LoadFromData([]byte(SpecYAML()))
+	if err != nil {
+		t.Fatalf("LoadFromData() error = %v", err)
+	}
+
+	rollouts := doc.Paths.Value("/v1/admin/ranking-rollouts")
+	if rollouts == nil || rollouts.Post == nil || rollouts.Get == nil {
+		t.Fatal("ranking rollout collection operations are missing")
+	}
+	if got := rollouts.Post.RequestBody.Value.Content.Get("application/json").Schema.Ref; got != "#/components/schemas/RankingRolloutPolicyCreateRequest" {
+		t.Fatalf("create request schema ref = %q, want RankingRolloutPolicyCreateRequest", got)
+	}
+	if got := rollouts.Post.Responses.Value("201").Value.Content.Get("application/json").Schema.Ref; got != "#/components/schemas/RankingRolloutPolicy" {
+		t.Fatalf("create response schema ref = %q, want RankingRolloutPolicy", got)
+	}
+	if got := rollouts.Get.Responses.Value("200").Value.Content.Get("application/json").Schema.Ref; got != "#/components/schemas/RankingRolloutPolicyListResponse" {
+		t.Fatalf("list response schema ref = %q, want RankingRolloutPolicyListResponse", got)
+	}
+
+	request := doc.Components.Schemas["RankingRolloutPolicyCreateRequest"].Value
+	for _, field := range []string{
+		"fusion_strategy",
+		"fusion_version",
+		"fusion_rank_constant",
+		"fusion_channel_weights",
+		"fusion_per_channel_candidate",
+		"fusion_total_candidates",
+	} {
+		if request.Properties[field] == nil {
+			t.Fatalf("ranking rollout create schema missing fusion field %q", field)
+		}
+	}
+
+	spec := SpecYAML()
+	for _, path := range []string{"/v1/memories/search", "/v1/context/assemble"} {
+		pathStart := strings.Index(spec, path)
+		pathEnd := strings.Index(spec[pathStart:], "\n  /")
+		if pathStart < 0 || pathEnd < 0 {
+			t.Fatalf("ordinary retrieval path %q is missing from the specification", path)
+		}
+		if strings.Contains(spec[pathStart:pathStart+pathEnd], "fusion_") {
+			t.Fatalf("ordinary retrieval path %q must not expose fusion strategy internals", path)
+		}
+	}
+}
+
 func TestSpecYAMLIsValidOpenAPI(t *testing.T) {
 	loader := openapi3.NewLoader()
 	doc, err := loader.LoadFromData([]byte(SpecYAML()))

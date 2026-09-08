@@ -7,10 +7,10 @@ import (
 
 func TestRankingRolloutActivationGate(t *testing.T) {
 	gate := RankingRolloutActivationGate{
-		DryRunSucceeded:        true,
+		DryRunSucceeded:         true,
 		EvidenceThresholdStatus: RankingRolloutThresholdStatusSatisfied,
-		BlockersPresent:        false,
-		AttributionRecorded:    true,
+		BlockersPresent:         false,
+		AttributionRecorded:     true,
 	}
 
 	if !gate.CanActivate() {
@@ -46,6 +46,40 @@ func TestRankingRolloutPolicyValidate(t *testing.T) {
 	policy.Mode = RankingRolloutMode("free_form")
 	if err := policy.Validate(); err == nil {
 		t.Fatal("Validate() error = nil, want invalid rollout mode")
+	}
+}
+
+func TestRankingRolloutPolicyValidateAcceptsExplicitFusionStrategy(t *testing.T) {
+	policy := validRankingRolloutPolicyForTest()
+	policy.FusionStrategy = "rrf"
+	policy.FusionVersion = "rrf-v1"
+	policy.FusionRankConstant = 60
+	policy.FusionPerChannelCandidate = 50
+	policy.FusionTotalCandidates = 200
+	policy.FusionChannelWeights = map[string]float64{"lexical": 1, "semantic": 1}
+	if err := policy.Validate(); err != nil {
+		t.Fatalf("Validate() error = %v, want explicit fusion strategy accepted", err)
+	}
+}
+
+func TestRankingRolloutPolicyValidateRejectsInvalidFusionStrategy(t *testing.T) {
+	policy := validRankingRolloutPolicyForTest()
+	policy.FusionStrategy = "rrf"
+	policy.FusionVersion = ""
+	if err := policy.Validate(); err == nil {
+		t.Fatal("Validate() error = nil, want missing fusion version")
+	}
+}
+
+func validRankingRolloutPolicyForTest() RankingRolloutPolicy {
+	now := time.Date(2026, 9, 7, 12, 0, 0, 0, time.UTC)
+	return RankingRolloutPolicy{
+		ID: "policy-1", Scope: Scope{Tenant: "tenant-a", Project: "project-a", Namespace: "namespace-a"},
+		Status: RankingRolloutPolicyStatusDraft, Mode: RankingRolloutModeDryRun,
+		Surfaces:        []RankingRolloutSurface{RankingRolloutSurfaceSearch},
+		SignalSources:   []RankingRolloutSignalSource{RankingRolloutSignalSourceUsefulnessFeedback},
+		ThresholdStatus: RankingRolloutThresholdStatusSatisfied, Actor: "operator", Reason: "test",
+		CreatedAt: now, UpdatedAt: now,
 	}
 }
 

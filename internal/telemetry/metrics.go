@@ -75,6 +75,17 @@ type RankingRolloutEvent struct {
 	ReasonCode      string
 }
 
+// RetrievalFusionEvent carries bounded retrieval-fusion health telemetry only.
+// It intentionally excludes scope, query, candidate identity, and raw scores.
+type RetrievalFusionEvent struct {
+	Strategy       string
+	Version        string
+	Channel        string
+	Availability   string
+	CandidateCount int
+	Outcome        string
+}
+
 type DerivedInsightReplayEvent struct {
 	Mode        string
 	Result      string
@@ -394,6 +405,33 @@ func (o *MetricsObserver) RecordRankingRollout(ctx context.Context, event Rankin
 	}, 1)
 }
 
+func (o *MetricsObserver) RecordRetrievalFusion(ctx context.Context, event RetrievalFusionEvent) {
+	if o == nil {
+		return
+	}
+	o.addCounter("stele_retrieval_fusion_total", map[string]string{
+		"strategy":        labelOrUnknown(event.Strategy),
+		"version":         labelOrUnknown(event.Version),
+		"channel":         labelOrUnknown(event.Channel),
+		"availability":    labelOrUnknown(event.Availability),
+		"candidate_count": retrievalFusionCandidateCountBucket(event.CandidateCount),
+		"outcome":         labelOrUnknown(event.Outcome),
+	}, 1)
+}
+
+func retrievalFusionCandidateCountBucket(count int) string {
+	switch {
+	case count <= 0:
+		return "0"
+	case count <= 10:
+		return "1_10"
+	case count <= 50:
+		return "11_50"
+	default:
+		return "51_plus"
+	}
+}
+
 func (o *MetricsObserver) RecordDerivedInsightReplay(ctx context.Context, event DerivedInsightReplayEvent) {
 	if o == nil {
 		return
@@ -670,6 +708,7 @@ func (o *MetricsObserver) RenderPrometheus() string {
 	writeMetricFamilyHeader(&builder, "stele_usefulness_feedback_total", "counter", "Usefulness feedback lifecycle operations by bounded categories.")
 	writeMetricFamilyHeader(&builder, "stele_task_evaluation_total", "counter", "Task evaluation lifecycle operations by bounded categories.")
 	writeMetricFamilyHeader(&builder, "stele_ranking_rollout_total", "counter", "Ranking rollout lifecycle and impact operations by bounded categories.")
+	writeMetricFamilyHeader(&builder, "stele_retrieval_fusion_total", "counter", "Retrieval fusion availability and bounded candidate-pool outcomes.")
 	writeMetricFamilyHeader(&builder, "stele_derived_insight_replay_total", "counter", "Derived insight replay outcomes by low-cardinality categories.")
 	writeMetricFamilyHeader(&builder, "stele_quality_evaluation_total", "counter", "Memory quality evaluation outcomes.")
 	writeMetricFamilyHeader(&builder, "stele_quality_repair_actions_total", "counter", "Memory quality repair action outcomes.")

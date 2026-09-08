@@ -4736,7 +4736,7 @@ func TestNewHTTPHandlerServesRankingRolloutAPIs(t *testing.T) {
 		RankingRollout: service,
 	})
 
-	createReq := httptest.NewRequest(http.MethodPost, "/v1/admin/ranking-rollouts", strings.NewReader(`{"id":"policy_1","status":"draft","mode":"dry_run","surfaces":["search"],"signal_sources":["task_evaluations"],"threshold_status":"satisfied","evidence_minimum":1,"actor":"operator-a","reason":"create policy"}`))
+	createReq := httptest.NewRequest(http.MethodPost, "/v1/admin/ranking-rollouts", strings.NewReader(`{"id":"policy_1","status":"draft","mode":"dry_run","surfaces":["search"],"signal_sources":["task_evaluations"],"threshold_status":"satisfied","evidence_minimum":1,"actor":"operator-a","reason":"create policy","fusion_strategy":"rrf","fusion_version":"rrf-v1","fusion_rank_constant":60,"fusion_channel_weights":{"lexical":1,"semantic":1},"fusion_per_channel_candidate":20,"fusion_total_candidates":40}`))
 	setAdminScopeHeaders(createReq)
 	createResp := httptest.NewRecorder()
 	handler.ServeHTTP(createResp, createReq)
@@ -4794,6 +4794,9 @@ func TestNewHTTPHandlerServesRankingRolloutAPIs(t *testing.T) {
 
 	if service.gotCreate.Scope != scope || service.gotCreate.ID != "policy_1" {
 		t.Fatalf("create input = %+v, want scoped create", service.gotCreate)
+	}
+	if service.gotCreate.FusionStrategy != "rrf" || service.gotCreate.FusionVersion != "rrf-v1" || service.gotCreate.FusionRankConstant != 60 || service.gotCreate.FusionPerChannelCandidate != 20 || service.gotCreate.FusionTotalCandidates != 40 || service.gotCreate.FusionChannelWeights["semantic"] != 1 {
+		t.Fatalf("fusion create input = %+v, want explicit fusion strategy", service.gotCreate)
 	}
 	if service.gotList.Scope != scope || service.gotRead.Scope != scope || service.gotRead.PolicyID != "policy_1" {
 		t.Fatalf("read/list input = %+v %+v, want scoped policy", service.gotList, service.gotRead)
@@ -5895,6 +5898,44 @@ func setAPIScopeHeaders(req *http.Request) {
 	req.Header.Set("X-Stele-Tenant", "tenant-a")
 	req.Header.Set("X-Stele-Project", "project-a")
 	req.Header.Set("X-Stele-Namespace", "namespace-a")
+}
+
+func TestRankingRolloutRollbackEmitsBoundedRestorationMetric(t *testing.T) {
+	scope := memory.Scope{Tenant: "tenant-a", Project: "project-a", Namespace: "namespace-a"}
+	metrics := telemetry.NewMetricsObserver()
+	service := &stubRankingRolloutAdminService{policy: memory.RankingRolloutPolicy{
+		ID:              "policy-1",
+		Scope:           scope,
+		Status:          memory.RankingRolloutPolicyStatusRolledBack,
+		Surfaces:        []memory.RankingRolloutSurface{memory.RankingRolloutSurfaceSearch},
+		SignalSources:   []memory.RankingRolloutSignalSource{memory.RankingRolloutSignalSourceTaskEvaluations},
+		ThresholdStatus: memory.RankingRolloutThresholdStatusSatisfied,
+	}}
+	handler := NewHTTPHandler(HTTPDependencies{
+		Readiness:      stubReadinessChecker{},
+		AdminAPIKeys:   map[string]struct{}{"admin-key": {}},
+		RankingRollout: service,
+		Metrics:        metrics,
+	})
+
+	req := httptest.NewRequest(http.MethodPost, "/v1/admin/ranking-rollouts/policy-1/rollback", strings.NewReader(`{"actor":"operator-a","reason":"restore baseline"}`))
+	setAdminActionHeaders(req)
+	resp := httptest.NewRecorder()
+	handler.ServeHTTP(resp, req)
+	if resp.Code != http.StatusAccepted {
+		t.Fatalf("rollback status = %d body=%s, want 202", resp.Code, resp.Body.String())
+	}
+
+	output := metrics.RenderPrometheus()
+	want := `stele_ranking_rollout_total{operation="rollback",policy_status="rolled_back",reason_code="rollback_restored",result="ok",signal_source="task_evaluations",surface="search",threshold_status="satisfied"} 1`
+	if !strings.Contains(output, want) {
+		t.Fatalf("metrics missing %q\n%s", want, output)
+	}
+	for _, forbidden := range []string{"tenant-a", "project-a", "namespace-a", "policy-1", "operator-a", "restore baseline"} {
+		if strings.Contains(output, forbidden) {
+			t.Fatalf("metrics contain prohibited value %q\n%s", forbidden, output)
+		}
+	}
 }
 
 func setAdminScopeHeaders(req *http.Request) {

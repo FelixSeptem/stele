@@ -184,14 +184,47 @@ func TestCalculateEvaluationMetricsClassifiesLifecycleAndMalformedScopeFailures(
 	}
 }
 
+func TestEvaluationReportSuppressesUnsafeFusionCandidatesAndRawDetails(t *testing.T) {
+	scope := memory.Scope{Tenant: "eval", Project: "baseline", Namespace: "redaction"}
+	report, err := CalculateEvaluationMetrics(EvaluationReplay{
+		Metadata: EvaluationRankingMetadata{
+			FixtureVersion: "retrieval-fixture-v1", RepresentationVersion: "canonical-v1", RankingVersion: "ranking-v1",
+			FusionStrategy: "rrf:rrf-v1", CompatibleEmbeddingRevision: "embedding-v1", PolicyVersion: "quality-policy-v1",
+		},
+		Cases: []EvaluationReplayCase{{
+			CaseID: "redaction", Scope: scope, ExpectedEvidenceGroups: [][]string{{"visible"}},
+			Candidates: []EvaluationReplayCandidate{
+				{Alias: "visible", MemoryID: "visible-memory", Scope: scope, State: memory.MemoryStateActive, FinalRank: 1, lexicalScore: 0.987654},
+				{Alias: "foreign-alias", MemoryID: "foreign-memory-id", Scope: memory.Scope{Tenant: "foreign-tenant", Project: "foreign-project", Namespace: "foreign-namespace"}, State: memory.MemoryStateActive, FinalRank: 2, semanticScore: 0.876543},
+				{Alias: "hidden-alias", MemoryID: "hidden-memory-id", Scope: scope, State: memory.MemoryStateForgotten, FinalRank: 3, relationScore: 0.765432},
+			},
+		}},
+	})
+	if err != nil {
+		t.Fatalf("CalculateEvaluationMetrics() error = %v", err)
+	}
+	if len(report.SafetyFailures) == 0 || report.Metrics.RecallAt1 != 0 || report.Metrics.MRR != 0 {
+		t.Fatalf("report = %+v, want unsafe candidates to suppress quality metrics", report)
+	}
+	encoded, err := MarshalEvaluationReport(report)
+	if err != nil {
+		t.Fatalf("MarshalEvaluationReport() error = %v", err)
+	}
+	for _, prohibited := range []string{"visible-memory", "foreign-memory-id", "hidden-memory-id", "foreign-tenant", "foreign-project", "foreign-namespace", "0.987654", "0.876543", "0.765432"} {
+		if strings.Contains(string(encoded), prohibited) {
+			t.Fatalf("report contains prohibited raw detail %q: %s", prohibited, encoded)
+		}
+	}
+}
+
 func TestOrdinarySearchResultDoesNotSerializeEvaluationDiagnostics(t *testing.T) {
 	encoded, err := json.Marshal(SearchResult{Hits: []SearchHit{{
 		Memory: memory.CanonicalMemory{ID: "memory-1"},
-	}}})
+	}}, fusionChannelAvailability: map[FusionChannel]fusionChannelAvailability{FusionChannelRelation: fusionChannelUnavailable}})
 	if err != nil {
 		t.Fatalf("marshal ordinary SearchResult: %v", err)
 	}
-	if strings.Contains(string(encoded), "evaluation") || strings.Contains(string(encoded), "candidate_channels") {
+	if strings.Contains(string(encoded), "evaluation") || strings.Contains(string(encoded), "candidate_channels") || strings.Contains(string(encoded), "fusionChannelAvailability") || strings.Contains(string(encoded), "unavailable") {
 		t.Fatalf("ordinary SearchResult exposes evaluation diagnostics: %s", encoded)
 	}
 }
@@ -231,7 +264,8 @@ func TestEvaluationRunnerReplaysFixtureThroughMemorySearcher(t *testing.T) {
 	}
 	searcher := &stubEvaluationSearcher{result: SearchResult{Hits: []SearchHit{{
 		Memory: memory.CanonicalMemory{ID: "memory-1", Scope: fixture.Cases[0].Scope, State: memory.MemoryStateActive},
-		Score:  ScoreBreakdown{Lexical: 0.9, Overall: 0.9},
+		Score:  ScoreBreakdown{Lexical: 0.9, Semantic: 0.8, Relation: 0.7, Overall: 0.9},
+		Chunk:  &memory.MemoryChunk{ID: "chunk-1"},
 	}}}}
 
 	run, err := NewEvaluationRunner(searcher).Replay(context.Background(), fixture, seed, EvaluationRankingMetadata{
@@ -246,6 +280,9 @@ func TestEvaluationRunnerReplaysFixtureThroughMemorySearcher(t *testing.T) {
 	}
 	if searcher.input.Scope != fixture.Cases[0].Scope || searcher.input.Query != fixture.Cases[0].Query {
 		t.Fatalf("Search() input = %+v, want fixture scope and query", searcher.input)
+	}
+	if run.Metadata.FusionStrategy != "rrf:rrf-v1" {
+		t.Fatalf("fusion strategy = %q, want default RRF identity", run.Metadata.FusionStrategy)
 	}
 	if !searcher.input.IncludeRelations || !searcher.input.IncludeSummaries || searcher.input.TopK != evaluationReplayTopK {
 		t.Fatalf("Search() input = %+v, want full internal retrieval surface", searcher.input)
@@ -264,8 +301,74 @@ func TestEvaluationRunnerReplaysFixtureThroughMemorySearcher(t *testing.T) {
 		t.Fatalf("diagnostics = %+v, want one visible candidate diagnostic", run.Cases[0].Diagnostics)
 	}
 	diagnostic := run.Cases[0].Diagnostics[0]
-	if diagnostic.Alias != "database" || diagnostic.LexicalRank != 1 || diagnostic.FinalRank != 1 || diagnostic.Disposition != EvaluationCandidateDispositionReturned {
+	if diagnostic.Alias != "database" || diagnostic.LexicalRank != 1 || diagnostic.SemanticRank != 1 || diagnostic.RelationRank != 1 || diagnostic.ChunkRank != 1 || diagnostic.FinalRank != 1 || diagnostic.Disposition != EvaluationCandidateDispositionReturned {
 		t.Fatalf("diagnostic = %+v, want returned lexical candidate diagnostic", diagnostic)
+	}
+	if diagnostic.ChannelStatus["lexical"] != EvaluationChannelStatusAvailable || diagnostic.ChannelStatus["semantic"] != EvaluationChannelStatusAvailable || diagnostic.ChannelStatus["relation"] != EvaluationChannelStatusAvailable || diagnostic.ChannelStatus["chunk"] != EvaluationChannelStatusAvailable {
+		t.Fatalf("channel status = %+v, want all contributing channels available", diagnostic.ChannelStatus)
+	}
+}
+
+func TestEvaluationRunnerReportsAggregateFusionChannelAvailability(t *testing.T) {
+	fixture := EvaluationFixture{
+		Version: "retrieval-fixture-v1",
+		Cases: []EvaluationCase{{
+			ID:                     "optional-relation",
+			Scope:                  memory.Scope{Tenant: "eval", Project: "baseline", Namespace: "availability"},
+			Query:                  "controlled query",
+			Sources:                []EvaluationSource{{Alias: "fact", EventType: "fixture", Content: "controlled"}},
+			ExpectedEvidenceGroups: [][]string{{"fact"}},
+		}},
+	}
+	searcher := &stubEvaluationSearcher{result: SearchResult{
+		Hits: []SearchHit{{Memory: memory.CanonicalMemory{ID: "memory-1", Scope: fixture.Cases[0].Scope, State: memory.MemoryStateActive}}},
+		fusionChannelAvailability: map[FusionChannel]fusionChannelAvailability{
+			FusionChannelLexical:  fusionChannelAvailable,
+			FusionChannelRelation: fusionChannelUnavailable,
+		},
+	}}
+
+	run, err := NewEvaluationRunner(searcher).Replay(context.Background(), fixture, EvaluationFixtureSeed{
+		FixtureVersion: fixture.Version,
+		Aliases: []EvaluationSeededAlias{{
+			CaseID: "optional-relation", Alias: "fact", MemoryID: "memory-1", Scope: fixture.Cases[0].Scope, State: memory.MemoryStateActive,
+		}},
+	}, EvaluationRankingMetadata{
+		FixtureVersion: fixture.Version, RepresentationVersion: "canonical-v1", RankingVersion: "baseline-v1", CompatibleEmbeddingRevision: "deterministic-v1", PolicyVersion: "quality-policy-v1",
+	})
+	if err != nil {
+		t.Fatalf("Replay() error = %v", err)
+	}
+	availability := run.Cases[0].ChannelAvailability
+	if availability["lexical"] != EvaluationChannelStatusAvailable || availability["relation"] != EvaluationChannelStatusUnavailable {
+		t.Fatalf("channel availability = %+v, want lexical available and relation unavailable", availability)
+	}
+}
+
+func TestEvaluationRunnerRecordsNotReturnedDispositionForActiveFixtureAlias(t *testing.T) {
+	fixture := EvaluationFixture{
+		Version: "retrieval-fixture-v1",
+		Cases: []EvaluationCase{{
+			ID:                     "not-returned",
+			Scope:                  memory.Scope{Tenant: "eval", Project: "baseline", Namespace: "disposition"},
+			Query:                  "controlled query",
+			Sources:                []EvaluationSource{{Alias: "missing", EventType: "fixture", Content: "controlled"}},
+			ExpectedEvidenceGroups: [][]string{{"missing"}},
+		}},
+	}
+	run, err := NewEvaluationRunner(&stubEvaluationSearcher{}).Replay(context.Background(), fixture, EvaluationFixtureSeed{
+		FixtureVersion: fixture.Version,
+		Aliases: []EvaluationSeededAlias{{
+			CaseID: "not-returned", Alias: "missing", MemoryID: "memory-1", Scope: fixture.Cases[0].Scope, State: memory.MemoryStateActive,
+		}},
+	}, EvaluationRankingMetadata{
+		FixtureVersion: fixture.Version, RepresentationVersion: "canonical-v1", RankingVersion: "baseline-v1", CompatibleEmbeddingRevision: "deterministic-v1", PolicyVersion: "quality-policy-v1",
+	})
+	if err != nil {
+		t.Fatalf("Replay() error = %v", err)
+	}
+	if len(run.Cases[0].Diagnostics) != 1 || run.Cases[0].Diagnostics[0].Alias != "missing" || run.Cases[0].Diagnostics[0].Disposition != EvaluationCandidateDispositionNotReturned {
+		t.Fatalf("diagnostics = %+v, want active missing alias marked not returned", run.Cases[0].Diagnostics)
 	}
 }
 

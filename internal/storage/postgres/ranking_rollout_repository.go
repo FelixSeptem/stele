@@ -3,6 +3,7 @@ package postgres
 import (
 	"context"
 	"database/sql"
+	"encoding/json"
 	"fmt"
 	"sort"
 	"strings"
@@ -17,6 +18,10 @@ func (r *Repository) CreateRankingRolloutPolicy(ctx context.Context, policy memo
 	if err := policy.Validate(); err != nil {
 		return memory.RankingRolloutPolicy{}, err
 	}
+	fusionChannelWeights, err := marshalOptionalFusionChannelWeights(policy.FusionChannelWeights)
+	if err != nil {
+		return memory.RankingRolloutPolicy{}, err
+	}
 
 	tx, err := r.tx.BeginTx(ctx, pgx.TxOptions{})
 	if err != nil {
@@ -28,11 +33,15 @@ func (r *Repository) CreateRankingRolloutPolicy(ctx context.Context, policy memo
 INSERT INTO ranking_rollout_policies (
 	id, tenant, project, namespace, status, mode, surfaces, signal_sources, threshold_status,
 	evidence_minimum, actor, reason, latest_dry_run_id, latest_dry_run_status,
+	fusion_strategy, fusion_version, fusion_rank_constant, fusion_channel_weights,
+	fusion_per_channel_candidate, fusion_total_candidates,
 	activated_at, disabled_at, rolled_back_at, created_at, updated_at
 )
-VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19)
+VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19, $20, $21, $22, $23, $24, $25)
 RETURNING id, tenant, project, namespace, status, mode, surfaces, signal_sources, threshold_status,
 	evidence_minimum, actor, reason, latest_dry_run_id, latest_dry_run_status,
+	fusion_strategy, fusion_version, fusion_rank_constant, fusion_channel_weights,
+	fusion_per_channel_candidate, fusion_total_candidates,
 	activated_at, disabled_at, rolled_back_at, created_at, updated_at
 `
 	created, err := scanRankingRolloutPolicy(tx.QueryRow(
@@ -52,6 +61,12 @@ RETURNING id, tenant, project, namespace, status, mode, surfaces, signal_sources
 		policy.Reason,
 		nullableString(policy.LatestDryRunID),
 		nullableString(string(policy.LatestDryRunStatus)),
+		nullableString(policy.FusionStrategy),
+		nullableString(policy.FusionVersion),
+		nullableRankingInt(policy.FusionRankConstant),
+		fusionChannelWeights,
+		nullableRankingInt(policy.FusionPerChannelCandidate),
+		nullableRankingInt(policy.FusionTotalCandidates),
 		nullableTime(policy.ActivatedAt),
 		nullableTime(policy.DisabledAt),
 		nullableTime(policy.RolledBackAt),
@@ -80,6 +95,8 @@ func (r *Repository) ReadRankingRolloutPolicy(ctx context.Context, input memory.
 	const query = `
 SELECT id, tenant, project, namespace, status, mode, surfaces, signal_sources, threshold_status,
 	evidence_minimum, actor, reason, latest_dry_run_id, latest_dry_run_status,
+	fusion_strategy, fusion_version, fusion_rank_constant, fusion_channel_weights,
+	fusion_per_channel_candidate, fusion_total_candidates,
 	activated_at, disabled_at, rolled_back_at, created_at, updated_at
 FROM ranking_rollout_policies
 WHERE tenant = $1 AND project = $2 AND namespace = $3 AND id = $4
@@ -99,6 +116,8 @@ func (r *Repository) ReadActiveRankingRolloutPolicy(ctx context.Context, input m
 	const query = `
 SELECT id, tenant, project, namespace, status, mode, surfaces, signal_sources, threshold_status,
 	evidence_minimum, actor, reason, latest_dry_run_id, latest_dry_run_status,
+	fusion_strategy, fusion_version, fusion_rank_constant, fusion_channel_weights,
+	fusion_per_channel_candidate, fusion_total_candidates,
 	activated_at, disabled_at, rolled_back_at, created_at, updated_at
 FROM ranking_rollout_policies
 WHERE tenant = $1
@@ -124,6 +143,8 @@ func (r *Repository) ListRankingRolloutPolicies(ctx context.Context, input memor
 	const query = `
 SELECT id, tenant, project, namespace, status, mode, surfaces, signal_sources, threshold_status,
 	evidence_minimum, actor, reason, latest_dry_run_id, latest_dry_run_status,
+	fusion_strategy, fusion_version, fusion_rank_constant, fusion_channel_weights,
+	fusion_per_channel_candidate, fusion_total_candidates,
 	activated_at, disabled_at, rolled_back_at, created_at, updated_at
 FROM ranking_rollout_policies
 WHERE tenant = $1 AND project = $2 AND namespace = $3
@@ -280,6 +301,8 @@ WHERE tenant = $1 AND project = $2 AND namespace = $3 AND id = $4
 	AND status NOT IN ($11, $12)
 RETURNING id, tenant, project, namespace, status, mode, surfaces, signal_sources, threshold_status,
 	evidence_minimum, actor, reason, latest_dry_run_id, latest_dry_run_status,
+	fusion_strategy, fusion_version, fusion_rank_constant, fusion_channel_weights,
+	fusion_per_channel_candidate, fusion_total_candidates,
 	activated_at, disabled_at, rolled_back_at, created_at, updated_at
 `
 	policy, err := scanRankingRolloutPolicy(tx.QueryRow(ctx, query, input.Scope.Tenant, input.Scope.Project, input.Scope.Namespace, input.PolicyID, memory.RankingRolloutPolicyStatusActiveForScope, input.Actor, input.Reason, input.ActivatedAt, input.Gate.EvidenceThresholdStatus, memory.RankingRolloutModeActiveForScope, memory.RankingRolloutPolicyStatusDisabled, memory.RankingRolloutPolicyStatusRolledBack))
@@ -317,6 +340,8 @@ SET status = $5,
 WHERE tenant = $1 AND project = $2 AND namespace = $3 AND id = $4
 RETURNING id, tenant, project, namespace, status, mode, surfaces, signal_sources, threshold_status,
 	evidence_minimum, actor, reason, latest_dry_run_id, latest_dry_run_status,
+	fusion_strategy, fusion_version, fusion_rank_constant, fusion_channel_weights,
+	fusion_per_channel_candidate, fusion_total_candidates,
 	activated_at, disabled_at, rolled_back_at, created_at, updated_at
 `
 	policy, err := scanRankingRolloutPolicy(tx.QueryRow(ctx, query, input.Scope.Tenant, input.Scope.Project, input.Scope.Namespace, input.PolicyID, memory.RankingRolloutPolicyStatusDisabled, input.Actor, input.Reason, input.DisabledAt))
@@ -357,6 +382,8 @@ SET status = $5,
 WHERE tenant = $1 AND project = $2 AND namespace = $3 AND id = $4
 RETURNING id, tenant, project, namespace, status, mode, surfaces, signal_sources, threshold_status,
 	evidence_minimum, actor, reason, latest_dry_run_id, latest_dry_run_status,
+	fusion_strategy, fusion_version, fusion_rank_constant, fusion_channel_weights,
+	fusion_per_channel_candidate, fusion_total_candidates,
 	activated_at, disabled_at, rolled_back_at, created_at, updated_at
 `
 	policy, err := scanRankingRolloutPolicy(tx.QueryRow(ctx, query, input.Scope.Tenant, input.Scope.Project, input.Scope.Namespace, input.PolicyID, memory.RankingRolloutPolicyStatusRolledBack, input.Actor, input.Reason, input.RolledBackAt))
@@ -421,6 +448,12 @@ func scanRankingRolloutPolicy(scanner provenanceScanner) (memory.RankingRolloutP
 	var signalSources []string
 	var latestDryRunID sql.NullString
 	var latestDryRunStatus sql.NullString
+	var fusionStrategy sql.NullString
+	var fusionVersion sql.NullString
+	var fusionRankConstant sql.NullInt64
+	var fusionChannelWeights []byte
+	var fusionPerChannelCandidate sql.NullInt64
+	var fusionTotalCandidates sql.NullInt64
 	var activatedAt sql.NullTime
 	var disabledAt sql.NullTime
 	var rolledBackAt sql.NullTime
@@ -439,6 +472,12 @@ func scanRankingRolloutPolicy(scanner provenanceScanner) (memory.RankingRolloutP
 		&policy.Reason,
 		&latestDryRunID,
 		&latestDryRunStatus,
+		&fusionStrategy,
+		&fusionVersion,
+		&fusionRankConstant,
+		&fusionChannelWeights,
+		&fusionPerChannelCandidate,
+		&fusionTotalCandidates,
 		&activatedAt,
 		&disabledAt,
 		&rolledBackAt,
@@ -454,6 +493,26 @@ func scanRankingRolloutPolicy(scanner provenanceScanner) (memory.RankingRolloutP
 	}
 	if latestDryRunStatus.Valid {
 		policy.LatestDryRunStatus = memory.RankingRolloutThresholdStatus(latestDryRunStatus.String)
+	}
+	if fusionStrategy.Valid {
+		policy.FusionStrategy = fusionStrategy.String
+	}
+	if fusionVersion.Valid {
+		policy.FusionVersion = fusionVersion.String
+	}
+	if fusionRankConstant.Valid {
+		policy.FusionRankConstant = int(fusionRankConstant.Int64)
+	}
+	if len(fusionChannelWeights) > 0 {
+		if err := json.Unmarshal(fusionChannelWeights, &policy.FusionChannelWeights); err != nil {
+			return memory.RankingRolloutPolicy{}, fmt.Errorf("decode ranking rollout fusion channel weights: %w", err)
+		}
+	}
+	if fusionPerChannelCandidate.Valid {
+		policy.FusionPerChannelCandidate = int(fusionPerChannelCandidate.Int64)
+	}
+	if fusionTotalCandidates.Valid {
+		policy.FusionTotalCandidates = int(fusionTotalCandidates.Int64)
 	}
 	if activatedAt.Valid {
 		policy.ActivatedAt = activatedAt.Time
@@ -562,6 +621,8 @@ func readRankingRolloutPolicyForUpdate(ctx context.Context, db queryRower, scope
 	const query = `
 SELECT id, tenant, project, namespace, status, mode, surfaces, signal_sources, threshold_status,
 	evidence_minimum, actor, reason, latest_dry_run_id, latest_dry_run_status,
+	fusion_strategy, fusion_version, fusion_rank_constant, fusion_channel_weights,
+	fusion_per_channel_candidate, fusion_total_candidates,
 	activated_at, disabled_at, rolled_back_at, created_at, updated_at
 FROM ranking_rollout_policies
 WHERE tenant = $1 AND project = $2 AND namespace = $3 AND id = $4
@@ -1058,4 +1119,22 @@ func rankingRolloutReasonCodeStrings(values []memory.RankingRolloutImpactReasonC
 		items = append(items, string(value))
 	}
 	return items
+}
+
+func nullableRankingInt(value int) any {
+	if value == 0 {
+		return nil
+	}
+	return value
+}
+
+func marshalOptionalFusionChannelWeights(value map[string]float64) (any, error) {
+	if len(value) == 0 {
+		return nil, nil
+	}
+	payload, err := json.Marshal(value)
+	if err != nil {
+		return nil, fmt.Errorf("marshal ranking rollout fusion channel weights: %w", err)
+	}
+	return payload, nil
 }

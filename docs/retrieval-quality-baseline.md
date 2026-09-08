@@ -62,3 +62,70 @@ go test ./internal/storage/postgres -run MemoryChunkPostgres -count=1
 Disable chunk materialization or consumption to roll back; no destructive migration
 or canonical-memory rewrite is required. Derived chunk retention and deletion must
 follow the source lifecycle and the operator's PostgreSQL backup/restore policy.
+
+## Stable candidate fusion
+
+The stable hybrid fusion contract treats lexical, semantic, relation, and active
+chunk retrieval as bounded ranked channels. The default strategy identity is
+`rrf:rrf-v1`. It uses an explicit rank constant and channel weights; for a
+visible candidate `c` the contract is:
+
+```text
+fused(c) = sum(weight(channel) / (rank_constant + rank))
+```
+
+`rank` is the channel's one-based rank, and every bounded validated contribution
+from a channel is added once to the candidate's canonical memory identity. The default
+parameters are deliberately part of `rrf:rrf-v1`:
+
+- Rank constant: `60`
+- Lexical channel weight: `1`
+- Semantic channel weight: `1`
+- Relation channel weight: `0.8`
+- Chunk channel weight: `0.8`
+- Per-channel candidate bound: `50`
+- Total candidate bound: `200`
+
+Candidates are scope-, lifecycle-, class-, and lineage-validated before fusion,
+then represented by one canonical memory identity. Final output ordering is
+deterministic: fused score descending, memory-class policy priority, source
+timestamp descending, then canonical memory ID ascending. This ordering applies
+after aggregation, so a duplicated parent from multiple recall paths cannot
+produce two public hits.
+
+Lexical retrieval remains the required canonical path. Semantic, relation, and
+authorized chunk retrieval are optional: an empty or unavailable optional channel
+contributes no candidates and the result falls back to the remaining validated
+channels. Invalid strategy definitions and invalid scope, lifecycle, lineage, or
+candidate-bound inputs fail closed; they never widen the candidate pool or make
+hidden evidence influence ranking.
+
+`normalized_weighted:normalized-weighted-v1` is an explicit offline comparison
+experiment. It normalizes each channel's bounded scores before applying declared
+weights and is never selected implicitly. Fusion strategy identity is included in
+evaluation metadata so RRF and experimental results remain comparable and
+rollback does not require a data migration.
+
+Evaluation and replay diagnostics are available only on authorized local, CI, or
+administrative paths. They retain bounded strategy identity, channel/rank state,
+availability, and final-disposition categories for visible evaluated results.
+They never include raw candidate pools, raw provider scores, hidden identifiers,
+scope values, DSNs, credentials, or provider error text.
+
+The Prometheus counter `stele_retrieval_fusion_total` emits only low-cardinality
+`strategy`, `version`, `channel`, `availability`, `candidate_count`, and
+`outcome` labels. Candidate-count buckets are `0`, `1_10`, `11_50`, and
+`51_plus`; labels never contain query text, memory identifiers, policy IDs, or
+scope values. The bounded `stele_ranking_rollout_total` counter records a
+successful restoration as `reason_code=rollback_restored`.
+
+Run focused contract coverage with:
+
+```powershell
+go test ./internal/retrieval ./internal/telemetry -count=1
+go test ./internal/app -run RankingRollout -count=1
+```
+
+The replay command requires the explicitly owned disposable
+`STELE_TEST_RETRIEVAL_EVALUATION_DSN` described above. It must not be supplied
+from, or replaced by, `STELE_POSTGRES_DSN`.

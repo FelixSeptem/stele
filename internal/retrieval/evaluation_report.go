@@ -17,6 +17,9 @@ func RenderEvaluationReport(report EvaluationReport) (string, error) {
 	fmt.Fprintf(&builder, "fixture_version=%s\n", report.Metadata.FixtureVersion)
 	fmt.Fprintf(&builder, "representation_version=%s\n", report.Metadata.RepresentationVersion)
 	fmt.Fprintf(&builder, "ranking_version=%s\n", report.Metadata.RankingVersion)
+	if strings.TrimSpace(report.Metadata.FusionStrategy) != "" {
+		fmt.Fprintf(&builder, "fusion_strategy=%s\n", report.Metadata.FusionStrategy)
+	}
 	fmt.Fprintf(&builder, "compatible_embedding_revision=%s\n", report.Metadata.CompatibleEmbeddingRevision)
 	fmt.Fprintf(&builder, "policy_version=%s\n", report.Metadata.PolicyVersion)
 	fmt.Fprintf(&builder, "case_count=%d\n", len(report.Cases))

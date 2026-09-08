@@ -508,15 +508,21 @@ type publicWorkflowStepRecord struct {
 }
 
 type rankingRolloutPolicyCreateRequest struct {
-	ID              string                               `json:"id"`
-	Status          memory.RankingRolloutPolicyStatus    `json:"status"`
-	Mode            memory.RankingRolloutMode            `json:"mode"`
-	Surfaces        []memory.RankingRolloutSurface       `json:"surfaces"`
-	SignalSources   []memory.RankingRolloutSignalSource  `json:"signal_sources"`
-	ThresholdStatus memory.RankingRolloutThresholdStatus `json:"threshold_status"`
-	EvidenceMinimum int                                  `json:"evidence_minimum"`
-	Actor           string                               `json:"actor"`
-	Reason          string                               `json:"reason"`
+	ID                        string                               `json:"id"`
+	Status                    memory.RankingRolloutPolicyStatus    `json:"status"`
+	Mode                      memory.RankingRolloutMode            `json:"mode"`
+	Surfaces                  []memory.RankingRolloutSurface       `json:"surfaces"`
+	SignalSources             []memory.RankingRolloutSignalSource  `json:"signal_sources"`
+	ThresholdStatus           memory.RankingRolloutThresholdStatus `json:"threshold_status"`
+	EvidenceMinimum           int                                  `json:"evidence_minimum"`
+	Actor                     string                               `json:"actor"`
+	Reason                    string                               `json:"reason"`
+	FusionStrategy            string                               `json:"fusion_strategy,omitempty"`
+	FusionVersion             string                               `json:"fusion_version,omitempty"`
+	FusionRankConstant        int                                  `json:"fusion_rank_constant,omitempty"`
+	FusionChannelWeights      map[string]float64                   `json:"fusion_channel_weights,omitempty"`
+	FusionPerChannelCandidate int                                  `json:"fusion_per_channel_candidate,omitempty"`
+	FusionTotalCandidates     int                                  `json:"fusion_total_candidates,omitempty"`
 }
 
 type rankingRolloutPolicyActionRequest struct {
@@ -3321,18 +3327,24 @@ func handleAdminRankingRolloutCreate(w http.ResponseWriter, r *http.Request, ser
 		return
 	}
 	policy := memory.RankingRolloutPolicy{
-		ID:              strings.TrimSpace(req.ID),
-		Scope:           scope,
-		Status:          req.Status,
-		Mode:            req.Mode,
-		Surfaces:        req.Surfaces,
-		SignalSources:   req.SignalSources,
-		ThresholdStatus: req.ThresholdStatus,
-		EvidenceMinimum: req.EvidenceMinimum,
-		Actor:           strings.TrimSpace(req.Actor),
-		Reason:          strings.TrimSpace(req.Reason),
-		CreatedAt:       time.Now().UTC(),
-		UpdatedAt:       time.Now().UTC(),
+		ID:                        strings.TrimSpace(req.ID),
+		Scope:                     scope,
+		Status:                    req.Status,
+		Mode:                      req.Mode,
+		Surfaces:                  req.Surfaces,
+		SignalSources:             req.SignalSources,
+		ThresholdStatus:           req.ThresholdStatus,
+		EvidenceMinimum:           req.EvidenceMinimum,
+		Actor:                     strings.TrimSpace(req.Actor),
+		Reason:                    strings.TrimSpace(req.Reason),
+		FusionStrategy:            strings.TrimSpace(req.FusionStrategy),
+		FusionVersion:             strings.TrimSpace(req.FusionVersion),
+		FusionRankConstant:        req.FusionRankConstant,
+		FusionChannelWeights:      req.FusionChannelWeights,
+		FusionPerChannelCandidate: req.FusionPerChannelCandidate,
+		FusionTotalCandidates:     req.FusionTotalCandidates,
+		CreatedAt:                 time.Now().UTC(),
+		UpdatedAt:                 time.Now().UTC(),
 	}
 	created, err := service.CreateRankingRolloutPolicy(r.Context(), policy)
 	if err != nil {

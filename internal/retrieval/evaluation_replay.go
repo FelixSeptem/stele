@@ -44,6 +44,7 @@ type EvaluationReplayCase struct {
 	ExcludedAliases        []string
 	Candidates             []EvaluationReplayCandidate
 	Diagnostics            []EvaluationCandidateDiagnostic
+	ChannelAvailability    map[string]EvaluationChannelStatus
 	CandidatePoolSize      int
 	Latency                time.Duration
 }
@@ -51,19 +52,30 @@ type EvaluationReplayCase struct {
 type EvaluationCandidateDisposition string
 
 const (
-	EvaluationCandidateDispositionReturned EvaluationCandidateDisposition = "returned"
+	EvaluationCandidateDispositionReturned    EvaluationCandidateDisposition = "returned"
+	EvaluationCandidateDispositionNotReturned EvaluationCandidateDisposition = "not_returned"
+)
+
+type EvaluationChannelStatus string
+
+const (
+	EvaluationChannelStatusAvailable   EvaluationChannelStatus = "available"
+	EvaluationChannelStatusUnavailable EvaluationChannelStatus = "unavailable"
 )
 
 // EvaluationCandidateDiagnostic contains only a fixture alias and bounded rank
 // information. Unknown, hidden, and foreign candidates are deliberately omitted from
 // this list and represented by aggregate safety categories during evaluation.
 type EvaluationCandidateDiagnostic struct {
-	Alias        string
-	LexicalRank  int
-	SemanticRank int
-	RelationRank int
-	FinalRank    int
-	Disposition  EvaluationCandidateDisposition
+	Alias          string
+	FusionStrategy string
+	LexicalRank    int
+	SemanticRank   int
+	RelationRank   int
+	ChunkRank      int
+	ChannelStatus  map[string]EvaluationChannelStatus
+	FinalRank      int
+	Disposition    EvaluationCandidateDisposition
 }
 
 // EvaluationReplayCandidate remains internal to replay and metric calculation. It
@@ -78,6 +90,7 @@ type EvaluationReplayCandidate struct {
 	Lexical       bool
 	Semantic      bool
 	Relation      bool
+	Chunk         bool
 	FinalRank     int
 	lexicalScore  float64
 	semanticScore float64
@@ -110,6 +123,9 @@ func (r *EvaluationRunner) Replay(ctx context.Context, fixture EvaluationFixture
 	if err := fixture.Validate(); err != nil {
 		return EvaluationReplay{}, NewEvaluationFailure(EvaluationSafetyFailureInvalidFixtureScope, err.Error())
 	}
+	if metadata.FusionStrategy == "" {
+		metadata.FusionStrategy = fusionStrategyIdentity(DefaultRRFStrategy())
+	}
 	if err := metadata.Validate(); err != nil {
 		return EvaluationReplay{}, NewEvaluationFailure(EvaluationSafetyFailureUnsafeDiagnostics, err.Error())
 	}
@@ -132,12 +148,16 @@ func (r *EvaluationRunner) Replay(ctx context.Context, fixture EvaluationFixture
 	run = EvaluationReplay{Metadata: metadata, Cases: make([]EvaluationReplayCase, 0, len(fixture.Cases))}
 	for _, item := range fixture.Cases {
 		caseAliases := make(map[string]EvaluationSeededAlias, len(item.Sources))
+		activeAliases := make([]string, 0, len(item.Sources))
 		for _, source := range item.Sources {
 			record, found := aliases[evaluationSeedAliasKey(item.ID, source.Alias)]
 			if !found {
 				return EvaluationReplay{}, fmt.Errorf("seeded evaluation alias is missing")
 			}
 			caseAliases[record.MemoryID] = record
+			if record.State == memory.MemoryStateActive {
+				activeAliases = append(activeAliases, record.Alias)
+			}
 		}
 
 		started := time.Now()
@@ -163,6 +183,11 @@ func (r *EvaluationRunner) Replay(ctx context.Context, fixture EvaluationFixture
 			Candidates:             make([]EvaluationReplayCandidate, 0, len(result.Hits)),
 			CandidatePoolSize:      len(result.Hits),
 			Latency:                time.Since(started),
+			ChannelAvailability:    evaluationChannelAvailability(result.fusionChannelAvailability),
+		}
+		if result.fusionStrategy.Name != "" {
+			metadata.FusionStrategy = fusionStrategyIdentity(result.fusionStrategy)
+			run.Metadata.FusionStrategy = metadata.FusionStrategy
 		}
 		for index, hit := range result.Hits {
 			record := caseAliases[hit.Memory.ID]
@@ -175,6 +200,7 @@ func (r *EvaluationRunner) Replay(ctx context.Context, fixture EvaluationFixture
 				Lexical:       hit.Score.Lexical != 0,
 				Semantic:      hit.Score.Semantic != 0,
 				Relation:      hit.Score.Relation != 0,
+				Chunk:         hit.Chunk != nil,
 				FinalRank:     index + 1,
 				lexicalScore:  hit.Score.Lexical,
 				semanticScore: hit.Score.Semantic,
@@ -182,10 +208,57 @@ func (r *EvaluationRunner) Replay(ctx context.Context, fixture EvaluationFixture
 				ChunkDerived:  hit.Chunk != nil,
 			})
 		}
-		caseRun.Diagnostics = evaluationCandidateDiagnostics(caseRun.Candidates)
+		caseRun.Diagnostics = evaluationCandidateDiagnostics(caseRun.Candidates, metadata.FusionStrategy)
+		caseRun.Diagnostics = append(caseRun.Diagnostics, evaluationMissingCandidateDiagnostics(caseRun.Diagnostics, activeAliases, metadata.FusionStrategy)...)
 		run.Cases = append(run.Cases, caseRun)
 	}
 	return run, nil
+}
+
+func evaluationMissingCandidateDiagnostics(returned []EvaluationCandidateDiagnostic, activeAliases []string, fusionStrategy string) []EvaluationCandidateDiagnostic {
+	returnedAliases := make(map[string]struct{}, len(returned))
+	for _, diagnostic := range returned {
+		returnedAliases[diagnostic.Alias] = struct{}{}
+	}
+	aliases := append([]string(nil), activeAliases...)
+	sort.Strings(aliases)
+	missing := make([]EvaluationCandidateDiagnostic, 0, len(aliases))
+	for _, alias := range aliases {
+		if _, found := returnedAliases[alias]; found {
+			continue
+		}
+		if len(returned)+len(missing) >= evaluationReplayTopK {
+			break
+		}
+		missing = append(missing, EvaluationCandidateDiagnostic{
+			Alias:          alias,
+			FusionStrategy: fusionStrategy,
+			ChannelStatus: map[string]EvaluationChannelStatus{
+				"lexical":  EvaluationChannelStatusUnavailable,
+				"semantic": EvaluationChannelStatusUnavailable,
+				"relation": EvaluationChannelStatusUnavailable,
+				"chunk":    EvaluationChannelStatusUnavailable,
+			},
+			Disposition: EvaluationCandidateDispositionNotReturned,
+		})
+	}
+	return missing
+}
+
+func evaluationChannelAvailability(availability map[FusionChannel]fusionChannelAvailability) map[string]EvaluationChannelStatus {
+	result := make(map[string]EvaluationChannelStatus, 4)
+	for _, channel := range []FusionChannel{FusionChannelLexical, FusionChannelSemantic, FusionChannelRelation, FusionChannelChunk} {
+		status := EvaluationChannelStatusUnavailable
+		if availability[channel] == fusionChannelAvailable {
+			status = EvaluationChannelStatusAvailable
+		}
+		result[string(channel)] = status
+	}
+	return result
+}
+
+func fusionStrategyIdentity(strategy FusionStrategy) string {
+	return string(strategy.Name) + ":" + strategy.Version
 }
 
 type retrievalEvaluationObserver interface {
@@ -204,25 +277,54 @@ type evaluationObserverAdapter struct{}
 func (evaluationObserverAdapter) RecordRetrievalEvaluation(context.Context, telemetry.RetrievalEvaluationEvent) {
 }
 
-func evaluationCandidateDiagnostics(candidates []EvaluationReplayCandidate) []EvaluationCandidateDiagnostic {
+func evaluationCandidateDiagnostics(candidates []EvaluationReplayCandidate, fusionStrategy string) []EvaluationCandidateDiagnostic {
 	lexicalRanks := evaluationChannelRanks(candidates, func(candidate EvaluationReplayCandidate) float64 { return candidate.lexicalScore })
 	semanticRanks := evaluationChannelRanks(candidates, func(candidate EvaluationReplayCandidate) float64 { return candidate.semanticScore })
 	relationRanks := evaluationChannelRanks(candidates, func(candidate EvaluationReplayCandidate) float64 { return candidate.relationScore })
+	chunkRanks := evaluationBooleanChannelRanks(candidates, func(candidate EvaluationReplayCandidate) bool { return candidate.Chunk })
 	diagnostics := make([]EvaluationCandidateDiagnostic, 0, len(candidates))
 	for _, candidate := range candidates {
 		if candidate.Alias == "" || candidate.State != memory.MemoryStateActive {
 			continue
 		}
 		diagnostics = append(diagnostics, EvaluationCandidateDiagnostic{
-			Alias:        candidate.Alias,
-			LexicalRank:  lexicalRanks[candidate.FinalRank],
-			SemanticRank: semanticRanks[candidate.FinalRank],
-			RelationRank: relationRanks[candidate.FinalRank],
-			FinalRank:    candidate.FinalRank,
-			Disposition:  EvaluationCandidateDispositionReturned,
+			Alias:          candidate.Alias,
+			FusionStrategy: fusionStrategy,
+			LexicalRank:    lexicalRanks[candidate.FinalRank],
+			SemanticRank:   semanticRanks[candidate.FinalRank],
+			RelationRank:   relationRanks[candidate.FinalRank],
+			ChunkRank:      chunkRanks[candidate.FinalRank],
+			ChannelStatus: map[string]EvaluationChannelStatus{
+				"lexical":  evaluationChannelStatus(candidate.Lexical),
+				"semantic": evaluationChannelStatus(candidate.Semantic),
+				"relation": evaluationChannelStatus(candidate.Relation),
+				"chunk":    evaluationChannelStatus(candidate.Chunk),
+			},
+			FinalRank:   candidate.FinalRank,
+			Disposition: EvaluationCandidateDispositionReturned,
 		})
 	}
 	return diagnostics
+}
+
+func evaluationBooleanChannelRanks(candidates []EvaluationReplayCandidate, included func(EvaluationReplayCandidate) bool) map[int]int {
+	ranks := make(map[int]int)
+	rank := 0
+	for _, candidate := range candidates {
+		if !included(candidate) {
+			continue
+		}
+		rank++
+		ranks[candidate.FinalRank] = rank
+	}
+	return ranks
+}
+
+func evaluationChannelStatus(included bool) EvaluationChannelStatus {
+	if included {
+		return EvaluationChannelStatusAvailable
+	}
+	return EvaluationChannelStatusUnavailable
 }
 
 func evaluationChannelRanks(candidates []EvaluationReplayCandidate, score func(EvaluationReplayCandidate) float64) map[int]int {

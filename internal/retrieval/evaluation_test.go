@@ -205,6 +205,22 @@ func TestMarshalEvaluationReportExcludesFixturePayloads(t *testing.T) {
 	}
 }
 
+func TestMarshalEvaluationReportRejectsUnsafeFusionStrategyIdentity(t *testing.T) {
+	report := EvaluationReport{Metadata: EvaluationRankingMetadata{
+		FixtureVersion: "retrieval-fixture-v1", RepresentationVersion: "canonical-v1", RankingVersion: "ranking-v1",
+		FusionStrategy: "postgres://operator:secret@db.internal/fusion-error", CompatibleEmbeddingRevision: "embedding-v1", PolicyVersion: "policy-v1",
+	}}
+	_, err := MarshalEvaluationReport(report)
+	if err == nil {
+		t.Fatal("MarshalEvaluationReport() error = nil, want unsafe fusion identity rejected")
+	}
+	for _, prohibited := range []string{"postgres://", "secret", "db.internal"} {
+		if strings.Contains(err.Error(), prohibited) {
+			t.Fatalf("redacted error %q contains %q", err, prohibited)
+		}
+	}
+}
+
 func TestRenderEvaluationReportIncludesCompatibilityVersions(t *testing.T) {
 	report := EvaluationReport{
 		Metadata: EvaluationRankingMetadata{
@@ -225,6 +241,20 @@ func TestRenderEvaluationReportIncludesCompatibilityVersions(t *testing.T) {
 		if !strings.Contains(output, want) {
 			t.Fatalf("human report %q does not contain %q", output, want)
 		}
+	}
+}
+
+func TestRenderEvaluationReportIncludesFusionStrategyWithoutRawScores(t *testing.T) {
+	report := EvaluationReport{Metadata: EvaluationRankingMetadata{
+		FixtureVersion: "fixture-v1", RepresentationVersion: "canonical-v1", RankingVersion: "baseline-v1",
+		FusionStrategy: "rrf-v1", CompatibleEmbeddingRevision: "embedding-v1", PolicyVersion: "policy-v1",
+	}}
+	rendered, err := RenderEvaluationReport(report)
+	if err != nil {
+		t.Fatalf("RenderEvaluationReport() error = %v", err)
+	}
+	if !strings.Contains(rendered, "fusion_strategy=rrf-v1") {
+		t.Fatalf("rendered report = %q, want fusion strategy identity", rendered)
 	}
 }
 
@@ -254,6 +284,21 @@ func TestCompareEvaluationReportsReportsDeltaAndProtectedRegression(t *testing.T
 	}
 	if len(comparison.ProtectedRegressions) == 0 || comparison.ProtectedRegressions[0].Category != "single-fact" {
 		t.Fatalf("protected regressions = %+v, want single-fact regression", comparison.ProtectedRegressions)
+	}
+}
+
+func TestCompareEvaluationReportsIdentifiesFusionStrategies(t *testing.T) {
+	baseline := evaluationComparisonReport("retrieval-fixture-v1", "ranking-v1", 1)
+	baseline.Metadata.FusionStrategy = "rrf:rrf-v1"
+	candidate := evaluationComparisonReport("retrieval-fixture-v1", "ranking-v1", 1)
+	candidate.Metadata.FusionStrategy = "normalized_weighted:normalized-weighted-v1"
+
+	comparison, err := CompareEvaluationReports(baseline, candidate, nil)
+	if err != nil {
+		t.Fatalf("CompareEvaluationReports() error = %v", err)
+	}
+	if comparison.BaselineFusionStrategy != baseline.Metadata.FusionStrategy || comparison.CandidateFusionStrategy != candidate.Metadata.FusionStrategy {
+		t.Fatalf("fusion strategies = %+v, want both comparison identities", comparison)
 	}
 }
 
