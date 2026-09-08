@@ -1930,6 +1930,44 @@ results override all quality scores. Threshold edits require a new policy versio
 baseline and candidate reports must use compatible fixture and representation
 versions before comparison.
 
+## Stable fusion rollout and evaluator runbook
+
+Create and operate a ranking rollout as an authenticated administrator under one
+exact `X-Stele-Tenant`, `X-Stele-Project`, and `X-Stele-Namespace` scope. Start
+by creating the selection with `POST /v1/admin/ranking-rollouts`; a policy for
+one scope never applies to another scope merely because a header value is similar.
+
+Begin comparison in either `status=diagnostics_only` with
+`mode=diagnostics_only`, or `status=dry_run` with `mode=dry_run`. Compare the
+default `rrf:rrf-v1` against the explicit experiment
+`normalized_weighted:normalized-weighted-v1` through owned retrieval-evaluation
+infrastructure. These modes retain the currently approved retrieval behavior and
+produce only bounded authorized rollout/evaluation evidence.
+
+Do not activate a selection until the existing rollout gate records a successful
+dry run, recorded attribution, an evidence threshold of `satisfied`, and no
+blockers. Use `POST /v1/admin/ranking-rollouts/{policy_id}/dry-run` to run the
+controlled comparison and inspect the bounded result with
+`GET /v1/admin/ranking-rollouts/{policy_id}/impact`. Only a policy with both
+`status=active_for_scope` and `mode=active_for_scope` changes real search or
+context retrieval, and it does so only for the exact policy scope. Activate it
+through `POST /v1/admin/ranking-rollouts/{policy_id}/activate` after the gate is
+satisfied.
+
+To stop a rollout, use
+`POST /v1/admin/ranking-rollouts/{policy_id}/disable`. To restore the deployment
+baseline, use `POST /v1/admin/ranking-rollouts/{policy_id}/rollback`. Rollback
+returns later retrieval to the prior approved baseline without modifying canonical
+memory, derived chunks, raw events, or provenance records; the bounded rollout
+telemetry records the restoration as `rollback_restored`.
+
+Run the evaluator only with an explicitly supplied disposable owned PostgreSQL
+DSN in `STELE_TEST_RETRIEVAL_EVALUATION_DSN`. Never use ambient
+`STELE_POSTGRES_DSN` for replay. If the evaluator DSN is absent,
+`pwsh -File scripts/retrieval-evaluation.ps1` prints
+`SKIP_RETRIEVAL_EVALUATION_DSN_REQUIRED` and exits with code `2`; that is a
+controlled skip rather than a passed evaluation.
+
 - `api` logs request completion and panic recovery in structured key-value style.
 - `GET /livez`, `GET /readyz`, and `GET /metrics` provide process liveness, mode-aware readiness, and Prometheus-style runtime metrics for self-hosted orchestration.
 - `worker` logs polling loop failures and successful batch execution.

@@ -448,3 +448,40 @@ func TestSelfHostingDocsIncludeIntegrationEvidenceWorkflowGoldenPath(t *testing.
 		}
 	}
 }
+
+func TestFusionContractAndRolloutRunbookAreDocumented(t *testing.T) {
+	qualityBytes, err := os.ReadFile("retrieval-quality-baseline.md")
+	if err != nil {
+		t.Fatalf("read retrieval-quality-baseline.md: %v", err)
+	}
+	quality := string(qualityBytes)
+	for _, want := range []string{
+		"rrf:rrf-v1",
+		"weight(channel) / (rank_constant + rank)",
+		"Per-channel candidate bound: `50`",
+		"Total candidate bound: `200`",
+		"stele_retrieval_fusion_total",
+		"rollback_restored",
+	} {
+		if !strings.Contains(quality, want) {
+			t.Fatalf("retrieval-quality baseline missing fusion contract %q", want)
+		}
+	}
+
+	hostingBytes, err := os.ReadFile("self-hosting.md")
+	if err != nil {
+		t.Fatalf("read self-hosting.md: %v", err)
+	}
+	hosting := string(hostingBytes)
+	for _, want := range []string{
+		"Stable fusion rollout and evaluator runbook",
+		"/v1/admin/ranking-rollouts",
+		"normalized_weighted:normalized-weighted-v1",
+		"active_for_scope",
+		"STELE_TEST_RETRIEVAL_EVALUATION_DSN",
+	} {
+		if !strings.Contains(hosting, want) {
+			t.Fatalf("self-hosting guide missing fusion runbook contract %q", want)
+		}
+	}
+}

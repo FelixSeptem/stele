@@ -1101,7 +1101,8 @@ paths:
           description: Ranking rollout policies
           content:
             application/json:
-              schema: {type: object}
+              schema:
+                $ref: '#/components/schemas/RankingRolloutPolicyListResponse'
     post:
       operationId: createRankingRollout
       parameters:
@@ -1113,13 +1114,15 @@ paths:
         required: true
         content:
           application/json:
-            schema: {type: object}
+            schema:
+              $ref: '#/components/schemas/RankingRolloutPolicyCreateRequest'
       responses:
         '201':
           description: Ranking rollout created
           content:
             application/json:
-              schema: {type: object}
+              schema:
+                $ref: '#/components/schemas/RankingRolloutPolicy'
   /v1/admin/ranking-rollouts/{policy_id}:
     get:
       operationId: getRankingRollout
@@ -1137,7 +1140,8 @@ paths:
           description: Ranking rollout policy
           content:
             application/json:
-              schema: {type: object}
+              schema:
+                $ref: '#/components/schemas/RankingRolloutPolicy'
   /v1/admin/ranking-rollouts/{policy_id}/impact:
     get:
       operationId: getRankingRolloutImpact
@@ -1191,7 +1195,8 @@ paths:
           description: Ranking rollout activated
           content:
             application/json:
-              schema: {type: object}
+              schema:
+                $ref: '#/components/schemas/RankingRolloutPolicy'
   /v1/admin/ranking-rollouts/{policy_id}/disable:
     post:
       operationId: disableRankingRollout
@@ -1209,7 +1214,8 @@ paths:
           description: Ranking rollout disabled
           content:
             application/json:
-              schema: {type: object}
+              schema:
+                $ref: '#/components/schemas/RankingRolloutPolicy'
   /v1/admin/ranking-rollouts/{policy_id}/rollback:
     post:
       operationId: rollbackRankingRollout
@@ -1227,7 +1233,8 @@ paths:
           description: Ranking rollout rolled back
           content:
             application/json:
-              schema: {type: object}
+              schema:
+                $ref: '#/components/schemas/RankingRolloutPolicy'
   /v1/admin/assurance/health-evaluations:
     get:
       operationId: listAdminAssuranceHealthEvaluations
@@ -7575,5 +7582,112 @@ components:
           type: array
           items:
             $ref: '#/components/schemas/JobExecutionRecord'
+    RankingRolloutPolicyCreateRequest:
+      type: object
+      required:
+        - id
+        - status
+        - mode
+        - surfaces
+        - signal_sources
+        - threshold_status
+        - evidence_minimum
+        - actor
+        - reason
+      properties:
+        id:
+          type: string
+        status:
+          type: string
+          enum: [draft, diagnostics_only, dry_run, active_for_scope, disabled, rolled_back]
+        mode:
+          type: string
+          enum: [diagnostics_only, dry_run, active_for_scope]
+        surfaces:
+          type: array
+          minItems: 1
+          items:
+            type: string
+            enum: [search, context]
+        signal_sources:
+          type: array
+          minItems: 1
+          items:
+            type: string
+            enum: [usefulness_feedback, task_evaluations, session_verification]
+        threshold_status:
+          type: string
+          enum: [pending, satisfied, blocked]
+        evidence_minimum:
+          type: integer
+          minimum: 0
+        actor:
+          type: string
+        reason:
+          type: string
+        fusion_strategy:
+          type: string
+          enum: [rrf, normalized_weighted]
+        fusion_version:
+          type: string
+          maxLength: 64
+        fusion_rank_constant:
+          type: integer
+          minimum: 1
+          maximum: 10000
+        fusion_channel_weights:
+          type: object
+          additionalProperties:
+            type: number
+            minimum: 0
+            maximum: 100
+        fusion_per_channel_candidate:
+          type: integer
+          minimum: 1
+          maximum: 1000
+        fusion_total_candidates:
+          type: integer
+          minimum: 1
+          maximum: 5000
+    RankingRolloutPolicy:
+      allOf:
+        - $ref: '#/components/schemas/RankingRolloutPolicyCreateRequest'
+        - type: object
+          required:
+            - scope
+            - created_at
+            - updated_at
+          properties:
+            scope:
+              $ref: '#/components/schemas/Scope'
+            latest_dry_run_id:
+              type: string
+            latest_dry_run_status:
+              type: string
+              enum: [pending, satisfied, blocked]
+            activated_at:
+              type: string
+              format: date-time
+            disabled_at:
+              type: string
+              format: date-time
+            rolled_back_at:
+              type: string
+              format: date-time
+            created_at:
+              type: string
+              format: date-time
+            updated_at:
+              type: string
+              format: date-time
+    RankingRolloutPolicyListResponse:
+      type: object
+      required:
+        - policies
+      properties:
+        policies:
+          type: array
+          items:
+            $ref: '#/components/schemas/RankingRolloutPolicy'
 `
 }

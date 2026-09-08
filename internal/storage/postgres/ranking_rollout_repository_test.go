@@ -9,6 +9,14 @@ import (
 	pgxmock "github.com/pashagolub/pgxmock/v4"
 )
 
+func rankingRolloutPolicyColumns() []string {
+	return []string{"id", "tenant", "project", "namespace", "status", "mode", "surfaces", "signal_sources", "threshold_status", "evidence_minimum", "actor", "reason", "latest_dry_run_id", "latest_dry_run_status", "fusion_strategy", "fusion_version", "fusion_rank_constant", "fusion_channel_weights", "fusion_per_channel_candidate", "fusion_total_candidates", "activated_at", "disabled_at", "rolled_back_at", "created_at", "updated_at"}
+}
+
+func rankingRolloutPolicyRow(id string, scope memory.Scope, status memory.RankingRolloutPolicyStatus, mode memory.RankingRolloutMode, threshold memory.RankingRolloutThresholdStatus, evidence int, actor, reason string, latestID, latestStatus any, activated, disabled, rolledBack, created, updated any) []any {
+	return []any{id, scope.Tenant, scope.Project, scope.Namespace, status, mode, []string{"search"}, []string{"task_evaluations"}, threshold, evidence, actor, reason, latestID, latestStatus, nil, nil, nil, nil, nil, nil, activated, disabled, rolledBack, created, updated}
+}
+
 func TestRepositoryCreateActivateRollbackRankingRolloutPolicy(t *testing.T) {
 	mock, err := pgxmock.NewPool()
 	if err != nil {
@@ -35,9 +43,9 @@ func TestRepositoryCreateActivateRollbackRankingRolloutPolicy(t *testing.T) {
 
 	mock.ExpectBegin()
 	mock.ExpectQuery("INSERT INTO ranking_rollout_policies").
-		WithArgs(policy.ID, scope.Tenant, scope.Project, scope.Namespace, policy.Status, policy.Mode, []string{"search"}, []string{"task_evaluations"}, policy.ThresholdStatus, policy.EvidenceMinimum, policy.Actor, policy.Reason, nil, nil, nil, nil, nil, policy.CreatedAt, policy.UpdatedAt).
-		WillReturnRows(pgxmock.NewRows([]string{"id", "tenant", "project", "namespace", "status", "mode", "surfaces", "signal_sources", "threshold_status", "evidence_minimum", "actor", "reason", "latest_dry_run_id", "latest_dry_run_status", "activated_at", "disabled_at", "rolled_back_at", "created_at", "updated_at"}).
-			AddRow(policy.ID, scope.Tenant, scope.Project, scope.Namespace, policy.Status, policy.Mode, []string{"search"}, []string{"task_evaluations"}, policy.ThresholdStatus, policy.EvidenceMinimum, policy.Actor, policy.Reason, nil, nil, nil, nil, nil, now, now))
+		WithArgs(policy.ID, scope.Tenant, scope.Project, scope.Namespace, policy.Status, policy.Mode, []string{"search"}, []string{"task_evaluations"}, policy.ThresholdStatus, policy.EvidenceMinimum, policy.Actor, policy.Reason, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, policy.CreatedAt, policy.UpdatedAt).
+		WillReturnRows(pgxmock.NewRows(rankingRolloutPolicyColumns()).
+			AddRow(policy.ID, scope.Tenant, scope.Project, scope.Namespace, policy.Status, policy.Mode, []string{"search"}, []string{"task_evaluations"}, policy.ThresholdStatus, policy.EvidenceMinimum, policy.Actor, policy.Reason, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, now, now))
 	mock.ExpectExec("INSERT INTO ranking_rollout_policy_states").
 		WithArgs(policy.ID, scope.Tenant, scope.Project, scope.Namespace, policy.Status, policy.Actor, policy.Reason, nil, nil, nil, policy.UpdatedAt).
 		WillReturnResult(pgxmock.NewResult("INSERT", 1))
@@ -55,8 +63,8 @@ func TestRepositoryCreateActivateRollbackRankingRolloutPolicy(t *testing.T) {
 	mock.ExpectBegin()
 	mock.ExpectQuery("UPDATE ranking_rollout_policies").
 		WithArgs(scope.Tenant, scope.Project, scope.Namespace, policy.ID, memory.RankingRolloutPolicyStatusActiveForScope, "operator-b", "activate after dry-run", now.Add(time.Minute), memory.RankingRolloutThresholdStatusSatisfied, memory.RankingRolloutModeActiveForScope, memory.RankingRolloutPolicyStatusDisabled, memory.RankingRolloutPolicyStatusRolledBack).
-		WillReturnRows(pgxmock.NewRows([]string{"id", "tenant", "project", "namespace", "status", "mode", "surfaces", "signal_sources", "threshold_status", "evidence_minimum", "actor", "reason", "latest_dry_run_id", "latest_dry_run_status", "activated_at", "disabled_at", "rolled_back_at", "created_at", "updated_at"}).
-			AddRow(policy.ID, scope.Tenant, scope.Project, scope.Namespace, memory.RankingRolloutPolicyStatusActiveForScope, memory.RankingRolloutModeActiveForScope, []string{"search"}, []string{"task_evaluations"}, memory.RankingRolloutThresholdStatusSatisfied, policy.EvidenceMinimum, "operator-b", "activate after dry-run", "dry_run_1", memory.RankingRolloutThresholdStatusSatisfied, now.Add(time.Minute), nil, nil, now, now.Add(time.Minute)))
+		WillReturnRows(pgxmock.NewRows(rankingRolloutPolicyColumns()).
+			AddRow(policy.ID, scope.Tenant, scope.Project, scope.Namespace, memory.RankingRolloutPolicyStatusActiveForScope, memory.RankingRolloutModeActiveForScope, []string{"search"}, []string{"task_evaluations"}, memory.RankingRolloutThresholdStatusSatisfied, policy.EvidenceMinimum, "operator-b", "activate after dry-run", "dry_run_1", memory.RankingRolloutThresholdStatusSatisfied, nil, nil, nil, nil, nil, nil, now.Add(time.Minute), nil, nil, now, now.Add(time.Minute)))
 	mock.ExpectExec("INSERT INTO ranking_rollout_policy_states").
 		WithArgs(policy.ID, scope.Tenant, scope.Project, scope.Namespace, memory.RankingRolloutPolicyStatusActiveForScope, "operator-b", "activate after dry-run", now.Add(time.Minute), nil, nil, now.Add(time.Minute)).
 		WillReturnResult(pgxmock.NewResult("INSERT", 1))
@@ -68,9 +76,9 @@ func TestRepositoryCreateActivateRollbackRankingRolloutPolicy(t *testing.T) {
 		Reason:      "activate after dry-run",
 		ActivatedAt: now.Add(time.Minute),
 		Gate: memory.RankingRolloutActivationGate{
-			DryRunSucceeded:        true,
+			DryRunSucceeded:         true,
 			EvidenceThresholdStatus: memory.RankingRolloutThresholdStatusSatisfied,
-			AttributionRecorded:    true,
+			AttributionRecorded:     true,
 		},
 	})
 	if err != nil {
@@ -83,12 +91,12 @@ func TestRepositoryCreateActivateRollbackRankingRolloutPolicy(t *testing.T) {
 	mock.ExpectBegin()
 	mock.ExpectQuery("SELECT[\\s\\S]*FROM ranking_rollout_policies[\\s\\S]*FOR UPDATE").
 		WithArgs(scope.Tenant, scope.Project, scope.Namespace, policy.ID).
-		WillReturnRows(pgxmock.NewRows([]string{"id", "tenant", "project", "namespace", "status", "mode", "surfaces", "signal_sources", "threshold_status", "evidence_minimum", "actor", "reason", "latest_dry_run_id", "latest_dry_run_status", "activated_at", "disabled_at", "rolled_back_at", "created_at", "updated_at"}).
-			AddRow(policy.ID, scope.Tenant, scope.Project, scope.Namespace, memory.RankingRolloutPolicyStatusActiveForScope, policy.Mode, []string{"search"}, []string{"task_evaluations"}, memory.RankingRolloutThresholdStatusSatisfied, policy.EvidenceMinimum, "operator-b", "activate after dry-run", "dry_run_1", memory.RankingRolloutThresholdStatusSatisfied, now.Add(time.Minute), nil, nil, now, now.Add(time.Minute)))
+		WillReturnRows(pgxmock.NewRows(rankingRolloutPolicyColumns()).
+			AddRow(policy.ID, scope.Tenant, scope.Project, scope.Namespace, memory.RankingRolloutPolicyStatusActiveForScope, policy.Mode, []string{"search"}, []string{"task_evaluations"}, memory.RankingRolloutThresholdStatusSatisfied, policy.EvidenceMinimum, "operator-b", "activate after dry-run", "dry_run_1", memory.RankingRolloutThresholdStatusSatisfied, nil, nil, nil, nil, nil, nil, now.Add(time.Minute), nil, nil, now, now.Add(time.Minute)))
 	mock.ExpectQuery("UPDATE ranking_rollout_policies").
 		WithArgs(scope.Tenant, scope.Project, scope.Namespace, policy.ID, memory.RankingRolloutPolicyStatusRolledBack, "operator-c", "rollback degraded ranking", now.Add(2*time.Minute)).
-		WillReturnRows(pgxmock.NewRows([]string{"id", "tenant", "project", "namespace", "status", "mode", "surfaces", "signal_sources", "threshold_status", "evidence_minimum", "actor", "reason", "latest_dry_run_id", "latest_dry_run_status", "activated_at", "disabled_at", "rolled_back_at", "created_at", "updated_at"}).
-			AddRow(policy.ID, scope.Tenant, scope.Project, scope.Namespace, memory.RankingRolloutPolicyStatusRolledBack, policy.Mode, []string{"search"}, []string{"task_evaluations"}, policy.ThresholdStatus, policy.EvidenceMinimum, "operator-c", "rollback degraded ranking", nil, nil, now.Add(time.Minute), nil, now.Add(2*time.Minute), now, now.Add(2*time.Minute)))
+		WillReturnRows(pgxmock.NewRows(rankingRolloutPolicyColumns()).
+			AddRow(policy.ID, scope.Tenant, scope.Project, scope.Namespace, memory.RankingRolloutPolicyStatusRolledBack, policy.Mode, []string{"search"}, []string{"task_evaluations"}, policy.ThresholdStatus, policy.EvidenceMinimum, "operator-c", "rollback degraded ranking", nil, nil, nil, nil, nil, nil, nil, nil, now.Add(time.Minute), nil, now.Add(2*time.Minute), now, now.Add(2*time.Minute)))
 	mock.ExpectExec("INSERT INTO ranking_rollout_policy_states").
 		WithArgs(policy.ID, scope.Tenant, scope.Project, scope.Namespace, memory.RankingRolloutPolicyStatusRolledBack, "operator-c", "rollback degraded ranking", now.Add(time.Minute), nil, now.Add(2*time.Minute), now.Add(2*time.Minute)).
 		WillReturnResult(pgxmock.NewResult("INSERT", 1))
@@ -130,8 +138,8 @@ func TestRepositoryRecordRankingRolloutDryRunPersistsComparisonAndImpact(t *test
 	mock.ExpectBegin()
 	mock.ExpectQuery("SELECT[\\s\\S]*FROM ranking_rollout_policies[\\s\\S]*FOR UPDATE").
 		WithArgs(scope.Tenant, scope.Project, scope.Namespace, policyID).
-		WillReturnRows(pgxmock.NewRows([]string{"id", "tenant", "project", "namespace", "status", "mode", "surfaces", "signal_sources", "threshold_status", "evidence_minimum", "actor", "reason", "latest_dry_run_id", "latest_dry_run_status", "activated_at", "disabled_at", "rolled_back_at", "created_at", "updated_at"}).
-			AddRow(policyID, scope.Tenant, scope.Project, scope.Namespace, memory.RankingRolloutPolicyStatusDryRun, memory.RankingRolloutModeDryRun, []string{"search"}, []string{"task_evaluations"}, memory.RankingRolloutThresholdStatusInsufficient, 2, "operator-a", "test rollout", nil, nil, nil, nil, nil, now, now))
+		WillReturnRows(pgxmock.NewRows(rankingRolloutPolicyColumns()).
+			AddRow(rankingRolloutPolicyRow(policyID, scope, memory.RankingRolloutPolicyStatusDryRun, memory.RankingRolloutModeDryRun, memory.RankingRolloutThresholdStatusInsufficient, 2, "operator-a", "test rollout", nil, nil, nil, nil, nil, now, now)...))
 	mock.ExpectQuery("INSERT INTO ranking_rollout_dry_runs").
 		WithArgs(pgxmock.AnyArg(), policyID, scope.Tenant, scope.Project, scope.Namespace, memory.RankingRolloutSurfaceSearch, memory.RankingRolloutSignalSourceTaskEvaluations, memory.RankingRolloutThresholdStatusSatisfied, 2, 1, []string{"mem_1"}, []string{"subject_boosted"}, []string{"task_evaluations"}, 2, 0, now).
 		WillReturnRows(pgxmock.NewRows([]string{"id", "policy_id", "tenant", "project", "namespace", "surface", "signal_source", "threshold_status", "baseline_rank", "adjusted_rank", "changed_subject_ids", "reason_codes", "signal_categories", "evidence_count", "hidden_evidence_count", "created_at"}).

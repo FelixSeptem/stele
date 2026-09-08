@@ -20,6 +20,8 @@ type EvaluationProtectedRegression struct {
 type EvaluationComparison struct {
 	BaselineRankingVersion  string                          `json:"baseline_ranking_version"`
 	CandidateRankingVersion string                          `json:"candidate_ranking_version"`
+	BaselineFusionStrategy  string                          `json:"baseline_fusion_strategy,omitempty"`
+	CandidateFusionStrategy string                          `json:"candidate_fusion_strategy,omitempty"`
 	MetricDeltas            []EvaluationMetricDelta         `json:"metric_deltas"`
 	ProtectedRegressions    []EvaluationProtectedRegression `json:"protected_regressions,omitempty"`
 	Advisories              []string                        `json:"advisories,omitempty"`
@@ -48,6 +50,8 @@ func CompareEvaluationReports(baseline, candidate EvaluationReport, protectedCat
 	comparison := EvaluationComparison{
 		BaselineRankingVersion:  baseline.Metadata.RankingVersion,
 		CandidateRankingVersion: candidate.Metadata.RankingVersion,
+		BaselineFusionStrategy:  baseline.Metadata.FusionStrategy,
+		CandidateFusionStrategy: candidate.Metadata.FusionStrategy,
 		MetricDeltas: []EvaluationMetricDelta{
 			evaluationMetricDelta("recall_at_1", baseline.Metrics.RecallAt1, candidate.Metrics.RecallAt1),
 			evaluationMetricDelta("recall_at_5", baseline.Metrics.RecallAt5, candidate.Metrics.RecallAt5),

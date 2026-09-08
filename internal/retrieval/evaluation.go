@@ -46,6 +46,7 @@ type EvaluationRankingMetadata struct {
 	FixtureVersion              string           `json:"fixture_version"`
 	RepresentationVersion       string           `json:"representation_version"`
 	RankingVersion              string           `json:"ranking_version"`
+	FusionStrategy              string           `json:"fusion_strategy,omitempty"`
 	CompatibleEmbeddingRevision string           `json:"compatible_embedding_revision"`
 	LexicalMatchMode            LexicalMatchMode `json:"lexical_match_mode,omitempty"`
 	PolicyVersion               string           `json:"policy_version"`
@@ -181,6 +182,9 @@ func (m EvaluationRankingMetadata) Validate() error {
 	if strings.TrimSpace(m.RankingVersion) == "" {
 		return fmt.Errorf("ranking version is required")
 	}
+	if !evaluationSafeIdentity(m.FusionStrategy) {
+		return fmt.Errorf("fusion strategy identity is invalid")
+	}
 	if strings.TrimSpace(m.CompatibleEmbeddingRevision) == "" {
 		return fmt.Errorf("compatible embedding revision is required")
 	}
@@ -191,6 +195,25 @@ func (m EvaluationRankingMetadata) Validate() error {
 		return fmt.Errorf("policy version is required")
 	}
 	return nil
+}
+
+func evaluationSafeIdentity(value string) bool {
+	if value == "" {
+		return true
+	}
+	if len(value) > 128 {
+		return false
+	}
+	for _, character := range value {
+		if (character >= 'a' && character <= 'z') ||
+			(character >= 'A' && character <= 'Z') ||
+			(character >= '0' && character <= '9') ||
+			character == '_' || character == '-' || character == '.' || character == ':' {
+			continue
+		}
+		return false
+	}
+	return true
 }
 
 func (f EvaluationFixture) Validate() error {

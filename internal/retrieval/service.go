@@ -21,6 +21,7 @@ type SearchInput struct {
 	Classes                    []memory.MemoryClass
 	rankingSurface             memory.RankingRolloutSurface
 	rankingPolicyDisabled      bool
+	fusionStrategyOverride     *FusionStrategy
 	TimeFrom                   time.Time
 	TimeTo                     time.Time
 	TopK                       int
@@ -114,7 +115,20 @@ type SearchHit struct {
 type SearchResult struct {
 	Hits        []SearchHit         `json:"hits"`
 	Diagnostics []ContextDiagnostic `json:"diagnostics,omitempty"`
+
+	// fusionChannelAvailability and fusionStrategy are evaluation-only state.
+	// They remain unexported so ordinary API responses cannot expose internal
+	// recall execution details.
+	fusionChannelAvailability map[FusionChannel]fusionChannelAvailability
+	fusionStrategy            FusionStrategy
 }
+
+type fusionChannelAvailability string
+
+const (
+	fusionChannelAvailable   fusionChannelAvailability = "available"
+	fusionChannelUnavailable fusionChannelAvailability = "unavailable"
+)
 
 type InsightCitation struct {
 	InsightID    string `json:"insight_id"`
@@ -248,6 +262,8 @@ type ServiceDependencies struct {
 	Projections                  ContextProjectionReader
 	ProjectionConsumptionEnabled bool
 	Chunks                       ChunkCandidateSearcher
+	// FusionStrategy defaults to the versioned RRF baseline when omitted.
+	FusionStrategy FusionStrategy
 	// ChunkRollout defaults to default_off. Shadow evaluates chunk candidates
 	// only for authorized diagnostics; Active permits them to influence results.
 	ChunkRollout memory.ChunkRolloutMode
@@ -265,6 +281,7 @@ type Service struct {
 	projections                  ContextProjectionReader
 	projectionConsumptionEnabled bool
 	chunks                       ChunkCandidateSearcher
+	fusionStrategy               FusionStrategy
 	chunkRollout                 memory.ChunkRolloutMode
 	observer                     telemetry.Observer
 }
@@ -282,6 +299,10 @@ func NewService(deps ServiceDependencies, observers ...telemetry.Observer) *Serv
 	if chunkRollout == "" {
 		chunkRollout = memory.ChunkRolloutModeDefaultOff
 	}
+	fusionStrategy := deps.FusionStrategy
+	if fusionStrategy.Name == "" {
+		fusionStrategy = DefaultRRFStrategy()
+	}
 	return &Service{
 		lexical:                      deps.Lexical,
 		semantic:                     deps.Semantic,
@@ -294,6 +315,7 @@ func NewService(deps ServiceDependencies, observers ...telemetry.Observer) *Serv
 		projections:                  deps.Projections,
 		projectionConsumptionEnabled: deps.ProjectionConsumptionEnabled,
 		chunks:                       deps.Chunks,
+		fusionStrategy:               fusionStrategy,
 		chunkRollout:                 chunkRollout,
 		observer:                     observer,
 	}
@@ -334,14 +356,40 @@ func (s *Service) Search(ctx context.Context, input SearchInput) (result SearchR
 	if surface == "" {
 		surface = memory.RankingRolloutSurfaceSearch
 	}
+	var activeRankingPolicy *memory.RankingRolloutPolicy
+	if s.rankingRolloutPolicyReader != nil && !input.rankingPolicyDisabled {
+		policy, policyErr := s.readActiveRankingPolicy(ctx, input.Scope, surface)
+		if policyErr != nil {
+			return SearchResult{}, policyErr
+		}
+		activeRankingPolicy = policy
+	}
+	fusionStrategy := s.fusionStrategy
+	if input.fusionStrategyOverride != nil {
+		fusionStrategy = *input.fusionStrategyOverride
+	}
+	if activeRankingPolicy != nil {
+		configured, ok, fusionErr := fusionStrategyFromPolicy(*activeRankingPolicy)
+		if fusionErr != nil {
+			return SearchResult{}, fusionErr
+		}
+		if ok {
+			fusionStrategy = configured
+		}
+	}
 
-	merged := map[string]ScoredMemory{}
-	orderedIDs := make([]string, 0)
+	channelCandidates := make([]FusionChannelCandidates, 0, 4)
+	channelAvailability := defaultFusionChannelAvailability()
 	chunkCitationMap := map[string][]Citation{}
 	chunkByMemoryID := map[string]*memory.MemoryChunk{}
+	fusionDiagnostics := []ContextDiagnostic(nil)
 
-	appendHits := func(hits []ScoredMemory) {
+	filterChannel := func(channel FusionChannel, hits []ScoredMemory) {
+		filtered := make([]ScoredMemory, 0, len(hits))
 		for _, hit := range hits {
+			if hit.Memory.Scope.Normalized() != input.Scope.Normalized() || hit.Memory.State != memory.MemoryStateActive {
+				continue
+			}
 			if !matchClassFilter(hit.Memory.Class, input.Classes) {
 				continue
 			}
@@ -352,20 +400,10 @@ func (s *Service) Search(ctx context.Context, input SearchInput) (result SearchR
 				continue
 			}
 
-			current, ok := merged[hit.Memory.ID]
-			if !ok {
-				merged[hit.Memory.ID] = hit
-				orderedIDs = append(orderedIDs, hit.Memory.ID)
-				continue
-			}
-
-			if hit.Memory.ModifiedAt.After(current.Memory.ModifiedAt) || current.Memory.ModifiedAt.IsZero() {
-				current.Memory = hit.Memory
-			}
-			current.LexicalScore += hit.LexicalScore
-			current.SemanticScore += hit.SemanticScore
-			current.RelationScore += hit.RelationScore
-			merged[hit.Memory.ID] = current
+			filtered = append(filtered, hit)
+		}
+		if len(filtered) > 0 {
+			channelCandidates = append(channelCandidates, FusionChannelCandidates{Channel: channel, Candidates: filtered})
 		}
 	}
 
@@ -374,29 +412,38 @@ func (s *Service) Search(ctx context.Context, input SearchInput) (result SearchR
 		if err != nil {
 			return SearchResult{}, err
 		}
-		appendHits(hits)
+		channelAvailability[FusionChannelLexical] = fusionChannelAvailable
+		filterChannel(FusionChannelLexical, hits)
 	}
 
 	if s.semantic != nil {
 		hits, err := s.semantic.SearchSemantic(ctx, input)
 		if err != nil {
-			return SearchResult{}, err
+			if input.IncludeFeedbackDiagnostics {
+				fusionDiagnostics = append(fusionDiagnostics, ContextDiagnostic{Section: "fusion", Status: "optional_channel_unavailable", Reason: "semantic recall failed closed"})
+			}
+		} else {
+			channelAvailability[FusionChannelSemantic] = fusionChannelAvailable
+			filterChannel(FusionChannelSemantic, hits)
 		}
-		appendHits(hits)
 	}
 
 	if input.IncludeRelations && s.relations != nil {
 		hits, err := s.relations.SearchRelations(ctx, input)
 		if err != nil {
-			return SearchResult{}, err
+			// Relation recall is optional; preserve lexical/semantic retrieval.
+			if input.IncludeFeedbackDiagnostics {
+				fusionDiagnostics = append(fusionDiagnostics, ContextDiagnostic{Section: "fusion", Status: "optional_channel_unavailable", Reason: "relation recall failed closed"})
+			}
+		} else {
+			channelAvailability[FusionChannelRelation] = fusionChannelAvailable
+			filterChannel(FusionChannelRelation, hits)
 		}
-		appendHits(hits)
 	}
 
 	// Derived chunks are strictly opt-in. In shadow mode we execute the search
 	// only to produce diagnostics for explicitly requested evaluation callers;
 	// ordinary responses remain byte-for-byte compatible with canonical retrieval.
-	chunkDiagnostics := []ContextDiagnostic(nil)
 	if s.chunks != nil && s.chunkRollout != memory.ChunkRolloutModeDefaultOff {
 		chunkCandidates, chunkErr := s.chunks.SearchChunks(ctx, ChunkSearchInput{
 			Scope: input.Scope, Query: input.Query, QueryEmbedding: input.QueryEmbedding,
@@ -404,14 +451,19 @@ func (s *Service) Search(ctx context.Context, input SearchInput) (result SearchR
 		})
 		if chunkErr != nil {
 			if s.chunkRollout == memory.ChunkRolloutModeActive {
-				return SearchResult{}, chunkErr
-			}
-			if input.IncludeFeedbackDiagnostics {
-				chunkDiagnostics = append(chunkDiagnostics, ContextDiagnostic{Section: "chunk_retrieval", Status: "shadow_unavailable", Reason: "chunk candidate evaluation failed closed"})
+				if input.IncludeFeedbackDiagnostics {
+					fusionDiagnostics = append(fusionDiagnostics, ContextDiagnostic{Section: "fusion", Status: "optional_channel_unavailable", Reason: "chunk recall failed closed"})
+				}
+			} else if input.IncludeFeedbackDiagnostics {
+				fusionDiagnostics = append(fusionDiagnostics, ContextDiagnostic{Section: "chunk_retrieval", Status: "shadow_unavailable", Reason: "chunk candidate evaluation failed closed"})
 			}
 		} else {
+			if s.chunkRollout == memory.ChunkRolloutModeActive {
+				channelAvailability[FusionChannelChunk] = fusionChannelAvailable
+			}
 			accepted := 0
 			omitted := 0
+			chunkHits := make([]ScoredMemory, 0, len(chunkCandidates))
 			for _, candidate := range chunkCandidates {
 				if err := candidate.Chunk.Validate(); err != nil || candidate.Chunk.Scope.Normalized() != input.Scope.Normalized() || candidate.Parent.Scope.Normalized() != input.Scope.Normalized() || candidate.Parent.State != memory.MemoryStateActive {
 					omitted++
@@ -425,7 +477,7 @@ func (s *Service) Search(ctx context.Context, input SearchInput) (result SearchR
 				if s.chunkRollout == memory.ChunkRolloutModeActive {
 					// Parent memory is the public result. Keep chunk metadata private.
 					hit := ScoredMemory{Memory: candidate.Parent, LexicalScore: candidate.Score.Lexical, SemanticScore: candidate.Score.Semantic, RelationScore: candidate.Score.Relation}
-					appendHits([]ScoredMemory{hit})
+					chunkHits = append(chunkHits, hit)
 					if len(candidate.Citations) > 0 {
 						chunkCitationMap[candidate.Parent.ID] = append(chunkCitationMap[candidate.Parent.ID], candidate.Citations...)
 					}
@@ -433,38 +485,41 @@ func (s *Service) Search(ctx context.Context, input SearchInput) (result SearchR
 					chunkByMemoryID[candidate.Parent.ID] = &chunkCopy
 				}
 			}
+			if len(chunkHits) > 0 {
+				channelCandidates = append(channelCandidates, FusionChannelCandidates{Channel: FusionChannelChunk, Candidates: chunkHits})
+			}
 			if input.IncludeFeedbackDiagnostics && s.chunkRollout == memory.ChunkRolloutModeShadow {
-				chunkDiagnostics = append(chunkDiagnostics, ContextDiagnostic{Section: "chunk_retrieval", Status: "shadow_evaluated", Available: len(chunkCandidates), Included: accepted, Omitted: omitted})
+				fusionDiagnostics = append(fusionDiagnostics, ContextDiagnostic{Section: "chunk_retrieval", Status: "shadow_evaluated", Available: len(chunkCandidates), Included: accepted, Omitted: omitted})
 			}
 		}
 	}
 
-	scored := make([]SearchHit, 0, len(orderedIDs))
-	memoryIDs := make([]string, 0, len(orderedIDs))
-	for _, id := range orderedIDs {
-		hit := merged[id]
-		memoryIDs = append(memoryIDs, hit.Memory.ID)
+	fused, err := FuseCandidates(fusionStrategy, channelCandidates)
+	if err != nil {
+		return SearchResult{}, err
+	}
+	if input.IncludeFeedbackDiagnostics {
+		fusionDiagnostics = append(fusionDiagnostics, ContextDiagnostic{Section: "fusion", Status: "strategy_applied", Reason: string(fusionStrategy.Name) + ":" + fusionStrategy.Version, Available: len(channelCandidates), Included: len(fused)})
+	}
+	s.recordFusionTelemetry(ctx, fusionStrategy, channelCandidates)
+	scored := make([]SearchHit, 0, len(fused))
+	memoryIDs := make([]string, 0, len(fused))
+	for _, candidate := range fused {
+		memoryIDs = append(memoryIDs, candidate.Memory.ID)
 		searchHit := SearchHit{
-			Memory: hit.Memory,
+			Memory: candidate.Memory,
 			Score: ScoreBreakdown{
-				Overall:  hit.LexicalScore + hit.SemanticScore + hit.RelationScore,
-				Lexical:  hit.LexicalScore,
-				Semantic: hit.SemanticScore,
-				Relation: hit.RelationScore,
+				Overall:  candidate.Score,
+				Lexical:  candidate.ChannelScores.Lexical,
+				Semantic: candidate.ChannelScores.Semantic,
+				Relation: candidate.ChannelScores.Relation,
 			},
 		}
-		if chunk := chunkByMemoryID[hit.Memory.ID]; chunk != nil {
+		if chunk := chunkByMemoryID[candidate.Memory.ID]; chunk != nil {
 			searchHit.Chunk = chunk
 		}
 		scored = append(scored, searchHit)
 	}
-
-	sort.Slice(scored, func(i, j int) bool {
-		if scored[i].Score.Overall == scored[j].Score.Overall {
-			return scored[i].Memory.ModifiedAt.After(scored[j].Memory.ModifiedAt)
-		}
-		return scored[i].Score.Overall > scored[j].Score.Overall
-	})
 
 	diagnostics, err := s.applyUsefulnessFeedbackSignals(ctx, input, scored)
 	if err != nil {
@@ -472,7 +527,7 @@ func (s *Service) Search(ctx context.Context, input SearchInput) (result SearchR
 	}
 
 	if !input.rankingPolicyDisabled {
-		adjusted, policyDiagnostics, err := s.applyRankingRolloutPolicy(ctx, input.Scope, surface, input.FeedbackAwareRanking, scored)
+		adjusted, policyDiagnostics, err := s.applyRankingRolloutPolicy(ctx, input.Scope, surface, input.FeedbackAwareRanking, scored, activeRankingPolicy)
 		if err != nil {
 			return SearchResult{}, err
 		}
@@ -512,14 +567,56 @@ func (s *Service) Search(ctx context.Context, input SearchInput) (result SearchR
 		}
 	}
 
-	if len(chunkDiagnostics) > 0 {
-		diagnostics = append(diagnostics, chunkDiagnostics...)
+	if len(fusionDiagnostics) > 0 {
+		diagnostics = append(diagnostics, fusionDiagnostics...)
 	}
-	result = SearchResult{Hits: scored, Diagnostics: diagnostics}
+	result = SearchResult{
+		Hits:                      scored,
+		Diagnostics:               diagnostics,
+		fusionChannelAvailability: channelAvailability,
+		fusionStrategy:            fusionStrategy,
+	}
 	return result, nil
 }
 
-func (s *Service) applyRankingRolloutPolicy(ctx context.Context, scope memory.Scope, surface memory.RankingRolloutSurface, feedbackAwareRanking bool, scored []SearchHit) (bool, []ContextDiagnostic, error) {
+func defaultFusionChannelAvailability() map[FusionChannel]fusionChannelAvailability {
+	return map[FusionChannel]fusionChannelAvailability{
+		FusionChannelLexical:  fusionChannelUnavailable,
+		FusionChannelSemantic: fusionChannelUnavailable,
+		FusionChannelRelation: fusionChannelUnavailable,
+		FusionChannelChunk:    fusionChannelUnavailable,
+	}
+}
+
+type retrievalFusionMetricObserver interface {
+	RecordRetrievalFusion(context.Context, telemetry.RetrievalFusionEvent)
+}
+
+func (s *Service) recordFusionTelemetry(ctx context.Context, strategy FusionStrategy, channels []FusionChannelCandidates) {
+	observer, ok := s.observer.(retrievalFusionMetricObserver)
+	if !ok || observer == nil {
+		return
+	}
+	seen := make(map[FusionChannel]struct{}, len(channels))
+	for _, candidates := range channels {
+		seen[candidates.Channel] = struct{}{}
+		observer.RecordRetrievalFusion(ctx, telemetry.RetrievalFusionEvent{
+			Strategy: string(strategy.Name), Version: strategy.Version, Channel: string(candidates.Channel),
+			Availability: "available", CandidateCount: len(candidates.Candidates), Outcome: "fused",
+		})
+	}
+	for _, channel := range []FusionChannel{FusionChannelLexical, FusionChannelSemantic, FusionChannelRelation, FusionChannelChunk} {
+		if _, present := seen[channel]; present {
+			continue
+		}
+		observer.RecordRetrievalFusion(ctx, telemetry.RetrievalFusionEvent{
+			Strategy: string(strategy.Name), Version: strategy.Version, Channel: string(channel),
+			Availability: "unavailable", CandidateCount: 0, Outcome: "fallback",
+		})
+	}
+}
+
+func (s *Service) applyRankingRolloutPolicy(ctx context.Context, scope memory.Scope, surface memory.RankingRolloutSurface, feedbackAwareRanking bool, scored []SearchHit, policy *memory.RankingRolloutPolicy) (bool, []ContextDiagnostic, error) {
 	if s.rankingRolloutPolicyReader == nil {
 		if feedbackAwareRanking {
 			applyFeedbackAwareRankingHint(scored, s.usefulnessSummarizer, ctx, scope)
@@ -528,44 +625,76 @@ func (s *Service) applyRankingRolloutPolicy(ctx context.Context, scope memory.Sc
 		return false, nil, nil
 	}
 
-	policy, err := s.rankingRolloutPolicyReader.ReadActiveRankingRolloutPolicy(ctx, memory.ReadActiveRankingRolloutPolicyInput{
-		Scope:   scope,
-		Surface: surface,
-	})
-	if err != nil {
-		if errors.Is(err, pgx.ErrNoRows) {
-			if feedbackAwareRanking {
-				applyFeedbackAwareRankingHint(scored, s.usefulnessSummarizer, ctx, scope)
-				s.recordRankingRolloutPolicyEvaluation(ctx, "request_hint", surface, memory.RankingRolloutPolicy{}, "no_active_policy")
-				return true, []ContextDiagnostic{{Section: "search_feedback", Status: "request_hint_applied", Reason: "explicit per-request feedback-aware ranking hint applied"}}, nil
-			}
-			s.recordRankingRolloutPolicyEvaluation(ctx, "not_applied", surface, memory.RankingRolloutPolicy{}, "no_active_policy")
-			return false, nil, nil
+	if policy == nil {
+		if feedbackAwareRanking {
+			applyFeedbackAwareRankingHint(scored, s.usefulnessSummarizer, ctx, scope)
+			s.recordRankingRolloutPolicyEvaluation(ctx, "request_hint", surface, memory.RankingRolloutPolicy{}, "no_active_policy")
+			return true, []ContextDiagnostic{{Section: "search_feedback", Status: "request_hint_applied", Reason: "explicit per-request feedback-aware ranking hint applied"}}, nil
 		}
-		return false, nil, err
+		s.recordRankingRolloutPolicyEvaluation(ctx, "not_applied", surface, memory.RankingRolloutPolicy{}, "no_active_policy")
+		return false, nil, nil
 	}
 
 	applied := policy.Status == memory.RankingRolloutPolicyStatusActiveForScope && policy.Mode == memory.RankingRolloutModeActiveForScope
 	if applied {
 		for i := range scored {
-			adjustment, err := s.rankingRolloutAdjustmentForHit(ctx, scope, policy, scored[i].Memory.ID)
+			adjustment, err := s.rankingRolloutAdjustmentForHit(ctx, scope, *policy, scored[i].Memory.ID)
 			if err != nil {
 				return false, nil, err
 			}
 			scored[i].Score.Overall += adjustment
 		}
-		s.recordRankingRolloutPolicyEvaluation(ctx, "applied", surface, policy, "active_policy")
+		s.recordRankingRolloutPolicyEvaluation(ctx, "applied", surface, *policy, "active_policy")
 		return true, []ContextDiagnostic{{Section: "search_feedback", Status: "ranking_policy_applied", Reason: "active scoped ranking rollout policy applied"}}, nil
 	}
 
 	if feedbackAwareRanking {
 		applyFeedbackAwareRankingHint(scored, s.usefulnessSummarizer, ctx, scope)
-		s.recordRankingRolloutPolicyEvaluation(ctx, "request_hint", surface, policy, "ineligible_policy")
+		s.recordRankingRolloutPolicyEvaluation(ctx, "request_hint", surface, *policy, "ineligible_policy")
 		return true, []ContextDiagnostic{{Section: "search_feedback", Status: "request_hint_applied", Reason: "explicit per-request feedback-aware ranking hint applied"}}, nil
 	}
 
-	s.recordRankingRolloutPolicyEvaluation(ctx, "not_applied", surface, policy, "ineligible_policy")
+	s.recordRankingRolloutPolicyEvaluation(ctx, "not_applied", surface, *policy, "ineligible_policy")
 	return false, []ContextDiagnostic{{Section: "search_feedback", Status: "ranking_policy_skipped", Reason: "active scoped ranking rollout policy is not eligible for default ranking"}}, nil
+}
+
+func (s *Service) readActiveRankingPolicy(ctx context.Context, scope memory.Scope, surface memory.RankingRolloutSurface) (*memory.RankingRolloutPolicy, error) {
+	policy, err := s.rankingRolloutPolicyReader.ReadActiveRankingRolloutPolicy(ctx, memory.ReadActiveRankingRolloutPolicyInput{Scope: scope, Surface: surface})
+	if err != nil {
+		if errors.Is(err, pgx.ErrNoRows) {
+			return nil, nil
+		}
+		return nil, err
+	}
+	if policy.Scope.Normalized() != scope.Normalized() {
+		return nil, fmt.Errorf("active ranking rollout policy scope does not match retrieval scope")
+	}
+	return &policy, nil
+}
+
+func fusionStrategyFromPolicy(policy memory.RankingRolloutPolicy) (FusionStrategy, bool, error) {
+	if policy.Status != memory.RankingRolloutPolicyStatusActiveForScope || policy.Mode != memory.RankingRolloutModeActiveForScope {
+		return FusionStrategy{}, false, nil
+	}
+	if policy.FusionStrategy == "" {
+		return FusionStrategy{}, false, nil
+	}
+	weights := make(map[FusionChannel]float64, len(policy.FusionChannelWeights))
+	for channel, weight := range policy.FusionChannelWeights {
+		weights[FusionChannel(channel)] = weight
+	}
+	strategy := FusionStrategy{
+		Name:                FusionStrategyName(policy.FusionStrategy),
+		Version:             policy.FusionVersion,
+		RankConstant:        policy.FusionRankConstant,
+		ChannelWeights:      weights,
+		PerChannelCandidate: policy.FusionPerChannelCandidate,
+		TotalCandidates:     policy.FusionTotalCandidates,
+	}
+	if err := strategy.Validate(); err != nil {
+		return FusionStrategy{}, false, fmt.Errorf("invalid active fusion strategy: %w", err)
+	}
+	return strategy, true, nil
 }
 
 func (s *Service) recordRankingRolloutPolicyEvaluation(ctx context.Context, result string, surface memory.RankingRolloutSurface, policy memory.RankingRolloutPolicy, reasonCode string) {
@@ -801,6 +930,23 @@ func (s *Service) AssembleContext(ctx context.Context, input AssembleContextInpu
 		return AssembledContext{}, err
 	}
 
+	var contextPolicy *memory.RankingRolloutPolicy
+	if s.rankingRolloutPolicyReader != nil {
+		contextPolicy, err = s.readActiveRankingPolicy(ctx, input.Scope, memory.RankingRolloutSurfaceContext)
+		if err != nil {
+			return AssembledContext{}, err
+		}
+	}
+	var contextFusion *FusionStrategy
+	if contextPolicy != nil {
+		configured, ok, fusionErr := fusionStrategyFromPolicy(*contextPolicy)
+		if fusionErr != nil {
+			return AssembledContext{}, fusionErr
+		}
+		if ok {
+			contextFusion = &configured
+		}
+	}
 	result, err := s.Search(ctx, SearchInput{
 		Scope:                      input.Scope,
 		Query:                      input.Query,
@@ -810,6 +956,7 @@ func (s *Service) AssembleContext(ctx context.Context, input AssembleContextInpu
 		IncludeFeedbackDiagnostics: input.IncludeDiagnostics && input.IncludeFeedbackDiagnostics,
 		FeedbackAwareRanking:       false,
 		rankingPolicyDisabled:      true,
+		fusionStrategyOverride:     contextFusion,
 	})
 	if err != nil {
 		return AssembledContext{}, err
@@ -820,7 +967,7 @@ func (s *Service) AssembleContext(ctx context.Context, input AssembleContextInpu
 	}
 	chunkContextDiagnostics := []ContextDiagnostic(nil)
 	result.Hits, chunkContextDiagnostics = s.boundChunkContextEvidence(input, result.Hits)
-	adjusted, policyDiagnostics, err := s.applyRankingRolloutPolicy(ctx, input.Scope, memory.RankingRolloutSurfaceContext, input.FeedbackAwareRanking, result.Hits)
+	adjusted, policyDiagnostics, err := s.applyRankingRolloutPolicy(ctx, input.Scope, memory.RankingRolloutSurfaceContext, input.FeedbackAwareRanking, result.Hits, contextPolicy)
 	if err != nil {
 		return AssembledContext{}, err
 	}

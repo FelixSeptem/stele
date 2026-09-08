@@ -337,7 +337,7 @@ func TestServiceSearchAddsFeedbackDiagnosticsWithoutChangingDefaultRanking(t *te
 
 func TestServiceSearchReadsActiveRankingPolicyWhenConfigured(t *testing.T) {
 	scope := memory.Scope{Tenant: "tenant-a", Project: "project-a", Namespace: "namespace-a"}
-	policyReader := &stubRankingRolloutPolicyReader{}
+	policyReader := &stubRankingRolloutPolicyReader{policy: memory.RankingRolloutPolicy{Scope: scope}}
 	service := NewService(ServiceDependencies{
 		Lexical: &stubLexicalSource{
 			hits: []ScoredMemory{

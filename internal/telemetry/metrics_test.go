@@ -225,6 +225,23 @@ func TestMetricsObserverExportsTaskEvaluationAndRankingRolloutSignalsWithoutHigh
 	}
 }
 
+func TestMetricsObserverExportsFusionSignalsWithoutHighCardinalityLabels(t *testing.T) {
+	observer := NewMetricsObserver()
+	observer.RecordRetrievalFusion(context.Background(), RetrievalFusionEvent{
+		Strategy: "rrf", Version: "rrf-v1", Channel: "semantic", Availability: "unavailable", CandidateCount: 7, Outcome: "fallback",
+	})
+
+	metrics := observer.RenderPrometheus()
+	if !strings.Contains(metrics, `stele_retrieval_fusion_total{availability="unavailable",candidate_count="1_10",channel="semantic",outcome="fallback",strategy="rrf",version="rrf-v1"} 1`) {
+		t.Fatalf("metrics missing bounded fusion signal\n%s", metrics)
+	}
+	for _, forbidden := range []string{"tenant", "project", "namespace", "memory_id", "query", "score", "policy_id"} {
+		if strings.Contains(metrics, forbidden) {
+			t.Fatalf("metrics contain high-cardinality label %q\n%s", forbidden, metrics)
+		}
+	}
+}
+
 func TestMetricsObserverExportsDerivedInsightReplaySignalsWithoutHighCardinalityLabels(t *testing.T) {
 	observer := NewMetricsObserver()
 	ctx := context.Background()
