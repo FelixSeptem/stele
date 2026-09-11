@@ -41,6 +41,20 @@ type Config struct {
 	Embedding                           EmbeddingConfig
 	Jobs                                JobConfig
 	Assurance                           AssuranceConfig
+	QueryAnalysis                       QueryAnalysisConfig
+}
+
+type QueryAnalysisConfig struct {
+	MaxQueryBytes          int
+	MaxHints               int
+	MaxSignals             int
+	MaxSubqueries          int
+	MaxTermBytes           int
+	MaxSubqueryBytes       int
+	MaxAnalysisWork        int
+	MaxCandidatesPerSignal int
+	MaxAggregateCandidates int
+	MaxElapsed             time.Duration
 }
 
 type HTTPConfig struct {
@@ -133,6 +147,10 @@ func LoadFromEnv() (Config, error) {
 		return Config{}, fmt.Errorf("STELE_POSTGRES_DSN is required")
 	}
 	contextProjectionConsumptionEnabled := loadBoolEnv("STELE_CONTEXT_PROJECTION_CONSUMPTION_ENABLED")
+	queryAnalysis, err := loadQueryAnalysisConfig()
+	if err != nil {
+		return Config{}, err
+	}
 
 	// Accept the short policy name introduced by the migration contract while
 	// retaining the database-qualified name used by the product configuration.
@@ -378,6 +396,7 @@ func LoadFromEnv() (Config, error) {
 		PostgresDSN:                         postgresDSN,
 		Migrations:                          MigrationConfig{Policy: migrationPolicy},
 		ContextProjectionConsumptionEnabled: contextProjectionConsumptionEnabled,
+		QueryAnalysis:                       queryAnalysis,
 		Auth: AuthConfig{
 			BootstrapAdminKey: bootstrapAdminKey,
 			DefaultTenant:     defaultTenant,
@@ -432,6 +451,49 @@ func LoadFromEnv() (Config, error) {
 			AlertRetryBackoff:        alertRetryBackoff,
 		},
 	}, nil
+}
+
+func loadQueryAnalysisConfig() (QueryAnalysisConfig, error) {
+	q := QueryAnalysisConfig{
+		MaxQueryBytes: 4096, MaxHints: 4, MaxSignals: 8, MaxSubqueries: 4,
+		MaxTermBytes: 256, MaxSubqueryBytes: 1024, MaxAnalysisWork: 7,
+		MaxCandidatesPerSignal: 50, MaxAggregateCandidates: 200, MaxElapsed: 250 * time.Millisecond,
+	}
+	var err error
+	if q.MaxQueryBytes, err = loadIntWithDefault("STELE_QUERY_ANALYSIS_MAX_QUERY_BYTES", q.MaxQueryBytes); err != nil {
+		return QueryAnalysisConfig{}, err
+	}
+	if q.MaxHints, err = loadIntWithDefault("STELE_QUERY_ANALYSIS_MAX_HINTS", q.MaxHints); err != nil {
+		return QueryAnalysisConfig{}, err
+	}
+	if q.MaxSignals, err = loadIntWithDefault("STELE_QUERY_ANALYSIS_MAX_SIGNALS", q.MaxSignals); err != nil {
+		return QueryAnalysisConfig{}, err
+	}
+	if q.MaxSubqueries, err = loadIntWithDefault("STELE_QUERY_ANALYSIS_MAX_SUBQUERIES", q.MaxSubqueries); err != nil {
+		return QueryAnalysisConfig{}, err
+	}
+	if q.MaxTermBytes, err = loadIntWithDefault("STELE_QUERY_ANALYSIS_MAX_TERM_BYTES", q.MaxTermBytes); err != nil {
+		return QueryAnalysisConfig{}, err
+	}
+	if q.MaxSubqueryBytes, err = loadIntWithDefault("STELE_QUERY_ANALYSIS_MAX_SUBQUERY_BYTES", q.MaxSubqueryBytes); err != nil {
+		return QueryAnalysisConfig{}, err
+	}
+	if q.MaxAnalysisWork, err = loadIntWithDefault("STELE_QUERY_ANALYSIS_MAX_WORK", q.MaxAnalysisWork); err != nil {
+		return QueryAnalysisConfig{}, err
+	}
+	if q.MaxCandidatesPerSignal, err = loadIntWithDefault("STELE_QUERY_ANALYSIS_MAX_CANDIDATES_PER_SIGNAL", q.MaxCandidatesPerSignal); err != nil {
+		return QueryAnalysisConfig{}, err
+	}
+	if q.MaxAggregateCandidates, err = loadIntWithDefault("STELE_QUERY_ANALYSIS_MAX_AGGREGATE_CANDIDATES", q.MaxAggregateCandidates); err != nil {
+		return QueryAnalysisConfig{}, err
+	}
+	if q.MaxElapsed, err = loadDurationWithDefault("STELE_QUERY_ANALYSIS_MAX_ELAPSED", q.MaxElapsed); err != nil {
+		return QueryAnalysisConfig{}, err
+	}
+	if q.MaxQueryBytes < 1 || q.MaxQueryBytes > 16*1024 || q.MaxHints < 0 || q.MaxHints > 4 || q.MaxSignals < 1 || q.MaxSignals > 16 || q.MaxSubqueries < 0 || q.MaxSubqueries > 8 || q.MaxSubqueries >= q.MaxSignals || q.MaxTermBytes < 1 || q.MaxTermBytes > 1024 || q.MaxSubqueryBytes < 1 || q.MaxSubqueryBytes > 4096 || q.MaxAnalysisWork < 1 || q.MaxAnalysisWork > 7 || q.MaxCandidatesPerSignal < 1 || q.MaxCandidatesPerSignal > 100 || q.MaxAggregateCandidates < q.MaxCandidatesPerSignal || q.MaxAggregateCandidates > 1000 || q.MaxElapsed <= 0 || q.MaxElapsed > 5*time.Second {
+		return QueryAnalysisConfig{}, fmt.Errorf("query-analysis settings are invalid")
+	}
+	return q, nil
 }
 
 func getEnvOrDefault(key string, fallback string) string {

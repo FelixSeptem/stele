@@ -14,10 +14,10 @@
 
 ## 3. Exact-scope rollout governance
 
-- [ ] 3.1 Add failing domain tests for diagnostics-only, shadow, active, disabled, rollback, missing, expired, malformed, and foreign-scope query-analysis policies; extend existing ranking-rollout policy validation/resolution and verify every non-approved disposition resolves to original-only behavior.
-- [ ] 3.2 Inspect the existing rollout persistence representation and either prove with repository round-trip tests that a typed versioned query-analysis payload fits safely or add the smallest forward migration needed; verify unknown fields/versions fail closed and migration manifest/upgrade tests pass.
-- [ ] 3.3 Add PostgreSQL repository tests for exact tenant/project/namespace and optional session/user isolation of query-analysis rollout state, including same-name foreign policies; implement persistence changes if required and verify no broader-scope fallback is selected.
-- [ ] 3.4 Add configuration/startup validation for default-disabled query analysis and bounded policy values, without adding a parallel global activation mechanism; verify invalid or absent configuration preserves the existing original-query baseline.
+- [x] 3.1 Add failing domain tests for diagnostics-only, shadow, active, disabled, rollback, missing, expired, malformed, and foreign-scope query-analysis policies; extend existing ranking-rollout policy validation/resolution and verify every non-approved disposition resolves to original-only behavior.
+- [x] 3.2 Inspect the existing rollout persistence representation and either prove with repository round-trip tests that a typed versioned query-analysis payload fits safely or add the smallest forward migration needed; verify unknown fields/versions fail closed and migration manifest/upgrade tests pass.
+- [x] 3.3 Add PostgreSQL repository tests for exact tenant/project/namespace and optional session/user isolation of query-analysis rollout state, including same-name foreign policies; implement persistence changes if required and verify no broader-scope fallback is selected.
+- [x] 3.4 Add configuration/startup validation for default-disabled query analysis and bounded policy values, without adding a parallel global activation mechanism; verify invalid or absent configuration preserves the existing original-query baseline.
 
 ## 4. Bounded retrieval orchestration
 

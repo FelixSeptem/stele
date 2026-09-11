@@ -231,3 +231,47 @@ func TestLoadFromEnvRejectsUnknownMigrationPolicy(t *testing.T) {
 		t.Fatal("LoadFromEnv() error = nil, want invalid migration policy error")
 	}
 }
+
+func TestLoadFromEnvQueryAnalysisDefaultsToBoundedLimitsWithoutGlobalActivation(t *testing.T) {
+	t.Setenv("STELE_MODE", "api")
+	t.Setenv("STELE_POSTGRES_DSN", "postgres://example")
+	cfg, err := LoadFromEnv()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cfg.QueryAnalysis.MaxSignals != 8 || cfg.QueryAnalysis.MaxSubqueries != 4 {
+		t.Fatalf("query analysis defaults = %+v", cfg.QueryAnalysis)
+	}
+}
+
+func TestLoadFromEnvParsesBoundedQueryAnalysisConfig(t *testing.T) {
+	t.Setenv("STELE_MODE", "api")
+	t.Setenv("STELE_POSTGRES_DSN", "postgres://example")
+	t.Setenv("STELE_QUERY_ANALYSIS_MAX_SIGNALS", "8")
+	t.Setenv("STELE_QUERY_ANALYSIS_MAX_SUBQUERIES", "4")
+	t.Setenv("STELE_QUERY_ANALYSIS_MAX_ELAPSED", "250ms")
+	cfg, err := LoadFromEnv()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cfg.QueryAnalysis.MaxSignals != 8 || cfg.QueryAnalysis.MaxSubqueries != 4 || cfg.QueryAnalysis.MaxElapsed != 250*time.Millisecond {
+		t.Fatalf("query analysis config = %+v", cfg.QueryAnalysis)
+	}
+}
+
+func TestLoadFromEnvRejectsUnsafeQueryAnalysisBounds(t *testing.T) {
+	for _, tc := range []struct{ name, key, value string }{
+		{"signals", "STELE_QUERY_ANALYSIS_MAX_SIGNALS", "17"},
+		{"subqueries", "STELE_QUERY_ANALYSIS_MAX_SUBQUERIES", "8"},
+		{"elapsed", "STELE_QUERY_ANALYSIS_MAX_ELAPSED", "6s"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Setenv("STELE_MODE", "api")
+			t.Setenv("STELE_POSTGRES_DSN", "postgres://example")
+			t.Setenv(tc.key, tc.value)
+			if _, err := LoadFromEnv(); err == nil {
+				t.Fatal("LoadFromEnv() error = nil, want unsafe query-analysis bound rejection")
+			}
+		})
+	}
+}

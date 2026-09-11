@@ -1,0 +1,5 @@
+ALTER TABLE ranking_rollout_policies DROP CONSTRAINT IF EXISTS ranking_rollout_policies_query_analysis_selector_check;
+ALTER TABLE ranking_rollout_policies DROP CONSTRAINT IF EXISTS ranking_rollout_policies_query_analysis_payload_check;
+ALTER TABLE ranking_rollout_policies DROP COLUMN IF EXISTS query_analysis_policy;
+ALTER TABLE ranking_rollout_policies DROP COLUMN IF EXISTS query_analysis_user_id;
+ALTER TABLE ranking_rollout_policies DROP COLUMN IF EXISTS query_analysis_session_id;

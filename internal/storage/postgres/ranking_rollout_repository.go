@@ -1,10 +1,12 @@
 package postgres
 
 import (
+	"bytes"
 	"context"
 	"database/sql"
 	"encoding/json"
 	"fmt"
+	"io"
 	"sort"
 	"strings"
 	"time"
@@ -19,6 +21,7 @@ func (r *Repository) CreateRankingRolloutPolicy(ctx context.Context, policy memo
 		return memory.RankingRolloutPolicy{}, err
 	}
 	policy.Scope = policy.Scope.Normalized()
+	policy.QueryAnalysisSelector = policy.QueryAnalysisSelector.Normalized()
 	fusionChannelWeights, err := marshalOptionalFusionChannelWeights(policy.FusionChannelWeights)
 	if err != nil {
 		return memory.RankingRolloutPolicy{}, err
@@ -39,9 +42,10 @@ INSERT INTO ranking_rollout_policies (
 	diversity_policy_name, diversity_policy_version, diversity_mmr_lambda, diversity_semantic_threshold,
 	diversity_max_candidates, diversity_max_pairwise_comparisons, diversity_max_embedding_dimensions,
 	diversity_max_citations_per_candidate, diversity_coverage_weights,
+	query_analysis_session_id, query_analysis_user_id, query_analysis_policy,
 	activated_at, disabled_at, rolled_back_at, created_at, updated_at
 )
-VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19, $20, $21, $22, $23, $24, $25, $26, $27, $28, $29, $30, $31, $32, $33, $34)
+VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19, $20, $21, $22, $23, $24, $25, $26, $27, $28, $29, $30, $31, $32, $33, $34, $35, $36, $37)
 ON CONFLICT (id) DO UPDATE SET id = ranking_rollout_policies.id
 RETURNING id, tenant, project, namespace, status, mode, surfaces, signal_sources, threshold_status,
 	evidence_minimum, actor, reason, latest_dry_run_id, latest_dry_run_status,
@@ -50,8 +54,60 @@ RETURNING id, tenant, project, namespace, status, mode, surfaces, signal_sources
 	diversity_policy_name, diversity_policy_version, diversity_mmr_lambda, diversity_semantic_threshold,
 	diversity_max_candidates, diversity_max_pairwise_comparisons, diversity_max_embedding_dimensions,
 	diversity_max_citations_per_candidate, diversity_coverage_weights,
+	query_analysis_session_id, query_analysis_user_id, query_analysis_policy,
 	activated_at, disabled_at, rolled_back_at, created_at, updated_at
 `
+	if policy.QueryAnalysis != nil {
+		payload, marshalErr := json.Marshal(policy.QueryAnalysis)
+		if marshalErr != nil {
+			return memory.RankingRolloutPolicy{}, fmt.Errorf("marshal query-analysis rollout policy: %w", marshalErr)
+		}
+		const queryWithAnalysis = `
+INSERT INTO ranking_rollout_policies (
+	id, tenant, project, namespace, status, mode, surfaces, signal_sources, threshold_status,
+	evidence_minimum, actor, reason, latest_dry_run_id, latest_dry_run_status,
+	fusion_strategy, fusion_version, fusion_rank_constant, fusion_channel_weights,
+	fusion_per_channel_candidate, fusion_total_candidates,
+	diversity_policy_name, diversity_policy_version, diversity_mmr_lambda, diversity_semantic_threshold,
+	diversity_max_candidates, diversity_max_pairwise_comparisons, diversity_max_embedding_dimensions,
+	diversity_max_citations_per_candidate, diversity_coverage_weights,
+	query_analysis_session_id, query_analysis_user_id, query_analysis_policy,
+	activated_at, disabled_at, rolled_back_at, created_at, updated_at
+)
+VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20,$21,$22,$23,$24,$25,$26,$27,$28,$29,$30,$31,$32,$33,$34,$35,$36,$37)
+ON CONFLICT (id) DO UPDATE SET id = ranking_rollout_policies.id
+RETURNING id, tenant, project, namespace, status, mode, surfaces, signal_sources, threshold_status,
+	evidence_minimum, actor, reason, latest_dry_run_id, latest_dry_run_status,
+	fusion_strategy, fusion_version, fusion_rank_constant, fusion_channel_weights,
+	fusion_per_channel_candidate, fusion_total_candidates,
+	diversity_policy_name, diversity_policy_version, diversity_mmr_lambda, diversity_semantic_threshold,
+	diversity_max_candidates, diversity_max_pairwise_comparisons, diversity_max_embedding_dimensions,
+	diversity_max_citations_per_candidate, diversity_coverage_weights,
+	query_analysis_session_id, query_analysis_user_id, query_analysis_policy,
+	activated_at, disabled_at, rolled_back_at, created_at, updated_at`
+		created, scanErr := scanRankingRolloutPolicy(tx.QueryRow(ctx, queryWithAnalysis,
+			policy.ID, policy.Scope.Tenant, policy.Scope.Project, policy.Scope.Namespace, policy.Status, policy.Mode,
+			rankingRolloutSurfaceStrings(policy.Surfaces), rankingRolloutSignalSourceStrings(policy.SignalSources), policy.ThresholdStatus,
+			policy.EvidenceMinimum, policy.Actor, policy.Reason, nullableString(policy.LatestDryRunID), nullableString(string(policy.LatestDryRunStatus)),
+			nullableString(policy.FusionStrategy), nullableString(policy.FusionVersion), nullableRankingInt(policy.FusionRankConstant), fusionChannelWeights,
+			nullableRankingInt(policy.FusionPerChannelCandidate), nullableRankingInt(policy.FusionTotalCandidates), nullableString(policy.DiversityPolicyName), nullableString(policy.DiversityPolicyVersion),
+			nullableDiversityFloat(policy.DiversityMMRLambda, policy.DiversityPolicyName != ""), nullableDiversityFloat(policy.DiversitySemanticThreshold, policy.DiversityPolicyName != ""),
+			nullableRankingInt(policy.DiversityMaxCandidates), nullableRankingInt(policy.DiversityMaxPairwiseComparisons), nullableRankingInt(policy.DiversityMaxEmbeddingDimensions), nullableRankingInt(policy.DiversityMaxCitationsPerCandidate), marshalOptionalDiversityCoverageWeights(policy.DiversityCoverageWeights),
+			nullableString(policy.QueryAnalysisSelector.SessionID), nullableString(policy.QueryAnalysisSelector.UserID), payload,
+			nullableTime(policy.ActivatedAt), nullableTime(policy.DisabledAt), nullableTime(policy.RolledBackAt), policy.CreatedAt, policy.UpdatedAt))
+		if scanErr != nil {
+			return memory.RankingRolloutPolicy{}, fmt.Errorf("create ranking rollout policy: %w", scanErr)
+		}
+		created.QueryAnalysis = policy.QueryAnalysis
+		created.QueryAnalysisSelector = policy.QueryAnalysisSelector
+		if err := upsertRankingRolloutPolicyState(ctx, tx, created, created.Status, created.Actor, created.Reason, created.UpdatedAt); err != nil {
+			return memory.RankingRolloutPolicy{}, err
+		}
+		if err := tx.Commit(ctx); err != nil {
+			return memory.RankingRolloutPolicy{}, fmt.Errorf("commit ranking rollout policy transaction: %w", err)
+		}
+		return created, nil
+	}
 	created, err := scanRankingRolloutPolicy(tx.QueryRow(
 		ctx,
 		query,
@@ -77,6 +133,7 @@ RETURNING id, tenant, project, namespace, status, mode, surfaces, signal_sources
 		nullableRankingInt(policy.FusionTotalCandidates),
 		nullableString(policy.DiversityPolicyName), nullableString(policy.DiversityPolicyVersion), nullableDiversityFloat(policy.DiversityMMRLambda, policy.DiversityPolicyName != ""), nullableDiversityFloat(policy.DiversitySemanticThreshold, policy.DiversityPolicyName != ""),
 		nullableRankingInt(policy.DiversityMaxCandidates), nullableRankingInt(policy.DiversityMaxPairwiseComparisons), nullableRankingInt(policy.DiversityMaxEmbeddingDimensions), nullableRankingInt(policy.DiversityMaxCitationsPerCandidate), marshalOptionalDiversityCoverageWeights(policy.DiversityCoverageWeights),
+		nil, nil, nil,
 		nullableTime(policy.ActivatedAt),
 		nullableTime(policy.DisabledAt),
 		nullableTime(policy.RolledBackAt),
@@ -109,6 +166,7 @@ SELECT id, tenant, project, namespace, status, mode, surfaces, signal_sources, t
 	fusion_per_channel_candidate, fusion_total_candidates,
 	diversity_policy_name, diversity_policy_version, diversity_mmr_lambda, diversity_semantic_threshold,
 	diversity_max_candidates, diversity_max_pairwise_comparisons, diversity_max_embedding_dimensions, diversity_max_citations_per_candidate, diversity_coverage_weights,
+	query_analysis_session_id, query_analysis_user_id, query_analysis_policy,
 	activated_at, disabled_at, rolled_back_at, created_at, updated_at
 FROM ranking_rollout_policies
 WHERE tenant = $1 AND project = $2 AND namespace = $3 AND id = $4
@@ -133,6 +191,7 @@ SELECT id, tenant, project, namespace, status, mode, surfaces, signal_sources, t
 	fusion_per_channel_candidate, fusion_total_candidates,
 	diversity_policy_name, diversity_policy_version, diversity_mmr_lambda, diversity_semantic_threshold,
 	diversity_max_candidates, diversity_max_pairwise_comparisons, diversity_max_embedding_dimensions, diversity_max_citations_per_candidate, diversity_coverage_weights,
+	query_analysis_session_id, query_analysis_user_id, query_analysis_policy,
 	activated_at, disabled_at, rolled_back_at, created_at, updated_at
 FROM ranking_rollout_policies
 WHERE tenant = $1
@@ -150,6 +209,82 @@ LIMIT 1
 	return policy, nil
 }
 
+// ReadEffectiveQueryAnalysisRolloutPolicy selects only a query-analysis
+// payload whose complete exact scope (including nullable session/user
+// selectors) matches the request. It intentionally has no broader fallback.
+func (r *Repository) ReadEffectiveQueryAnalysisRolloutPolicy(ctx context.Context, input memory.ReadEffectiveQueryAnalysisRolloutPolicyInput) (memory.RankingRolloutPolicy, error) {
+	if err := input.Validate(); err != nil {
+		return memory.RankingRolloutPolicy{}, err
+	}
+	scope := input.Scope.Normalized()
+	selectorSession := strings.TrimSpace(input.SessionID)
+	selectorUser := strings.TrimSpace(input.UserID)
+	const query = `
+SELECT id, tenant, project, namespace, status, mode, surfaces,
+       query_analysis_session_id, query_analysis_user_id, query_analysis_policy,
+       activated_at, disabled_at, rolled_back_at, created_at, updated_at
+FROM ranking_rollout_policies
+WHERE tenant = $1 AND project = $2 AND namespace = $3
+  AND $4 = ANY(surfaces)
+  AND query_analysis_policy IS NOT NULL
+  AND query_analysis_session_id IS NOT DISTINCT FROM $5
+  AND query_analysis_user_id IS NOT DISTINCT FROM $6
+ORDER BY activated_at DESC NULLS LAST, updated_at DESC, created_at DESC, id DESC
+LIMIT 1`
+	var p memory.RankingRolloutPolicy
+	var surfaces []string
+	var sessionID, userID sql.NullString
+	var payload []byte
+	var activated, disabled, rolledBack, created, updated sql.NullTime
+	if err := r.db.QueryRow(ctx, query, scope.Tenant, scope.Project, scope.Namespace, string(input.Surface), nullableString(selectorSession), nullableString(selectorUser)).Scan(
+		&p.ID, &p.Scope.Tenant, &p.Scope.Project, &p.Scope.Namespace, &p.Status, &p.Mode, &surfaces,
+		&sessionID, &userID, &payload, &activated, &disabled, &rolledBack, &created, &updated); err != nil {
+		return memory.RankingRolloutPolicy{}, fmt.Errorf("read effective query-analysis rollout policy: %w", err)
+	}
+	p.Surfaces = rankingRolloutSurfaces(surfaces)
+	if sessionID.Valid {
+		p.QueryAnalysisSelector.SessionID = sessionID.String
+	}
+	if userID.Valid {
+		p.QueryAnalysisSelector.UserID = userID.String
+	}
+	if len(payload) == 0 {
+		return memory.RankingRolloutPolicy{}, fmt.Errorf("query-analysis rollout payload is empty")
+	}
+	var qa memory.QueryAnalysisRolloutPolicy
+	decoder := json.NewDecoder(bytes.NewReader(payload))
+	decoder.DisallowUnknownFields()
+	if err := decoder.Decode(&qa); err != nil {
+		return memory.RankingRolloutPolicy{}, fmt.Errorf("decode query-analysis rollout payload: %w", err)
+	}
+	var trailing any
+	if err := decoder.Decode(&trailing); err == nil {
+		return memory.RankingRolloutPolicy{}, fmt.Errorf("decode query-analysis rollout payload: trailing JSON value")
+	} else if err != io.EOF {
+		return memory.RankingRolloutPolicy{}, fmt.Errorf("decode query-analysis rollout payload: trailing data: %w", err)
+	}
+	if err := qa.Validate(); err != nil {
+		return memory.RankingRolloutPolicy{}, fmt.Errorf("validate query-analysis rollout payload: %w", err)
+	}
+	p.QueryAnalysis = &qa
+	if activated.Valid {
+		p.ActivatedAt = activated.Time
+	}
+	if disabled.Valid {
+		p.DisabledAt = disabled.Time
+	}
+	if rolledBack.Valid {
+		p.RolledBackAt = rolledBack.Time
+	}
+	if created.Valid {
+		p.CreatedAt = created.Time
+	}
+	if updated.Valid {
+		p.UpdatedAt = updated.Time
+	}
+	return p, nil
+}
+
 func (r *Repository) ListRankingRolloutPolicies(ctx context.Context, input memory.ListRankingRolloutPoliciesInput) ([]memory.RankingRolloutPolicy, error) {
 	if err := input.Validate(); err != nil {
 		return nil, err
@@ -163,6 +298,7 @@ SELECT id, tenant, project, namespace, status, mode, surfaces, signal_sources, t
 	fusion_per_channel_candidate, fusion_total_candidates,
 	diversity_policy_name, diversity_policy_version, diversity_mmr_lambda, diversity_semantic_threshold,
 	diversity_max_candidates, diversity_max_pairwise_comparisons, diversity_max_embedding_dimensions, diversity_max_citations_per_candidate, diversity_coverage_weights,
+	query_analysis_session_id, query_analysis_user_id, query_analysis_policy,
 	activated_at, disabled_at, rolled_back_at, created_at, updated_at
 FROM ranking_rollout_policies
 WHERE tenant = $1 AND project = $2 AND namespace = $3
@@ -324,6 +460,7 @@ RETURNING id, tenant, project, namespace, status, mode, surfaces, signal_sources
 	fusion_per_channel_candidate, fusion_total_candidates,
 	diversity_policy_name, diversity_policy_version, diversity_mmr_lambda, diversity_semantic_threshold,
 	diversity_max_candidates, diversity_max_pairwise_comparisons, diversity_max_embedding_dimensions, diversity_max_citations_per_candidate, diversity_coverage_weights,
+	query_analysis_session_id, query_analysis_user_id, query_analysis_policy,
 	activated_at, disabled_at, rolled_back_at, created_at, updated_at
 `
 	policy, err := scanRankingRolloutPolicy(tx.QueryRow(ctx, query, input.Scope.Tenant, input.Scope.Project, input.Scope.Namespace, input.PolicyID, memory.RankingRolloutPolicyStatusActiveForScope, input.Actor, input.Reason, input.ActivatedAt, input.Gate.EvidenceThresholdStatus, memory.RankingRolloutModeActiveForScope, memory.RankingRolloutPolicyStatusDisabled, memory.RankingRolloutPolicyStatusRolledBack))
@@ -366,6 +503,7 @@ RETURNING id, tenant, project, namespace, status, mode, surfaces, signal_sources
 	fusion_per_channel_candidate, fusion_total_candidates,
 	diversity_policy_name, diversity_policy_version, diversity_mmr_lambda, diversity_semantic_threshold,
 	diversity_max_candidates, diversity_max_pairwise_comparisons, diversity_max_embedding_dimensions, diversity_max_citations_per_candidate, diversity_coverage_weights,
+	query_analysis_session_id, query_analysis_user_id, query_analysis_policy,
 	activated_at, disabled_at, rolled_back_at, created_at, updated_at
 `
 	policy, err := scanRankingRolloutPolicy(tx.QueryRow(ctx, query, input.Scope.Tenant, input.Scope.Project, input.Scope.Namespace, input.PolicyID, memory.RankingRolloutPolicyStatusDisabled, input.Actor, input.Reason, input.DisabledAt))
@@ -411,6 +549,7 @@ RETURNING id, tenant, project, namespace, status, mode, surfaces, signal_sources
 	fusion_per_channel_candidate, fusion_total_candidates,
 	diversity_policy_name, diversity_policy_version, diversity_mmr_lambda, diversity_semantic_threshold,
 	diversity_max_candidates, diversity_max_pairwise_comparisons, diversity_max_embedding_dimensions, diversity_max_citations_per_candidate, diversity_coverage_weights,
+	query_analysis_session_id, query_analysis_user_id, query_analysis_policy,
 	activated_at, disabled_at, rolled_back_at, created_at, updated_at
 `
 	policy, err := scanRankingRolloutPolicy(tx.QueryRow(ctx, query, input.Scope.Tenant, input.Scope.Project, input.Scope.Namespace, input.PolicyID, memory.RankingRolloutPolicyStatusRolledBack, input.Actor, input.Reason, input.RolledBackAt))
@@ -490,6 +629,9 @@ func scanRankingRolloutPolicy(scanner provenanceScanner) (memory.RankingRolloutP
 	var diversityMaxEmbeddingDimensions sql.NullInt64
 	var diversityMaxCitationsPerCandidate sql.NullInt64
 	var diversityCoverageWeights []byte
+	var queryAnalysisSessionID sql.NullString
+	var queryAnalysisUserID sql.NullString
+	var queryAnalysisPayload []byte
 	var activatedAt sql.NullTime
 	var disabledAt sql.NullTime
 	var rolledBackAt sql.NullTime
@@ -523,6 +665,9 @@ func scanRankingRolloutPolicy(scanner provenanceScanner) (memory.RankingRolloutP
 		&diversityMaxEmbeddingDimensions,
 		&diversityMaxCitationsPerCandidate,
 		&diversityCoverageWeights,
+		&queryAnalysisSessionID,
+		&queryAnalysisUserID,
+		&queryAnalysisPayload,
 		&activatedAt,
 		&disabledAt,
 		&rolledBackAt,
@@ -587,6 +732,31 @@ func scanRankingRolloutPolicy(scanner provenanceScanner) (memory.RankingRolloutP
 		if err := json.Unmarshal(diversityCoverageWeights, &policy.DiversityCoverageWeights); err != nil {
 			return memory.RankingRolloutPolicy{}, fmt.Errorf("decode diversity coverage weights: %w", err)
 		}
+	}
+	if queryAnalysisSessionID.Valid {
+		policy.QueryAnalysisSelector.SessionID = queryAnalysisSessionID.String
+	}
+	if queryAnalysisUserID.Valid {
+		policy.QueryAnalysisSelector.UserID = queryAnalysisUserID.String
+	}
+	if len(queryAnalysisPayload) > 0 {
+		decoder := json.NewDecoder(bytes.NewReader(queryAnalysisPayload))
+		decoder.DisallowUnknownFields()
+		var qa memory.QueryAnalysisRolloutPolicy
+		if err := decoder.Decode(&qa); err != nil {
+			return memory.RankingRolloutPolicy{}, fmt.Errorf("decode query-analysis rollout payload: %w", err)
+		}
+		var trailing any
+		if err := decoder.Decode(&trailing); err != io.EOF {
+			if err == nil {
+				return memory.RankingRolloutPolicy{}, fmt.Errorf("decode query-analysis rollout payload: trailing JSON value")
+			}
+			return memory.RankingRolloutPolicy{}, fmt.Errorf("decode query-analysis rollout payload: trailing data: %w", err)
+		}
+		if err := qa.Validate(); err != nil {
+			return memory.RankingRolloutPolicy{}, fmt.Errorf("validate query-analysis rollout payload: %w", err)
+		}
+		policy.QueryAnalysis = &qa
 	}
 	if activatedAt.Valid {
 		policy.ActivatedAt = activatedAt.Time
@@ -699,6 +869,7 @@ SELECT id, tenant, project, namespace, status, mode, surfaces, signal_sources, t
 	fusion_per_channel_candidate, fusion_total_candidates,
 	diversity_policy_name, diversity_policy_version, diversity_mmr_lambda, diversity_semantic_threshold,
 	diversity_max_candidates, diversity_max_pairwise_comparisons, diversity_max_embedding_dimensions, diversity_max_citations_per_candidate, diversity_coverage_weights,
+	query_analysis_session_id, query_analysis_user_id, query_analysis_policy,
 	activated_at, disabled_at, rolled_back_at, created_at, updated_at
 FROM ranking_rollout_policies
 WHERE tenant = $1 AND project = $2 AND namespace = $3 AND id = $4

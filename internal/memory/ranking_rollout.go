@@ -164,20 +164,22 @@ type RankingRolloutPolicy struct {
 	FusionTotalCandidates     int                           `json:"fusion_total_candidates,omitempty"`
 	// Diversity fields are optional as a complete bundle. When configured, all
 	// identity and bounded selection parameters must be present and valid.
-	DiversityPolicyName               string             `json:"diversity_policy_name,omitempty"`
-	DiversityPolicyVersion            string             `json:"diversity_policy_version,omitempty"`
-	DiversityMMRLambda                float64            `json:"diversity_mmr_lambda,omitempty"`
-	DiversitySemanticThreshold        float64            `json:"diversity_semantic_threshold,omitempty"`
-	DiversityMaxCandidates            int                `json:"diversity_max_candidates,omitempty"`
-	DiversityMaxPairwiseComparisons   int                `json:"diversity_max_pairwise_comparisons,omitempty"`
-	DiversityMaxEmbeddingDimensions   int                `json:"diversity_max_embedding_dimensions,omitempty"`
-	DiversityMaxCitationsPerCandidate int                `json:"diversity_max_citations_per_candidate,omitempty"`
-	DiversityCoverageWeights          map[string]float64 `json:"diversity_coverage_weights,omitempty"`
-	ActivatedAt                       time.Time          `json:"activated_at,omitempty"`
-	DisabledAt                        time.Time          `json:"disabled_at,omitempty"`
-	RolledBackAt                      time.Time          `json:"rolled_back_at,omitempty"`
-	CreatedAt                         time.Time          `json:"created_at"`
-	UpdatedAt                         time.Time          `json:"updated_at"`
+	DiversityPolicyName               string                       `json:"diversity_policy_name,omitempty"`
+	DiversityPolicyVersion            string                       `json:"diversity_policy_version,omitempty"`
+	DiversityMMRLambda                float64                      `json:"diversity_mmr_lambda,omitempty"`
+	DiversitySemanticThreshold        float64                      `json:"diversity_semantic_threshold,omitempty"`
+	DiversityMaxCandidates            int                          `json:"diversity_max_candidates,omitempty"`
+	DiversityMaxPairwiseComparisons   int                          `json:"diversity_max_pairwise_comparisons,omitempty"`
+	DiversityMaxEmbeddingDimensions   int                          `json:"diversity_max_embedding_dimensions,omitempty"`
+	DiversityMaxCitationsPerCandidate int                          `json:"diversity_max_citations_per_candidate,omitempty"`
+	DiversityCoverageWeights          map[string]float64           `json:"diversity_coverage_weights,omitempty"`
+	QueryAnalysisSelector             QueryAnalysisRolloutSelector `json:"query_analysis_selector,omitempty"`
+	QueryAnalysis                     *QueryAnalysisRolloutPolicy  `json:"query_analysis,omitempty"`
+	ActivatedAt                       time.Time                    `json:"activated_at,omitempty"`
+	DisabledAt                        time.Time                    `json:"disabled_at,omitempty"`
+	RolledBackAt                      time.Time                    `json:"rolled_back_at,omitempty"`
+	CreatedAt                         time.Time                    `json:"created_at"`
+	UpdatedAt                         time.Time                    `json:"updated_at"`
 }
 
 func (p RankingRolloutPolicy) Validate() error {
@@ -236,7 +238,155 @@ func (p RankingRolloutPolicy) Validate() error {
 	if err := validateRankingRolloutDiversity(p); err != nil {
 		return err
 	}
+	if err := validateQueryAnalysisRollout(p); err != nil {
+		return err
+	}
 	return nil
+}
+
+const (
+	QueryAnalysisRolloutSchemaVersionV1 = "query-analysis-rollout-v1"
+	QueryAnalysisPolicyVersionV1        = "query-analysis-v1"
+	QueryAnalysisLimitsVersionV1        = "query-analysis-limits-v1"
+)
+
+type QueryAnalysisRolloutSelector struct {
+	SessionID string `json:"session_id,omitempty"`
+	UserID    string `json:"user_id,omitempty"`
+}
+
+func (s QueryAnalysisRolloutSelector) Normalized() QueryAnalysisRolloutSelector {
+	return QueryAnalysisRolloutSelector{SessionID: strings.TrimSpace(s.SessionID), UserID: strings.TrimSpace(s.UserID)}
+}
+
+type QueryAnalysisRolloutPolicy struct {
+	SchemaVersion          string        `json:"schema_version"`
+	PolicyVersion          string        `json:"policy_version"`
+	LimitsVersion          string        `json:"limits_version"`
+	MaxQueryBytes          int           `json:"max_query_bytes"`
+	MaxHints               int           `json:"max_hints"`
+	MaxSignals             int           `json:"max_signals"`
+	MaxSubqueries          int           `json:"max_subqueries"`
+	MaxTermBytes           int           `json:"max_term_bytes"`
+	MaxSubqueryBytes       int           `json:"max_subquery_bytes"`
+	MaxAnalysisWork        int           `json:"max_analysis_work"`
+	MaxCandidatesPerSignal int           `json:"max_candidates_per_signal"`
+	MaxAggregateCandidates int           `json:"max_aggregate_candidates"`
+	MaxElapsed             time.Duration `json:"max_elapsed_ns"`
+	ExpiresAt              time.Time     `json:"expires_at"`
+}
+
+func (p QueryAnalysisRolloutPolicy) Validate() error {
+	if p.SchemaVersion != QueryAnalysisRolloutSchemaVersionV1 || p.PolicyVersion != QueryAnalysisPolicyVersionV1 || p.LimitsVersion != QueryAnalysisLimitsVersionV1 {
+		return fmt.Errorf("query-analysis rollout contains an unsupported version")
+	}
+	checks := []struct {
+		name            string
+		value, min, max int
+	}{
+		{"max query bytes", p.MaxQueryBytes, 1, 16 * 1024},
+		{"max hints", p.MaxHints, 0, 4},
+		{"max signals", p.MaxSignals, 1, 16},
+		{"max subqueries", p.MaxSubqueries, 0, 8},
+		{"max term bytes", p.MaxTermBytes, 1, 1024},
+		{"max subquery bytes", p.MaxSubqueryBytes, 1, 4096},
+		{"max analysis work", p.MaxAnalysisWork, 1, 7},
+		{"max candidates per signal", p.MaxCandidatesPerSignal, 1, 100},
+		{"max aggregate candidates", p.MaxAggregateCandidates, 1, 1000},
+	}
+	for _, check := range checks {
+		if check.value < check.min || check.value > check.max {
+			return fmt.Errorf("query-analysis %s must be between %d and %d", check.name, check.min, check.max)
+		}
+	}
+	if p.MaxSubqueries >= p.MaxSignals {
+		return fmt.Errorf("query-analysis max subqueries must leave capacity for the original signal")
+	}
+	if p.MaxAggregateCandidates < p.MaxCandidatesPerSignal {
+		return fmt.Errorf("query-analysis aggregate candidates must cover candidates per signal")
+	}
+	if p.MaxElapsed <= 0 || p.MaxElapsed > 5*time.Second {
+		return fmt.Errorf("query-analysis max elapsed must be between 1ns and 5s")
+	}
+	if p.ExpiresAt.IsZero() {
+		return fmt.Errorf("query-analysis rollout expiry is required")
+	}
+	return nil
+}
+
+func validateQueryAnalysisRollout(policy RankingRolloutPolicy) error {
+	selector := policy.QueryAnalysisSelector.Normalized()
+	if policy.QueryAnalysis == nil {
+		if selector.SessionID != "" || selector.UserID != "" {
+			return fmt.Errorf("query-analysis selector requires a query-analysis policy")
+		}
+		return nil
+	}
+	return policy.QueryAnalysis.Validate()
+}
+
+type QueryAnalysisRolloutStage string
+
+const (
+	QueryAnalysisRolloutStageOriginalOnly    QueryAnalysisRolloutStage = "original_only"
+	QueryAnalysisRolloutStageDiagnosticsOnly QueryAnalysisRolloutStage = "diagnostics_only"
+	QueryAnalysisRolloutStageShadow          QueryAnalysisRolloutStage = "shadow"
+	QueryAnalysisRolloutStageActive          QueryAnalysisRolloutStage = "active"
+)
+
+type ResolveQueryAnalysisRolloutInput struct {
+	Scope     Scope
+	Surface   RankingRolloutSurface
+	SessionID string
+	UserID    string
+	Now       time.Time
+}
+
+type QueryAnalysisRolloutResolution struct {
+	Stage                       QueryAnalysisRolloutStage
+	OriginalOnly                bool
+	DerivedSignalsAffectResults bool
+	Policy                      *QueryAnalysisRolloutPolicy
+}
+
+func ResolveQueryAnalysisRollout(policy *RankingRolloutPolicy, input ResolveQueryAnalysisRolloutInput) QueryAnalysisRolloutResolution {
+	fallback := QueryAnalysisRolloutResolution{Stage: QueryAnalysisRolloutStageOriginalOnly, OriginalOnly: true}
+	if policy == nil || input.Scope.Validate() != nil || !input.Surface.Valid() || policy.QueryAnalysis == nil || policy.QueryAnalysis.Validate() != nil {
+		return fallback
+	}
+	if policy.Scope.Normalized() != input.Scope.Normalized() || policy.QueryAnalysisSelector.Normalized() != (QueryAnalysisRolloutSelector{SessionID: input.SessionID, UserID: input.UserID}).Normalized() {
+		return fallback
+	}
+	if !queryAnalysisRolloutIncludesSurface(*policy, input.Surface) || input.Now.IsZero() || !input.Now.Before(policy.QueryAnalysis.ExpiresAt) {
+		return fallback
+	}
+	if (policy.Status == RankingRolloutPolicyStatusDiagnosticsOnly && policy.Mode != RankingRolloutModeDiagnosticsOnly) ||
+		(policy.Status == RankingRolloutPolicyStatusDryRun && policy.Mode != RankingRolloutModeDryRun) ||
+		(policy.Status == RankingRolloutPolicyStatusActiveForScope && policy.Mode != RankingRolloutModeActiveForScope) {
+		return fallback
+	}
+	resolution := fallback
+	resolution.Policy = policy.QueryAnalysis
+	switch policy.Status {
+	case RankingRolloutPolicyStatusDiagnosticsOnly:
+		resolution.Stage = QueryAnalysisRolloutStageDiagnosticsOnly
+	case RankingRolloutPolicyStatusDryRun:
+		resolution.Stage = QueryAnalysisRolloutStageShadow
+	case RankingRolloutPolicyStatusActiveForScope:
+		resolution.Stage = QueryAnalysisRolloutStageActive
+		resolution.OriginalOnly = false
+		resolution.DerivedSignalsAffectResults = true
+	}
+	return resolution
+}
+
+func queryAnalysisRolloutIncludesSurface(policy RankingRolloutPolicy, surface RankingRolloutSurface) bool {
+	for _, configured := range policy.Surfaces {
+		if configured == surface {
+			return true
+		}
+	}
+	return false
 }
 
 func validateRankingRolloutDiversity(policy RankingRolloutPolicy) error {
@@ -411,6 +561,23 @@ func (i ReadRankingRolloutPolicyInput) Validate() error {
 type ReadActiveRankingRolloutPolicyInput struct {
 	Scope   Scope
 	Surface RankingRolloutSurface
+}
+
+type ReadEffectiveQueryAnalysisRolloutPolicyInput struct {
+	Scope     Scope
+	Surface   RankingRolloutSurface
+	SessionID string
+	UserID    string
+}
+
+func (i ReadEffectiveQueryAnalysisRolloutPolicyInput) Validate() error {
+	if err := i.Scope.Validate(); err != nil {
+		return err
+	}
+	if !i.Surface.Valid() {
+		return fmt.Errorf("ranking rollout surface %q is invalid", i.Surface)
+	}
+	return nil
 }
 
 func (i ReadActiveRankingRolloutPolicyInput) Validate() error {

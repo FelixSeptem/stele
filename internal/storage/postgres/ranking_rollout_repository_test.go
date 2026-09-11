@@ -2,6 +2,7 @@ package postgres
 
 import (
 	"context"
+	"database/sql"
 	"testing"
 	"time"
 
@@ -10,11 +11,137 @@ import (
 )
 
 func rankingRolloutPolicyColumns() []string {
-	return []string{"id", "tenant", "project", "namespace", "status", "mode", "surfaces", "signal_sources", "threshold_status", "evidence_minimum", "actor", "reason", "latest_dry_run_id", "latest_dry_run_status", "fusion_strategy", "fusion_version", "fusion_rank_constant", "fusion_channel_weights", "fusion_per_channel_candidate", "fusion_total_candidates", "diversity_policy_name", "diversity_policy_version", "diversity_mmr_lambda", "diversity_semantic_threshold", "diversity_max_candidates", "diversity_max_pairwise_comparisons", "diversity_max_embedding_dimensions", "diversity_max_citations_per_candidate", "diversity_coverage_weights", "activated_at", "disabled_at", "rolled_back_at", "created_at", "updated_at"}
+	return []string{"id", "tenant", "project", "namespace", "status", "mode", "surfaces", "signal_sources", "threshold_status", "evidence_minimum", "actor", "reason", "latest_dry_run_id", "latest_dry_run_status", "fusion_strategy", "fusion_version", "fusion_rank_constant", "fusion_channel_weights", "fusion_per_channel_candidate", "fusion_total_candidates", "diversity_policy_name", "diversity_policy_version", "diversity_mmr_lambda", "diversity_semantic_threshold", "diversity_max_candidates", "diversity_max_pairwise_comparisons", "diversity_max_embedding_dimensions", "diversity_max_citations_per_candidate", "diversity_coverage_weights", "query_analysis_session_id", "query_analysis_user_id", "query_analysis_policy", "activated_at", "disabled_at", "rolled_back_at", "created_at", "updated_at"}
 }
 
 func rankingRolloutPolicyRow(id string, scope memory.Scope, status memory.RankingRolloutPolicyStatus, mode memory.RankingRolloutMode, threshold memory.RankingRolloutThresholdStatus, evidence int, actor, reason string, latestID, latestStatus any, activated, disabled, rolledBack, created, updated any) []any {
-	return []any{id, scope.Tenant, scope.Project, scope.Namespace, status, mode, []string{"search"}, []string{"task_evaluations"}, threshold, evidence, actor, reason, latestID, latestStatus, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, activated, disabled, rolledBack, created, updated}
+	return []any{id, scope.Tenant, scope.Project, scope.Namespace, status, mode, []string{"search"}, []string{"task_evaluations"}, threshold, evidence, actor, reason, latestID, latestStatus,
+		nil, nil, nil, nil, nil, nil, // fusion
+		nil, nil, nil, nil, nil, nil, nil, nil, nil, // diversity
+		nil, nil, nil, // query analysis
+		activated, disabled, rolledBack, created, updated}
+}
+
+func TestRepositoryReadsExactQueryAnalysisRolloutSelectorsAndRoundTripsPayload(t *testing.T) {
+	mock, err := pgxmock.NewPool()
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer mock.Close()
+	scope := memory.Scope{Tenant: "tenant-a", Project: "project-a", Namespace: "namespace-a"}
+	now := time.Date(2026, 9, 7, 12, 0, 0, 0, time.UTC)
+	payload := []byte(`{"schema_version":"query-analysis-rollout-v1","policy_version":"query-analysis-v1","limits_version":"query-analysis-limits-v1","max_query_bytes":4096,"max_hints":4,"max_signals":8,"max_subqueries":4,"max_term_bytes":256,"max_subquery_bytes":1024,"max_analysis_work":7,"max_candidates_per_signal":50,"max_aggregate_candidates":200,"max_elapsed_ns":250000000,"expires_at":"2026-09-08T12:00:00Z"}`)
+	row := []any{"shared-name", scope.Tenant, scope.Project, scope.Namespace, memory.RankingRolloutPolicyStatusDryRun, memory.RankingRolloutModeDryRun, []string{"search"}, "session-a", "user-a", payload, now, nil, nil, now, now}
+	mock.ExpectQuery(`SELECT[\s\S]*FROM ranking_rollout_policies[\s\S]*tenant = \$1[\s\S]*project = \$2[\s\S]*namespace = \$3[\s\S]*query_analysis_session_id IS NOT DISTINCT FROM \$5[\s\S]*query_analysis_user_id IS NOT DISTINCT FROM \$6`).
+		WithArgs(scope.Tenant, scope.Project, scope.Namespace, string(memory.RankingRolloutSurfaceSearch), "session-a", "user-a").
+		WillReturnRows(pgxmock.NewRows([]string{"id", "tenant", "project", "namespace", "status", "mode", "surfaces", "query_analysis_session_id", "query_analysis_user_id", "query_analysis_policy", "activated_at", "disabled_at", "rolled_back_at", "created_at", "updated_at"}).AddRow(row...))
+	repo := NewRepository(mock)
+	policy, err := repo.ReadEffectiveQueryAnalysisRolloutPolicy(context.Background(), memory.ReadEffectiveQueryAnalysisRolloutPolicyInput{Scope: scope, Surface: memory.RankingRolloutSurfaceSearch, SessionID: "session-a", UserID: "user-a"})
+	if err != nil {
+		t.Fatalf("ReadEffectiveQueryAnalysisRolloutPolicy() error = %v", err)
+	}
+	if policy.ID != "shared-name" || policy.QueryAnalysis == nil || policy.QueryAnalysis.MaxSignals != 8 || policy.QueryAnalysisSelector.SessionID != "session-a" || policy.QueryAnalysisSelector.UserID != "user-a" {
+		t.Fatalf("policy = %+v, want exact-selector typed payload", policy)
+	}
+	if err := mock.ExpectationsWereMet(); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestRepositoryQueryAnalysisPayloadUnknownFieldsAndVersionsFailClosed(t *testing.T) {
+	for _, payload := range [][]byte{
+		[]byte(`{"schema_version":"query-analysis-rollout-v1","unknown":true}`),
+		[]byte(`{"schema_version":"query-analysis-rollout-v2"}`),
+	} {
+		t.Run(string(payload), func(t *testing.T) {
+			mock, err := pgxmock.NewPool()
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer mock.Close()
+			scope := memory.Scope{Tenant: "tenant-a", Project: "project-a", Namespace: "namespace-a"}
+			row := []any{"policy", scope.Tenant, scope.Project, scope.Namespace, memory.RankingRolloutPolicyStatusDryRun, memory.RankingRolloutModeDryRun, []string{"search"}, nil, nil, payload, nil, nil, nil, time.Now(), time.Now()}
+			mock.ExpectQuery("SELECT[\\s\\S]*FROM ranking_rollout_policies").WithArgs(scope.Tenant, scope.Project, scope.Namespace, memory.RankingRolloutSurfaceSearch, nil, nil).WillReturnRows(pgxmock.NewRows([]string{"id", "tenant", "project", "namespace", "status", "mode", "surfaces", "query_analysis_session_id", "query_analysis_user_id", "query_analysis_policy", "activated_at", "disabled_at", "rolled_back_at", "created_at", "updated_at"}).AddRow(row...))
+			_, err = NewRepository(mock).ReadEffectiveQueryAnalysisRolloutPolicy(context.Background(), memory.ReadEffectiveQueryAnalysisRolloutPolicyInput{Scope: scope, Surface: memory.RankingRolloutSurfaceSearch})
+			if err == nil {
+				t.Fatal("error = nil, want malformed payload fail closed")
+			}
+		})
+	}
+}
+
+func TestRepositoryCreateQueryAnalysisPolicyPreservesRankingBundles(t *testing.T) {
+	mock, err := pgxmock.NewPool()
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer mock.Close()
+	scope := memory.Scope{Tenant: "tenant-a", Project: "project-a", Namespace: "namespace-a"}
+	now := time.Date(2026, 9, 7, 12, 0, 0, 0, time.UTC)
+	policy := memory.RankingRolloutPolicy{
+		ID: "qa-policy", Scope: scope, Status: memory.RankingRolloutPolicyStatusDryRun, Mode: memory.RankingRolloutModeDryRun,
+		Surfaces: []memory.RankingRolloutSurface{memory.RankingRolloutSurfaceSearch}, SignalSources: []memory.RankingRolloutSignalSource{memory.RankingRolloutSignalSourceTaskEvaluations},
+		ThresholdStatus: memory.RankingRolloutThresholdStatusSatisfied, Actor: "operator", Reason: "combined rollout", CreatedAt: now, UpdatedAt: now,
+		FusionStrategy: "rrf", FusionVersion: "rrf-v1", FusionRankConstant: 60, FusionChannelWeights: map[string]float64{"lexical": 1, "semantic": 1}, FusionPerChannelCandidate: 20, FusionTotalCandidates: 40,
+		DiversityPolicyName: "mmr", DiversityPolicyVersion: "mmr-v1", DiversityMMRLambda: .7, DiversitySemanticThreshold: .8, DiversityMaxCandidates: 40, DiversityMaxPairwiseComparisons: 1000, DiversityMaxEmbeddingDimensions: 1536, DiversityMaxCitationsPerCandidate: 8, DiversityCoverageWeights: map[string]float64{"memory_class": 1, "session": 1, "entity": 1, "time_slice": 1, "unknown": 1},
+		QueryAnalysisSelector: memory.QueryAnalysisRolloutSelector{SessionID: "session-a", UserID: "user-a"}, QueryAnalysis: &memory.QueryAnalysisRolloutPolicy{SchemaVersion: memory.QueryAnalysisRolloutSchemaVersionV1, PolicyVersion: memory.QueryAnalysisPolicyVersionV1, LimitsVersion: memory.QueryAnalysisLimitsVersionV1, MaxQueryBytes: 4096, MaxHints: 4, MaxSignals: 8, MaxSubqueries: 4, MaxTermBytes: 256, MaxSubqueryBytes: 1024, MaxAnalysisWork: 7, MaxCandidatesPerSignal: 50, MaxAggregateCandidates: 200, MaxElapsed: 250 * time.Millisecond, ExpiresAt: now.Add(time.Hour)},
+	}
+	row := rankingRolloutPolicyRow(policy.ID, scope, policy.Status, policy.Mode, policy.ThresholdStatus, 0, policy.Actor, policy.Reason, nil, nil, nil, nil, nil, now, now)
+	row[14], row[15], row[16], row[17], row[18], row[19] = policy.FusionStrategy, policy.FusionVersion, int64(60), []byte(`{"lexical":1,"semantic":1}`), int64(20), int64(40)
+	row[20], row[21], row[22], row[23], row[24], row[25], row[26], row[27], row[28] = policy.DiversityPolicyName, policy.DiversityPolicyVersion, .7, .8, int64(40), int64(1000), int64(1536), int64(8), []byte(`{"entity":1,"memory_class":1,"session":1,"time_slice":1,"unknown":1}`)
+	mock.ExpectBegin()
+	mock.ExpectQuery(`INSERT INTO ranking_rollout_policies[\s\S]*latest_dry_run_id[\s\S]*fusion_strategy[\s\S]*diversity_policy_name[\s\S]*query_analysis_session_id`).WithArgs(anyRankingRolloutArgs(37)...).WillReturnRows(pgxmock.NewRows(rankingRolloutPolicyColumns()).AddRow(row...))
+	mock.ExpectExec("INSERT INTO ranking_rollout_policy_states").WithArgs(anyRankingRolloutArgs(11)...).WillReturnResult(pgxmock.NewResult("INSERT", 1))
+	mock.ExpectCommit()
+	created, err := NewRepository(mock).CreateRankingRolloutPolicy(context.Background(), policy)
+	if err != nil {
+		t.Fatalf("CreateRankingRolloutPolicy() error = %v", err)
+	}
+	if created.FusionVersion != policy.FusionVersion || created.DiversityPolicyVersion != policy.DiversityPolicyVersion || created.QueryAnalysis == nil {
+		t.Fatalf("created policy lost bundle: %+v", created)
+	}
+	if err := mock.ExpectationsWereMet(); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestRepositoryQueryAnalysisRolloutDoesNotFallbackToSameNameForeignPolicy(t *testing.T) {
+	scope := memory.Scope{Tenant: "tenant-a", Project: "project-a", Namespace: "namespace-a"}
+	cases := []struct {
+		name     string
+		request  memory.ReadEffectiveQueryAnalysisRolloutPolicyInput
+		wantArgs []any
+	}{
+		{
+			name:     "foreign canonical scope",
+			request:  memory.ReadEffectiveQueryAnalysisRolloutPolicyInput{Scope: scope, Surface: memory.RankingRolloutSurfaceSearch, SessionID: "session-a", UserID: "user-a"},
+			wantArgs: []any{"tenant-a", "project-a", "namespace-a", memory.RankingRolloutSurfaceSearch, "session-a", "user-a"},
+		},
+		{
+			name:     "foreign optional selector",
+			request:  memory.ReadEffectiveQueryAnalysisRolloutPolicyInput{Scope: scope, Surface: memory.RankingRolloutSurfaceSearch, SessionID: "session-a", UserID: "user-a"},
+			wantArgs: []any{"tenant-a", "project-a", "namespace-a", memory.RankingRolloutSurfaceSearch, "session-a", "user-a"},
+		},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			mock, err := pgxmock.NewPool()
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer mock.Close()
+			mock.ExpectQuery(`SELECT[\s\S]*FROM ranking_rollout_policies[\s\S]*WHERE tenant = \$1 AND project = \$2 AND namespace = \$3[\s\S]*query_analysis_policy IS NOT NULL[\s\S]*query_analysis_session_id IS NOT DISTINCT FROM \$5[\s\S]*query_analysis_user_id IS NOT DISTINCT FROM \$6`).
+				WithArgs(tc.wantArgs[0], tc.wantArgs[1], tc.wantArgs[2], string(memory.RankingRolloutSurfaceSearch), tc.wantArgs[4], tc.wantArgs[5]).
+				WillReturnError(sql.ErrNoRows)
+			_, err = NewRepository(mock).ReadEffectiveQueryAnalysisRolloutPolicy(context.Background(), tc.request)
+			if err == nil {
+				t.Fatal("ReadEffectiveQueryAnalysisRolloutPolicy() error = nil, want no broader-scope fallback")
+			}
+			if err := mock.ExpectationsWereMet(); err != nil {
+				t.Fatal(err)
+			}
+		})
+	}
 }
 
 func TestRepositoryCreateActivateRollbackRankingRolloutPolicy(t *testing.T) {
@@ -43,7 +170,7 @@ func TestRepositoryCreateActivateRollbackRankingRolloutPolicy(t *testing.T) {
 
 	mock.ExpectBegin()
 	mock.ExpectQuery("INSERT INTO ranking_rollout_policies").
-		WithArgs(policy.ID, scope.Tenant, scope.Project, scope.Namespace, policy.Status, policy.Mode, []string{"search"}, []string{"task_evaluations"}, policy.ThresholdStatus, policy.EvidenceMinimum, policy.Actor, policy.Reason, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, policy.CreatedAt, policy.UpdatedAt).
+		WithArgs(anyRankingRolloutArgs(37)...).
 		WillReturnRows(pgxmock.NewRows(rankingRolloutPolicyColumns()).
 			AddRow(rankingRolloutPolicyRow(policy.ID, scope, policy.Status, policy.Mode, policy.ThresholdStatus, policy.EvidenceMinimum, policy.Actor, policy.Reason, nil, nil, nil, nil, nil, now, now)...))
 	mock.ExpectExec("INSERT INTO ranking_rollout_policy_states").
@@ -135,7 +262,7 @@ func TestRepositoryCreateRankingRolloutPolicyIsRetrySafeByID(t *testing.T) {
 	policy := memory.RankingRolloutPolicy{ID: "policy-retry", Scope: scope, Status: memory.RankingRolloutPolicyStatusDraft, Mode: memory.RankingRolloutModeDryRun, Surfaces: []memory.RankingRolloutSurface{memory.RankingRolloutSurfaceSearch}, SignalSources: []memory.RankingRolloutSignalSource{memory.RankingRolloutSignalSourceTaskEvaluations}, ThresholdStatus: memory.RankingRolloutThresholdStatusInsufficient, Actor: "operator", Reason: "retry", CreatedAt: now, UpdatedAt: now}
 	for attempt := 0; attempt < 2; attempt++ {
 		mock.ExpectBegin()
-		mock.ExpectQuery("INSERT INTO ranking_rollout_policies").WithArgs(anyRankingRolloutArgs(34)...).WillReturnRows(pgxmock.NewRows(rankingRolloutPolicyColumns()).AddRow(rankingRolloutPolicyRow(policy.ID, scope, policy.Status, policy.Mode, policy.ThresholdStatus, policy.EvidenceMinimum, policy.Actor, policy.Reason, nil, nil, nil, nil, nil, now, now)...))
+		mock.ExpectQuery("INSERT INTO ranking_rollout_policies").WithArgs(anyRankingRolloutArgs(37)...).WillReturnRows(pgxmock.NewRows(rankingRolloutPolicyColumns()).AddRow(rankingRolloutPolicyRow(policy.ID, scope, policy.Status, policy.Mode, policy.ThresholdStatus, policy.EvidenceMinimum, policy.Actor, policy.Reason, nil, nil, nil, nil, nil, now, now)...))
 		mock.ExpectExec("INSERT INTO ranking_rollout_policy_states").WithArgs(anyRankingRolloutArgs(11)...).WillReturnResult(pgxmock.NewResult("INSERT", 1))
 		mock.ExpectCommit()
 	}
