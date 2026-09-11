@@ -1,9 +1,9 @@
 ## 1. Query-analysis contracts and bounds
 
-- [ ] 1.1 Add failing `internal/retrieval` tests for immutable original-query retention, versioned analysis identity, explicit absent/unknown dispositions, and deterministic replay; verify the focused tests fail for the missing contracts before implementation and pass afterward.
-- [ ] 1.2 Define provider-independent query-analysis input, result, hint, signal, disposition, and versioned-limit contracts with validation that rejects unknown versions and unsafe values; verify contract and validation tests pass without database or network access.
-- [ ] 1.3 Define stable fallback and diagnostic category enums plus bounded counters/durations, including unavailable, malformed, adversarial, duplicate, and over-budget cases; verify table-driven tests reject unknown/unbounded diagnostics and never serialize query or subquery text.
-- [ ] 1.4 Review mature Go packages relevant to deterministic tokenization, language normalization, and date parsing on `pkg.go.dev`, record the dependency decision in the implementation notes, and verify any adopted dependency has a maintained stable API and passes repository license/dependency checks; prefer the standard library when no package materially reduces risk.
+- [x] 1.1 Add failing `internal/retrieval` tests for immutable original-query retention, versioned analysis identity, explicit absent/unknown dispositions, and deterministic replay; verify the focused tests fail for the missing contracts before implementation and pass afterward.
+- [x] 1.2 Define provider-independent query-analysis input, result, hint, signal, disposition, and versioned-limit contracts with validation that rejects unknown versions and unsafe values; verify contract and validation tests pass without database or network access.
+- [x] 1.3 Define stable fallback and diagnostic category enums plus bounded counters/durations, including unavailable, malformed, adversarial, duplicate, and over-budget cases; verify table-driven tests reject unknown/unbounded diagnostics and never serialize query or subquery text.
+- [x] 1.4 Review mature Go packages relevant to deterministic tokenization, language normalization, and date parsing on `pkg.go.dev`, record the dependency decision in the implementation notes, and verify any adopted dependency has a maintained stable API and passes repository license/dependency checks; prefer the standard library when no package materially reduces risk.
 
 ## 2. Deterministic normalization, hints, and decomposition
 
