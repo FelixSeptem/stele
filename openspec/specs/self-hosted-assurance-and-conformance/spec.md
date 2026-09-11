@@ -179,8 +179,6 @@ and SHALL NOT execute backup or restore itself.
 - **THEN** assurance reports backup/restore as unknown, stale, degraded, or
   unhealthy and does not promote the scope to production-ready
 
-## ADDED Requirements
-
 ### Requirement: Workflow health participates in conformance and readiness
 The service SHALL include recent integration workflow completion and gap diagnostics in conformance runs, health evaluations, readiness reports, incidents, alert candidates, and recovery verification.
 
