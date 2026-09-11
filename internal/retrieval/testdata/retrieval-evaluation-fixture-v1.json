@@ -140,6 +140,54 @@
       ],
       "expected_evidence_groups": [["same-scope-record"]],
       "excluded_aliases": ["foreign-scope-probe"]
+    },
+    {
+      "id": "lineage-repeated-versions",
+      "category": "lineage-dedup",
+      "scope": {"tenant": "eval", "project": "retrieval-baseline", "namespace": "lineage"},
+      "query": "Which versioned policy is current?",
+      "sources": [
+        {"alias": "policy-version-1", "event_type": "fixture", "content": "The policy is versioned and retained for audit.", "class": "procedural", "source_event_id": "lineage-event-1", "parent_memory_id": "lineage-parent"},
+        {"alias": "policy-version-2", "event_type": "fixture", "content": "The policy is versioned and retained for audit with the current revision.", "class": "summary", "source_event_id": "lineage-event-1", "parent_memory_id": "lineage-parent"}
+      ],
+      "expected_evidence_groups": [["policy-version-1"]]
+    },
+    {
+      "id": "near-identical-visible-evidence",
+      "category": "near-identical",
+      "scope": {"tenant": "eval", "project": "retrieval-baseline", "namespace": "near-identical"},
+      "query": "Where are vectors stored?",
+      "sources": [
+        {"alias": "vector-primary", "event_type": "fixture", "content": "Vectors are stored in PostgreSQL with pgvector.", "class": "procedural", "fact_cluster": "vectors"},
+        {"alias": "vector-paraphrase", "event_type": "fixture", "content": "pgvector stores vectors inside PostgreSQL.", "class": "summary", "fact_cluster": "vectors"},
+        {"alias": "vector-independent", "event_type": "fixture", "content": "Embedding revisions are tracked alongside vector storage.", "class": "episodic", "fact_cluster": "embedding-revision"}
+      ],
+      "expected_evidence_groups": [["vector-primary"]]
+    },
+    {
+      "id": "independent-multi-hop-budget",
+      "category": "multi-hop-budget",
+      "scope": {"tenant": "eval", "project": "retrieval-baseline", "namespace": "budget"},
+      "query": "What database and isolation boundaries apply?",
+      "sources": [
+        {"alias": "budget-database", "event_type": "fixture", "content": "PostgreSQL is the system of record.", "class": "procedural"},
+        {"alias": "budget-isolation", "event_type": "fixture", "content": "Every retrieval query enforces tenant project and namespace boundaries.", "class": "procedural"},
+        {"alias": "budget-distractor", "event_type": "fixture", "content": "An unrelated worker records latency metrics.", "class": "episodic"}
+      ],
+      "expected_evidence_groups": [["budget-database"], ["budget-isolation"]]
+    },
+    {
+      "id": "hidden-and-foreign-distractors",
+      "category": "distractor-safety",
+      "scope": {"tenant": "eval", "project": "retrieval-baseline", "namespace": "distractors"},
+      "query": "Which evidence is visible?",
+      "sources": [
+        {"alias": "distractor-visible", "event_type": "fixture", "content": "Only active in-scope evidence is visible.", "class": "summary"},
+        {"alias": "distractor-hidden", "event_type": "fixture", "content": "Suppressed evidence must remain hidden.", "class": "summary", "state": "suppressed"},
+        {"alias": "distractor-forgotten", "event_type": "fixture", "content": "Forgotten evidence must remain hidden.", "class": "summary", "state": "forgotten"}
+      ],
+      "expected_evidence_groups": [["distractor-visible"]],
+      "excluded_aliases": ["distractor-hidden", "distractor-forgotten", "foreign-distractor"]
     }
   ]
 }

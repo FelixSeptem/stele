@@ -5,6 +5,7 @@ import (
 	"errors"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/FelixSeptem/stele/internal/memory"
 	"github.com/FelixSeptem/stele/internal/telemetry"
@@ -33,6 +34,57 @@ func TestServiceSearchUsesDefaultRRFFusionAcrossChannels(t *testing.T) {
 	}
 	if result.Hits[0].Score.Overall <= result.Hits[1].Score.Overall {
 		t.Fatalf("fused scores = %v then %v, want descending", result.Hits[0].Score.Overall, result.Hits[1].Score.Overall)
+	}
+}
+
+func TestServiceSearchDeduplicatesEquivalentVisibleEvidenceAfterFusion(t *testing.T) {
+	scope := memory.Scope{Tenant: "tenant-a", Project: "project-a", Namespace: "namespace-a"}
+	first := memory.CanonicalMemory{ID: "mem-first", Scope: scope, Class: memory.MemoryClassEpisodic, State: memory.MemoryStateActive}
+	second := memory.CanonicalMemory{ID: "mem-second", Scope: scope, Class: memory.MemoryClassEpisodic, State: memory.MemoryStateActive}
+	service := NewService(ServiceDependencies{
+		Lexical:  &stubLexicalSource{hits: []ScoredMemory{{Memory: first, LexicalScore: 1}, {Memory: second, LexicalScore: 0.9}}},
+		Semantic: &stubSemanticSource{hits: []ScoredMemory{{Memory: second, SemanticScore: 1}}},
+	})
+	// The current searcher contract does not expose lineage metadata; same
+	// canonical IDs are still deduplicated by the post-fusion selector. This
+	// regression ensures ordinary responses retain one identity per memory.
+	result, err := service.Search(context.Background(), SearchInput{Scope: scope, Query: "evidence", TopK: 3})
+	if err != nil {
+		t.Fatalf("Search() error = %v", err)
+	}
+	seen := map[string]struct{}{}
+	for _, hit := range result.Hits {
+		if _, exists := seen[hit.Memory.ID]; exists {
+			t.Fatalf("duplicate public memory id %q in hits = %+v", hit.Memory.ID, result.Hits)
+		}
+		seen[hit.Memory.ID] = struct{}{}
+	}
+}
+
+func TestServiceSearchActiveDiversityPolicyIsRedactedFromOrdinaryResponse(t *testing.T) {
+	scope := memory.Scope{Tenant: "tenant-a", Project: "project-a", Namespace: "namespace-a"}
+	policy := memory.RankingRolloutPolicy{
+		ID: "diversity-policy", Scope: scope, Status: memory.RankingRolloutPolicyStatusActiveForScope, Mode: memory.RankingRolloutModeActiveForScope,
+		Surfaces: []memory.RankingRolloutSurface{memory.RankingRolloutSurfaceSearch}, SignalSources: []memory.RankingRolloutSignalSource{memory.RankingRolloutSignalSourceQualityFindings}, ThresholdStatus: memory.RankingRolloutThresholdStatusSatisfied,
+		Actor: "operator", Reason: "approved", CreatedAt: time.Now().UTC(), UpdatedAt: time.Now().UTC(),
+		DiversityPolicyName: "mmr", DiversityPolicyVersion: "mmr-v1", DiversityMMRLambda: 0.5, DiversitySemanticThreshold: 0.9, DiversityMaxCandidates: 10, DiversityMaxPairwiseComparisons: 20, DiversityMaxEmbeddingDimensions: 3, DiversityMaxCitationsPerCandidate: 4,
+		DiversityCoverageWeights: map[string]float64{"memory_class": 0.1, "session": 0.1, "entity": 0.1, "time_slice": 0.1, "unknown": 0},
+	}
+	service := NewService(ServiceDependencies{
+		Lexical:                    &stubLexicalSource{hits: []ScoredMemory{{Memory: memory.CanonicalMemory{ID: "mem-1", Scope: scope, Class: memory.MemoryClassProfile, State: memory.MemoryStateActive}, LexicalScore: 1}}},
+		RankingRolloutPolicyReader: &stubRankingRolloutPolicyReader{policy: policy},
+	})
+	result, err := service.Search(context.Background(), SearchInput{Scope: scope, Query: "profile"})
+	if err != nil {
+		t.Fatalf("Search() error = %v", err)
+	}
+	for _, diagnostic := range result.Diagnostics {
+		if strings.Contains(diagnostic.Section, "diversity") || strings.Contains(diagnostic.Reason, "mmr") || strings.Contains(diagnostic.Reason, "diversity") {
+			t.Fatalf("ordinary diagnostics disclose diversity internals = %+v", result.Diagnostics)
+		}
+	}
+	if len(result.Hits) != 1 || result.Hits[0].Memory.ID != "mem-1" {
+		t.Fatalf("hits = %+v, want public baseline hit", result.Hits)
 	}
 }
 

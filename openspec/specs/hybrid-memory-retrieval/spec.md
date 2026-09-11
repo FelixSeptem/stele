@@ -2,7 +2,9 @@
 
 ## Purpose
 Define the hybrid retrieval capability that combines lexical and semantic recall over governed canonical memory while preserving lifecycle-safe defaults.
+
 ## Requirements
+
 ### Requirement: Hybrid lexical and semantic retrieval
 The service SHALL support governed retrieval through both lexical and semantic recall over canonical memory and summary memory.
 
@@ -28,12 +30,24 @@ chunk-derived candidates into one lifecycle-safe ranked output rather than
 returning isolated recall streams. The merge MUST use the selected versioned
 stable fusion strategy over bounded channel ranks, not implicit cross-channel raw
 score addition, and MUST preserve one canonical memory identity per result.
+Before candidates are handed to context diversity selection or exposed as final
+ranked evidence, the service MUST apply the selected deterministic identity and
+validated-lineage deduplication policy without weakening scope, lifecycle,
+source-lineage, citation, or canonical fallback behavior.
 
 #### Scenario: Query hits multiple recall paths
 - **WHEN** a query produces candidates from two or more enabled recall paths
 - **THEN** the service deduplicates overlapping canonical memories, fuses their
-  bounded channel ranks through the selected strategy, and returns one unified
-  deterministic ranked result list
+  bounded channel ranks through the selected strategy, applies deterministic
+  identity/lineage handling to the validated fused candidates, and returns one
+  unified deterministic ranked result list
+
+#### Scenario: Equivalent fused candidates share source evidence
+- **WHEN** otherwise distinct fused candidates resolve to one validated source
+  event or parent-memory lineage in the exact resolved scope
+- **THEN** the service selects one stable representative before handing evidence
+  to context diversity selection and retains bounded authorized citations for
+  the equivalent sources
 
 #### Scenario: One optional recall path is unavailable
 - **WHEN** semantic, relation, or authorized chunk recall is unavailable while
@@ -113,4 +127,3 @@ candidate information.
 - **WHEN** a client invokes ordinary hybrid retrieval
 - **THEN** the response preserves the public result contract and does not expose
   internal chunk diagnostics
-

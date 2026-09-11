@@ -22,6 +22,8 @@ type EvaluationComparison struct {
 	CandidateRankingVersion string                          `json:"candidate_ranking_version"`
 	BaselineFusionStrategy  string                          `json:"baseline_fusion_strategy,omitempty"`
 	CandidateFusionStrategy string                          `json:"candidate_fusion_strategy,omitempty"`
+	BaselinePolicyVersion   string                          `json:"baseline_policy_version"`
+	CandidatePolicyVersion  string                          `json:"candidate_policy_version"`
 	MetricDeltas            []EvaluationMetricDelta         `json:"metric_deltas"`
 	ProtectedRegressions    []EvaluationProtectedRegression `json:"protected_regressions,omitempty"`
 	Advisories              []string                        `json:"advisories,omitempty"`
@@ -52,6 +54,8 @@ func CompareEvaluationReports(baseline, candidate EvaluationReport, protectedCat
 		CandidateRankingVersion: candidate.Metadata.RankingVersion,
 		BaselineFusionStrategy:  baseline.Metadata.FusionStrategy,
 		CandidateFusionStrategy: candidate.Metadata.FusionStrategy,
+		BaselinePolicyVersion:   baseline.Metadata.PolicyVersion,
+		CandidatePolicyVersion:  candidate.Metadata.PolicyVersion,
 		MetricDeltas: []EvaluationMetricDelta{
 			evaluationMetricDelta("recall_at_1", baseline.Metrics.RecallAt1, candidate.Metrics.RecallAt1),
 			evaluationMetricDelta("recall_at_5", baseline.Metrics.RecallAt5, candidate.Metrics.RecallAt5),
@@ -60,6 +64,9 @@ func CompareEvaluationReports(baseline, candidate EvaluationReport, protectedCat
 			evaluationMetricDelta("ndcg_at_10", baseline.Metrics.NDCGAt10, candidate.Metrics.NDCGAt10),
 			evaluationMetricDelta("multi_hop_evidence_coverage", baseline.Metrics.MultiHopEvidenceCoverage, candidate.Metrics.MultiHopEvidenceCoverage),
 			evaluationMetricDelta("duplicate_rate", baseline.Metrics.DuplicateRate, candidate.Metrics.DuplicateRate),
+			evaluationMetricDelta("protected_recall", baseline.Metrics.ProtectedRecall, candidate.Metrics.ProtectedRecall),
+			evaluationMetricDelta("evidence_coverage", baseline.Metrics.EvidenceCoverage, candidate.Metrics.EvidenceCoverage),
+			evaluationMetricDelta("candidate_pool_size", float64(baseline.Metrics.CandidatePoolSize), float64(candidate.Metrics.CandidatePoolSize)),
 			evaluationMetricDelta("p95_latency_ms", baseline.Metrics.P95LatencyMS, candidate.Metrics.P95LatencyMS),
 		},
 	}

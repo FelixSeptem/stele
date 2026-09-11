@@ -11,7 +11,10 @@ const (
 	evaluationDecisionSafetyFailure     = "safety_failure"
 	evaluationDecisionProtectedRecall   = "protected_recall_regression"
 	evaluationDecisionProtectedMultiHop = "protected_multihop_regression"
+	evaluationDecisionProtectedCoverage = "protected_evidence_coverage_regression"
+	evaluationDecisionBudgetRegression  = "budget_omission_regression"
 	evaluationDecisionLatencyExceeded   = "latency_budget_exceeded"
+	evaluationDecisionLatencyRegression = "latency_regression"
 )
 
 // EvaluateReleasePolicy turns a compatible baseline/candidate pair into a bounded
@@ -46,6 +49,18 @@ func EvaluateReleasePolicy(policy EvaluationReleasePolicy, baseline, candidate E
 	if candidate.Metrics.MultiHopEvidenceCoverage < baseline.Metrics.MultiHopEvidenceCoverage-policy.MaxMultiHopCoverageRegression {
 		decision.Eligible = false
 		decision.HardFailures = append(decision.HardFailures, evaluationDecisionProtectedMultiHop)
+	}
+	if candidate.Metrics.EvidenceCoverage < baseline.Metrics.EvidenceCoverage-policy.MaxEvidenceCoverageRegression {
+		decision.Eligible = false
+		decision.HardFailures = append(decision.HardFailures, evaluationDecisionProtectedCoverage)
+	}
+	if candidate.Metrics.BudgetOmissionRate > baseline.Metrics.BudgetOmissionRate+policy.MaxBudgetOmissionIncrease {
+		decision.Eligible = false
+		decision.HardFailures = append(decision.HardFailures, evaluationDecisionBudgetRegression)
+	}
+	if policy.MaxP95LatencyRegressionMS > 0 && candidate.Metrics.P95LatencyMS > baseline.Metrics.P95LatencyMS+float64(policy.MaxP95LatencyRegressionMS) {
+		decision.Eligible = false
+		decision.HardFailures = append(decision.HardFailures, evaluationDecisionLatencyRegression)
 	}
 	if candidate.Metrics.P95LatencyMS > float64(policy.MaxP95LatencyMS) {
 		decision.Eligible = false

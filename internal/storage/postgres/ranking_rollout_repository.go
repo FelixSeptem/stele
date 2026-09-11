@@ -18,6 +18,7 @@ func (r *Repository) CreateRankingRolloutPolicy(ctx context.Context, policy memo
 	if err := policy.Validate(); err != nil {
 		return memory.RankingRolloutPolicy{}, err
 	}
+	policy.Scope = policy.Scope.Normalized()
 	fusionChannelWeights, err := marshalOptionalFusionChannelWeights(policy.FusionChannelWeights)
 	if err != nil {
 		return memory.RankingRolloutPolicy{}, err
@@ -35,13 +36,20 @@ INSERT INTO ranking_rollout_policies (
 	evidence_minimum, actor, reason, latest_dry_run_id, latest_dry_run_status,
 	fusion_strategy, fusion_version, fusion_rank_constant, fusion_channel_weights,
 	fusion_per_channel_candidate, fusion_total_candidates,
+	diversity_policy_name, diversity_policy_version, diversity_mmr_lambda, diversity_semantic_threshold,
+	diversity_max_candidates, diversity_max_pairwise_comparisons, diversity_max_embedding_dimensions,
+	diversity_max_citations_per_candidate, diversity_coverage_weights,
 	activated_at, disabled_at, rolled_back_at, created_at, updated_at
 )
-VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19, $20, $21, $22, $23, $24, $25)
+VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19, $20, $21, $22, $23, $24, $25, $26, $27, $28, $29, $30, $31, $32, $33, $34)
+ON CONFLICT (id) DO UPDATE SET id = ranking_rollout_policies.id
 RETURNING id, tenant, project, namespace, status, mode, surfaces, signal_sources, threshold_status,
 	evidence_minimum, actor, reason, latest_dry_run_id, latest_dry_run_status,
 	fusion_strategy, fusion_version, fusion_rank_constant, fusion_channel_weights,
 	fusion_per_channel_candidate, fusion_total_candidates,
+	diversity_policy_name, diversity_policy_version, diversity_mmr_lambda, diversity_semantic_threshold,
+	diversity_max_candidates, diversity_max_pairwise_comparisons, diversity_max_embedding_dimensions,
+	diversity_max_citations_per_candidate, diversity_coverage_weights,
 	activated_at, disabled_at, rolled_back_at, created_at, updated_at
 `
 	created, err := scanRankingRolloutPolicy(tx.QueryRow(
@@ -67,6 +75,8 @@ RETURNING id, tenant, project, namespace, status, mode, surfaces, signal_sources
 		fusionChannelWeights,
 		nullableRankingInt(policy.FusionPerChannelCandidate),
 		nullableRankingInt(policy.FusionTotalCandidates),
+		nullableString(policy.DiversityPolicyName), nullableString(policy.DiversityPolicyVersion), nullableDiversityFloat(policy.DiversityMMRLambda, policy.DiversityPolicyName != ""), nullableDiversityFloat(policy.DiversitySemanticThreshold, policy.DiversityPolicyName != ""),
+		nullableRankingInt(policy.DiversityMaxCandidates), nullableRankingInt(policy.DiversityMaxPairwiseComparisons), nullableRankingInt(policy.DiversityMaxEmbeddingDimensions), nullableRankingInt(policy.DiversityMaxCitationsPerCandidate), marshalOptionalDiversityCoverageWeights(policy.DiversityCoverageWeights),
 		nullableTime(policy.ActivatedAt),
 		nullableTime(policy.DisabledAt),
 		nullableTime(policy.RolledBackAt),
@@ -76,7 +86,6 @@ RETURNING id, tenant, project, namespace, status, mode, surfaces, signal_sources
 	if err != nil {
 		return memory.RankingRolloutPolicy{}, fmt.Errorf("create ranking rollout policy: %w", err)
 	}
-
 	if err := upsertRankingRolloutPolicyState(ctx, tx, created, created.Status, created.Actor, created.Reason, created.UpdatedAt); err != nil {
 		return memory.RankingRolloutPolicy{}, err
 	}
@@ -91,12 +100,15 @@ func (r *Repository) ReadRankingRolloutPolicy(ctx context.Context, input memory.
 	if err := input.Validate(); err != nil {
 		return memory.RankingRolloutPolicy{}, err
 	}
+	input.Scope = input.Scope.Normalized()
 
 	const query = `
 SELECT id, tenant, project, namespace, status, mode, surfaces, signal_sources, threshold_status,
 	evidence_minimum, actor, reason, latest_dry_run_id, latest_dry_run_status,
 	fusion_strategy, fusion_version, fusion_rank_constant, fusion_channel_weights,
 	fusion_per_channel_candidate, fusion_total_candidates,
+	diversity_policy_name, diversity_policy_version, diversity_mmr_lambda, diversity_semantic_threshold,
+	diversity_max_candidates, diversity_max_pairwise_comparisons, diversity_max_embedding_dimensions, diversity_max_citations_per_candidate, diversity_coverage_weights,
 	activated_at, disabled_at, rolled_back_at, created_at, updated_at
 FROM ranking_rollout_policies
 WHERE tenant = $1 AND project = $2 AND namespace = $3 AND id = $4
@@ -112,12 +124,15 @@ func (r *Repository) ReadActiveRankingRolloutPolicy(ctx context.Context, input m
 	if err := input.Validate(); err != nil {
 		return memory.RankingRolloutPolicy{}, err
 	}
+	input.Scope = input.Scope.Normalized()
 
 	const query = `
 SELECT id, tenant, project, namespace, status, mode, surfaces, signal_sources, threshold_status,
 	evidence_minimum, actor, reason, latest_dry_run_id, latest_dry_run_status,
 	fusion_strategy, fusion_version, fusion_rank_constant, fusion_channel_weights,
 	fusion_per_channel_candidate, fusion_total_candidates,
+	diversity_policy_name, diversity_policy_version, diversity_mmr_lambda, diversity_semantic_threshold,
+	diversity_max_candidates, diversity_max_pairwise_comparisons, diversity_max_embedding_dimensions, diversity_max_citations_per_candidate, diversity_coverage_weights,
 	activated_at, disabled_at, rolled_back_at, created_at, updated_at
 FROM ranking_rollout_policies
 WHERE tenant = $1
@@ -139,12 +154,15 @@ func (r *Repository) ListRankingRolloutPolicies(ctx context.Context, input memor
 	if err := input.Validate(); err != nil {
 		return nil, err
 	}
+	input.Scope = input.Scope.Normalized()
 
 	const query = `
 SELECT id, tenant, project, namespace, status, mode, surfaces, signal_sources, threshold_status,
 	evidence_minimum, actor, reason, latest_dry_run_id, latest_dry_run_status,
 	fusion_strategy, fusion_version, fusion_rank_constant, fusion_channel_weights,
 	fusion_per_channel_candidate, fusion_total_candidates,
+	diversity_policy_name, diversity_policy_version, diversity_mmr_lambda, diversity_semantic_threshold,
+	diversity_max_candidates, diversity_max_pairwise_comparisons, diversity_max_embedding_dimensions, diversity_max_citations_per_candidate, diversity_coverage_weights,
 	activated_at, disabled_at, rolled_back_at, created_at, updated_at
 FROM ranking_rollout_policies
 WHERE tenant = $1 AND project = $2 AND namespace = $3
@@ -276,6 +294,7 @@ func (r *Repository) ActivateRankingRolloutPolicy(ctx context.Context, input mem
 	if err := input.Validate(); err != nil {
 		return memory.RankingRolloutPolicy{}, err
 	}
+	input.Scope = input.Scope.Normalized()
 	if !input.Gate.CanActivate() {
 		return memory.RankingRolloutPolicy{}, fmt.Errorf("ranking rollout activation gate not satisfied")
 	}
@@ -303,6 +322,8 @@ RETURNING id, tenant, project, namespace, status, mode, surfaces, signal_sources
 	evidence_minimum, actor, reason, latest_dry_run_id, latest_dry_run_status,
 	fusion_strategy, fusion_version, fusion_rank_constant, fusion_channel_weights,
 	fusion_per_channel_candidate, fusion_total_candidates,
+	diversity_policy_name, diversity_policy_version, diversity_mmr_lambda, diversity_semantic_threshold,
+	diversity_max_candidates, diversity_max_pairwise_comparisons, diversity_max_embedding_dimensions, diversity_max_citations_per_candidate, diversity_coverage_weights,
 	activated_at, disabled_at, rolled_back_at, created_at, updated_at
 `
 	policy, err := scanRankingRolloutPolicy(tx.QueryRow(ctx, query, input.Scope.Tenant, input.Scope.Project, input.Scope.Namespace, input.PolicyID, memory.RankingRolloutPolicyStatusActiveForScope, input.Actor, input.Reason, input.ActivatedAt, input.Gate.EvidenceThresholdStatus, memory.RankingRolloutModeActiveForScope, memory.RankingRolloutPolicyStatusDisabled, memory.RankingRolloutPolicyStatusRolledBack))
@@ -323,6 +344,7 @@ func (r *Repository) DisableRankingRolloutPolicy(ctx context.Context, input memo
 	if err := input.Validate(); err != nil {
 		return memory.RankingRolloutPolicy{}, err
 	}
+	input.Scope = input.Scope.Normalized()
 
 	tx, err := r.tx.BeginTx(ctx, pgx.TxOptions{})
 	if err != nil {
@@ -342,6 +364,8 @@ RETURNING id, tenant, project, namespace, status, mode, surfaces, signal_sources
 	evidence_minimum, actor, reason, latest_dry_run_id, latest_dry_run_status,
 	fusion_strategy, fusion_version, fusion_rank_constant, fusion_channel_weights,
 	fusion_per_channel_candidate, fusion_total_candidates,
+	diversity_policy_name, diversity_policy_version, diversity_mmr_lambda, diversity_semantic_threshold,
+	diversity_max_candidates, diversity_max_pairwise_comparisons, diversity_max_embedding_dimensions, diversity_max_citations_per_candidate, diversity_coverage_weights,
 	activated_at, disabled_at, rolled_back_at, created_at, updated_at
 `
 	policy, err := scanRankingRolloutPolicy(tx.QueryRow(ctx, query, input.Scope.Tenant, input.Scope.Project, input.Scope.Namespace, input.PolicyID, memory.RankingRolloutPolicyStatusDisabled, input.Actor, input.Reason, input.DisabledAt))
@@ -361,6 +385,7 @@ func (r *Repository) RollbackRankingRolloutPolicy(ctx context.Context, input mem
 	if err := input.Validate(); err != nil {
 		return memory.RankingRolloutPolicy{}, err
 	}
+	input.Scope = input.Scope.Normalized()
 
 	tx, err := r.tx.BeginTx(ctx, pgx.TxOptions{})
 	if err != nil {
@@ -384,6 +409,8 @@ RETURNING id, tenant, project, namespace, status, mode, surfaces, signal_sources
 	evidence_minimum, actor, reason, latest_dry_run_id, latest_dry_run_status,
 	fusion_strategy, fusion_version, fusion_rank_constant, fusion_channel_weights,
 	fusion_per_channel_candidate, fusion_total_candidates,
+	diversity_policy_name, diversity_policy_version, diversity_mmr_lambda, diversity_semantic_threshold,
+	diversity_max_candidates, diversity_max_pairwise_comparisons, diversity_max_embedding_dimensions, diversity_max_citations_per_candidate, diversity_coverage_weights,
 	activated_at, disabled_at, rolled_back_at, created_at, updated_at
 `
 	policy, err := scanRankingRolloutPolicy(tx.QueryRow(ctx, query, input.Scope.Tenant, input.Scope.Project, input.Scope.Namespace, input.PolicyID, memory.RankingRolloutPolicyStatusRolledBack, input.Actor, input.Reason, input.RolledBackAt))
@@ -454,6 +481,15 @@ func scanRankingRolloutPolicy(scanner provenanceScanner) (memory.RankingRolloutP
 	var fusionChannelWeights []byte
 	var fusionPerChannelCandidate sql.NullInt64
 	var fusionTotalCandidates sql.NullInt64
+	var diversityPolicyName sql.NullString
+	var diversityPolicyVersion sql.NullString
+	var diversityMMRLambda sql.NullFloat64
+	var diversitySemanticThreshold sql.NullFloat64
+	var diversityMaxCandidates sql.NullInt64
+	var diversityMaxPairwiseComparisons sql.NullInt64
+	var diversityMaxEmbeddingDimensions sql.NullInt64
+	var diversityMaxCitationsPerCandidate sql.NullInt64
+	var diversityCoverageWeights []byte
 	var activatedAt sql.NullTime
 	var disabledAt sql.NullTime
 	var rolledBackAt sql.NullTime
@@ -478,6 +514,15 @@ func scanRankingRolloutPolicy(scanner provenanceScanner) (memory.RankingRolloutP
 		&fusionChannelWeights,
 		&fusionPerChannelCandidate,
 		&fusionTotalCandidates,
+		&diversityPolicyName,
+		&diversityPolicyVersion,
+		&diversityMMRLambda,
+		&diversitySemanticThreshold,
+		&diversityMaxCandidates,
+		&diversityMaxPairwiseComparisons,
+		&diversityMaxEmbeddingDimensions,
+		&diversityMaxCitationsPerCandidate,
+		&diversityCoverageWeights,
 		&activatedAt,
 		&disabledAt,
 		&rolledBackAt,
@@ -513,6 +558,35 @@ func scanRankingRolloutPolicy(scanner provenanceScanner) (memory.RankingRolloutP
 	}
 	if fusionTotalCandidates.Valid {
 		policy.FusionTotalCandidates = int(fusionTotalCandidates.Int64)
+	}
+	if diversityPolicyName.Valid {
+		policy.DiversityPolicyName = diversityPolicyName.String
+	}
+	if diversityPolicyVersion.Valid {
+		policy.DiversityPolicyVersion = diversityPolicyVersion.String
+	}
+	if diversityMMRLambda.Valid {
+		policy.DiversityMMRLambda = diversityMMRLambda.Float64
+	}
+	if diversitySemanticThreshold.Valid {
+		policy.DiversitySemanticThreshold = diversitySemanticThreshold.Float64
+	}
+	if diversityMaxCandidates.Valid {
+		policy.DiversityMaxCandidates = int(diversityMaxCandidates.Int64)
+	}
+	if diversityMaxPairwiseComparisons.Valid {
+		policy.DiversityMaxPairwiseComparisons = int(diversityMaxPairwiseComparisons.Int64)
+	}
+	if diversityMaxEmbeddingDimensions.Valid {
+		policy.DiversityMaxEmbeddingDimensions = int(diversityMaxEmbeddingDimensions.Int64)
+	}
+	if diversityMaxCitationsPerCandidate.Valid {
+		policy.DiversityMaxCitationsPerCandidate = int(diversityMaxCitationsPerCandidate.Int64)
+	}
+	if len(diversityCoverageWeights) > 0 {
+		if err := json.Unmarshal(diversityCoverageWeights, &policy.DiversityCoverageWeights); err != nil {
+			return memory.RankingRolloutPolicy{}, fmt.Errorf("decode diversity coverage weights: %w", err)
+		}
 	}
 	if activatedAt.Valid {
 		policy.ActivatedAt = activatedAt.Time
@@ -623,6 +697,8 @@ SELECT id, tenant, project, namespace, status, mode, surfaces, signal_sources, t
 	evidence_minimum, actor, reason, latest_dry_run_id, latest_dry_run_status,
 	fusion_strategy, fusion_version, fusion_rank_constant, fusion_channel_weights,
 	fusion_per_channel_candidate, fusion_total_candidates,
+	diversity_policy_name, diversity_policy_version, diversity_mmr_lambda, diversity_semantic_threshold,
+	diversity_max_candidates, diversity_max_pairwise_comparisons, diversity_max_embedding_dimensions, diversity_max_citations_per_candidate, diversity_coverage_weights,
 	activated_at, disabled_at, rolled_back_at, created_at, updated_at
 FROM ranking_rollout_policies
 WHERE tenant = $1 AND project = $2 AND namespace = $3 AND id = $4
@@ -1126,6 +1202,24 @@ func nullableRankingInt(value int) any {
 		return nil
 	}
 	return value
+}
+
+func nullableDiversityFloat(value float64, configured bool) any {
+	if !configured {
+		return nil
+	}
+	return value
+}
+
+func marshalOptionalDiversityCoverageWeights(value map[string]float64) any {
+	if len(value) == 0 {
+		return nil
+	}
+	payload, err := json.Marshal(value)
+	if err != nil {
+		return nil
+	}
+	return payload
 }
 
 func marshalOptionalFusionChannelWeights(value map[string]float64) (any, error) {
