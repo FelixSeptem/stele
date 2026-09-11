@@ -121,6 +121,41 @@ func TestQueryAnalysisResultConstructionIsDeterministic(t *testing.T) {
 	}
 }
 
+func TestNewQueryAnalysisResultDefensivelyCopiesAndValidatesCategories(t *testing.T) {
+	input := validQueryAnalysisInput()
+	categories := []QueryAnalysisDiagnosticCount{{Category: QueryAnalysisDiagnosticOverBudget, Count: 2}}
+	result, err := NewQueryAnalysisResult(input, QueryAnalysisDispositionPartial, nil, nil, categories...)
+	if err != nil {
+		t.Fatalf("NewQueryAnalysisResult() error = %v", err)
+	}
+	categories[0].Count = 99
+	if got := result.Categories; !reflect.DeepEqual(got, []QueryAnalysisDiagnosticCount{{Category: QueryAnalysisDiagnosticOverBudget, Count: 2}}) {
+		t.Fatalf("categories changed through caller slice: %#v", got)
+	}
+
+	tests := []struct {
+		name        string
+		disposition QueryAnalysisDisposition
+		categories  []QueryAnalysisDiagnosticCount
+		want        string
+	}{
+		{name: "unknown", disposition: QueryAnalysisDispositionPartial, categories: []QueryAnalysisDiagnosticCount{{Category: "invented", Count: 1}}, want: "diagnostic category"},
+		{name: "duplicate", disposition: QueryAnalysisDispositionPartial, categories: []QueryAnalysisDiagnosticCount{{Category: QueryAnalysisDiagnosticOverBudget, Count: 1}, {Category: QueryAnalysisDiagnosticOverBudget, Count: 1}}, want: "duplicate"},
+		{name: "zero count", disposition: QueryAnalysisDispositionPartial, categories: []QueryAnalysisDiagnosticCount{{Category: QueryAnalysisDiagnosticOverBudget}}, want: "diagnostic count"},
+		{name: "unbounded count", disposition: QueryAnalysisDispositionPartial, categories: []QueryAnalysisDiagnosticCount{{Category: QueryAnalysisDiagnosticOverBudget, Count: QueryAnalysisHardMaxDiagnosticCount + 1}}, want: "diagnostic count"},
+		{name: "over budget must be partial", disposition: QueryAnalysisDispositionComplete, categories: []QueryAnalysisDiagnosticCount{{Category: QueryAnalysisDiagnosticOverBudget, Count: 1}}, want: "partial"},
+		{name: "adversarial must be original only", disposition: QueryAnalysisDispositionPartial, categories: []QueryAnalysisDiagnosticCount{{Category: QueryAnalysisDiagnosticAdversarial, Count: 1}}, want: "original-only"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			_, err := NewQueryAnalysisResult(input, tt.disposition, nil, nil, tt.categories...)
+			if err == nil || !strings.Contains(err.Error(), tt.want) {
+				t.Fatalf("NewQueryAnalysisResult() error = %v, want %q", err, tt.want)
+			}
+		})
+	}
+}
+
 func TestQueryAnalysisInputAndLimitsRejectUnknownVersionsAndUnsafeValues(t *testing.T) {
 	tests := []struct {
 		name   string
@@ -135,6 +170,7 @@ func TestQueryAnalysisInputAndLimitsRejectUnknownVersionsAndUnsafeValues(t *test
 		{name: "zero term bytes", mutate: func(input *QueryAnalysisInput) { input.Limits.MaxTermBytes = 0 }, want: "max term bytes"},
 		{name: "zero subquery bytes", mutate: func(input *QueryAnalysisInput) { input.Limits.MaxSubqueryBytes = 0 }, want: "max subquery bytes"},
 		{name: "zero work", mutate: func(input *QueryAnalysisInput) { input.Limits.MaxAnalysisWork = 0 }, want: "max analysis work"},
+		{name: "work exceeds fixed stages", mutate: func(input *QueryAnalysisInput) { input.Limits.MaxAnalysisWork = QueryAnalysisStageCount + 1 }, want: "max analysis work"},
 		{name: "zero candidates per signal", mutate: func(input *QueryAnalysisInput) { input.Limits.MaxCandidatesPerSignal = 0 }, want: "max candidates per signal"},
 		{name: "zero aggregate candidates", mutate: func(input *QueryAnalysisInput) { input.Limits.MaxAggregateCandidates = 0 }, want: "max aggregate candidates"},
 		{name: "zero elapsed", mutate: func(input *QueryAnalysisInput) { input.Limits.MaxElapsed = 0 }, want: "max elapsed"},

@@ -7,10 +7,10 @@
 
 ## 2. Deterministic normalization, hints, and decomposition
 
-- [ ] 2.1 Add failing table-driven tests for bounded whitespace/Unicode/case normalization and mixed-language aliases or terms, including empty, duplicate, oversized, malformed UTF-8, and adversarial input; implement deterministic normalization and verify stable ordering and configured length/count truncation.
-- [ ] 2.2 Add failing tests for entity, temporal, memory-class, and intent hint extraction, including ambiguous and unknown cases plus conflicts with explicit request filters; implement non-authoritative bounded hints and verify conflicts are discarded without invented identifiers or widened filters.
-- [ ] 2.3 Add failing tests for recognizable multi-hop decomposition, duplicate subqueries, stable ordering, maximum subquery/signal counts, and work-budget exhaustion; implement deterministic rule-based decomposition and verify it performs no database, network, or online-model calls.
-- [ ] 2.4 Add fuzz/property coverage for arbitrary query bytes and limits, asserting termination, no panic, immutable original input, deterministic output, and all configured bounds; verify the focused fuzz seed corpus and ordinary package tests pass.
+- [x] 2.1 Add failing table-driven tests for bounded whitespace/Unicode/case normalization and mixed-language aliases or terms, including empty, duplicate, oversized, malformed UTF-8, and adversarial input; implement deterministic normalization and verify stable ordering and configured length/count truncation.
+- [x] 2.2 Add failing tests for entity, temporal, memory-class, and intent hint extraction, including ambiguous and unknown cases plus conflicts with explicit request filters; implement non-authoritative bounded hints and verify conflicts are discarded without invented identifiers or widened filters.
+- [x] 2.3 Add failing tests for recognizable multi-hop decomposition, duplicate subqueries, stable ordering, maximum subquery/signal counts, and work-budget exhaustion; implement deterministic rule-based decomposition and verify it performs no database, network, or online-model calls.
+- [x] 2.4 Add fuzz/property coverage for arbitrary query bytes and limits, asserting termination, no panic, immutable original input, deterministic output, and all configured bounds; verify the focused fuzz seed corpus and ordinary package tests pass.
 
 ## 3. Exact-scope rollout governance
 

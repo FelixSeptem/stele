@@ -27,13 +27,16 @@ func (version QueryAnalysisLimitsVersion) valid() bool {
 }
 
 const (
+	// QueryAnalysisStageCount is the fixed number of bounded v1 analyzer
+	// stages: normalization, aliases, four hint extractors, and decomposition.
+	QueryAnalysisStageCount                 = 7
 	QueryAnalysisHardMaxQueryBytes          = 16 * 1024
 	QueryAnalysisHardMaxHints               = 4
 	QueryAnalysisHardMaxSignals             = 16
 	QueryAnalysisHardMaxSubqueries          = 8
 	QueryAnalysisHardMaxTermBytes           = 1024
 	QueryAnalysisHardMaxSubqueryBytes       = 4096
-	QueryAnalysisHardMaxAnalysisWork        = 10000
+	QueryAnalysisHardMaxAnalysisWork        = QueryAnalysisStageCount
 	QueryAnalysisHardMaxCandidatesPerSignal = 100
 	QueryAnalysisHardMaxAggregateCandidates = 1000
 	QueryAnalysisHardMaxDiagnosticCount     = 10000
@@ -66,7 +69,7 @@ func DefaultQueryAnalysisLimits() QueryAnalysisLimits {
 		MaxSubqueries:          4,
 		MaxTermBytes:           256,
 		MaxSubqueryBytes:       1024,
-		MaxAnalysisWork:        1000,
+		MaxAnalysisWork:        QueryAnalysisStageCount,
 		MaxCandidatesPerSignal: 50,
 		MaxAggregateCandidates: 200,
 		MaxElapsed:             250 * time.Millisecond,
@@ -262,9 +265,12 @@ type QueryAnalysisResult struct {
 	Hints       []QueryAnalysisHint      `json:"hints"`
 	Signals     []QueryAnalysisSignal    `json:"signals"`
 	WorkUnits   int                      `json:"work_units"`
+	// Categories contains bounded internal aggregate outcomes for later
+	// authorized diagnostics conversion. It is never serialized with a result.
+	Categories []QueryAnalysisDiagnosticCount `json:"-"`
 }
 
-func NewQueryAnalysisResult(input QueryAnalysisInput, disposition QueryAnalysisDisposition, hints []QueryAnalysisHint, derived []QueryAnalysisSignal) (QueryAnalysisResult, error) {
+func NewQueryAnalysisResult(input QueryAnalysisInput, disposition QueryAnalysisDisposition, hints []QueryAnalysisHint, derived []QueryAnalysisSignal, categories ...QueryAnalysisDiagnosticCount) (QueryAnalysisResult, error) {
 	result := QueryAnalysisResult{
 		Identity: QueryAnalysisIdentity{
 			PolicyVersion: input.PolicyVersion,
@@ -272,6 +278,7 @@ func NewQueryAnalysisResult(input QueryAnalysisInput, disposition QueryAnalysisD
 		},
 		Disposition: disposition,
 		Hints:       append([]QueryAnalysisHint(nil), hints...),
+		Categories:  append([]QueryAnalysisDiagnosticCount(nil), categories...),
 		Signals: []QueryAnalysisSignal{{
 			Kind:      QueryAnalysisSignalOriginal,
 			Text:      input.AcceptedQuery,
@@ -279,6 +286,9 @@ func NewQueryAnalysisResult(input QueryAnalysisInput, disposition QueryAnalysisD
 		}},
 	}
 	result.Signals = append(result.Signals, derived...)
+	sort.Slice(result.Categories, func(i, j int) bool {
+		return result.Categories[i].Category < result.Categories[j].Category
+	})
 	if err := result.Validate(input); err != nil {
 		return QueryAnalysisResult{}, err
 	}
@@ -300,6 +310,25 @@ func (result QueryAnalysisResult) Validate(input QueryAnalysisInput) error {
 	}
 	if result.WorkUnits < 0 || result.WorkUnits > input.Limits.MaxAnalysisWork {
 		return fmt.Errorf("query-analysis work units exceed max analysis work")
+	}
+	seenCategories := make(map[QueryAnalysisDiagnosticCategory]struct{}, len(result.Categories))
+	for _, count := range result.Categories {
+		if !count.Category.valid() {
+			return fmt.Errorf("unknown query-analysis diagnostic category")
+		}
+		if _, duplicate := seenCategories[count.Category]; duplicate {
+			return fmt.Errorf("duplicate query-analysis diagnostic category")
+		}
+		seenCategories[count.Category] = struct{}{}
+		if count.Count <= 0 || count.Count > QueryAnalysisHardMaxDiagnosticCount {
+			return fmt.Errorf("query-analysis diagnostic count is outside its bound")
+		}
+		if count.Category == QueryAnalysisDiagnosticOverBudget && result.Disposition != QueryAnalysisDispositionPartial {
+			return fmt.Errorf("query-analysis over-budget category requires partial disposition")
+		}
+		if count.Category == QueryAnalysisDiagnosticAdversarial && result.Disposition != QueryAnalysisDispositionOriginalOnly {
+			return fmt.Errorf("query-analysis adversarial category requires original-only disposition")
+		}
 	}
 	if len(result.Hints) > input.Limits.MaxHints {
 		return fmt.Errorf("query-analysis hint count exceeds max hints")
