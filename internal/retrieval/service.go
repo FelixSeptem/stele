@@ -166,10 +166,19 @@ type AssembledContext struct {
 }
 
 type ScoredMemory struct {
-	Memory        memory.CanonicalMemory
-	LexicalScore  float64
-	SemanticScore float64
-	RelationScore float64
+	Memory                  memory.CanonicalMemory
+	LexicalScore            float64
+	SemanticScore           float64
+	RelationScore           float64
+	SourceEventID           string
+	ParentMemoryID          string
+	EmbeddingRevision       string
+	EmbeddingRevisionActive bool
+	Embedding               []float32
+	SessionID               string
+	EntityKey               string
+	TimeSlice               string
+	Citations               []Citation
 }
 
 type LexicalSearcher interface {
@@ -379,6 +388,7 @@ func (s *Service) Search(ctx context.Context, input SearchInput) (result SearchR
 	}
 
 	channelCandidates := make([]FusionChannelCandidates, 0, 4)
+	diversityMetadata := make(map[string]ScoredMemory)
 	channelAvailability := defaultFusionChannelAvailability()
 	chunkCitationMap := map[string][]Citation{}
 	chunkByMemoryID := map[string]*memory.MemoryChunk{}
@@ -401,6 +411,11 @@ func (s *Service) Search(ctx context.Context, input SearchInput) (result SearchR
 			}
 
 			filtered = append(filtered, hit)
+			if existing, exists := diversityMetadata[hit.Memory.ID]; !exists {
+				diversityMetadata[hit.Memory.ID] = hit
+			} else {
+				diversityMetadata[hit.Memory.ID] = mergeDiversityScoredMemory(existing, hit)
+			}
 		}
 		if len(filtered) > 0 {
 			channelCandidates = append(channelCandidates, FusionChannelCandidates{Channel: channel, Candidates: filtered})
@@ -502,9 +517,35 @@ func (s *Service) Search(ctx context.Context, input SearchInput) (result SearchR
 		fusionDiagnostics = append(fusionDiagnostics, ContextDiagnostic{Section: "fusion", Status: "strategy_applied", Reason: string(fusionStrategy.Name) + ":" + fusionStrategy.Version, Available: len(channelCandidates), Included: len(fused)})
 	}
 	s.recordFusionTelemetry(ctx, fusionStrategy, channelCandidates)
+	// Identity/lineage deduplication is always applied after stable fusion. An
+	// active diversity rollout may additionally perform bounded semantic
+	// selection; malformed or absent policy configuration safely retains this
+	// deterministic deduplicated baseline.
+	diversityPolicy, diversityEnabled := diversityPolicyFromRankingRollout(activeRankingPolicy)
+	diversityCandidates := make([]DiversityCandidate, 0, len(fused))
+	for _, candidate := range fused {
+		metadata := diversityMetadata[candidate.Memory.ID]
+		diversityCandidates = append(diversityCandidates, DiversityCandidate{FusedCandidate: candidate, SourceEventID: metadata.SourceEventID, ParentMemoryID: metadata.ParentMemoryID, EmbeddingRevision: metadata.EmbeddingRevision, EmbeddingRevisionActive: metadata.EmbeddingRevisionActive, Embedding: append([]float32(nil), metadata.Embedding...), SessionID: metadata.SessionID, EntityKey: metadata.EntityKey, TimeSlice: metadata.TimeSlice, Citations: append([]Citation(nil), metadata.Citations...)})
+	}
+	var diversitySelection DiversitySelection
+	if diversityEnabled {
+		diversitySelection, err = SelectDiverseCandidates(input.Scope, diversityPolicy, diversityCandidates, len(diversityCandidates))
+	} else {
+		diversitySelection = DeduplicateDiversityCandidates(input.Scope, diversityCandidates)
+	}
+	if err != nil {
+		return SearchResult{}, err
+	}
+	fused = make([]FusedCandidate, 0, len(diversitySelection.Candidates))
+	for _, candidate := range diversitySelection.Candidates {
+		fused = append(fused, candidate.FusedCandidate)
+	}
+	if input.IncludeFeedbackDiagnostics && diversityEnabled {
+		fusionDiagnostics = append(fusionDiagnostics, ContextDiagnostic{Section: "diversity", Status: "policy_applied", Reason: diversityPolicy.Name + ":" + diversityPolicy.Version, Included: len(diversitySelection.Candidates), Omitted: diversitySelection.Dispositions.Duplicate + diversitySelection.Dispositions.Diversity})
+	}
 	scored := make([]SearchHit, 0, len(fused))
 	memoryIDs := make([]string, 0, len(fused))
-	for _, candidate := range fused {
+	for candidateIndex, candidate := range fused {
 		memoryIDs = append(memoryIDs, candidate.Memory.ID)
 		searchHit := SearchHit{
 			Memory: candidate.Memory,
@@ -514,6 +555,7 @@ func (s *Service) Search(ctx context.Context, input SearchInput) (result SearchR
 				Semantic: candidate.ChannelScores.Semantic,
 				Relation: candidate.ChannelScores.Relation,
 			},
+			Citations: append([]Citation(nil), diversitySelection.Candidates[candidateIndex].Citations...),
 		}
 		if chunk := chunkByMemoryID[candidate.Memory.ID]; chunk != nil {
 			searchHit.Chunk = chunk
@@ -577,6 +619,38 @@ func (s *Service) Search(ctx context.Context, input SearchInput) (result SearchR
 		fusionStrategy:            fusionStrategy,
 	}
 	return result, nil
+}
+
+func mergeDiversityScoredMemory(left, right ScoredMemory) ScoredMemory {
+	merged := left
+	if merged.SourceEventID == "" {
+		merged.SourceEventID = right.SourceEventID
+	}
+	if merged.ParentMemoryID == "" {
+		merged.ParentMemoryID = right.ParentMemoryID
+	}
+	if merged.EmbeddingRevision == "" {
+		merged.EmbeddingRevision = right.EmbeddingRevision
+	}
+	if !merged.EmbeddingRevisionActive {
+		merged.EmbeddingRevisionActive = right.EmbeddingRevisionActive
+	}
+	if len(merged.Embedding) == 0 {
+		merged.Embedding = append([]float32(nil), right.Embedding...)
+	}
+	if merged.SessionID == "" {
+		merged.SessionID = right.SessionID
+	}
+	if merged.EntityKey == "" {
+		merged.EntityKey = right.EntityKey
+	}
+	if merged.TimeSlice == "" {
+		merged.TimeSlice = right.TimeSlice
+	}
+	if len(merged.Citations) == 0 {
+		merged.Citations = append([]Citation(nil), right.Citations...)
+	}
+	return merged
 }
 
 func defaultFusionChannelAvailability() map[FusionChannel]fusionChannelAvailability {
@@ -695,6 +769,30 @@ func fusionStrategyFromPolicy(policy memory.RankingRolloutPolicy) (FusionStrateg
 		return FusionStrategy{}, false, fmt.Errorf("invalid active fusion strategy: %w", err)
 	}
 	return strategy, true, nil
+}
+
+func diversityPolicyFromRankingRollout(policy *memory.RankingRolloutPolicy) (DiversityPolicy, bool) {
+	if policy == nil || policy.Status != memory.RankingRolloutPolicyStatusActiveForScope || policy.Mode != memory.RankingRolloutModeActiveForScope || strings.TrimSpace(policy.DiversityPolicyName) == "" {
+		return DiversityPolicy{}, false
+	}
+	weights := DiversityCoverageWeights{
+		MemoryClass: policy.DiversityCoverageWeights["memory_class"],
+		Session:     policy.DiversityCoverageWeights["session"],
+		Entity:      policy.DiversityCoverageWeights["entity"],
+		TimeSlice:   policy.DiversityCoverageWeights["time_slice"],
+		Unknown:     policy.DiversityCoverageWeights["unknown"],
+	}
+	converted := DiversityPolicy{
+		Name: policy.DiversityPolicyName, Version: policy.DiversityPolicyVersion,
+		MMRLambda: policy.DiversityMMRLambda, SemanticThreshold: policy.DiversitySemanticThreshold,
+		MaxCandidates: policy.DiversityMaxCandidates, MaxPairwiseComparisons: policy.DiversityMaxPairwiseComparisons,
+		MaxEmbeddingDimensions: policy.DiversityMaxEmbeddingDimensions, MaxCitationsPerCandidate: policy.DiversityMaxCitationsPerCandidate,
+		CoverageWeights: weights,
+	}
+	if err := converted.Validate(); err != nil {
+		return DiversityPolicy{}, false
+	}
+	return converted, true
 }
 
 func (s *Service) recordRankingRolloutPolicyEvaluation(ctx context.Context, result string, surface memory.RankingRolloutSurface, policy memory.RankingRolloutPolicy, reasonCode string) {
@@ -1017,13 +1115,34 @@ func (s *Service) AssembleContext(ctx context.Context, input AssembleContextInpu
 			others = append(others, hit)
 		}
 
-		for _, citation := range hit.Citations {
-			key := citation.MemoryID + ":" + citation.RawEventID + ":" + citation.Operation
-			if _, ok := citationSeen[key]; ok {
-				continue
+	}
+	if contextDiversityPolicy, enabled := diversityPolicyFromRankingRollout(contextPolicy); enabled {
+		omitted := 0
+		var sectionOmitted int
+		profiles, sectionOmitted = applyContextDiversity(input.Scope, contextDiversityPolicy, profiles)
+		omitted += sectionOmitted
+		summaries, sectionOmitted = applyContextDiversity(input.Scope, contextDiversityPolicy, summaries)
+		omitted += sectionOmitted
+		relations, sectionOmitted = applyContextDiversity(input.Scope, contextDiversityPolicy, relations)
+		omitted += sectionOmitted
+		episodes, sectionOmitted = applyContextDiversity(input.Scope, contextDiversityPolicy, episodes)
+		omitted += sectionOmitted
+		others, sectionOmitted = applyContextDiversity(input.Scope, contextDiversityPolicy, others)
+		omitted += sectionOmitted
+		if input.IncludeDiagnostics && omitted > 0 {
+			output.Diagnostics = append(output.Diagnostics, ContextDiagnostic{Section: "diversity", Status: "section_selection_applied", Omitted: omitted})
+		}
+	}
+	for _, section := range [][]SearchHit{profiles, summaries, relations, episodes, others} {
+		for _, hit := range section {
+			for _, citation := range hit.Citations {
+				key := citation.MemoryID + ":" + citation.RawEventID + ":" + citation.Operation
+				if _, ok := citationSeen[key]; ok {
+					continue
+				}
+				citationSeen[key] = struct{}{}
+				output.Citations = append(output.Citations, citation)
 			}
-			citationSeen[key] = struct{}{}
-			output.Citations = append(output.Citations, citation)
 		}
 	}
 
@@ -1072,6 +1191,31 @@ func (s *Service) AssembleContext(ctx context.Context, input AssembleContextInpu
 	}
 
 	return output, nil
+}
+
+func applyContextDiversity(scope memory.Scope, policy DiversityPolicy, hits []SearchHit) ([]SearchHit, int) {
+	if len(hits) <= 1 {
+		return hits, 0
+	}
+	candidates := make([]DiversityCandidate, 0, len(hits))
+	for _, hit := range hits {
+		candidates = append(candidates, DiversityCandidate{FusedCandidate: FusedCandidate{Memory: hit.Memory, Score: hit.Score.Overall}, Citations: append([]Citation(nil), hit.Citations...)})
+	}
+	selection, err := SelectDiverseCandidates(scope, policy, candidates, len(candidates))
+	if err != nil {
+		return hits, 0
+	}
+	byID := make(map[string]SearchHit, len(hits))
+	for _, hit := range hits {
+		byID[hit.Memory.ID] = hit
+	}
+	result := make([]SearchHit, 0, len(selection.Candidates))
+	for _, candidate := range selection.Candidates {
+		hit := byID[candidate.Memory.ID]
+		hit.Citations = candidate.Citations
+		result = append(result, hit)
+	}
+	return result, selection.Dispositions.Duplicate + selection.Dispositions.Diversity
 }
 
 // boundChunkContextEvidence keeps chunk-derived evidence within the existing

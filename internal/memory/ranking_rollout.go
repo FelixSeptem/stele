@@ -2,6 +2,7 @@ package memory
 
 import (
 	"fmt"
+	"math"
 	"strings"
 	"time"
 )
@@ -161,11 +162,22 @@ type RankingRolloutPolicy struct {
 	FusionChannelWeights      map[string]float64            `json:"fusion_channel_weights,omitempty"`
 	FusionPerChannelCandidate int                           `json:"fusion_per_channel_candidate,omitempty"`
 	FusionTotalCandidates     int                           `json:"fusion_total_candidates,omitempty"`
-	ActivatedAt               time.Time                     `json:"activated_at,omitempty"`
-	DisabledAt                time.Time                     `json:"disabled_at,omitempty"`
-	RolledBackAt              time.Time                     `json:"rolled_back_at,omitempty"`
-	CreatedAt                 time.Time                     `json:"created_at"`
-	UpdatedAt                 time.Time                     `json:"updated_at"`
+	// Diversity fields are optional as a complete bundle. When configured, all
+	// identity and bounded selection parameters must be present and valid.
+	DiversityPolicyName               string             `json:"diversity_policy_name,omitempty"`
+	DiversityPolicyVersion            string             `json:"diversity_policy_version,omitempty"`
+	DiversityMMRLambda                float64            `json:"diversity_mmr_lambda,omitempty"`
+	DiversitySemanticThreshold        float64            `json:"diversity_semantic_threshold,omitempty"`
+	DiversityMaxCandidates            int                `json:"diversity_max_candidates,omitempty"`
+	DiversityMaxPairwiseComparisons   int                `json:"diversity_max_pairwise_comparisons,omitempty"`
+	DiversityMaxEmbeddingDimensions   int                `json:"diversity_max_embedding_dimensions,omitempty"`
+	DiversityMaxCitationsPerCandidate int                `json:"diversity_max_citations_per_candidate,omitempty"`
+	DiversityCoverageWeights          map[string]float64 `json:"diversity_coverage_weights,omitempty"`
+	ActivatedAt                       time.Time          `json:"activated_at,omitempty"`
+	DisabledAt                        time.Time          `json:"disabled_at,omitempty"`
+	RolledBackAt                      time.Time          `json:"rolled_back_at,omitempty"`
+	CreatedAt                         time.Time          `json:"created_at"`
+	UpdatedAt                         time.Time          `json:"updated_at"`
 }
 
 func (p RankingRolloutPolicy) Validate() error {
@@ -220,6 +232,52 @@ func (p RankingRolloutPolicy) Validate() error {
 	}
 	if err := validateRankingRolloutFusion(p); err != nil {
 		return err
+	}
+	if err := validateRankingRolloutDiversity(p); err != nil {
+		return err
+	}
+	return nil
+}
+
+func validateRankingRolloutDiversity(policy RankingRolloutPolicy) error {
+	hasAny := strings.TrimSpace(policy.DiversityPolicyName) != "" || strings.TrimSpace(policy.DiversityPolicyVersion) != "" || len(policy.DiversityCoverageWeights) > 0 || policy.DiversityMMRLambda != 0 || policy.DiversitySemanticThreshold != 0 || policy.DiversityMaxCandidates != 0 || policy.DiversityMaxPairwiseComparisons != 0 || policy.DiversityMaxEmbeddingDimensions != 0 || policy.DiversityMaxCitationsPerCandidate != 0
+	if !hasAny {
+		return nil
+	}
+	if strings.TrimSpace(policy.DiversityPolicyName) != "mmr" {
+		return fmt.Errorf("unsupported diversity policy %q", policy.DiversityPolicyName)
+	}
+	if strings.TrimSpace(policy.DiversityPolicyVersion) == "" || len(policy.DiversityPolicyVersion) > 64 {
+		return fmt.Errorf("diversity policy version is required and must not exceed 64 characters")
+	}
+	if math.IsNaN(policy.DiversityMMRLambda) || math.IsInf(policy.DiversityMMRLambda, 0) || policy.DiversityMMRLambda < 0 || policy.DiversityMMRLambda > 1 {
+		return fmt.Errorf("diversity MMR lambda must be between 0 and 1")
+	}
+	if math.IsNaN(policy.DiversitySemanticThreshold) || math.IsInf(policy.DiversitySemanticThreshold, 0) || policy.DiversitySemanticThreshold < 0 || policy.DiversitySemanticThreshold > 1 {
+		return fmt.Errorf("diversity semantic threshold must be between 0 and 1")
+	}
+	if policy.DiversityMaxCandidates <= 0 || policy.DiversityMaxCandidates > 5000 {
+		return fmt.Errorf("diversity candidate limit must be between 1 and 5000")
+	}
+	if policy.DiversityMaxPairwiseComparisons <= 0 || policy.DiversityMaxPairwiseComparisons > 100000 {
+		return fmt.Errorf("diversity pairwise comparison limit must be between 1 and 100000")
+	}
+	if policy.DiversityMaxEmbeddingDimensions <= 0 || policy.DiversityMaxEmbeddingDimensions > 4096 {
+		return fmt.Errorf("diversity embedding dimension limit must be between 1 and 4096")
+	}
+	if policy.DiversityMaxCitationsPerCandidate <= 0 || policy.DiversityMaxCitationsPerCandidate > 64 {
+		return fmt.Errorf("diversity citation limit must be between 1 and 64")
+	}
+	if len(policy.DiversityCoverageWeights) != 5 {
+		return fmt.Errorf("diversity coverage weights must define memory_class, session, entity, time_slice, and unknown")
+	}
+	for key, value := range policy.DiversityCoverageWeights {
+		if key != "memory_class" && key != "session" && key != "entity" && key != "time_slice" && key != "unknown" {
+			return fmt.Errorf("unsupported diversity coverage weight %q", key)
+		}
+		if math.IsNaN(value) || math.IsInf(value, 0) || value < 0 || value > 1 {
+			return fmt.Errorf("diversity coverage weight for %q must be between 0 and 1", key)
+		}
 	}
 	return nil
 }

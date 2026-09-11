@@ -25,19 +25,23 @@ func TestRepositoryEvaluationFixtureCoversRequiredRetrievalScenarios(t *testing.
 	}
 
 	wantCategories := map[string]struct{}{
-		"single-fact":      {},
-		"multi-hop":        {},
-		"temporal":         {},
-		"profile":          {},
-		"episodic":         {},
-		"procedural":       {},
-		"summary":          {},
-		"relation":         {},
-		"contradiction":    {},
-		"noisy-neighbor":   {},
-		"duplicate":        {},
-		"hidden-lifecycle": {},
-		"cross-scope":      {},
+		"single-fact":       {},
+		"multi-hop":         {},
+		"temporal":          {},
+		"profile":           {},
+		"episodic":          {},
+		"procedural":        {},
+		"summary":           {},
+		"relation":          {},
+		"contradiction":     {},
+		"noisy-neighbor":    {},
+		"duplicate":         {},
+		"hidden-lifecycle":  {},
+		"cross-scope":       {},
+		"lineage-dedup":     {},
+		"near-identical":    {},
+		"multi-hop-budget":  {},
+		"distractor-safety": {},
 	}
 	for _, item := range fixture.Cases {
 		delete(wantCategories, item.Category)
@@ -302,6 +306,34 @@ func TestCompareEvaluationReportsIdentifiesFusionStrategies(t *testing.T) {
 	}
 }
 
+func TestCompareEvaluationReportsIncludesDiversityPolicyAndExtendedDeltas(t *testing.T) {
+	baseline := evaluationComparisonReport("fixture-v1", "baseline-v1", 1)
+	candidate := evaluationComparisonReport("fixture-v1", "candidate-v1", 0.9)
+	candidate.Metadata.PolicyVersion = "diversity-policy-v2"
+	candidate.Metrics.CandidatePoolSize = 7
+	baseline.Metrics.CandidatePoolSize = 10
+	candidate.Metrics.EvidenceCoverage = 0.8
+	baseline.Metrics.EvidenceCoverage = 1
+	comparison, err := CompareEvaluationReports(baseline, candidate, nil)
+	if err != nil {
+		t.Fatalf("CompareEvaluationReports() error = %v", err)
+	}
+	if comparison.CandidatePolicyVersion != "diversity-policy-v2" {
+		t.Fatalf("candidate policy version = %q", comparison.CandidatePolicyVersion)
+	}
+	want := map[string]bool{"protected_recall": false, "evidence_coverage": false, "candidate_pool_size": false}
+	for _, delta := range comparison.MetricDeltas {
+		if _, ok := want[delta.Metric]; ok {
+			want[delta.Metric] = true
+		}
+	}
+	for metric, found := range want {
+		if !found {
+			t.Errorf("missing metric delta %q: %+v", metric, comparison.MetricDeltas)
+		}
+	}
+}
+
 func evaluationComparisonReport(fixtureVersion, rankingVersion string, recall float64) EvaluationReport {
 	return EvaluationReport{
 		Metadata: EvaluationRankingMetadata{
@@ -365,5 +397,49 @@ func TestEvaluateReleasePolicyRejectsSafetyFailureEvenWhenQualityImproves(t *tes
 	}
 	if decision.Eligible || len(decision.HardFailures) != 1 || decision.HardFailures[0] != "safety_failure" {
 		t.Fatalf("safety failure must reject release before quality gains: %+v", decision)
+	}
+}
+
+func TestEvaluateReleasePolicyRejectsCoverageBudgetAndLatencyRegressions(t *testing.T) {
+	policy := EvaluationReleasePolicy{Version: "quality-policy-v1", ProtectedCutoffs: []int{1, 5, 10}, MaxRecallRegression: 1, MaxMultiHopCoverageRegression: 0.1, MaxP95LatencyMS: 500, MaxP95LatencyRegressionMS: 10}
+	baseline := evaluationComparisonReport("retrieval-fixture-v1", "baseline-v1", 1)
+	baseline.Metrics.EvidenceCoverage = 1
+	baseline.Metrics.BudgetOmissionRate = 0
+	baseline.Metrics.P95LatencyMS = 20
+	candidate := evaluationComparisonReport("retrieval-fixture-v1", "candidate-v1", 1)
+	candidate.Metrics.EvidenceCoverage = 0.5
+	candidate.Metrics.BudgetOmissionRate = 0.5
+	candidate.Metrics.P95LatencyMS = 40
+	decision, err := EvaluateReleasePolicy(policy, baseline, candidate)
+	if err != nil {
+		t.Fatalf("EvaluateReleasePolicy() error = %v", err)
+	}
+	if decision.Eligible {
+		t.Fatalf("decision = %+v, want rejection", decision)
+	}
+	for _, want := range []string{"protected_evidence_coverage_regression", "budget_omission_regression", "latency_regression"} {
+		found := false
+		for _, got := range decision.HardFailures {
+			if got == want {
+				found = true
+			}
+		}
+		if !found {
+			t.Errorf("hard failures = %v, missing %q", decision.HardFailures, want)
+		}
+	}
+}
+
+func TestEvaluateReleasePolicyRejectsCrossScopeAndLifecycleFailures(t *testing.T) {
+	policy := EvaluationReleasePolicy{Version: "quality-policy-v1", ProtectedCutoffs: []int{1}, MaxP95LatencyMS: 500}
+	baseline := evaluationComparisonReport("retrieval-fixture-v1", "baseline-v1", 0.5)
+	candidate := evaluationComparisonReport("retrieval-fixture-v1", "candidate-v1", 1)
+	candidate.SafetyFailures = []EvaluationSafetyFailure{{Category: EvaluationSafetyFailureCrossScope, Count: 1}, {Category: EvaluationSafetyFailureLifecycleVisibility, Count: 1}}
+	decision, err := EvaluateReleasePolicy(policy, baseline, candidate)
+	if err != nil {
+		t.Fatalf("EvaluateReleasePolicy() error = %v", err)
+	}
+	if decision.Eligible || len(decision.HardFailures) != 1 || decision.HardFailures[0] != "safety_failure" {
+		t.Fatalf("decision = %+v", decision)
 	}
 }
