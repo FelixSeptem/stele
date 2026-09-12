@@ -185,21 +185,21 @@ func (l DerivedInsightLesson) Validate() error {
 }
 
 type DerivedInsight struct {
-	ID             string                      `json:"id"`
-	Scope          Scope                       `json:"scope"`
-	Type           DerivedInsightType          `json:"type"`
-	State          DerivedInsightState         `json:"state"`
-	Title          string                      `json:"title"`
-	Summary        string                      `json:"summary"`
-	Confidence     DerivedInsightConfidence    `json:"confidence"`
-	Payload        map[string]any              `json:"payload,omitempty"`
-	Lesson         *DerivedInsightLesson       `json:"lesson,omitempty"`
-	Derivation     DerivedInsightDerivation    `json:"derivation"`
-	Evidence       []DerivedInsightEvidenceRef `json:"evidence"`
+	ID              string                        `json:"id"`
+	Scope           Scope                         `json:"scope"`
+	Type            DerivedInsightType            `json:"type"`
+	State           DerivedInsightState           `json:"state"`
+	Title           string                        `json:"title"`
+	Summary         string                        `json:"summary"`
+	Confidence      DerivedInsightConfidence      `json:"confidence"`
+	Payload         map[string]any                `json:"payload,omitempty"`
+	Lesson          *DerivedInsightLesson         `json:"lesson,omitempty"`
+	Derivation      DerivedInsightDerivation      `json:"derivation"`
+	Evidence        []DerivedInsightEvidenceRef   `json:"evidence"`
 	FeedbackSummary DerivedInsightFeedbackSummary `json:"feedback_summary,omitempty"`
-	CreatedAt      time.Time                   `json:"created_at,omitempty"`
-	UpdatedAt      time.Time                   `json:"updated_at,omitempty"`
-	LastObservedAt time.Time                   `json:"last_observed_at,omitempty"`
+	CreatedAt       time.Time                     `json:"created_at,omitempty"`
+	UpdatedAt       time.Time                     `json:"updated_at,omitempty"`
+	LastObservedAt  time.Time                     `json:"last_observed_at,omitempty"`
 }
 
 func (i DerivedInsight) Validate() error {

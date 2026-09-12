@@ -340,6 +340,29 @@ func TestRenderEvaluationReportIncludesFusionStrategyWithoutRawScores(t *testing
 	}
 }
 
+func TestEvaluationReportCarriesBoundedRerankerMetadataWithoutSecrets(t *testing.T) {
+	report := EvaluationReport{Metadata: EvaluationRankingMetadata{
+		FixtureVersion: "fixture-v1", RepresentationVersion: "repr-v1", RankingVersion: "rank-v2",
+		CompatibleEmbeddingRevision: "embed-v1", PolicyVersion: "policy-v1",
+		QualityFeatureVersion: "quality-v1", RerankerProvider: "openai-compatible", RerankerVersion: "rerank-v1", RerankerMode: "shadow",
+	}, ChangedRankCount: 2, RerankFallbackCounts: map[string]int{"timeout": 1}}
+	encoded, err := MarshalEvaluationReport(report)
+	if err != nil {
+		t.Fatalf("MarshalEvaluationReport() error = %v", err)
+	}
+	text := string(encoded)
+	for _, want := range []string{"quality_feature_version", "reranker_provider", "reranker_version", "reranker_mode", "changed_rank_count", "timeout"} {
+		if !strings.Contains(text, want) {
+			t.Fatalf("report missing %q: %s", want, text)
+		}
+	}
+	for _, forbidden := range []string{"api_key", "endpoint", "dsn", "postgres://", "raw_score", "query text"} {
+		if strings.Contains(text, forbidden) {
+			t.Fatalf("report leaked %q: %s", forbidden, text)
+		}
+	}
+}
+
 func TestCompareEvaluationReportsRejectsIncompatibleFixture(t *testing.T) {
 	baseline := evaluationComparisonReport("retrieval-fixture-v1", "baseline-v1", 1)
 	candidate := evaluationComparisonReport("retrieval-fixture-v2", "candidate-v1", 1)

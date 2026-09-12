@@ -173,10 +173,10 @@ func TestDerivedInsightFeedbackValidateRejectsUnsupportedSignal(t *testing.T) {
 
 func TestSupersedeDerivedInsightFeedbackInputValidateRequiresActorReasonAndTarget(t *testing.T) {
 	input := SupersedeDerivedInsightFeedbackInput{
-		Scope:      Scope{Tenant: "tenant-a", Project: "project-a", Namespace: "namespace-a"},
-		FeedbackID: "feedback_123",
-		Actor:      "operator-a",
-		Reason:     "replaced by more accurate review",
+		Scope:        Scope{Tenant: "tenant-a", Project: "project-a", Namespace: "namespace-a"},
+		FeedbackID:   "feedback_123",
+		Actor:        "operator-a",
+		Reason:       "replaced by more accurate review",
 		SupersededAt: time.Date(2026, 7, 4, 15, 0, 0, 0, time.UTC),
 	}
 

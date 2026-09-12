@@ -2,7 +2,9 @@
 
 ## Purpose
 TBD - created by archiving change task-success-evaluation-and-feedback-ranking-rollout. Update Purpose after archive.
+
 ## Requirements
+
 ### Requirement: Ranking rollout policies are durable and scoped
 The service SHALL allow authorized administrators to create durable feedback and task-success-aware ranking rollout policies scoped by tenant, project, and namespace.
 
@@ -49,23 +51,27 @@ The service MUST activate a ranking rollout policy only after bounded activation
 - **THEN** the service rejects activation or keeps the policy diagnostics-only until the blocker is resolved
 
 ### Requirement: Active rollout changes ranking without changing visibility
-The service SHALL apply an active scoped rollout policy as a ranking hint layer for configured search or context surfaces while preserving lifecycle and scope isolation as primary visibility controls.
+The service SHALL apply an active scoped rollout policy as a bounded ranking hint layer for configured search or context surfaces, including optional quality-feature and reranker identities, while preserving lifecycle and scope isolation as primary visibility controls.
 
 #### Scenario: Active policy applies to search
 - **WHEN** a caller searches memory in a scope with an active matching rollout policy
-- **THEN** the service can adjust ranking using active usefulness feedback, task-success summaries, verification outcomes, and quality signals while excluding hidden or out-of-scope memory from results
+- **THEN** the service can adjust ranking using approved usefulness, task-success, verification, quality-feature, and optional reranker signals while excluding hidden or out-of-scope memory from results
+
+#### Scenario: Active policy references provider credentials
+- **WHEN** a rollout policy is created or activated
+- **THEN** the durable policy stores only logical provider/model and strategy identities, never endpoint URLs, API keys, DSNs, or raw provider payloads
+
+#### Scenario: No matching active policy exists
+- **WHEN** a caller searches or assembles context without an active matching policy
+- **THEN** the service preserves baseline ranking behavior
 
 #### Scenario: Active policy applies to context assembly
 - **WHEN** a caller assembles context in a scope with an active matching rollout policy
 - **THEN** the service can adjust candidate priority within budget and section rules while preserving citations, lifecycle visibility, and context safety
 
-#### Scenario: No matching active policy exists
-- **WHEN** a caller searches or assembles context without an active matching rollout policy and without per-request feedback-aware ranking
-- **THEN** the service preserves baseline ranking behavior
-
 #### Scenario: Request asks for diagnostics while policy is active
 - **WHEN** a caller requests ranking diagnostics or dry-run comparison while an active policy applies to the resolved scope
-- **THEN** the service may include policy impact diagnostics while ordinary result ordering follows the active policy unless the request is explicitly diagnostics-only
+- **THEN** the service may include bounded policy impact diagnostics while ordinary result ordering follows the active policy unless the request is explicitly diagnostics-only
 
 ### Requirement: Rollout policies are reversible and auditable
 The service MUST support pausing, disabling, and rolling back ranking rollout policies without mutating task evaluations, feedback records, or canonical memory.
@@ -90,17 +96,20 @@ The service SHALL expose scoped admin reports for rollout policy status, dry-run
 - **THEN** the service stores detailed ids in scoped durable evidence and excludes them from metric labels and public diagnostics
 
 ### Requirement: Ranking signals are rebuildable and bounded
-The service SHALL derive rollout ranking signals from durable active feedback, task evaluations, session verification, and quality findings using bounded categories and rebuildable summaries.
+The service SHALL derive ranking signals from durable active feedback, task evaluations, session verification, quality findings, and versioned quality-feature summaries using bounded categories and rebuildable summaries.
 
 #### Scenario: Signal summary is rebuilt
 - **WHEN** ranking signal aggregation is rerun or repaired
-- **THEN** the service recomputes signal summaries from durable source evidence rather than relying on non-auditable mutable scores
+- **THEN** the service recomputes summaries from durable source evidence and records the feature/policy version used
+
+#### Scenario: Single negative event exists
+- **WHEN** a single low-confidence negative event exists below the policy threshold
+- **THEN** the service records diagnostics but does not apply that signal as a default ranking adjustment
 
 #### Scenario: Superseded feedback exists
 - **WHEN** feedback or task evidence has been superseded or corrected
 - **THEN** active rollout signals exclude superseded evidence by default while preserving history for admin inspection
 
-#### Scenario: Single negative event exists
-- **WHEN** a single negative feedback or task failure exists below the policy threshold
-- **THEN** the service records diagnostics but does not apply that signal as a default ranking adjustment
-
+#### Scenario: Quality provider fails during aggregation
+- **WHEN** an optional provider is unavailable while signals are being evaluated
+- **THEN** the service marks the provider signal unavailable and retains the deterministic baseline

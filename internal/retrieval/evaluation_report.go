@@ -24,6 +24,18 @@ func RenderEvaluationReport(report EvaluationReport) (string, error) {
 	if strings.TrimSpace(report.Metadata.FusionStrategy) != "" {
 		fmt.Fprintf(&builder, "fusion_strategy=%s\n", report.Metadata.FusionStrategy)
 	}
+	if strings.TrimSpace(report.Metadata.QualityFeatureVersion) != "" {
+		fmt.Fprintf(&builder, "quality_feature_version=%s\n", report.Metadata.QualityFeatureVersion)
+	}
+	if strings.TrimSpace(report.Metadata.RerankerProvider) != "" {
+		fmt.Fprintf(&builder, "reranker_provider=%s\n", report.Metadata.RerankerProvider)
+	}
+	if strings.TrimSpace(report.Metadata.RerankerVersion) != "" {
+		fmt.Fprintf(&builder, "reranker_version=%s\n", report.Metadata.RerankerVersion)
+	}
+	if strings.TrimSpace(report.Metadata.RerankerMode) != "" {
+		fmt.Fprintf(&builder, "reranker_mode=%s\n", report.Metadata.RerankerMode)
+	}
 	fmt.Fprintf(&builder, "compatible_embedding_revision=%s\n", report.Metadata.CompatibleEmbeddingRevision)
 	fmt.Fprintf(&builder, "policy_version=%s\n", report.Metadata.PolicyVersion)
 	if report.Metadata.AnalysisVersion != "" {

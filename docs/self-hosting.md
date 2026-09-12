@@ -2038,3 +2038,34 @@ controlled non-pass skip, never a pass—and never falls back to
 - Summary compaction and retention sweep are dispatched per eligible discovered scope, with the configured default scope used only as a fallback when discovery returns none.
 - Job execution cleanup remains runtime-global and runs once per cadence window instead of being fanned out per discovered scope.
 - Telemetry hook points are wired for ingest, governance worker execution, retrieval, forgetting, governance backlog inspection, derived insight feedback, embedding admission decisions, cutover state snapshots, provider readiness probes, scheduler wave dispatch, embedding rebuild backlog plus execution inspection, scope proof runs and steps, memory session runs and turns, and memory session verification outcomes. The default runtime installs a Prometheus-style in-process metrics observer for the API metrics endpoint.
+
+### Optional reranker configuration
+
+The API, worker, and scheduler share one optional OpenAI-compatible reranker
+configuration. It is disabled by default; inject the endpoint, API key, and
+model through process environment, Docker/Kubernetes secrets, or ignored
+`.env.local` files. Keep `.env.example` placeholders only and never commit
+credentials, DSNs, evaluation data, or provider payloads.
+
+```text
+STELE_RERANK_ENABLED=false
+STELE_RERANK_MODE=shadow
+STELE_RERANK_PROVIDER=
+STELE_RERANK_ENDPOINT=
+STELE_RERANK_MODEL=
+STELE_RERANK_API_KEY=
+STELE_RERANK_TIMEOUT=30s
+STELE_RERANK_MAX_CANDIDATES=50
+STELE_RERANK_MAX_TEXT_BYTES=8192
+```
+
+Use diagnostics-only/shadow first and evaluate against a disposable real
+PostgreSQL + pgvector stack. Active mode requires an exact scoped rollout with
+matching logical provider/version/mode plus the existing dry-run, evidence,
+attribution, and no-blocker gates; global activation is not supported. Disable
+or rollback immediately returns to the fused baseline. Provider errors,
+timeouts, malformed or out-of-scope results, and bound violations fail closed
+without failing ordinary retrieval. Admin/evaluation diagnostics and
+`stele_retrieval_rerank_total` are low-cardinality and redact query text,
+scope values, memory IDs, raw scores, endpoint URLs, API keys, DSNs, and raw
+provider payloads.

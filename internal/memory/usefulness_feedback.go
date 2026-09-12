@@ -365,18 +365,18 @@ func (i SummarizeUsefulnessFeedbackInput) Validate() error {
 }
 
 type UsefulnessFeedbackSummary struct {
-	Subject          UsefulnessFeedbackSubject      `json:"subject"`
-	Counts           map[UsefulnessFeedbackType]int `json:"counts"`
-	TotalActive      int                            `json:"total_active"`
-	PositiveCount    int                            `json:"positive_count"`
-	NegativeCount    int                            `json:"negative_count"`
-	NeedsReviewCount int                            `json:"needs_review_count"`
-	EffectiveQuality UsefulnessQuality              `json:"effective_quality"`
-	TaskEvaluationIDs []string                      `json:"task_evaluation_ids,omitempty"`
-	TaskVerdictCounts map[TaskEvaluationVerdict]int `json:"task_verdict_counts,omitempty"`
+	Subject                UsefulnessFeedbackSubject        `json:"subject"`
+	Counts                 map[UsefulnessFeedbackType]int   `json:"counts"`
+	TotalActive            int                              `json:"total_active"`
+	PositiveCount          int                              `json:"positive_count"`
+	NegativeCount          int                              `json:"negative_count"`
+	NeedsReviewCount       int                              `json:"needs_review_count"`
+	EffectiveQuality       UsefulnessQuality                `json:"effective_quality"`
+	TaskEvaluationIDs      []string                         `json:"task_evaluation_ids,omitempty"`
+	TaskVerdictCounts      map[TaskEvaluationVerdict]int    `json:"task_verdict_counts,omitempty"`
 	TaskContributionCounts map[TaskContributionCategory]int `json:"task_contribution_counts,omitempty"`
-	LastTaskEvaluationAt time.Time                  `json:"last_task_evaluation_at,omitempty"`
-	LastFeedbackAt   time.Time                      `json:"last_feedback_at,omitempty"`
+	LastTaskEvaluationAt   time.Time                        `json:"last_task_evaluation_at,omitempty"`
+	LastFeedbackAt         time.Time                        `json:"last_feedback_at,omitempty"`
 }
 
 func SummarizeUsefulnessFeedback(subject UsefulnessFeedbackSubject, records []UsefulnessFeedback) UsefulnessFeedbackSummary {

@@ -19,10 +19,10 @@ func TestRepositoryCreatesSupersedesAndSummarizesUsefulnessFeedback(t *testing.T
 	scope := memory.Scope{Tenant: "tenant-a", Project: "project-a", Namespace: "namespace-a"}
 	now := time.Date(2026, 7, 11, 10, 30, 0, 0, time.UTC)
 	feedback := memory.UsefulnessFeedback{
-		ID:            "feedback_1",
-		Scope:         scope,
-		Type:          memory.UsefulnessFeedbackTypeNoisy,
-		SourceSurface: memory.UsefulnessFeedbackSourceSession,
+		ID:               "feedback_1",
+		Scope:            scope,
+		Type:             memory.UsefulnessFeedbackTypeNoisy,
+		SourceSurface:    memory.UsefulnessFeedbackSourceSession,
 		TaskEvaluationID: "task_eval_1",
 		Subjects: []memory.UsefulnessFeedbackSubject{{
 			Kind: memory.UsefulnessFeedbackSubjectMemory,
@@ -159,10 +159,10 @@ func TestRepositoryCreateUsefulnessFeedbackIsIdempotentWithExistingSubject(t *te
 	scope := memory.Scope{Tenant: "tenant-a", Project: "project-a", Namespace: "namespace-a"}
 	now := time.Date(2026, 7, 11, 11, 30, 0, 0, time.UTC)
 	feedback := memory.UsefulnessFeedback{
-		ID:            "feedback_retry",
-		Scope:         scope,
-		Type:          memory.UsefulnessFeedbackTypeUseful,
-		SourceSurface: memory.UsefulnessFeedbackSourceSession,
+		ID:               "feedback_retry",
+		Scope:            scope,
+		Type:             memory.UsefulnessFeedbackTypeUseful,
+		SourceSurface:    memory.UsefulnessFeedbackSourceSession,
 		TaskEvaluationID: "task_eval_1",
 		Subjects: []memory.UsefulnessFeedbackSubject{{
 			Kind: memory.UsefulnessFeedbackSubjectMemory,

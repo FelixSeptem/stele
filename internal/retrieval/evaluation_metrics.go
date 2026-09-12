@@ -122,6 +122,9 @@ func CalculateEvaluationMetrics(replay EvaluationReplay) (EvaluationReport, erro
 		report.Metrics = EvaluationMetricReport{}
 		return report, nil
 	}
+	if len(report.RerankFallbackCounts) == 0 {
+		report.RerankFallbackCounts = nil
+	}
 
 	caseCount := float64(len(replay.Cases))
 	report.Metrics.RecallAt1 /= caseCount

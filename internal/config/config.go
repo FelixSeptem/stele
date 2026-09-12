@@ -39,6 +39,7 @@ type Config struct {
 	ContextProjectionConsumptionEnabled bool
 	Auth                                AuthConfig
 	Embedding                           EmbeddingConfig
+	Reranker                            RerankerConfig
 	Jobs                                JobConfig
 	Assurance                           AssuranceConfig
 	QueryAnalysis                       QueryAnalysisConfig
@@ -94,6 +95,18 @@ type EmbeddingConfig struct {
 	DefaultDimensions int
 	ClassRoutes       map[string]EmbeddingRouteConfig
 	OpenAI            OpenAIEmbeddingProviderConfig
+}
+
+type RerankerConfig struct {
+	Enabled       bool
+	Mode          string
+	Provider      string
+	Endpoint      string
+	APIKey        string
+	Model         string
+	Timeout       time.Duration
+	MaxCandidates int
+	MaxTextBytes  int
 }
 
 type JobConfig struct {
@@ -364,6 +377,34 @@ func LoadFromEnv() (Config, error) {
 	if err != nil {
 		return Config{}, err
 	}
+	rerankerTimeout, err := loadDurationWithDefault("STELE_RERANK_TIMEOUT", 30*time.Second)
+	if err != nil {
+		return Config{}, err
+	}
+	rerankerMaxCandidates, err := loadIntWithDefault("STELE_RERANK_MAX_CANDIDATES", 50)
+	if err != nil {
+		return Config{}, err
+	}
+	rerankerMaxTextBytes, err := loadIntWithDefault("STELE_RERANK_MAX_TEXT_BYTES", 8192)
+	if err != nil {
+		return Config{}, err
+	}
+	rerankerConfig := RerankerConfig{
+		Enabled: loadBoolEnv("STELE_RERANK_ENABLED"), Mode: strings.TrimSpace(os.Getenv("STELE_RERANK_MODE")), Provider: strings.TrimSpace(os.Getenv("STELE_RERANK_PROVIDER")),
+		Endpoint: strings.TrimSpace(os.Getenv("STELE_RERANK_ENDPOINT")), APIKey: strings.TrimSpace(os.Getenv("STELE_RERANK_API_KEY")), Model: strings.TrimSpace(os.Getenv("STELE_RERANK_MODEL")),
+		Timeout: rerankerTimeout, MaxCandidates: rerankerMaxCandidates, MaxTextBytes: rerankerMaxTextBytes,
+	}
+	if rerankerConfig.Mode == "" && rerankerConfig.Enabled {
+		rerankerConfig.Mode = "shadow"
+	}
+	if rerankerConfig.Mode != "" && rerankerConfig.Mode != "disabled" && rerankerConfig.Mode != "diagnostics_only" && rerankerConfig.Mode != "shadow" && rerankerConfig.Mode != "active_for_scope" {
+		return Config{}, fmt.Errorf("invalid reranker mode %q", rerankerConfig.Mode)
+	}
+	if rerankerConfig.Enabled {
+		if rerankerConfig.Provider == "" || rerankerConfig.Endpoint == "" || rerankerConfig.Model == "" || rerankerConfig.Timeout <= 0 || rerankerConfig.MaxCandidates <= 0 || rerankerConfig.MaxTextBytes <= 0 {
+			return Config{}, fmt.Errorf("enabled reranker configuration is incomplete or invalid")
+		}
+	}
 	classRoutes, err := loadEmbeddingClassRoutes("STELE_EMBEDDING_CLASS_ROUTES")
 	if err != nil {
 		return Config{}, err
@@ -414,6 +455,7 @@ func LoadFromEnv() (Config, error) {
 				Timeout: openAIEmbeddingTimeout,
 			},
 		},
+		Reranker: rerankerConfig,
 		Jobs: JobConfig{
 			MaintenanceInterval:              maintenanceInterval,
 			WorkerPollInterval:               workerPollInterval,
