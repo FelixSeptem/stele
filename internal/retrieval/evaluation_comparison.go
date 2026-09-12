@@ -26,12 +26,15 @@ type EvaluationComparison struct {
 	CandidatePolicyVersion  string                          `json:"candidate_policy_version"`
 	MetricDeltas            []EvaluationMetricDelta         `json:"metric_deltas"`
 	ProtectedRegressions    []EvaluationProtectedRegression `json:"protected_regressions,omitempty"`
+	SafetyGatePassed        bool                            `json:"safety_gate_passed"`
+	SafetyFailures          []EvaluationSafetyFailure       `json:"safety_failures,omitempty"`
 	Advisories              []string                        `json:"advisories,omitempty"`
 }
 
-// CompareEvaluationReports compares reports only when their corpus and representation
-// are compatible. Ranking versions may differ because that is the candidate change
-// under review.
+// CompareEvaluationReports compares a candidate only with an immutable baseline
+// produced by the same retrieval stack. The query-analysis policy is the candidate
+// change under review; fixture, representation, fusion, ranking, and release-policy
+// identities must remain fixed.
 func CompareEvaluationReports(baseline, candidate EvaluationReport, protectedCategories []string) (EvaluationComparison, error) {
 	if err := baseline.Metadata.Validate(); err != nil {
 		return EvaluationComparison{}, NewEvaluationFailure(EvaluationSafetyFailureUnsafeDiagnostics, err.Error())
@@ -48,8 +51,23 @@ func CompareEvaluationReports(baseline, candidate EvaluationReport, protectedCat
 	if baseline.Metadata.CompatibleEmbeddingRevision != candidate.Metadata.CompatibleEmbeddingRevision {
 		return EvaluationComparison{}, fmt.Errorf("incompatible embedding revision")
 	}
+	if baseline.Metadata.FusionStrategy != candidate.Metadata.FusionStrategy {
+		return EvaluationComparison{}, fmt.Errorf("incompatible fusion strategy")
+	}
+	if baseline.Metadata.RankingVersion != candidate.Metadata.RankingVersion {
+		return EvaluationComparison{}, fmt.Errorf("incompatible ranking version")
+	}
+	if baseline.Metadata.PolicyVersion != candidate.Metadata.PolicyVersion {
+		return EvaluationComparison{}, fmt.Errorf("incompatible release policy version")
+	}
 	if baseline.Metadata.AnalysisVersion != candidate.Metadata.AnalysisVersion || baseline.Metadata.AnalysisLimitsVersion != candidate.Metadata.AnalysisLimitsVersion {
 		return EvaluationComparison{}, fmt.Errorf("incompatible analysis version")
+	}
+	if evaluationIsAnalysisComparison(baseline, candidate) && baseline.Metadata.RolloutDisposition != "original_only" {
+		return EvaluationComparison{}, fmt.Errorf("immutable original-query baseline must use original_only disposition")
+	}
+	if len(baseline.SafetyFailures) > 0 {
+		return EvaluationComparison{}, fmt.Errorf("immutable original-query baseline contains safety failures")
 	}
 
 	comparison := EvaluationComparison{
@@ -59,6 +77,8 @@ func CompareEvaluationReports(baseline, candidate EvaluationReport, protectedCat
 		CandidateFusionStrategy: candidate.Metadata.FusionStrategy,
 		BaselinePolicyVersion:   baseline.Metadata.PolicyVersion,
 		CandidatePolicyVersion:  candidate.Metadata.PolicyVersion,
+		SafetyGatePassed:        len(candidate.SafetyFailures) == 0,
+		SafetyFailures:          append([]EvaluationSafetyFailure(nil), candidate.SafetyFailures...),
 		MetricDeltas: []EvaluationMetricDelta{
 			evaluationMetricDelta("recall_at_1", baseline.Metrics.RecallAt1, candidate.Metrics.RecallAt1),
 			evaluationMetricDelta("recall_at_5", baseline.Metrics.RecallAt5, candidate.Metrics.RecallAt5),
@@ -88,6 +108,13 @@ func CompareEvaluationReports(baseline, candidate EvaluationReport, protectedCat
 		comparison.ProtectedRegressions = appendProtectedRegression(comparison.ProtectedRegressions, category, "multi_hop_evidence_coverage", baselineMetric.MultiHopEvidenceCoverage, candidateMetric.MultiHopEvidenceCoverage)
 	}
 	return comparison, nil
+}
+
+func evaluationIsAnalysisComparison(baseline, candidate EvaluationReport) bool {
+	return baseline.Metadata.AnalysisVersion != "" ||
+		baseline.Metadata.AnalysisLimitsVersion != "" ||
+		candidate.Metadata.AnalysisVersion != "" ||
+		candidate.Metadata.AnalysisLimitsVersion != ""
 }
 
 func evaluationMetricDelta(metric string, baseline, candidate float64) EvaluationMetricDelta {
