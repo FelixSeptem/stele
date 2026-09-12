@@ -170,6 +170,7 @@ func (r *EvaluationRunner) Replay(ctx context.Context, fixture EvaluationFixture
 			IncludeSummaries:                   true,
 			IncludeRelations:                   true,
 			rankingPolicyDisabled:              metadata.RolloutDisposition == "" || metadata.RolloutDisposition == "original_only",
+			queryAnalysisPolicyDisabled:        metadata.RolloutDisposition == "" || metadata.RolloutDisposition == "original_only",
 			IncludeFeedbackDiagnostics:         metadata.AnalysisVersion != "",
 			queryAnalysisDiagnosticsAuthorized: metadata.AnalysisVersion != "",
 		})

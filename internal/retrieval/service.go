@@ -21,6 +21,7 @@ type SearchInput struct {
 	Classes                            []memory.MemoryClass
 	rankingSurface                     memory.RankingRolloutSurface
 	rankingPolicyDisabled              bool
+	queryAnalysisPolicyDisabled        bool
 	queryAnalysisObserveOnly           bool
 	queryAnalysisDiagnosticsAuthorized bool
 	fusionStrategyOverride             *FusionStrategy
@@ -411,7 +412,7 @@ func (s *Service) Search(ctx context.Context, input SearchInput) (result SearchR
 	}
 	// Effective query-analysis policy includes diagnostics/shadow stages that
 	// are intentionally excluded from the ranking active-policy reader.
-	if s.queryAnalyzer != nil {
+	if s.queryAnalyzer != nil && !input.queryAnalysisPolicyDisabled {
 		if effectiveReader, ok := s.rankingRolloutPolicyReader.(effectiveQueryAnalysisPolicyReader); ok {
 			policy, policyErr := effectiveReader.ReadEffectiveQueryAnalysisRolloutPolicy(ctx, memory.ReadEffectiveQueryAnalysisRolloutPolicyInput{Scope: input.Scope, Surface: surface, SessionID: input.SessionID, UserID: input.UserID})
 			if policyErr == nil {
@@ -1382,6 +1383,7 @@ func (s *Service) AssembleContext(ctx context.Context, input AssembleContextInpu
 		IncludeRelations:           input.IncludeRelations,
 		IncludeFeedbackDiagnostics: input.IncludeDiagnostics && input.IncludeFeedbackDiagnostics,
 		FeedbackAwareRanking:       false,
+		rankingSurface:             memory.RankingRolloutSurfaceContext,
 		rankingPolicyDisabled:      true,
 		fusionStrategyOverride:     contextFusion,
 	})

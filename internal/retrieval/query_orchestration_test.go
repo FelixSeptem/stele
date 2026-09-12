@@ -411,4 +411,42 @@ func TestOrdinaryFeedbackDiagnosticsDoNotAuthorizeQueryAnalysisInternals(t *test
 	}
 }
 
+func TestInternalOriginalBaselineDisablesQueryAnalysisPolicy(t *testing.T) {
+	scope := memory.Scope{Tenant: "t", Project: "p", Namespace: "evaluation-baseline"}
+	limits := DefaultQueryAnalysisLimits()
+	analysisInput := QueryAnalysisInput{AcceptedQuery: "Original", PolicyVersion: QueryAnalysisPolicyVersionV1, Limits: limits}
+	analysis, err := NewQueryAnalysisResult(analysisInput, QueryAnalysisDispositionComplete, nil, []QueryAnalysisSignal{{Kind: QueryAnalysisSignalTerm, Text: "derived"}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	lexical := &recordingLexical{}
+	service := NewService(ServiceDependencies{Lexical: lexical, RankingRolloutPolicyReader: effectiveOnlyReader{policy: activeQAPolicy(scope, limits)}, QueryAnalyzer: orchestrationAnalyzer{result: analysis}, QueryAnalysisLimits: limits})
+	if _, err := service.Search(context.Background(), SearchInput{Scope: scope, Query: "Original", queryAnalysisPolicyDisabled: true}); err != nil {
+		t.Fatal(err)
+	}
+	if len(lexical.inputs) != 1 || lexical.inputs[0].Query != "Original" {
+		t.Fatalf("original-query baseline recall inputs=%+v", lexical.inputs)
+	}
+}
+
+func TestAssembleContextUsesContextSurfaceQueryAnalysisPolicy(t *testing.T) {
+	scope := memory.Scope{Tenant: "t", Project: "p", Namespace: "context"}
+	limits := DefaultQueryAnalysisLimits()
+	analysisInput := QueryAnalysisInput{AcceptedQuery: "Original", PolicyVersion: QueryAnalysisPolicyVersionV1, Limits: limits}
+	analysis, err := NewQueryAnalysisResult(analysisInput, QueryAnalysisDispositionComplete, nil, []QueryAnalysisSignal{{Kind: QueryAnalysisSignalTerm, Text: "derived"}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	policy := activeQAPolicy(scope, limits)
+	policy.Surfaces = []memory.RankingRolloutSurface{memory.RankingRolloutSurfaceContext}
+	lexical := &recordingLexical{}
+	service := NewService(ServiceDependencies{Lexical: lexical, RankingRolloutPolicyReader: effectiveOnlyReader{policy: policy}, QueryAnalyzer: orchestrationAnalyzer{result: analysis}, QueryAnalysisLimits: limits})
+	if _, err := service.AssembleContext(context.Background(), AssembleContextInput{Scope: scope, Query: "Original", Budget: 4}); err != nil {
+		t.Fatal(err)
+	}
+	if len(lexical.inputs) != 2 || lexical.inputs[0].Query != "Original" || lexical.inputs[1].Query != "derived" {
+		t.Fatalf("context recall inputs=%+v", lexical.inputs)
+	}
+}
+
 func ptrPolicy(p memory.RankingRolloutPolicy) *memory.RankingRolloutPolicy { return &p }

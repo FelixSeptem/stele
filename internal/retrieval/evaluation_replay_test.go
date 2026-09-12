@@ -308,6 +308,9 @@ func TestEvaluationRunnerReplaysFixtureThroughMemorySearcher(t *testing.T) {
 	if searcher.input.Scope != fixture.Cases[0].Scope || searcher.input.Query != fixture.Cases[0].Query {
 		t.Fatalf("Search() input = %+v, want fixture scope and query", searcher.input)
 	}
+	if !searcher.input.queryAnalysisPolicyDisabled {
+		t.Fatalf("original-query baseline did not disable query-analysis policy: %+v", searcher.input)
+	}
 	if run.Metadata.FusionStrategy != "rrf:rrf-v1" {
 		t.Fatalf("fusion strategy = %q, want default RRF identity", run.Metadata.FusionStrategy)
 	}
@@ -513,7 +516,7 @@ func TestEvaluationRunnerCopiesOnlyAuthorizedBoundedAnalysisDiagnostics(t *testi
 	if err != nil {
 		t.Fatal(err)
 	}
-	if searcher.input.rankingPolicyDisabled || !searcher.input.IncludeFeedbackDiagnostics || !searcher.input.queryAnalysisDiagnosticsAuthorized {
+	if searcher.input.rankingPolicyDisabled || searcher.input.queryAnalysisPolicyDisabled || !searcher.input.IncludeFeedbackDiagnostics || !searcher.input.queryAnalysisDiagnosticsAuthorized {
 		t.Fatalf("evaluation search input did not authorize active bounded analysis: %+v", searcher.input)
 	}
 	if run.Cases[0].AnalysisDiagnostics == nil || run.Cases[0].AnalysisDiagnostics.SignalCount != 3 || run.Cases[0].AnalysisDiagnostics.CandidateCount != 5 {
