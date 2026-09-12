@@ -225,6 +225,14 @@ func (r *EvaluationRunner) Replay(ctx context.Context, fixture EvaluationFixture
 }
 
 func evaluationReplayAnalysisDiagnostics(diagnostics []ContextDiagnostic, metadata EvaluationRankingMetadata, expectation *EvaluationAnalysisExpectation) (*QueryAnalysisDiagnostics, error) {
+	if metadata.RolloutDisposition == "original_only" {
+		for _, diagnostic := range diagnostics {
+			if diagnostic.Section == "query_analysis" {
+				return nil, fmt.Errorf("original-query baseline contains query-analysis diagnostics")
+			}
+		}
+		return nil, nil
+	}
 	var result *QueryAnalysisDiagnostics
 	for _, diagnostic := range diagnostics {
 		if diagnostic.Section != "query_analysis" {

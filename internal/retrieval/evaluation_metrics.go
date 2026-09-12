@@ -162,7 +162,7 @@ func CalculateEvaluationMetrics(replay EvaluationReplay) (EvaluationReport, erro
 
 func validateEvaluationReplayAnalysis(diagnostic *QueryAnalysisDiagnostics, metadata EvaluationRankingMetadata) error {
 	if diagnostic == nil {
-		if metadata.AnalysisVersion != "" {
+		if metadata.AnalysisVersion != "" && metadata.RolloutDisposition != "original_only" {
 			return fmt.Errorf("query-analysis diagnostics are missing")
 		}
 		return nil

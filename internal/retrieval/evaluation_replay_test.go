@@ -524,6 +524,29 @@ func TestEvaluationRunnerCopiesOnlyAuthorizedBoundedAnalysisDiagnostics(t *testi
 	}
 }
 
+func TestEvaluationRunnerAllowsVersionedOriginalOnlyBaselineWithoutAnalysisDiagnostics(t *testing.T) {
+	scope := memory.Scope{Tenant: "eval", Project: "baseline", Namespace: "original-only"}
+	fixture := EvaluationFixture{Version: "fixture-v1", Cases: []EvaluationCase{{
+		ID: "original-only", Category: "single-fact", Scope: scope, Query: "private query",
+		Sources: []EvaluationSource{{Alias: "fact", EventType: "fixture", Content: "private evidence"}}, ExpectedEvidenceGroups: [][]string{{"fact"}},
+		ExpectedAnalysis: &EvaluationAnalysisExpectation{PolicyVersion: QueryAnalysisPolicyVersionV1, LimitsVersion: QueryAnalysisLimitsVersionV1, Disposition: QueryAnalysisDispositionComplete, Fallback: QueryAnalysisFallbackNone, OriginalRetained: true, MaxSignalCount: 8, MaxSubqueryCount: 4, MaxCandidateCount: 200},
+	}}}
+	searcher := &stubEvaluationSearcher{}
+	run, err := NewEvaluationRunner(searcher).Replay(context.Background(), fixture, EvaluationFixtureSeed{FixtureVersion: fixture.Version, Aliases: []EvaluationSeededAlias{{CaseID: "original-only", Alias: "fact", Scope: scope, MemoryID: "memory-1", State: memory.MemoryStateActive}}}, EvaluationRankingMetadata{
+		FixtureVersion: fixture.Version, RepresentationVersion: "canonical-v1", RankingVersion: "ranking-v1", FusionStrategy: "rrf:rrf-v1", CompatibleEmbeddingRevision: "embedding-v1", PolicyVersion: "policy-v1",
+		AnalysisVersion: string(QueryAnalysisPolicyVersionV1), AnalysisLimitsVersion: string(QueryAnalysisLimitsVersionV1), RolloutDisposition: "original_only",
+	})
+	if err != nil {
+		t.Fatalf("Replay() original-only baseline error = %v", err)
+	}
+	if !searcher.input.queryAnalysisPolicyDisabled || run.Cases[0].AnalysisDiagnostics != nil {
+		t.Fatalf("original-only baseline input=%+v diagnostics=%+v", searcher.input, run.Cases[0].AnalysisDiagnostics)
+	}
+	if _, err := CalculateEvaluationMetrics(run); err != nil {
+		t.Fatalf("CalculateEvaluationMetrics() original-only baseline error = %v", err)
+	}
+}
+
 func TestCalculateEvaluationMetricsRejectsUnboundedAnalysisCounts(t *testing.T) {
 	scope := memory.Scope{Tenant: "eval", Project: "baseline", Namespace: "bounds"}
 	diagnostics := QueryAnalysisDiagnostics{PolicyVersion: QueryAnalysisPolicyVersionV1, LimitsVersion: QueryAnalysisLimitsVersionV1, Disposition: QueryAnalysisDispositionComplete, Fallback: QueryAnalysisFallbackNone, OriginalRetained: true, SignalCount: QueryAnalysisHardMaxSignals + 1}

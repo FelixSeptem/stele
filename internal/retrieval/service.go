@@ -863,7 +863,7 @@ func (s *Service) queryRecallInputs(ctx context.Context, input SearchInput, rank
 		analysis, err = outcome.result, outcome.err
 	case <-time.After(analysisLimit):
 		if input.IncludeFeedbackDiagnostics {
-			return inputs, []ContextDiagnostic{{Section: "query_analysis", Status: "original_only", Reason: "analysis exceeded elapsed budget", PolicyVersion: QueryAnalysisPolicyVersionV1, LimitsVersion: limits.Version, OriginalRetained: true, Fallback: QueryAnalysisFallbackUnavailable, Disposition: QueryAnalysisDispositionOriginalOnly, RolloutStage: string(memory.QueryAnalysisRolloutStageOriginalOnly), ElapsedNS: boundedAnalysisElapsedNS(time.Since(analysisStarted), limits.MaxElapsed)}}
+			return inputs, []ContextDiagnostic{{Section: "query_analysis", Status: "original_only", Reason: "analysis exceeded elapsed budget", PolicyVersion: QueryAnalysisPolicyVersionV1, LimitsVersion: limits.Version, OriginalRetained: true, Fallback: QueryAnalysisFallbackUnavailable, Disposition: QueryAnalysisDispositionOriginalOnly, Categories: []QueryAnalysisDiagnosticCount{{Category: QueryAnalysisDiagnosticUnavailable, Count: 1}}, RolloutStage: string(memory.QueryAnalysisRolloutStageOriginalOnly), ElapsedNS: boundedAnalysisElapsedNS(time.Since(analysisStarted), limits.MaxElapsed)}}
 		}
 		return inputs, nil
 	case <-ctx.Done():
@@ -872,17 +872,18 @@ func (s *Service) queryRecallInputs(ctx context.Context, input SearchInput, rank
 	diagnostics := make([]ContextDiagnostic, 0, 1)
 	if err != nil {
 		if input.IncludeFeedbackDiagnostics {
-			diagnostics = append(diagnostics, ContextDiagnostic{Section: "query_analysis", Status: "original_only", Reason: "analysis unavailable; original query retained", PolicyVersion: QueryAnalysisPolicyVersionV1, LimitsVersion: limits.Version, OriginalRetained: true, Fallback: QueryAnalysisFallbackUnavailable, Disposition: QueryAnalysisDispositionOriginalOnly, RolloutStage: string(memory.QueryAnalysisRolloutStageOriginalOnly), ElapsedNS: boundedAnalysisElapsedNS(time.Since(analysisStarted), limits.MaxElapsed)})
+			diagnostics = append(diagnostics, ContextDiagnostic{Section: "query_analysis", Status: "original_only", Reason: "analysis unavailable; original query retained", PolicyVersion: QueryAnalysisPolicyVersionV1, LimitsVersion: limits.Version, OriginalRetained: true, Fallback: QueryAnalysisFallbackUnavailable, Disposition: QueryAnalysisDispositionOriginalOnly, Categories: []QueryAnalysisDiagnosticCount{{Category: QueryAnalysisDiagnosticUnavailable, Count: 1}}, RolloutStage: string(memory.QueryAnalysisRolloutStageOriginalOnly), ElapsedNS: boundedAnalysisElapsedNS(time.Since(analysisStarted), limits.MaxElapsed)})
 		}
 		return inputs, diagnostics
 	}
 	if err := analysis.Validate(analysisInput); err != nil {
 		if input.IncludeFeedbackDiagnostics {
-			diagnostics = append(diagnostics, ContextDiagnostic{Section: "query_analysis", Status: "original_only", Reason: "analysis rejected; original query retained", PolicyVersion: QueryAnalysisPolicyVersionV1, LimitsVersion: limits.Version, OriginalRetained: true, Fallback: QueryAnalysisFallbackMalformed, Disposition: QueryAnalysisDispositionOriginalOnly, RolloutStage: string(memory.QueryAnalysisRolloutStageOriginalOnly), ElapsedNS: boundedAnalysisElapsedNS(time.Since(analysisStarted), limits.MaxElapsed)})
+			diagnostics = append(diagnostics, ContextDiagnostic{Section: "query_analysis", Status: "original_only", Reason: "analysis rejected; original query retained", PolicyVersion: QueryAnalysisPolicyVersionV1, LimitsVersion: limits.Version, OriginalRetained: true, Fallback: QueryAnalysisFallbackMalformed, Disposition: QueryAnalysisDispositionOriginalOnly, Categories: []QueryAnalysisDiagnosticCount{{Category: QueryAnalysisDiagnosticMalformed, Count: 1}}, RolloutStage: string(memory.QueryAnalysisRolloutStageOriginalOnly), ElapsedNS: boundedAnalysisElapsedNS(time.Since(analysisStarted), limits.MaxElapsed)})
 		}
 		return inputs, diagnostics
 	}
 	resolution := memory.ResolveQueryAnalysisRollout(rankingPolicy, memory.ResolveQueryAnalysisRolloutInput{Scope: input.Scope, Surface: surface, SessionID: input.SessionID, UserID: input.UserID, Now: time.Now().UTC()})
+	fallback := queryAnalysisFallbackForResult(analysis)
 	if !resolution.DerivedSignalsAffectResults {
 		if resolution.Stage == memory.QueryAnalysisRolloutStageShadow {
 			for _, signal := range analysis.Signals[1:] {
@@ -897,7 +898,7 @@ func (s *Service) queryRecallInputs(ctx context.Context, input SearchInput, rank
 			}
 		}
 		if input.IncludeFeedbackDiagnostics {
-			diagnostic := queryAnalysisDiagnostic(analysis, limits, resolution.Stage, QueryAnalysisFallbackNone, time.Since(analysisStarted))
+			diagnostic := queryAnalysisDiagnostic(analysis, limits, resolution.Stage, fallback, time.Since(analysisStarted))
 			diagnostic.Status, diagnostic.Reason = string(resolution.Stage), "rollout does not permit derived signals"
 			diagnostics = append(diagnostics, diagnostic)
 		}
@@ -913,11 +914,32 @@ func (s *Service) queryRecallInputs(ctx context.Context, input SearchInput, rank
 		inputs = append(inputs, derived)
 	}
 	if input.IncludeFeedbackDiagnostics {
-		diagnostic := queryAnalysisDiagnostic(analysis, limits, resolution.Stage, QueryAnalysisFallbackNone, time.Since(analysisStarted))
+		diagnostic := queryAnalysisDiagnostic(analysis, limits, resolution.Stage, fallback, time.Since(analysisStarted))
 		diagnostic.Status, diagnostic.Reason, diagnostic.Included = "active", "bounded derived signals enabled", len(inputs)-1
 		diagnostics = append(diagnostics, diagnostic)
 	}
 	return inputs, diagnostics
+}
+
+func queryAnalysisFallbackForResult(result QueryAnalysisResult) QueryAnalysisFallbackCategory {
+	if result.Disposition != QueryAnalysisDispositionOriginalOnly {
+		return QueryAnalysisFallbackNone
+	}
+	for _, category := range result.Categories {
+		switch category.Category {
+		case QueryAnalysisDiagnosticAdversarial:
+			return QueryAnalysisFallbackAdversarial
+		case QueryAnalysisDiagnosticMalformed:
+			return QueryAnalysisFallbackMalformed
+		case QueryAnalysisDiagnosticUnavailable:
+			return QueryAnalysisFallbackUnavailable
+		case QueryAnalysisDiagnosticOverBudget:
+			return QueryAnalysisFallbackOverBudget
+		case QueryAnalysisDiagnosticDuplicate:
+			return QueryAnalysisFallbackDuplicate
+		}
+	}
+	return QueryAnalysisFallbackNone
 }
 
 func boundedAnalysisElapsedNS(elapsed, max time.Duration) int64 {

@@ -146,7 +146,9 @@ func containsAdversarialControl(value string) bool {
 			return true
 		}
 	}
-	return false
+	folded := cases.Fold().String(value)
+	return strings.Contains(folded, "../") ||
+		(strings.Contains(folded, "ignore bounds") && strings.Contains(folded, "tenant"))
 }
 
 func truncateUTF8(value string, maxBytes int) string {

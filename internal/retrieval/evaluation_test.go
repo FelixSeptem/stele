@@ -57,6 +57,36 @@ func TestRepositoryEvaluationFixtureCoversRequiredRetrievalScenarios(t *testing.
 	}
 }
 
+func TestRepositoryEvaluationFixtureMatchesRuleBasedAnalyzer(t *testing.T) {
+	encoded, err := os.ReadFile(filepath.Join("testdata", "retrieval-evaluation-fixture-v1.json"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	var fixture EvaluationFixture
+	if err := json.Unmarshal(encoded, &fixture); err != nil {
+		t.Fatal(err)
+	}
+	limits := DefaultQueryAnalysisLimits()
+	for _, item := range fixture.Cases {
+		if item.ExpectedAnalysis == nil || item.Category == "malformed" || item.Category == "analyzer-unavailable" {
+			continue
+		}
+		t.Run(item.ID, func(t *testing.T) {
+			result, err := (RuleBasedQueryAnalyzer{}).Analyze(QueryAnalysisInput{AcceptedQuery: item.Query, PolicyVersion: QueryAnalysisPolicyVersionV1, Limits: limits})
+			if err != nil {
+				t.Fatal(err)
+			}
+			diagnostic, err := QueryAnalysisDiagnosticsFromResult(result, limits, queryAnalysisFallbackForResult(result), 0, 0, "active")
+			if err != nil {
+				t.Fatal(err)
+			}
+			if err := evaluationAnalysisMatchesExpectation(diagnostic, item.ExpectedAnalysis); err != nil {
+				t.Fatalf("fixture analysis expectation does not match analyzer: %v; diagnostic=%+v expectation=%+v", err, diagnostic, *item.ExpectedAnalysis)
+			}
+		})
+	}
+}
+
 func TestEvaluationFixtureValidateAcceptsScopedEvidenceGroups(t *testing.T) {
 	fixture := EvaluationFixture{
 		Version: "retrieval-fixture-v1",
