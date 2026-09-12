@@ -158,6 +158,16 @@ type embeddingRuntime struct {
 	Status    memory.EmbeddingRuntimeStatus
 }
 
+func buildConfiguredReranker(cfg config.RerankerConfig) retrieval.Reranker {
+	if !cfg.Enabled {
+		return nil
+	}
+	return retrieval.OpenAIReranker{
+		Endpoint: cfg.Endpoint, APIKey: cfg.APIKey, Model: cfg.Model,
+		Timeout: cfg.Timeout, MaxCandidates: cfg.MaxCandidates, MaxTextBytes: cfg.MaxTextBytes,
+	}
+}
+
 const governanceWorkerLeaseDuration = 2 * time.Minute
 
 type lifecycleProcessorAdapter struct {
@@ -528,6 +538,7 @@ func buildAPIRuntime(ctx context.Context, cfg config.Config, deps apiRuntimeDepe
 		RankingRolloutPolicyReader:   repo,
 		Projections:                  repo,
 		ProjectionConsumptionEnabled: cfg.ContextProjectionConsumptionEnabled,
+		Reranker:                     buildConfiguredReranker(cfg.Reranker), RerankerMode: retrieval.RerankerMode(cfg.Reranker.Mode), RerankerProvider: cfg.Reranker.Provider, RerankerVersion: cfg.Reranker.Model,
 	}, deps.observer)
 	httpDeps := httpDependenciesFromConfigWithIngestor(cfg, ingestor)
 	durableAuthorizer := auth.NewPrincipalService(repo, time.Now)
@@ -725,6 +736,7 @@ func buildWorkerRuntime(ctx context.Context, cfg config.Config, deps workerRunti
 		RankingRolloutPolicyReader:   repo,
 		Projections:                  repo,
 		ProjectionConsumptionEnabled: cfg.ContextProjectionConsumptionEnabled,
+		Reranker:                     buildConfiguredReranker(cfg.Reranker), RerankerMode: retrieval.RerankerMode(cfg.Reranker.Mode), RerankerProvider: cfg.Reranker.Provider, RerankerVersion: cfg.Reranker.Model,
 	}, deps.observer)
 
 	worker := jobs.GovernanceWorker{

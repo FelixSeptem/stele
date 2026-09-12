@@ -70,6 +70,13 @@ func TestEvaluationFixtureSeederSeedsOwnedPostgresFixture(t *testing.T) {
 	if err := BootstrapDatabase(ctx, pool); err != nil {
 		t.Fatalf("BootstrapDatabase() error = %v", err)
 	}
+	var pgvectorInstalled bool
+	if err := pool.QueryRow(ctx, `SELECT EXISTS (SELECT 1 FROM pg_extension WHERE extname = 'vector')`).Scan(&pgvectorInstalled); err != nil {
+		t.Fatalf("check pgvector extension: %v", err)
+	}
+	if !pgvectorInstalled {
+		t.Skip("SKIP_RETRIEVAL_EVALUATION_PGVECTOR_REQUIRED")
+	}
 
 	repo := NewRepository(pool)
 	seeder := NewEvaluationFixtureSeeder(repo)

@@ -63,6 +63,33 @@ func TestCalculateEvaluationMetricsUsesEvidenceGroupsAndBoundedLatency(t *testin
 	}
 }
 
+func TestCalculateEvaluationMetricsReportsDiversityDispositionsAndProtectedMetrics(t *testing.T) {
+	scope := memory.Scope{Tenant: "eval", Project: "baseline", Namespace: "diversity"}
+	report, err := CalculateEvaluationMetrics(EvaluationReplay{
+		Metadata: EvaluationRankingMetadata{FixtureVersion: "fixture-v1", RepresentationVersion: "canonical-v1", RankingVersion: "diversity-v1", CompatibleEmbeddingRevision: "embedding-v1", PolicyVersion: "diversity-policy-v1"},
+		Cases: []EvaluationReplayCase{{
+			Scope: scope, ExpectedEvidenceGroups: [][]string{{"required"}}, CandidatePoolSize: 4, Latency: 12 * time.Millisecond,
+			Candidates: []EvaluationReplayCandidate{{Alias: "required", FinalRank: 1, Scope: scope, State: memory.MemoryStateActive}},
+			Diagnostics: []EvaluationCandidateDiagnostic{
+				{Alias: "required", Disposition: EvaluationCandidateDispositionReturned},
+				{Alias: "duplicate", Disposition: EvaluationCandidateDispositionNotReturned},
+			},
+		}},
+	})
+	if err != nil {
+		t.Fatalf("CalculateEvaluationMetrics() error = %v", err)
+	}
+	if report.Metadata.PolicyVersion != "diversity-policy-v1" {
+		t.Fatalf("policy version = %q", report.Metadata.PolicyVersion)
+	}
+	if report.DispositionAggregates["returned"] != 1 || report.DispositionAggregates["not_returned"] != 1 {
+		t.Fatalf("dispositions = %#v", report.DispositionAggregates)
+	}
+	if report.Metrics.ProtectedRecall != 1 || report.Metrics.EvidenceCoverage != 1 || report.Metrics.CandidatePoolSize != 4 || report.Metrics.P95LatencyMS != 12 {
+		t.Fatalf("metrics = %+v", report.Metrics)
+	}
+}
+
 func TestCalculateEvaluationMetricsCountsEveryEvidenceGroupSatisfiedAtSameRank(t *testing.T) {
 	report, err := CalculateEvaluationMetrics(EvaluationReplay{
 		Metadata: EvaluationRankingMetadata{

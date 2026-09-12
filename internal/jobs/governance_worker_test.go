@@ -562,11 +562,11 @@ func (p *completionMarkingProcessor) ProcessClaimedRawEvent(ctx context.Context,
 func TestGovernanceWorkerRunOnceProcessesRecoveredRetryWaitEventThroughClaimPath(t *testing.T) {
 	now := time.Date(2026, 6, 12, 3, 0, 0, 0, time.UTC)
 	claimer := &recoveryAwareClaimer{
-		event:      newClaimedRawEvent(t, "evt_retry_recovered", now).Event,
-		attempt:    2,
-		exhausted:  false,
-		processed:  false,
-		leaseUntil: time.Time{},
+		event:         newClaimedRawEvent(t, "evt_retry_recovered", now).Event,
+		attempt:       2,
+		exhausted:     false,
+		processed:     false,
+		leaseUntil:    time.Time{},
 		nextAttemptAt: now.Add(10 * time.Minute),
 	}
 	processor := &completionMarkingProcessor{claimer: claimer}

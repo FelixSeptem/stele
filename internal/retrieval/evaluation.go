@@ -31,13 +31,16 @@ type EvaluationCase struct {
 
 // EvaluationSource is a controlled source event used by one evaluation case.
 type EvaluationSource struct {
-	Alias           string             `json:"alias"`
-	EventType       string             `json:"event_type"`
-	Content         string             `json:"content"`
-	Class           memory.MemoryClass `json:"class,omitempty"`
-	State           memory.MemoryState `json:"state,omitempty"`
-	FactCluster     string             `json:"fact_cluster,omitempty"`
-	SourceTimestamp time.Time          `json:"source_timestamp,omitempty"`
+	Alias             string             `json:"alias"`
+	EventType         string             `json:"event_type"`
+	Content           string             `json:"content"`
+	Class             memory.MemoryClass `json:"class,omitempty"`
+	State             memory.MemoryState `json:"state,omitempty"`
+	FactCluster       string             `json:"fact_cluster,omitempty"`
+	SourceEventID     string             `json:"source_event_id,omitempty"`
+	ParentMemoryID    string             `json:"parent_memory_id,omitempty"`
+	EmbeddingRevision string             `json:"embedding_revision,omitempty"`
+	SourceTimestamp   time.Time          `json:"source_timestamp,omitempty"`
 }
 
 // EvaluationRankingMetadata identifies an evaluation report without exposing
@@ -50,6 +53,10 @@ type EvaluationRankingMetadata struct {
 	CompatibleEmbeddingRevision string           `json:"compatible_embedding_revision"`
 	LexicalMatchMode            LexicalMatchMode `json:"lexical_match_mode,omitempty"`
 	PolicyVersion               string           `json:"policy_version"`
+	QualityFeatureVersion       string           `json:"quality_feature_version,omitempty"`
+	RerankerProvider            string           `json:"reranker_provider,omitempty"`
+	RerankerVersion             string           `json:"reranker_version,omitempty"`
+	RerankerMode                string           `json:"reranker_mode,omitempty"`
 }
 
 // EvaluationSafetyFailureCategory is a stable non-sensitive failure reason.
@@ -104,6 +111,9 @@ type EvaluationMetricReport struct {
 	CandidatePoolSize        int     `json:"candidate_pool_size"`
 	P50LatencyMS             float64 `json:"p50_latency_ms"`
 	P95LatencyMS             float64 `json:"p95_latency_ms"`
+	ProtectedRecall          float64 `json:"protected_recall"`
+	EvidenceCoverage         float64 `json:"evidence_coverage"`
+	BudgetOmissionRate       float64 `json:"budget_omission_rate"`
 }
 
 // EvaluationCaseReport is a bounded per-case contribution to an evaluation report.
@@ -115,15 +125,20 @@ type EvaluationCaseReport struct {
 	CandidatePoolSize int                       `json:"candidate_pool_size"`
 	LatencyMS         float64                   `json:"latency_ms"`
 	ChunkDerivedCount int                       `json:"chunk_derived_count,omitempty"`
+	ChangedRankCount  int                       `json:"changed_rank_count,omitempty"`
+	RerankFallback    string                    `json:"rerank_fallback,omitempty"`
 }
 
 // EvaluationReport is the versioned data model rendered by local and CI replay.
 type EvaluationReport struct {
-	Metadata       EvaluationRankingMetadata `json:"metadata"`
-	Cases          []EvaluationCaseReport    `json:"cases"`
-	Metrics        EvaluationMetricReport    `json:"metrics"`
-	SafetyFailures []EvaluationSafetyFailure `json:"safety_failures,omitempty"`
-	GeneratedAt    time.Time                 `json:"generated_at"`
+	Metadata              EvaluationRankingMetadata `json:"metadata"`
+	Cases                 []EvaluationCaseReport    `json:"cases"`
+	Metrics               EvaluationMetricReport    `json:"metrics"`
+	SafetyFailures        []EvaluationSafetyFailure `json:"safety_failures,omitempty"`
+	DispositionAggregates map[string]int            `json:"disposition_aggregates,omitempty"`
+	GeneratedAt           time.Time                 `json:"generated_at"`
+	ChangedRankCount      int                       `json:"changed_rank_count,omitempty"`
+	RerankFallbackCounts  map[string]int            `json:"rerank_fallback_counts,omitempty"`
 }
 
 // EvaluationFixtureSeed is the alias-to-record resolution produced by a fixture
@@ -151,7 +166,10 @@ type EvaluationReleasePolicy struct {
 	ProtectedCategories           []string `json:"protected_categories,omitempty"`
 	MaxRecallRegression           float64  `json:"max_recall_regression"`
 	MaxMultiHopCoverageRegression float64  `json:"max_multi_hop_coverage_regression"`
+	MaxEvidenceCoverageRegression float64  `json:"max_evidence_coverage_regression,omitempty"`
+	MaxBudgetOmissionIncrease     float64  `json:"max_budget_omission_increase,omitempty"`
 	MaxP95LatencyMS               int      `json:"max_p95_latency_ms"`
+	MaxP95LatencyRegressionMS     int      `json:"max_p95_latency_regression_ms,omitempty"`
 }
 
 // EvaluationReleaseDecision is the bounded policy result for a candidate report.
@@ -193,6 +211,14 @@ func (m EvaluationRankingMetadata) Validate() error {
 	}
 	if strings.TrimSpace(m.PolicyVersion) == "" {
 		return fmt.Errorf("policy version is required")
+	}
+	for name, value := range map[string]string{"quality feature version": m.QualityFeatureVersion, "reranker provider": m.RerankerProvider, "reranker version": m.RerankerVersion, "reranker mode": m.RerankerMode} {
+		if !evaluationSafeIdentity(value) {
+			return fmt.Errorf("%s identity is invalid", name)
+		}
+	}
+	if m.RerankerMode != "" && m.RerankerMode != "disabled" && m.RerankerMode != "diagnostics_only" && m.RerankerMode != "shadow" && m.RerankerMode != "active_for_scope" {
+		return fmt.Errorf("reranker mode is invalid")
 	}
 	return nil
 }
@@ -325,7 +351,7 @@ func (p EvaluationReleasePolicy) Validate() error {
 	if p.MaxP95LatencyMS <= 0 {
 		return fmt.Errorf("max p95 latency must be greater than zero")
 	}
-	if p.MaxRecallRegression < 0 || p.MaxMultiHopCoverageRegression < 0 {
+	if p.MaxRecallRegression < 0 || p.MaxMultiHopCoverageRegression < 0 || p.MaxEvidenceCoverageRegression < 0 || p.MaxBudgetOmissionIncrease < 0 || p.MaxP95LatencyRegressionMS < 0 {
 		return fmt.Errorf("quality regression tolerances must be greater than or equal to zero")
 	}
 	seenCategories := make(map[string]struct{}, len(p.ProtectedCategories))

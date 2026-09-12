@@ -1,0 +1,12 @@
+- [x] 1.1 Inspect current retrieval, ranking rollout, configuration, telemetry, and evaluation contracts; record compatibility constraints and define versioned quality/reranker domain types.
+- [x] 1.2 Add `QualityFeatureVector`, bounded normalization, deterministic adjustment/clamping, and unit tests for neutral/missing/negative/conflicting evidence.
+- [x] 1.3 Add provider-independent `Reranker` contract, deterministic fake provider, validation, and fail-closed behavior tests.
+- [x] 2.1 Implement OpenAI-compatible HTTP reranker adapter with configurable endpoint/path/model/timeout/candidate and text bounds; redact secrets and response bodies.
+- [x] 2.2 Extend typed runtime configuration and provider registration for api/worker/scheduler with disabled defaults, environment loading, validation, and `.env.example`/ignore guidance.
+- [x] 3.1 Extend scoped ranking rollout policy to carry logical quality feature and reranker identities/mode without storing secrets; add additive migration/repository compatibility tests.
+- [x] 3.2 Integrate quality feature extraction and optional reranker after stable fusion and before diversity/context packing, preserving baseline fallback and exact-scope visibility checks.
+- [x] 3.3 Reuse activation, dry-run, shadow, diagnostics, disable, and rollback governance; ensure active mode requires matching evidence and never activates globally.
+- [x] 4.1 Extend retrieval evaluation/replay reports with bounded feature/reranker identity, fallback categories, changed-rank counts, and protected metric deltas with redaction assertions.
+- [x] 4.2 Add low-cardinality rerank telemetry and admin diagnostics while excluding query text, scope values, IDs, raw scores, credentials, DSNs, and provider payloads.
+- [x] 5.1 Update retrieval-quality and self-hosting docs with configuration examples using placeholders, local-secret guidance, rollout procedure, rollback, and real-stack evaluation prerequisites.
+- [x] 5.2 Run focused retrieval/config/provider/rollout/evaluation tests, `go test ./...`, race tests where practical, `openspec validate quality-aware-signals-and-controlled-reranking --strict`, and `git diff --check`.

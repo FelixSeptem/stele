@@ -129,3 +129,103 @@ go test ./internal/app -run RankingRollout -count=1
 The replay command requires the explicitly owned disposable
 `STELE_TEST_RETRIEVAL_EVALUATION_DSN` described above. It must not be supplied
 from, or replaced by, `STELE_POSTGRES_DSN`.
+
+## Identity deduplication and diversity-aware context packing
+
+The retrieval pipeline performs identity and validated-lineage deduplication
+after scope/lifecycle validation and stable fusion, and before any diversity or
+budget selection:
+
+```text
+scope + lifecycle validation
+  -> bounded recall and stable fusion
+  -> canonical/source-event/parent-lineage deduplication
+  -> optional semantic clustering and diversity selection
+  -> existing section, citation, and token/character budget packing
+```
+
+Identity equivalence is established by canonical memory ID, source event ID, or
+validated parent-memory lineage. The first candidate in the stable fused order
+is the representative; citations are merged deterministically and remain
+bounded per representative. An invalid, hidden, expired, suppressed,
+forgotten, deleted, or foreign candidate is discarded before grouping and can
+never suppress a visible candidate. With no approved diversity policy, this
+identity-deduplicated order is the default behavior.
+
+### Versioned diversity policy lifecycle
+
+A diversity policy is versioned by name and version and is resolved only for
+the exact `tenant/project/namespace` scope. Its bounded parameters include the
+semantic threshold, MMR (or equivalent) relevance/diversity weight, candidate
+limit, pairwise-comparison budget, citation limit, and coverage weights for
+memory class, source session, entity, and time slice. Semantic clusters are
+formed only from candidates with a compatible active embedding revision. If
+embeddings, the revision, or the optional computation are unavailable, the
+selector reports a bounded `semantic_unavailable` availability category and
+falls back to identity-only selection without widening recall or querying
+additional metadata.
+
+Rollouts use the existing ranking-rollout governance and have explicit
+`diagnostics_only`/`shadow`, `active_for_scope`, `disabled`, and rollback
+states. Diagnostics-only and shadow policies never change ordinary search or
+context output. Activation requires the normal dry-run, attribution, evidence
+threshold, and no-blocker gates; an absent, malformed, disabled, hidden, or
+foreign-scope policy is equivalent to no policy. Per-section selection runs
+after eligibility and summary preference but before existing budgets, so public
+section names, projections, citations, and caller budgets remain unchanged.
+
+Authorized evaluation or admin diagnostics may expose only the policy identity,
+aggregate dispositions (`selected`, `duplicate`, `omitted_by_diversity`,
+`omitted_by_budget`, `invalid`, or `semantic_unavailable`), bounded counts, and
+availability categories. Ordinary retrieval and context responses never
+expose cluster membership, similarity values, candidate pools, hidden content,
+foreign identifiers, scope values, or provider errors.
+
+Evaluation reports include the diversity-policy name/version and aggregate
+dispositions alongside duplicate rate, protected recall, evidence coverage,
+candidate-pool size, and bounded latency. Scope or lifecycle leakage is always
+a hard failure; protected-recall, multi-hop-coverage, budget, or latency
+regressions block activation. Rollback disables the active selection and
+restores the prior approved baseline without rewriting canonical memory, raw
+events, chunks, provenance, or fusion state; telemetry records
+`reason_code=rollback_restored`.
+
+The real-stack replay is intentionally opt-in. It requires an explicitly owned,
+disposable PostgreSQL + pgvector DSN in
+`STELE_TEST_RETRIEVAL_EVALUATION_DSN`. When the variable is absent, the
+evaluator prints `SKIP_RETRIEVAL_EVALUATION_DSN_REQUIRED` and exits with code
+`2`; this is a controlled non-pass skip, not a successful evaluation. The
+evaluator never falls back to `STELE_POSTGRES_DSN` or any ambient operator
+database. Remove the fixture scope after the run and keep reports free of
+credentials and raw candidate content.
+
+## Optional quality-aware reranking
+
+Reranking is an optional, fail-closed stage after stable RRF fusion and before
+diversity/context packing. It is disabled by default and ordinary retrieval is
+unchanged until an exact `tenant/project/namespace` policy is active. Durable
+policies store only logical quality/provider/version/mode identities; endpoint
+URLs, API keys, DSNs, source text, and raw provider payloads stay in runtime
+environment or Docker secrets.
+
+```text
+STELE_RERANK_ENABLED=false
+STELE_RERANK_MODE=shadow
+STELE_RERANK_PROVIDER=
+STELE_RERANK_ENDPOINT=
+STELE_RERANK_MODEL=
+STELE_RERANK_API_KEY=
+STELE_RERANK_TIMEOUT=30s
+STELE_RERANK_MAX_CANDIDATES=50
+STELE_RERANK_MAX_TEXT_BYTES=8192
+```
+
+Begin with diagnostics/shadow, then run the disposable PostgreSQL + pgvector
+replay. Activation requires dry-run success, attribution, satisfied evidence,
+no blockers, matching provider/version/mode, and exact scope. Timeout,
+malformed output, unknown/duplicate IDs, visibility failures, or bound
+violations retain the immutable baseline. Disable or rollback restores it
+without rewriting canonical memory. Reports and metrics expose only bounded
+identities, fallback categories, changed-rank counts, and protected deltas;
+they omit queries, scopes, IDs, raw scores, credentials, DSNs, endpoints, and
+provider payloads.

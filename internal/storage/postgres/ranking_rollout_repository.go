@@ -35,13 +35,15 @@ INSERT INTO ranking_rollout_policies (
 	evidence_minimum, actor, reason, latest_dry_run_id, latest_dry_run_status,
 	fusion_strategy, fusion_version, fusion_rank_constant, fusion_channel_weights,
 	fusion_per_channel_candidate, fusion_total_candidates,
+	quality_feature_version, reranker_provider, reranker_version, reranker_mode,
 	activated_at, disabled_at, rolled_back_at, created_at, updated_at
 )
-VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19, $20, $21, $22, $23, $24, $25)
+VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19, $20, $21, $22, $23, $24, $25, $26, $27, $28, $29)
 RETURNING id, tenant, project, namespace, status, mode, surfaces, signal_sources, threshold_status,
 	evidence_minimum, actor, reason, latest_dry_run_id, latest_dry_run_status,
 	fusion_strategy, fusion_version, fusion_rank_constant, fusion_channel_weights,
 	fusion_per_channel_candidate, fusion_total_candidates,
+	quality_feature_version, reranker_provider, reranker_version, reranker_mode,
 	activated_at, disabled_at, rolled_back_at, created_at, updated_at
 `
 	created, err := scanRankingRolloutPolicy(tx.QueryRow(
@@ -67,6 +69,10 @@ RETURNING id, tenant, project, namespace, status, mode, surfaces, signal_sources
 		fusionChannelWeights,
 		nullableRankingInt(policy.FusionPerChannelCandidate),
 		nullableRankingInt(policy.FusionTotalCandidates),
+		nullableString(policy.QualityFeatureVersion),
+		nullableString(policy.RerankerProvider),
+		nullableString(policy.RerankerVersion),
+		nullableString(policy.RerankerMode),
 		nullableTime(policy.ActivatedAt),
 		nullableTime(policy.DisabledAt),
 		nullableTime(policy.RolledBackAt),
@@ -97,6 +103,7 @@ SELECT id, tenant, project, namespace, status, mode, surfaces, signal_sources, t
 	evidence_minimum, actor, reason, latest_dry_run_id, latest_dry_run_status,
 	fusion_strategy, fusion_version, fusion_rank_constant, fusion_channel_weights,
 	fusion_per_channel_candidate, fusion_total_candidates,
+	quality_feature_version, reranker_provider, reranker_version, reranker_mode,
 	activated_at, disabled_at, rolled_back_at, created_at, updated_at
 FROM ranking_rollout_policies
 WHERE tenant = $1 AND project = $2 AND namespace = $3 AND id = $4
@@ -118,6 +125,7 @@ SELECT id, tenant, project, namespace, status, mode, surfaces, signal_sources, t
 	evidence_minimum, actor, reason, latest_dry_run_id, latest_dry_run_status,
 	fusion_strategy, fusion_version, fusion_rank_constant, fusion_channel_weights,
 	fusion_per_channel_candidate, fusion_total_candidates,
+	quality_feature_version, reranker_provider, reranker_version, reranker_mode,
 	activated_at, disabled_at, rolled_back_at, created_at, updated_at
 FROM ranking_rollout_policies
 WHERE tenant = $1
@@ -145,6 +153,7 @@ SELECT id, tenant, project, namespace, status, mode, surfaces, signal_sources, t
 	evidence_minimum, actor, reason, latest_dry_run_id, latest_dry_run_status,
 	fusion_strategy, fusion_version, fusion_rank_constant, fusion_channel_weights,
 	fusion_per_channel_candidate, fusion_total_candidates,
+	quality_feature_version, reranker_provider, reranker_version, reranker_mode,
 	activated_at, disabled_at, rolled_back_at, created_at, updated_at
 FROM ranking_rollout_policies
 WHERE tenant = $1 AND project = $2 AND namespace = $3
@@ -303,6 +312,7 @@ RETURNING id, tenant, project, namespace, status, mode, surfaces, signal_sources
 	evidence_minimum, actor, reason, latest_dry_run_id, latest_dry_run_status,
 	fusion_strategy, fusion_version, fusion_rank_constant, fusion_channel_weights,
 	fusion_per_channel_candidate, fusion_total_candidates,
+	quality_feature_version, reranker_provider, reranker_version, reranker_mode,
 	activated_at, disabled_at, rolled_back_at, created_at, updated_at
 `
 	policy, err := scanRankingRolloutPolicy(tx.QueryRow(ctx, query, input.Scope.Tenant, input.Scope.Project, input.Scope.Namespace, input.PolicyID, memory.RankingRolloutPolicyStatusActiveForScope, input.Actor, input.Reason, input.ActivatedAt, input.Gate.EvidenceThresholdStatus, memory.RankingRolloutModeActiveForScope, memory.RankingRolloutPolicyStatusDisabled, memory.RankingRolloutPolicyStatusRolledBack))
@@ -342,6 +352,7 @@ RETURNING id, tenant, project, namespace, status, mode, surfaces, signal_sources
 	evidence_minimum, actor, reason, latest_dry_run_id, latest_dry_run_status,
 	fusion_strategy, fusion_version, fusion_rank_constant, fusion_channel_weights,
 	fusion_per_channel_candidate, fusion_total_candidates,
+	quality_feature_version, reranker_provider, reranker_version, reranker_mode,
 	activated_at, disabled_at, rolled_back_at, created_at, updated_at
 `
 	policy, err := scanRankingRolloutPolicy(tx.QueryRow(ctx, query, input.Scope.Tenant, input.Scope.Project, input.Scope.Namespace, input.PolicyID, memory.RankingRolloutPolicyStatusDisabled, input.Actor, input.Reason, input.DisabledAt))
@@ -384,6 +395,7 @@ RETURNING id, tenant, project, namespace, status, mode, surfaces, signal_sources
 	evidence_minimum, actor, reason, latest_dry_run_id, latest_dry_run_status,
 	fusion_strategy, fusion_version, fusion_rank_constant, fusion_channel_weights,
 	fusion_per_channel_candidate, fusion_total_candidates,
+	quality_feature_version, reranker_provider, reranker_version, reranker_mode,
 	activated_at, disabled_at, rolled_back_at, created_at, updated_at
 `
 	policy, err := scanRankingRolloutPolicy(tx.QueryRow(ctx, query, input.Scope.Tenant, input.Scope.Project, input.Scope.Namespace, input.PolicyID, memory.RankingRolloutPolicyStatusRolledBack, input.Actor, input.Reason, input.RolledBackAt))
@@ -454,6 +466,10 @@ func scanRankingRolloutPolicy(scanner provenanceScanner) (memory.RankingRolloutP
 	var fusionChannelWeights []byte
 	var fusionPerChannelCandidate sql.NullInt64
 	var fusionTotalCandidates sql.NullInt64
+	var qualityFeatureVersion sql.NullString
+	var rerankerProvider sql.NullString
+	var rerankerVersion sql.NullString
+	var rerankerMode sql.NullString
 	var activatedAt sql.NullTime
 	var disabledAt sql.NullTime
 	var rolledBackAt sql.NullTime
@@ -478,6 +494,10 @@ func scanRankingRolloutPolicy(scanner provenanceScanner) (memory.RankingRolloutP
 		&fusionChannelWeights,
 		&fusionPerChannelCandidate,
 		&fusionTotalCandidates,
+		&qualityFeatureVersion,
+		&rerankerProvider,
+		&rerankerVersion,
+		&rerankerMode,
 		&activatedAt,
 		&disabledAt,
 		&rolledBackAt,
@@ -513,6 +533,18 @@ func scanRankingRolloutPolicy(scanner provenanceScanner) (memory.RankingRolloutP
 	}
 	if fusionTotalCandidates.Valid {
 		policy.FusionTotalCandidates = int(fusionTotalCandidates.Int64)
+	}
+	if qualityFeatureVersion.Valid {
+		policy.QualityFeatureVersion = qualityFeatureVersion.String
+	}
+	if rerankerProvider.Valid {
+		policy.RerankerProvider = rerankerProvider.String
+	}
+	if rerankerVersion.Valid {
+		policy.RerankerVersion = rerankerVersion.String
+	}
+	if rerankerMode.Valid {
+		policy.RerankerMode = rerankerMode.String
 	}
 	if activatedAt.Valid {
 		policy.ActivatedAt = activatedAt.Time
@@ -623,6 +655,7 @@ SELECT id, tenant, project, namespace, status, mode, surfaces, signal_sources, t
 	evidence_minimum, actor, reason, latest_dry_run_id, latest_dry_run_status,
 	fusion_strategy, fusion_version, fusion_rank_constant, fusion_channel_weights,
 	fusion_per_channel_candidate, fusion_total_candidates,
+	quality_feature_version, reranker_provider, reranker_version, reranker_mode,
 	activated_at, disabled_at, rolled_back_at, created_at, updated_at
 FROM ranking_rollout_policies
 WHERE tenant = $1 AND project = $2 AND namespace = $3 AND id = $4

@@ -20,8 +20,10 @@ func CalculateEvaluationMetrics(replay EvaluationReplay) (EvaluationReport, erro
 	}
 
 	report := EvaluationReport{
-		Metadata: replay.Metadata,
-		Cases:    make([]EvaluationCaseReport, 0, len(replay.Cases)),
+		Metadata:              replay.Metadata,
+		Cases:                 make([]EvaluationCaseReport, 0, len(replay.Cases)),
+		DispositionAggregates: make(map[string]int),
+		RerankFallbackCounts:  make(map[string]int),
 	}
 	latencies := make([]float64, 0, len(replay.Cases))
 	safetyCounts := make(map[EvaluationSafetyFailureCategory]int)
@@ -31,6 +33,12 @@ func CalculateEvaluationMetrics(replay EvaluationReplay) (EvaluationReport, erro
 			safetyCounts[failure.Category] += failure.Count
 		}
 		metrics := calculateCaseEvaluationMetrics(item)
+		for _, diagnostic := range item.Diagnostics {
+			if diagnostic.Disposition == "" {
+				continue
+			}
+			report.DispositionAggregates[string(diagnostic.Disposition)]++
+		}
 		chunkDerivedCount := 0
 		for _, candidate := range item.Candidates {
 			if candidate.ChunkDerived {
@@ -45,7 +53,13 @@ func CalculateEvaluationMetrics(replay EvaluationReplay) (EvaluationReport, erro
 			CandidatePoolSize: item.CandidatePoolSize,
 			LatencyMS:         float64(item.Latency) / float64(1_000_000),
 			ChunkDerivedCount: chunkDerivedCount,
+			ChangedRankCount:  item.ChangedRankCount,
+			RerankFallback:    item.RerankFallback,
 		})
+		report.ChangedRankCount += item.ChangedRankCount
+		if item.RerankFallback != "" {
+			report.RerankFallbackCounts[item.RerankFallback]++
+		}
 		latencies = append(latencies, float64(item.Latency)/float64(1_000_000))
 		report.Metrics.RecallAt1 += metrics.RecallAt1
 		report.Metrics.RecallAt5 += metrics.RecallAt5
@@ -71,6 +85,9 @@ func CalculateEvaluationMetrics(replay EvaluationReplay) (EvaluationReport, erro
 		report.Metrics = EvaluationMetricReport{}
 		return report, nil
 	}
+	if len(report.RerankFallbackCounts) == 0 {
+		report.RerankFallbackCounts = nil
+	}
 
 	caseCount := float64(len(replay.Cases))
 	report.Metrics.RecallAt1 /= caseCount
@@ -85,7 +102,20 @@ func CalculateEvaluationMetrics(replay EvaluationReplay) (EvaluationReport, erro
 	report.Metrics.CandidatePoolSize = int(math.Round(float64(report.Metrics.CandidatePoolSize) / caseCount))
 	report.Metrics.P50LatencyMS = evaluationPercentile(latencies, 0.50)
 	report.Metrics.P95LatencyMS = evaluationPercentile(latencies, 0.95)
+	report.Metrics.ProtectedRecall = report.Metrics.RecallAt10
+	report.Metrics.EvidenceCoverage = report.Metrics.MultiHopEvidenceCoverage
+	if total := dispositionTotal(report.DispositionAggregates); total > 0 {
+		report.Metrics.BudgetOmissionRate = float64(report.DispositionAggregates["omitted_by_budget"]) / float64(total)
+	}
 	return report, nil
+}
+
+func dispositionTotal(dispositions map[string]int) int {
+	total := 0
+	for _, count := range dispositions {
+		total += count
+	}
+	return total
 }
 
 func evaluationReplaySafetyFailures(item EvaluationReplayCase) []EvaluationSafetyFailure {
@@ -175,6 +205,8 @@ func calculateCaseEvaluationMetrics(item EvaluationReplayCase) EvaluationMetricR
 	metrics.RecallAt5 = evaluationGroupRecall(groupRanks, 5)
 	metrics.RecallAt10 = evaluationGroupRecall(groupRanks, 10)
 	metrics.MultiHopEvidenceCoverage = metrics.RecallAt10
+	metrics.ProtectedRecall = metrics.RecallAt10
+	metrics.EvidenceCoverage = metrics.MultiHopEvidenceCoverage
 	if firstRelevantRank > 0 {
 		metrics.MRR = 1 / float64(firstRelevantRank)
 	}

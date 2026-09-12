@@ -242,6 +242,24 @@ func TestMetricsObserverExportsFusionSignalsWithoutHighCardinalityLabels(t *test
 	}
 }
 
+func TestMetricsObserverExportsRerankSignalsWithBoundedLabels(t *testing.T) {
+	observer := NewMetricsObserver()
+	observer.RecordRetrievalRerank(context.Background(), RetrievalRerankEvent{
+		Provider: "openai-compatible", Mode: "shadow", Outcome: "fallback",
+		FallbackCategory: "timeout", CandidateCount: 73,
+	})
+	metrics := observer.RenderPrometheus()
+	want := `stele_retrieval_rerank_total{candidate_count="51_plus",fallback_category="timeout",mode="shadow",outcome="fallback",provider="openai-compatible"} 1`
+	if !strings.Contains(metrics, want) {
+		t.Fatalf("metrics missing bounded rerank signal\n%s", metrics)
+	}
+	for _, forbidden := range []string{"tenant", "project", "namespace", "memory_id", "query", "score", "endpoint", "api_key", "dsn"} {
+		if strings.Contains(metrics, forbidden) {
+			t.Fatalf("metrics contain forbidden rerank label %q\n%s", forbidden, metrics)
+		}
+	}
+}
+
 func TestMetricsObserverExportsDerivedInsightReplaySignalsWithoutHighCardinalityLabels(t *testing.T) {
 	observer := NewMetricsObserver()
 	ctx := context.Background()

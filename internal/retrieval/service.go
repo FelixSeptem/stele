@@ -242,6 +242,10 @@ type rankingRolloutMetricObserver interface {
 	RecordRankingRollout(ctx context.Context, event telemetry.RankingRolloutEvent)
 }
 
+type retrievalRerankMetricObserver interface {
+	RecordRetrievalRerank(ctx context.Context, event telemetry.RetrievalRerankEvent)
+}
+
 type MemorySearcher interface {
 	Search(ctx context.Context, input SearchInput) (SearchResult, error)
 }
@@ -266,7 +270,12 @@ type ServiceDependencies struct {
 	FusionStrategy FusionStrategy
 	// ChunkRollout defaults to default_off. Shadow evaluates chunk candidates
 	// only for authorized diagnostics; Active permits them to influence results.
-	ChunkRollout memory.ChunkRolloutMode
+	ChunkRollout     memory.ChunkRolloutMode
+	Reranker         Reranker
+	RerankerMode     RerankerMode
+	RerankerProvider string
+	RerankerVersion  string
+	QualityBounds    QualityAdjustmentBounds
 }
 
 type Service struct {
@@ -283,6 +292,11 @@ type Service struct {
 	chunks                       ChunkCandidateSearcher
 	fusionStrategy               FusionStrategy
 	chunkRollout                 memory.ChunkRolloutMode
+	reranker                     Reranker
+	rerankerMode                 RerankerMode
+	rerankerProvider             string
+	rerankerVersion              string
+	qualityBounds                QualityAdjustmentBounds
 	observer                     telemetry.Observer
 }
 
@@ -303,6 +317,20 @@ func NewService(deps ServiceDependencies, observers ...telemetry.Observer) *Serv
 	if fusionStrategy.Name == "" {
 		fusionStrategy = DefaultRRFStrategy()
 	}
+	rerankerMode := deps.RerankerMode
+	if rerankerMode == "" {
+		rerankerMode = RerankerModeDisabled
+	}
+	if !rerankerMode.Valid() {
+		rerankerMode = RerankerModeDisabled
+	}
+	qualityBounds := deps.QualityBounds
+	if qualityBounds.PerFeature <= 0 {
+		qualityBounds.PerFeature = 0.05
+	}
+	if qualityBounds.Total <= 0 {
+		qualityBounds.Total = 0.25
+	}
 	return &Service{
 		lexical:                      deps.Lexical,
 		semantic:                     deps.Semantic,
@@ -317,6 +345,11 @@ func NewService(deps ServiceDependencies, observers ...telemetry.Observer) *Serv
 		chunks:                       deps.Chunks,
 		fusionStrategy:               fusionStrategy,
 		chunkRollout:                 chunkRollout,
+		reranker:                     deps.Reranker,
+		rerankerMode:                 rerankerMode,
+		rerankerProvider:             strings.TrimSpace(deps.RerankerProvider),
+		rerankerVersion:              strings.TrimSpace(deps.RerankerVersion),
+		qualityBounds:                qualityBounds,
 		observer:                     observer,
 	}
 }
@@ -524,6 +557,9 @@ func (s *Service) Search(ctx context.Context, input SearchInput) (result SearchR
 	diagnostics, err := s.applyUsefulnessFeedbackSignals(ctx, input, scored)
 	if err != nil {
 		return SearchResult{}, err
+	}
+	if rerankDiagnostics := s.applyOptionalReranker(ctx, input, scored, activeRankingPolicy); len(rerankDiagnostics) > 0 {
+		diagnostics = append(diagnostics, rerankDiagnostics...)
 	}
 
 	if !input.rankingPolicyDisabled {
@@ -883,6 +919,171 @@ func (s *Service) applyUsefulnessFeedbackSignals(ctx context.Context, input Sear
 		diagnostics = append(diagnostics, ContextDiagnostic{Section: "search_feedback", Status: "ranking_hint_applied", Reason: "explicit per-request feedback-aware ranking hint applied"})
 	}
 	return diagnostics, nil
+}
+
+func (s *Service) applyOptionalReranker(ctx context.Context, input SearchInput, scored []SearchHit, policy *memory.RankingRolloutPolicy) []ContextDiagnostic {
+	if s.reranker == nil || s.rerankerMode == RerankerModeDisabled || len(scored) == 0 {
+		return nil
+	}
+	if s.rerankerMode == RerankerModeActive {
+		if policy == nil || !rerankerAllowedForPolicy(*policy, input.Scope, s.rerankerMode, s.rerankerProvider, s.rerankerVersion) {
+			s.recordRerankTelemetry(ctx, "fallback", "no_matching_policy", len(scored))
+			return []ContextDiagnostic{{Section: "rerank", Status: "fallback", Reason: "no matching active scoped reranker policy"}}
+		}
+	}
+	candidates := make([]RerankCandidate, 0, len(scored))
+	for _, hit := range scored {
+		if hit.Memory.Scope.Normalized() != input.Scope.Normalized() || hit.Memory.State != memory.MemoryStateActive {
+			s.recordRerankTelemetry(ctx, "fallback", "visibility_validation", len(scored))
+			return []ContextDiagnostic{{Section: "rerank", Status: "fallback", Reason: "candidate visibility validation failed"}}
+		}
+		candidates = append(candidates, RerankCandidate{ID: hit.Memory.ID, Text: hit.Memory.Content})
+	}
+	scores, err := s.reranker.Rerank(ctx, RerankRequest{Query: input.Query, Candidates: candidates})
+	if err != nil {
+		s.recordRerankTelemetry(ctx, "fallback", "provider_unavailable", len(scored))
+		return []ContextDiagnostic{{Section: "rerank", Status: "fallback", Reason: "optional reranker unavailable"}}
+	}
+	if err := ValidateRerankResponse(candidates, scores); err != nil {
+		s.recordRerankTelemetry(ctx, "fallback", "invalid_response", len(scored))
+		return []ContextDiagnostic{{Section: "rerank", Status: "fallback", Reason: "optional reranker response invalid"}}
+	}
+	if s.rerankerMode != RerankerModeActive {
+		s.recordRerankTelemetry(ctx, "shadow", "", len(scored))
+		return []ContextDiagnostic{{Section: "rerank", Status: "shadow_evaluated", Reason: "reranker executed without changing ordinary ordering"}}
+	}
+	byID := make(map[string]float64, len(scores))
+	for _, score := range scores {
+		byID[score.ID] = score.Score
+	}
+	for i := range scored {
+		feature, featureErr := s.qualityFeaturesForHit(ctx, input.Scope, scored[i])
+		if featureErr != nil {
+			feature = QualityFeatureVector{Version: "quality-v1"}
+		}
+		adjustment, _ := ComputeQualityAdjustment(feature, s.qualityBounds)
+		// Provider scores are normalized to a bounded hint around the fused baseline.
+		if score, ok := byID[scored[i].Memory.ID]; ok {
+			if score > 1 {
+				score = 1
+			}
+			if score < -1 {
+				score = -1
+			}
+			scored[i].Score.Overall += score * s.qualityBounds.Total
+		}
+		scored[i].Score.Overall += adjustment
+	}
+	sort.SliceStable(scored, func(i, j int) bool {
+		if scored[i].Score.Overall == scored[j].Score.Overall {
+			if !scored[i].Memory.ModifiedAt.Equal(scored[j].Memory.ModifiedAt) {
+				return scored[i].Memory.ModifiedAt.After(scored[j].Memory.ModifiedAt)
+			}
+			return scored[i].Memory.ID < scored[j].Memory.ID
+		}
+		return scored[i].Score.Overall > scored[j].Score.Overall
+	})
+	s.recordRerankTelemetry(ctx, "applied", "", len(scored))
+	return []ContextDiagnostic{{Section: "rerank", Status: "applied", Reason: "active scoped reranker applied"}}
+}
+
+func (s *Service) qualityFeaturesForHit(ctx context.Context, scope memory.Scope, hit SearchHit) (QualityFeatureVector, error) {
+	features := QualityFeatureVector{Version: "quality-v1"}
+	if !hit.Memory.ModifiedAt.IsZero() {
+		age := time.Since(hit.Memory.ModifiedAt)
+		switch {
+		case age <= 24*time.Hour:
+			features.Freshness = 1
+		case age >= 365*24*time.Hour:
+			features.Freshness = -1
+		default:
+			features.Freshness = 1 - 2*float64(age-24*time.Hour)/float64(364*24*time.Hour)
+		}
+	}
+	if len(hit.Citations) > 0 {
+		features.EvidenceCoverage = minQualityFeature(1, float64(len(hit.Citations))/3)
+	}
+	if s.usefulnessSummarizer != nil {
+		summary, err := s.usefulnessSummaryForHit(ctx, scope, hit.Memory.ID)
+		if err != nil {
+			return features, err
+		}
+		switch summary.EffectiveQuality {
+		case memory.UsefulnessQualityPositive:
+			features.Usefulness = 1
+		case memory.UsefulnessQualityNegative:
+			features.Usefulness = -1
+		case memory.UsefulnessQualityMixed:
+			features.Usefulness = -0.5
+		case memory.UsefulnessQualityNeedsReview:
+			features.Usefulness = -1
+		}
+	}
+	if s.taskEvaluationSummarizer != nil {
+		summary, err := s.taskEvaluationSummarizer.SummarizeTaskEvaluations(ctx, memory.SummarizeTaskEvaluationsInput{Scope: scope, EvidenceTargetKind: memory.TaskEvidenceTargetMemory, EvidenceTargetID: hit.Memory.ID})
+		if err != nil {
+			return features, err
+		}
+		if summary.ActiveEvaluations > 0 {
+			succeeded := summary.VerdictCounts[memory.TaskEvaluationVerdictSucceeded]
+			failed := summary.VerdictCounts[memory.TaskEvaluationVerdictFailed] + summary.VerdictCounts[memory.TaskEvaluationVerdictPartial]
+			features.TaskSuccess = clampQualityFeature(float64(succeeded-failed) / float64(summary.ActiveEvaluations))
+		}
+	}
+	return features, nil
+}
+
+func minQualityFeature(limit, value float64) float64 {
+	if value < limit {
+		return value
+	}
+	return limit
+}
+
+func clampQualityFeature(value float64) float64 {
+	if value < -1 {
+		return -1
+	}
+	if value > 1 {
+		return 1
+	}
+	return value
+}
+
+func (s *Service) recordRerankTelemetry(ctx context.Context, outcome, fallbackCategory string, candidateCount int) {
+	observer, ok := s.observer.(retrievalRerankMetricObserver)
+	if !ok || observer == nil {
+		return
+	}
+	observer.RecordRetrievalRerank(ctx, telemetry.RetrievalRerankEvent{
+		Provider: s.rerankerProvider, Mode: string(s.rerankerMode), Outcome: outcome,
+		FallbackCategory: fallbackCategory, CandidateCount: candidateCount,
+	})
+}
+
+func rerankerAllowedForPolicy(policy memory.RankingRolloutPolicy, scope memory.Scope, runtimeMode RerankerMode, runtimeProvider, runtimeVersion string) bool {
+	if policy.Scope.Normalized() != scope.Normalized() || policy.Status != memory.RankingRolloutPolicyStatusActiveForScope || policy.Mode != memory.RankingRolloutModeActiveForScope {
+		return false
+	}
+	if policy.ThresholdStatus != memory.RankingRolloutThresholdStatusSatisfied {
+		return false
+	}
+	if policy.LatestDryRunStatus != memory.RankingRolloutThresholdStatusSatisfied {
+		return false
+	}
+	if strings.TrimSpace(policy.LatestDryRunID) == "" {
+		return false
+	}
+	if policy.RerankerMode != "" && policy.RerankerMode != string(runtimeMode) {
+		return false
+	}
+	if strings.TrimSpace(policy.RerankerProvider) != "" && policy.RerankerProvider != strings.TrimSpace(runtimeProvider) {
+		return false
+	}
+	if strings.TrimSpace(policy.RerankerVersion) != "" && policy.RerankerVersion != strings.TrimSpace(runtimeVersion) {
+		return false
+	}
+	return true
 }
 
 func feedbackRankingAdjustment(summary memory.UsefulnessFeedbackSummary) float64 {

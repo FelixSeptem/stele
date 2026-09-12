@@ -49,9 +49,9 @@ type DerivedInsightFeedback struct {
 	Reason             string              `json:"reason"`
 	QualityScore       *float64            `json:"quality_score,omitempty"`
 	CreatedAt          time.Time           `json:"created_at"`
-	SupersededAt        time.Time           `json:"superseded_at,omitempty"`
-	SupersededByActor   string              `json:"superseded_by_actor,omitempty"`
-	SupersededByReason  string              `json:"superseded_by_reason,omitempty"`
+	SupersededAt       time.Time           `json:"superseded_at,omitempty"`
+	SupersededByActor  string              `json:"superseded_by_actor,omitempty"`
+	SupersededByReason string              `json:"superseded_by_reason,omitempty"`
 	RequestID          string              `json:"request_id,omitempty"`
 	Metadata           map[string]any      `json:"metadata,omitempty"`
 }
@@ -101,8 +101,8 @@ type CreateDerivedInsightFeedbackInput struct {
 	Reason       string
 	QualityScore *float64
 	CreatedAt    time.Time
-	RequestID     string
-	Metadata      map[string]any
+	RequestID    string
+	Metadata     map[string]any
 }
 
 func (i CreateDerivedInsightFeedbackInput) Validate() error {
@@ -115,8 +115,8 @@ func (i CreateDerivedInsightFeedbackInput) Validate() error {
 		Reason:       i.Reason,
 		QualityScore: i.QualityScore,
 		CreatedAt:    i.CreatedAt,
-		RequestID:     i.RequestID,
-		Metadata:      i.Metadata,
+		RequestID:    i.RequestID,
+		Metadata:     i.Metadata,
 	}
 	return feedback.Validate()
 }
@@ -203,13 +203,13 @@ func (i SupersedeDerivedInsightFeedbackInput) Validate() error {
 }
 
 type DerivedInsightFeedbackSummary struct {
-	InsightID     string                       `json:"insight_id,omitempty"`
-	Counts        map[InsightFeedbackType]int  `json:"counts"`
-	TotalActive   int                          `json:"total_active"`
-	PositiveCount int                          `json:"positive_count"`
-	NegativeCount int                          `json:"negative_count"`
-	NeedsReview   bool                         `json:"needs_review"`
-	LastFeedbackAt time.Time                    `json:"last_feedback_at,omitempty"`
+	InsightID      string                      `json:"insight_id,omitempty"`
+	Counts         map[InsightFeedbackType]int `json:"counts"`
+	TotalActive    int                         `json:"total_active"`
+	PositiveCount  int                         `json:"positive_count"`
+	NegativeCount  int                         `json:"negative_count"`
+	NeedsReview    bool                        `json:"needs_review"`
+	LastFeedbackAt time.Time                   `json:"last_feedback_at,omitempty"`
 }
 
 func SummarizeDerivedInsightFeedback(records []DerivedInsightFeedback) DerivedInsightFeedbackSummary {

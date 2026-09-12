@@ -1968,6 +1968,63 @@ DSN in `STELE_TEST_RETRIEVAL_EVALUATION_DSN`. Never use ambient
 `SKIP_RETRIEVAL_EVALUATION_DSN_REQUIRED` and exits with code `2`; that is a
 controlled skip rather than a passed evaluation.
 
+### Identity deduplication and diversity rollout operations
+
+Search and context assembly always validate exact `tenant/project/namespace`
+scope and active lifecycle state before selecting evidence. The default path
+then deduplicates equivalent candidates by canonical memory, source event, or
+validated parent-memory lineage. The first item in stable fused order is kept,
+with bounded deterministic citation merging. Invalid, hidden, suppressed,
+forgotten, deleted, expired, or foreign candidates are removed before grouping
+and cannot suppress visible evidence.
+
+An approved diversity policy is an optional second-stage selector. It is
+versioned by policy name/version and applies only to its exact scope. Parameters
+are bounded (semantic threshold, MMR/equivalent lambda, candidate and pairwise
+comparison limits, citation limit, and class/session/entity/time coverage
+weights). Per-section diversity runs after eligibility and summary preference
+but before the existing token/character budget packer, preserving public
+section names, response shape, citations, and caller budgets.
+
+Use the existing ranking-rollout routes to govern this lifecycle:
+
+1. Create a policy with `POST /v1/admin/ranking-rollouts`, always supplying one
+   exact tenant, project, and namespace. A policy from another scope is never
+   considered.
+2. Start in `diagnostics_only`/`shadow` or `dry_run`. These states retain the
+   current identity-deduplicated behavior and emit only bounded authorized
+   evaluation evidence.
+3. Run the controlled comparison with
+   `POST /v1/admin/ranking-rollouts/{policy_id}/dry-run`, then inspect
+   `GET /v1/admin/ranking-rollouts/{policy_id}/impact`. Activation requires a
+   successful dry run, attribution, a satisfied evidence threshold, and no
+   blockers. Only `status=active_for_scope` plus
+   `mode=active_for_scope` changes ordinary retrieval for that exact scope.
+4. Disable with `POST /v1/admin/ranking-rollouts/{policy_id}/disable` or restore
+   the previous approved baseline with
+   `POST /v1/admin/ranking-rollouts/{policy_id}/rollback`. Rollback is
+   append-only governance: it does not rewrite canonical memory, raw events,
+   derived chunks, provenance, or fusion state, and records
+   `reason_code=rollback_restored`.
+
+If no policy applies, a policy is malformed/hidden/disabled, or semantic
+embeddings lack a compatible active revision, selection degrades safely to the
+identity-deduplicated baseline. The authorized diagnostic category is bounded
+(`semantic_unavailable`, `duplicate`, `omitted_by_diversity`,
+`omitted_by_budget`, `invalid`, or `selected`); ordinary clients do not receive
+policy internals, similarity values, cluster membership, candidate pools,
+hidden content, foreign identifiers, scope values, or provider errors.
+
+Evaluation reports retain policy name/version and aggregate dispositions with
+duplicate rate, protected recall, evidence coverage, candidate-pool size, and
+bounded latency. Cross-scope or hidden-lifecycle leakage is a hard failure;
+protected recall, multi-hop coverage, budget, and latency regressions block
+activation. Real-stack evidence must use an explicitly owned disposable
+PostgreSQL + pgvector DSN in `STELE_TEST_RETRIEVAL_EVALUATION_DSN`. If absent,
+the evaluator emits `SKIP_RETRIEVAL_EVALUATION_DSN_REQUIRED` and exits `2`—a
+controlled non-pass skip, never a pass—and never falls back to
+`STELE_POSTGRES_DSN` or another ambient database.
+
 - `api` logs request completion and panic recovery in structured key-value style.
 - `GET /livez`, `GET /readyz`, and `GET /metrics` provide process liveness, mode-aware readiness, and Prometheus-style runtime metrics for self-hosted orchestration.
 - `worker` logs polling loop failures and successful batch execution.
@@ -1981,3 +2038,34 @@ controlled skip rather than a passed evaluation.
 - Summary compaction and retention sweep are dispatched per eligible discovered scope, with the configured default scope used only as a fallback when discovery returns none.
 - Job execution cleanup remains runtime-global and runs once per cadence window instead of being fanned out per discovered scope.
 - Telemetry hook points are wired for ingest, governance worker execution, retrieval, forgetting, governance backlog inspection, derived insight feedback, embedding admission decisions, cutover state snapshots, provider readiness probes, scheduler wave dispatch, embedding rebuild backlog plus execution inspection, scope proof runs and steps, memory session runs and turns, and memory session verification outcomes. The default runtime installs a Prometheus-style in-process metrics observer for the API metrics endpoint.
+
+### Optional reranker configuration
+
+The API, worker, and scheduler share one optional OpenAI-compatible reranker
+configuration. It is disabled by default; inject the endpoint, API key, and
+model through process environment, Docker/Kubernetes secrets, or ignored
+`.env.local` files. Keep `.env.example` placeholders only and never commit
+credentials, DSNs, evaluation data, or provider payloads.
+
+```text
+STELE_RERANK_ENABLED=false
+STELE_RERANK_MODE=shadow
+STELE_RERANK_PROVIDER=
+STELE_RERANK_ENDPOINT=
+STELE_RERANK_MODEL=
+STELE_RERANK_API_KEY=
+STELE_RERANK_TIMEOUT=30s
+STELE_RERANK_MAX_CANDIDATES=50
+STELE_RERANK_MAX_TEXT_BYTES=8192
+```
+
+Use diagnostics-only/shadow first and evaluate against a disposable real
+PostgreSQL + pgvector stack. Active mode requires an exact scoped rollout with
+matching logical provider/version/mode plus the existing dry-run, evidence,
+attribution, and no-blocker gates; global activation is not supported. Disable
+or rollback immediately returns to the fused baseline. Provider errors,
+timeouts, malformed or out-of-scope results, and bound violations fail closed
+without failing ordinary retrieval. Admin/evaluation diagnostics and
+`stele_retrieval_rerank_total` are low-cardinality and redact query text,
+scope values, memory IDs, raw scores, endpoint URLs, API keys, DSNs, and raw
+provider payloads.

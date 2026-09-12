@@ -161,6 +161,10 @@ type RankingRolloutPolicy struct {
 	FusionChannelWeights      map[string]float64            `json:"fusion_channel_weights,omitempty"`
 	FusionPerChannelCandidate int                           `json:"fusion_per_channel_candidate,omitempty"`
 	FusionTotalCandidates     int                           `json:"fusion_total_candidates,omitempty"`
+	QualityFeatureVersion     string                        `json:"quality_feature_version,omitempty"`
+	RerankerProvider          string                        `json:"reranker_provider,omitempty"`
+	RerankerVersion           string                        `json:"reranker_version,omitempty"`
+	RerankerMode              string                        `json:"reranker_mode,omitempty"`
 	ActivatedAt               time.Time                     `json:"activated_at,omitempty"`
 	DisabledAt                time.Time                     `json:"disabled_at,omitempty"`
 	RolledBackAt              time.Time                     `json:"rolled_back_at,omitempty"`
@@ -225,6 +229,18 @@ func (p RankingRolloutPolicy) Validate() error {
 }
 
 func validateRankingRolloutFusion(policy RankingRolloutPolicy) error {
+	if policy.QualityFeatureVersion != "" && len(policy.QualityFeatureVersion) > 64 {
+		return fmt.Errorf("quality feature version exceeds 64 characters")
+	}
+	if policy.RerankerProvider != "" && len(policy.RerankerProvider) > 64 {
+		return fmt.Errorf("reranker provider exceeds 64 characters")
+	}
+	if policy.RerankerVersion != "" && len(policy.RerankerVersion) > 64 {
+		return fmt.Errorf("reranker version exceeds 64 characters")
+	}
+	if policy.RerankerMode != "" && policy.RerankerMode != "disabled" && policy.RerankerMode != "diagnostics_only" && policy.RerankerMode != "shadow" && policy.RerankerMode != "active_for_scope" {
+		return fmt.Errorf("invalid reranker mode %q", policy.RerankerMode)
+	}
 	hasFusion := strings.TrimSpace(policy.FusionStrategy) != "" || strings.TrimSpace(policy.FusionVersion) != "" || policy.FusionRankConstant != 0 || len(policy.FusionChannelWeights) > 0 || policy.FusionPerChannelCandidate != 0 || policy.FusionTotalCandidates != 0
 	if !hasFusion {
 		return nil

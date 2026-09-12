@@ -47,6 +47,8 @@ type EvaluationReplayCase struct {
 	ChannelAvailability    map[string]EvaluationChannelStatus
 	CandidatePoolSize      int
 	Latency                time.Duration
+	ChangedRankCount       int
+	RerankFallback         string
 }
 
 type EvaluationCandidateDisposition string

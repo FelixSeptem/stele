@@ -1,6 +1,6 @@
 # Archive Index
 
-Updated: 2026-09-06 19:04:47
+Updated: 2026-09-12 21:20:00
 
 - 001 -> bootstrap-foundation-and-event-ingestion
 - 002 -> governance-pipeline-and-memory-consolidation
@@ -33,3 +33,5 @@ Updated: 2026-09-06 19:04:47
 - 029 -> versioned-migrations-and-runtime-hardening
 - 030 -> versioned-context-projections-and-bounded-assembly
 - 031 -> governed-memory-intents-reflection-and-compaction-evidence
+- 032 -> quality-aware-signals-and-controlled-reranking
+- 033 -> stable-hybrid-candidate-fusion

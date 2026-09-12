@@ -28,12 +28,12 @@ func TestRepositoryCreateTaskEvaluationWritesEvidenceAndIsIdempotent(t *testing.
 			Kind: memory.TaskEvidenceTargetSession,
 			ID:   "session_1",
 		}},
-		Actor:     "operator-a",
-		Reason:    "caller recorded success",
+		Actor:          "operator-a",
+		Reason:         "caller recorded success",
 		IdempotencyKey: "task-eval-1",
-		Metadata:  map[string]any{"session_id": "session_1"},
-		CreatedAt: now,
-		UpdatedAt: now,
+		Metadata:       map[string]any{"session_id": "session_1"},
+		CreatedAt:      now,
+		UpdatedAt:      now,
 	}
 
 	mock.ExpectBegin()
@@ -84,12 +84,12 @@ func TestRepositorySupersedeTaskEvaluationWritesAuditRecord(t *testing.T) {
 
 	repo := NewRepository(mock)
 	if err := repo.SupersedeTaskEvaluation(context.Background(), memory.SupersedeTaskEvaluationInput{
-		Scope:        scope,
-		EvaluationID: "task_eval_1",
+		Scope:         scope,
+		EvaluationID:  "task_eval_1",
 		SupersedingID: "task_eval_2",
-		Actor:        "operator-b",
-		Reason:       "corrected objective",
-		SupersededAt: now,
+		Actor:         "operator-b",
+		Reason:        "corrected objective",
+		SupersededAt:  now,
 	}); err != nil {
 		t.Fatalf("SupersedeTaskEvaluation() error = %v", err)
 	}

@@ -243,11 +243,11 @@ func (r *Repository) SummarizeTaskEvaluations(ctx context.Context, input memory.
 		return memory.TaskEvaluationSummary{}, err
 	}
 	records, err := r.ListTaskEvaluations(ctx, memory.ListTaskEvaluationsInput{
-		Scope:             input.Scope,
+		Scope:              input.Scope,
 		EvidenceTargetKind: input.EvidenceTargetKind,
 		EvidenceTargetID:   input.EvidenceTargetID,
 		IncludeSuperseded:  false,
-		Limit:             1000,
+		Limit:              1000,
 	})
 	if err != nil {
 		return memory.TaskEvaluationSummary{}, err
