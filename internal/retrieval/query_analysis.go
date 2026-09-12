@@ -591,7 +591,7 @@ func queryAnalysisNormalizationStatus(result QueryAnalysisResult) string {
 func queryAnalysisTimeStatus(result QueryAnalysisResult) string {
 	for _, hint := range result.Hints {
 		if hint.Kind == QueryAnalysisHintTemporal {
-			return "hinted"
+			return string(hint.Disposition)
 		}
 	}
 	return "not_detected"

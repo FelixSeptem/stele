@@ -61,6 +61,27 @@ func TestQueryAnalysisDiagnosticsFromResultIsAllowlistedAndBounded(t *testing.T)
 	}
 }
 
+func TestQueryAnalysisDiagnosticsReportNormalizationAndTemporalStatus(t *testing.T) {
+	limits := DefaultQueryAnalysisLimits()
+	input := QueryAnalysisInput{AcceptedQuery: "  TODAY  ", PolicyVersion: QueryAnalysisPolicyVersionV1, Limits: limits}
+	result, err := NewQueryAnalysisResult(input, QueryAnalysisDispositionComplete,
+		[]QueryAnalysisHint{{Kind: QueryAnalysisHintTemporal, Disposition: QueryAnalysisHintPresent, Value: "today"}},
+		[]QueryAnalysisSignal{{Kind: QueryAnalysisSignalNormalized, Text: "today"}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	diagnostics, err := QueryAnalysisDiagnosticsFromResult(result, limits, QueryAnalysisFallbackNone, limits.MaxElapsed+time.Second, limits.MaxAggregateCandidates+1, "active")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if diagnostics.NormalizationStatus != "normalized" || diagnostics.TimeStatus != "present" {
+		t.Fatalf("status=%q/%q", diagnostics.NormalizationStatus, diagnostics.TimeStatus)
+	}
+	if diagnostics.Elapsed != limits.MaxElapsed || diagnostics.CandidateCount != limits.MaxAggregateCandidates {
+		t.Fatalf("unbounded diagnostics=%+v", diagnostics)
+	}
+}
+
 func TestQueryAnalysisResultValidateRequiresMatchingVersionedIdentity(t *testing.T) {
 	input := validQueryAnalysisInput()
 	result, err := NewQueryAnalysisResult(input, QueryAnalysisDispositionComplete, nil, nil)

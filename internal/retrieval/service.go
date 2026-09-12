@@ -14,23 +14,25 @@ import (
 )
 
 type SearchInput struct {
-	Scope                      memory.Scope
-	Query                      string
-	QueryEmbedding             []float32
-	LexicalMatchMode           LexicalMatchMode
-	Classes                    []memory.MemoryClass
-	rankingSurface             memory.RankingRolloutSurface
-	rankingPolicyDisabled      bool
-	fusionStrategyOverride     *FusionStrategy
-	TimeFrom                   time.Time
-	TimeTo                     time.Time
-	TopK                       int
-	IncludeSummaries           bool
-	IncludeRelations           bool
-	IncludeFeedbackDiagnostics bool
-	FeedbackAwareRanking       bool
-	SessionID                  string
-	UserID                     string
+	Scope                              memory.Scope
+	Query                              string
+	QueryEmbedding                     []float32
+	LexicalMatchMode                   LexicalMatchMode
+	Classes                            []memory.MemoryClass
+	rankingSurface                     memory.RankingRolloutSurface
+	rankingPolicyDisabled              bool
+	queryAnalysisObserveOnly           bool
+	queryAnalysisDiagnosticsAuthorized bool
+	fusionStrategyOverride             *FusionStrategy
+	TimeFrom                           time.Time
+	TimeTo                             time.Time
+	TopK                               int
+	IncludeSummaries                   bool
+	IncludeRelations                   bool
+	IncludeFeedbackDiagnostics         bool
+	FeedbackAwareRanking               bool
+	SessionID                          string
+	UserID                             string
 }
 
 // LexicalMatchMode selects the full-text query composition used by an internal
@@ -459,6 +461,23 @@ func (s *Service) Search(ctx context.Context, input SearchInput) (result SearchR
 		}
 	}
 	aggregateCandidates := 0
+	shadowCandidates := 0
+
+	recordShadowCandidates := func(hits []ScoredMemory) {
+		limit := analysisLimits.MaxCandidatesPerSignal
+		if limit > 0 && len(hits) > limit {
+			hits = hits[:limit]
+		}
+		for _, hit := range hits {
+			if shadowCandidates >= analysisLimits.MaxAggregateCandidates {
+				break
+			}
+			if hit.Memory.Scope.Normalized() != input.Scope.Normalized() || hit.Memory.State != memory.MemoryStateActive || !matchClassFilter(hit.Memory.Class, input.Classes) {
+				continue
+			}
+			shadowCandidates++
+		}
+	}
 
 	filterChannel := func(channel FusionChannel, hits []ScoredMemory) {
 		if analysisLimits.MaxCandidatesPerSignal > 0 && len(hits) > analysisLimits.MaxCandidatesPerSignal {
@@ -510,7 +529,11 @@ func (s *Service) Search(ctx context.Context, input SearchInput) (result SearchR
 				}
 			} else {
 				channelAvailability[FusionChannelLexical] = fusionChannelAvailable
-				filterChannel(FusionChannelLexical, hits)
+				if recallInput.queryAnalysisObserveOnly {
+					recordShadowCandidates(hits)
+				} else {
+					filterChannel(FusionChannelLexical, hits)
+				}
 			}
 		}
 		if s.semantic != nil {
@@ -521,7 +544,11 @@ func (s *Service) Search(ctx context.Context, input SearchInput) (result SearchR
 				}
 			} else {
 				channelAvailability[FusionChannelSemantic] = fusionChannelAvailable
-				filterChannel(FusionChannelSemantic, hits)
+				if recallInput.queryAnalysisObserveOnly {
+					recordShadowCandidates(hits)
+				} else {
+					filterChannel(FusionChannelSemantic, hits)
+				}
 			}
 		}
 		if input.IncludeRelations && s.relations != nil {
@@ -532,7 +559,11 @@ func (s *Service) Search(ctx context.Context, input SearchInput) (result SearchR
 				}
 			} else {
 				channelAvailability[FusionChannelRelation] = fusionChannelAvailable
-				filterChannel(FusionChannelRelation, hits)
+				if recallInput.queryAnalysisObserveOnly {
+					recordShadowCandidates(hits)
+				} else {
+					filterChannel(FusionChannelRelation, hits)
+				}
 			}
 		}
 	}
@@ -554,6 +585,16 @@ func (s *Service) Search(ctx context.Context, input SearchInput) (result SearchR
 			}
 			if analysisLimits.MaxCandidatesPerSignal > 0 && len(chunkCandidates) > analysisLimits.MaxCandidatesPerSignal {
 				chunkCandidates = chunkCandidates[:analysisLimits.MaxCandidatesPerSignal]
+			}
+			if recallInput.queryAnalysisObserveOnly {
+				remaining := analysisLimits.MaxAggregateCandidates - shadowCandidates
+				if remaining > 0 {
+					if len(chunkCandidates) > remaining {
+						chunkCandidates = chunkCandidates[:remaining]
+					}
+					shadowCandidates += len(chunkCandidates)
+				}
+				continue
 			}
 			if analysisLimits.MaxAggregateCandidates > 0 {
 				remaining := analysisLimits.MaxAggregateCandidates - aggregateCandidates - len(allChunkCandidates)
@@ -722,10 +763,18 @@ func (s *Service) Search(ctx context.Context, input SearchInput) (result SearchR
 	if len(fusionDiagnostics) > 0 {
 		for i := range fusionDiagnostics {
 			if fusionDiagnostics[i].Section == "query_analysis" {
-				fusionDiagnostics[i].CandidateCount = aggregateCandidates
+				if fusionDiagnostics[i].RolloutStage == string(memory.QueryAnalysisRolloutStageShadow) {
+					fusionDiagnostics[i].Status = "shadow_evaluated"
+					fusionDiagnostics[i].CandidateCount = shadowCandidates
+				} else {
+					fusionDiagnostics[i].CandidateCount = aggregateCandidates
+				}
 			}
 		}
 		diagnostics = append(diagnostics, fusionDiagnostics...)
+	}
+	if !input.queryAnalysisDiagnosticsAuthorized {
+		diagnostics = filterQueryAnalysisDiagnostics(diagnostics)
 	}
 	result = SearchResult{
 		Hits:                      scored,
@@ -734,6 +783,16 @@ func (s *Service) Search(ctx context.Context, input SearchInput) (result SearchR
 		fusionStrategy:            fusionStrategy,
 	}
 	return result, nil
+}
+
+func filterQueryAnalysisDiagnostics(diagnostics []ContextDiagnostic) []ContextDiagnostic {
+	filtered := diagnostics[:0]
+	for _, diagnostic := range diagnostics {
+		if diagnostic.Section != "query_analysis" {
+			filtered = append(filtered, diagnostic)
+		}
+	}
+	return filtered
 }
 
 // mergeSignalChannels converts per-signal recall streams into one stable rank
@@ -824,6 +883,18 @@ func (s *Service) queryRecallInputs(ctx context.Context, input SearchInput, rank
 	}
 	resolution := memory.ResolveQueryAnalysisRollout(rankingPolicy, memory.ResolveQueryAnalysisRolloutInput{Scope: input.Scope, Surface: surface, SessionID: input.SessionID, UserID: input.UserID, Now: time.Now().UTC()})
 	if !resolution.DerivedSignalsAffectResults {
+		if resolution.Stage == memory.QueryAnalysisRolloutStageShadow {
+			for _, signal := range analysis.Signals[1:] {
+				if len(inputs) >= limits.MaxSignals {
+					break
+				}
+				derived := input
+				derived.Query = signal.Text
+				derived.QueryEmbedding = nil
+				derived.queryAnalysisObserveOnly = true
+				inputs = append(inputs, derived)
+			}
+		}
 		if input.IncludeFeedbackDiagnostics {
 			diagnostic := queryAnalysisDiagnostic(analysis, limits, resolution.Stage, QueryAnalysisFallbackNone, time.Since(analysisStarted))
 			diagnostic.Status, diagnostic.Reason = string(resolution.Stage), "rollout does not permit derived signals"

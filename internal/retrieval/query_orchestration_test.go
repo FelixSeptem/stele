@@ -278,12 +278,54 @@ func TestQueryAnalysisDiagnosticsAndShadowRemainOriginalOnly(t *testing.T) {
 		}
 		s := NewService(ServiceDependencies{RankingRolloutPolicyReader: effectiveOnlyReader{policy: policy}, QueryAnalyzer: orchestrationAnalyzer{result: analysis}, QueryAnalysisLimits: limits})
 		got, diagnostics := s.queryRecallInputs(context.Background(), SearchInput{Scope: scope, Query: "Original", IncludeFeedbackDiagnostics: true}, &policy, memory.RankingRolloutSurfaceSearch)
-		if len(got) != 1 || got[0].Query != "Original" {
+		wantInputs := 1
+		if status == memory.RankingRolloutPolicyStatusDryRun {
+			wantInputs = 2
+		}
+		if len(got) != wantInputs || got[0].Query != "Original" || (wantInputs == 2 && !got[1].queryAnalysisObserveOnly) {
 			t.Fatalf("status=%s inputs=%+v", status, got)
 		}
 		if len(diagnostics) != 1 || diagnostics[0].OriginalRetained != true || diagnostics[0].RolloutStage == string(memory.QueryAnalysisRolloutStageActive) {
 			t.Fatalf("status=%s diagnostics=%+v", status, diagnostics)
 		}
+	}
+}
+
+func TestQueryAnalysisShadowExecutesDerivedRecallButReturnsOriginalRanking(t *testing.T) {
+	scope := memory.Scope{Tenant: "t", Project: "p", Namespace: "shadow"}
+	limits := DefaultQueryAnalysisLimits()
+	analysisInput := QueryAnalysisInput{AcceptedQuery: "Original", PolicyVersion: QueryAnalysisPolicyVersionV1, Limits: limits}
+	analysis, err := NewQueryAnalysisResult(analysisInput, QueryAnalysisDispositionComplete, nil, []QueryAnalysisSignal{{Kind: QueryAnalysisSignalTerm, Text: "derived"}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	policy := activeQAPolicy(scope, limits)
+	policy.Status = memory.RankingRolloutPolicyStatusDryRun
+	policy.Mode = memory.RankingRolloutModeDryRun
+	lexical := &recordingLexical{hits: map[string][]ScoredMemory{
+		"Original": {{Memory: memory.CanonicalMemory{ID: "original", Scope: scope, Class: memory.MemoryClassEpisodic, State: memory.MemoryStateActive}}},
+		"derived":  {{Memory: memory.CanonicalMemory{ID: "shadow-only", Scope: scope, Class: memory.MemoryClassEpisodic, State: memory.MemoryStateActive}}},
+	}}
+	service := NewService(ServiceDependencies{Lexical: lexical, RankingRolloutPolicyReader: effectiveOnlyReader{policy: policy}, QueryAnalyzer: orchestrationAnalyzer{result: analysis}, QueryAnalysisLimits: limits})
+
+	result, err := service.Search(context.Background(), SearchInput{Scope: scope, Query: "Original", TopK: 10, IncludeFeedbackDiagnostics: true, queryAnalysisDiagnosticsAuthorized: true})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := []string{lexical.inputs[0].Query, lexical.inputs[1].Query}; !reflect.DeepEqual(got, []string{"Original", "derived"}) {
+		t.Fatalf("recall queries=%v", got)
+	}
+	if len(result.Hits) != 1 || result.Hits[0].Memory.ID != "original" {
+		t.Fatalf("shadow changed canonical ranking: %+v", result.Hits)
+	}
+	var found bool
+	for _, diagnostic := range result.Diagnostics {
+		if diagnostic.Section == "query_analysis" && diagnostic.Status == "shadow_evaluated" {
+			found = diagnostic.CandidateCount == 1
+		}
+	}
+	if !found {
+		t.Fatalf("missing bounded shadow comparison diagnostics: %+v", result.Diagnostics)
 	}
 }
 
@@ -345,6 +387,27 @@ func TestQueryAnalysisDiagnosticsAreRedactedAndOrdinarySearchDoesNotExposeThem(t
 	}
 	if len(result.Diagnostics) != 0 {
 		t.Fatalf("ordinary diagnostics=%+v", result.Diagnostics)
+	}
+}
+
+func TestOrdinaryFeedbackDiagnosticsDoNotAuthorizeQueryAnalysisInternals(t *testing.T) {
+	scope := memory.Scope{Tenant: "t", Project: "p", Namespace: "n"}
+	limits := DefaultQueryAnalysisLimits()
+	analysisInput := QueryAnalysisInput{AcceptedQuery: "Original", PolicyVersion: QueryAnalysisPolicyVersionV1, Limits: limits}
+	analysis, err := NewQueryAnalysisResult(analysisInput, QueryAnalysisDispositionComplete, nil, []QueryAnalysisSignal{{Kind: QueryAnalysisSignalTerm, Text: "derived"}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	policy := activeQAPolicy(scope, limits)
+	service := NewService(ServiceDependencies{Lexical: &recordingLexical{}, RankingRolloutPolicyReader: effectiveOnlyReader{policy: policy}, QueryAnalyzer: orchestrationAnalyzer{result: analysis}, QueryAnalysisLimits: limits})
+	result, err := service.Search(context.Background(), SearchInput{Scope: scope, Query: "Original", IncludeFeedbackDiagnostics: true})
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, diagnostic := range result.Diagnostics {
+		if diagnostic.Section == "query_analysis" {
+			t.Fatalf("ordinary feedback diagnostics exposed query analysis: %+v", diagnostic)
+		}
 	}
 }
 
