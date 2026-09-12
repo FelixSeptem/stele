@@ -162,6 +162,10 @@ type RankingRolloutPolicy struct {
 	FusionChannelWeights      map[string]float64            `json:"fusion_channel_weights,omitempty"`
 	FusionPerChannelCandidate int                           `json:"fusion_per_channel_candidate,omitempty"`
 	FusionTotalCandidates     int                           `json:"fusion_total_candidates,omitempty"`
+	QualityFeatureVersion     string                        `json:"quality_feature_version,omitempty"`
+	RerankerProvider          string                        `json:"reranker_provider,omitempty"`
+	RerankerVersion           string                        `json:"reranker_version,omitempty"`
+	RerankerMode              string                        `json:"reranker_mode,omitempty"`
 	// Diversity fields are optional as a complete bundle. When configured, all
 	// identity and bounded selection parameters must be present and valid.
 	DiversityPolicyName               string                       `json:"diversity_policy_name,omitempty"`

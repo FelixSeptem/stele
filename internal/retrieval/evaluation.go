@@ -80,6 +80,10 @@ type EvaluationRankingMetadata struct {
 	AnalysisVersion             string           `json:"analysis_version,omitempty"`
 	AnalysisLimitsVersion       string           `json:"analysis_limits_version,omitempty"`
 	RolloutDisposition          string           `json:"rollout_disposition,omitempty"`
+	QualityFeatureVersion       string           `json:"quality_feature_version,omitempty"`
+	RerankerProvider            string           `json:"reranker_provider,omitempty"`
+	RerankerVersion             string           `json:"reranker_version,omitempty"`
+	RerankerMode                string           `json:"reranker_mode,omitempty"`
 }
 
 // EvaluationSafetyFailureCategory is a stable non-sensitive failure reason.
@@ -160,6 +164,8 @@ type EvaluationCaseReport struct {
 	AnalysisFallback         QueryAnalysisFallbackCategory  `json:"analysis_fallback,omitempty"`
 	AnalysisCategories       []QueryAnalysisDiagnosticCount `json:"analysis_categories,omitempty"`
 	AnalysisElapsedMS        float64                        `json:"analysis_elapsed_ms,omitempty"`
+	ChangedRankCount         int                            `json:"changed_rank_count,omitempty"`
+	RerankFallback           string                         `json:"rerank_fallback,omitempty"`
 }
 
 // EvaluationReport is the versioned data model rendered by local and CI replay.
@@ -174,6 +180,8 @@ type EvaluationReport struct {
 	GeneratedAt                time.Time                 `json:"generated_at"`
 	RealStack                  bool                      `json:"real_stack"`
 	ReleaseEligible            bool                      `json:"release_eligible"`
+	ChangedRankCount           int                       `json:"changed_rank_count,omitempty"`
+	RerankFallbackCounts       map[string]int            `json:"rerank_fallback_counts,omitempty"`
 }
 
 // EvaluationFixtureSeed is the alias-to-record resolution produced by a fixture
@@ -262,6 +270,14 @@ func (m EvaluationRankingMetadata) Validate() error {
 	if m.RolloutDisposition != "" && !evaluationRolloutDispositionValid(m.RolloutDisposition) {
 		return fmt.Errorf("rollout disposition is unsupported")
 	}
+	for name, value := range map[string]string{"quality feature version": m.QualityFeatureVersion, "reranker provider": m.RerankerProvider, "reranker version": m.RerankerVersion, "reranker mode": m.RerankerMode} {
+		if !evaluationSafeIdentity(value) {
+			return fmt.Errorf("%s identity is invalid", name)
+		}
+	}
+	if m.RerankerMode != "" && m.RerankerMode != "disabled" && m.RerankerMode != "diagnostics_only" && m.RerankerMode != "shadow" && m.RerankerMode != "active_for_scope" {
+		return fmt.Errorf("reranker mode is invalid")
+	}
 	return nil
 }
 
@@ -277,6 +293,14 @@ func evaluationRolloutDispositionValid(disposition string) bool {
 func (report EvaluationReport) validateSafeOutput() error {
 	if err := validateEvaluationSafetyFailures(report.SafetyFailures); err != nil {
 		return err
+	}
+	for name, value := range map[string]string{"quality feature version": report.Metadata.QualityFeatureVersion, "reranker provider": report.Metadata.RerankerProvider, "reranker version": report.Metadata.RerankerVersion, "reranker mode": report.Metadata.RerankerMode} {
+		if !evaluationSafeIdentity(value) {
+			return fmt.Errorf("%s identity is invalid", name)
+		}
+	}
+	if report.Metadata.RerankerMode != "" && report.Metadata.RerankerMode != "disabled" && report.Metadata.RerankerMode != "diagnostics_only" && report.Metadata.RerankerMode != "shadow" && report.Metadata.RerankerMode != "active_for_scope" {
+		return fmt.Errorf("reranker mode is invalid")
 	}
 	for _, item := range report.Cases {
 		if !evaluationSafeIdentity(item.CaseID) || !evaluationSafeIdentity(item.Category) {

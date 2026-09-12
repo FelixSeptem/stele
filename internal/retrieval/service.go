@@ -304,6 +304,11 @@ type ServiceDependencies struct {
 	ChunkRollout        memory.ChunkRolloutMode
 	QueryAnalyzer       QueryAnalyzer
 	QueryAnalysisLimits QueryAnalysisLimits
+	Reranker            Reranker
+	RerankerMode        RerankerMode
+	RerankerProvider    string
+	RerankerVersion     string
+	QualityBounds       QualityAdjustmentBounds
 }
 
 type QueryAnalyzer interface {
@@ -330,6 +335,11 @@ type Service struct {
 	chunkRollout                 memory.ChunkRolloutMode
 	queryAnalyzer                QueryAnalyzer
 	queryAnalysisLimits          QueryAnalysisLimits
+	reranker                     Reranker
+	rerankerMode                 RerankerMode
+	rerankerProvider             string
+	rerankerVersion              string
+	qualityBounds                QualityAdjustmentBounds
 	observer                     telemetry.Observer
 }
 
@@ -380,6 +390,11 @@ func NewService(deps ServiceDependencies, observers ...telemetry.Observer) *Serv
 		chunkRollout:                 chunkRollout,
 		queryAnalyzer:                deps.QueryAnalyzer,
 		queryAnalysisLimits:          deps.QueryAnalysisLimits,
+		reranker:                     deps.Reranker,
+		rerankerMode:                 rerankerMode,
+		rerankerProvider:             strings.TrimSpace(deps.RerankerProvider),
+		rerankerVersion:              strings.TrimSpace(deps.RerankerVersion),
+		qualityBounds:                qualityBounds,
 		observer:                     observer,
 	}
 }
