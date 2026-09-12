@@ -689,6 +689,13 @@ Outputs:
 - bounded multi-signal retrieval orchestration
 - temporal, multi-hop, and ambiguous-query evaluation fixtures
 
+Status: implementation is complete through deterministic analysis contracts,
+fail-closed orchestration, diagnostics/shadow handling, and an owned-DSN-gated
+evaluation entrypoint. The default runtime remains original-query-only; active
+decomposition is not considered released until the real PostgreSQL + pgvector
+Phase 6.4 prerequisite and original-versus-analyzed comparison produce compatible
+passing evidence.
+
 Done when:
 
 - query understanding improves multi-hop and temporal evidence coverage without
@@ -989,6 +996,14 @@ Exit signal:
 - temporal and multi-hop coverage improves without simple-fact regression;
 - every rollout has a version, owner, evidence minimum, stop condition, and
   tested rollback.
+
+Current evidence: deterministic query understanding and bounded multi-signal
+retrieval are implemented and remain default-disabled outside exact approved
+rollout scopes. Active decomposition remains blocked pending an explicitly owned
+real PostgreSQL + pgvector Phase 6.4 prerequisite and compatible analyzed-candidate
+release report; a local skip is not a passing gate. Roadmap Task 6.6 (quality-aware
+signals and controlled reranking) remains separate and is not implied by this
+implementation.
 
 ### Stage 7: Benchmark Expansion, Retrieval Release Gate And Long-Term Maintenance (P5)
 

@@ -54,7 +54,7 @@ func CompareEvaluationReports(baseline, candidate EvaluationReport, protectedCat
 	if baseline.Metadata.FusionStrategy != candidate.Metadata.FusionStrategy {
 		return EvaluationComparison{}, fmt.Errorf("incompatible fusion strategy")
 	}
-	if baseline.Metadata.RankingVersion != candidate.Metadata.RankingVersion {
+	if evaluationIsAnalysisComparison(baseline, candidate) && baseline.Metadata.RankingVersion != candidate.Metadata.RankingVersion {
 		return EvaluationComparison{}, fmt.Errorf("incompatible ranking version")
 	}
 	if baseline.Metadata.PolicyVersion != candidate.Metadata.PolicyVersion {

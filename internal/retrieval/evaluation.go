@@ -346,11 +346,14 @@ func evaluationSafeIdentity(value string) bool {
 	if len(value) > 128 {
 		return false
 	}
+	if strings.Contains(value, "..") || strings.HasPrefix(value, "/") || strings.HasSuffix(value, "/") || strings.Contains(value, "\\") {
+		return false
+	}
 	for _, character := range value {
 		if (character >= 'a' && character <= 'z') ||
 			(character >= 'A' && character <= 'Z') ||
 			(character >= '0' && character <= '9') ||
-			character == '_' || character == '-' || character == '.' || character == ':' {
+			character == '_' || character == '-' || character == '.' || character == ':' || character == '/' {
 			continue
 		}
 		return false
