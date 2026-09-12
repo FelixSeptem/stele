@@ -229,10 +229,12 @@ export STELE_EMBEDDING_OPENAI_API_KEY='<provider-key>'
 
 ## Local Bootstrap With Compose
 
-Start the stack:
+Start the stack (the repository provides `.env.local.example`; copy it to
+`.env.local` and replace placeholders first):
 
 ```bash
-docker compose up --build -d
+Copy-Item .env.local.example .env.local
+docker compose --env-file .env.local up --build -d
 ```
 
 Watch the service come up:

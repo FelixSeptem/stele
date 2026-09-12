@@ -17,6 +17,9 @@ services:
       - stele-postgres-data:/var/lib/postgresql
 
   api:
+    env_file:
+      - path: .env.local
+        required: false
     build:
       context: .
       args:
@@ -48,6 +51,9 @@ services:
       - "${STELE_HTTP_HOST_PORT:-8080}:8080"
 
   worker:
+    env_file:
+      - path: .env.local
+        required: false
     build:
       context: .
       args:
@@ -76,6 +82,9 @@ services:
         condition: service_healthy
 
   scheduler:
+    env_file:
+      - path: .env.local
+        required: false
     build:
       context: .
       args:

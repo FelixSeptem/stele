@@ -15,9 +15,9 @@ In addition to event ingest, search, and context assembly, the API now exposes d
 Run the full self-hosted stack:
 
 ```bash
-Copy-Item .env.example .env
-# Replace the placeholder secrets in .env before sharing the environment.
-docker compose up --build -d
+Copy-Item .env.local.example .env.local
+# Replace placeholders in .env.local before starting the stack.
+docker compose --env-file .env.local up --build -d
 ```
 
 Then verify:

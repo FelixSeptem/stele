@@ -98,6 +98,37 @@ func TestDeploymentContractRejectsObsoleteAuthAndRequiresBootstrapVariables(t *t
 	}
 }
 
+func TestDeploymentContractSupportsSharedLocalProviderEnvironment(t *testing.T) {
+	compose, err := os.ReadFile("../docker-compose.yml")
+	if err != nil {
+		t.Fatalf("read docker-compose.yml: %v", err)
+	}
+	template, err := os.ReadFile("../.env.local.example")
+	if err != nil {
+		t.Fatalf("read .env.local.example: %v", err)
+	}
+	composeContent := string(compose)
+	for _, service := range []string{"api:", "worker:", "scheduler:"} {
+		if !strings.Contains(composeContent, service) {
+			t.Fatalf("compose missing service %q", service)
+		}
+	}
+	if strings.Count(composeContent, "path: .env.local") != 3 {
+		t.Fatalf("compose must inject .env.local into api, worker, and scheduler")
+	}
+	for _, required := range []string{
+		"STELE_EMBEDDING_DEFAULT_PROVIDER",
+		"STELE_EMBEDDING_OPENAI_API_KEY",
+		"STELE_RERANK_ENABLED",
+		"STELE_RERANK_ENDPOINT",
+		"STELE_RERANK_API_KEY",
+	} {
+		if !strings.Contains(string(template), required) {
+			t.Fatalf("local environment template missing provider variable %q", required)
+		}
+	}
+}
+
 func TestBackupRecoveryScriptsExposeSafetyGuards(t *testing.T) {
 	checks := map[string][]string{
 		"../scripts/stele-backup.ps1":         {"SourceDsn", "Destination", "pg_dump", "SHA256", "manifest"},
