@@ -1,6 +1,6 @@
 # Archive Index
 
-Updated: 2026-09-11 20:39:25
+Updated: 2026-09-12 15:23:35
 
 - 001 -> bootstrap-foundation-and-event-ingestion
 - 002 -> governance-pipeline-and-memory-consolidation
@@ -35,3 +35,4 @@ Updated: 2026-09-11 20:39:25
 - 031 -> governed-memory-intents-reflection-and-compaction-evidence
 - 032 -> evidence-deduplication-and-diversity-aware-context-packing
 - 033 -> stable-hybrid-candidate-fusion
+- 034 -> bounded-query-understanding-and-multi-signal-retrieval
