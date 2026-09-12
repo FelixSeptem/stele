@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"math"
 	"sort"
+	"strings"
 
 	"github.com/FelixSeptem/stele/internal/memory"
 )
@@ -20,13 +21,22 @@ func CalculateEvaluationMetrics(replay EvaluationReplay) (EvaluationReport, erro
 	}
 
 	report := EvaluationReport{
-		Metadata:              replay.Metadata,
-		Cases:                 make([]EvaluationCaseReport, 0, len(replay.Cases)),
-		DispositionAggregates: make(map[string]int),
+		Metadata:                   replay.Metadata,
+		Cases:                      make([]EvaluationCaseReport, 0, len(replay.Cases)),
+		DispositionAggregates:      make(map[string]int),
+		AnalysisFallbackAggregates: make(map[string]int),
+		AnalysisCategoryAggregates: make(map[string]int),
 	}
 	latencies := make([]float64, 0, len(replay.Cases))
 	safetyCounts := make(map[EvaluationSafetyFailureCategory]int)
+	protectedCases := 0
+	temporalCases := 0
+	multiHopCases := 0
+	analysisCases := 0
 	for _, item := range replay.Cases {
+		if err := validateEvaluationReplayAnalysis(item.AnalysisDiagnostics, replay.Metadata); err != nil {
+			return EvaluationReport{}, NewEvaluationFailure(EvaluationSafetyFailureUnsafeDiagnostics, err.Error())
+		}
 		safetyFailures := evaluationReplaySafetyFailures(item)
 		for _, failure := range safetyFailures {
 			safetyCounts[failure.Category] += failure.Count
@@ -44,7 +54,7 @@ func CalculateEvaluationMetrics(replay EvaluationReplay) (EvaluationReport, erro
 				chunkDerivedCount++
 			}
 		}
-		report.Cases = append(report.Cases, EvaluationCaseReport{
+		caseReport := EvaluationCaseReport{
 			CaseID:            item.CaseID,
 			Category:          item.Category,
 			Metrics:           metrics,
@@ -52,7 +62,30 @@ func CalculateEvaluationMetrics(replay EvaluationReplay) (EvaluationReport, erro
 			CandidatePoolSize: item.CandidatePoolSize,
 			LatencyMS:         float64(item.Latency) / float64(1_000_000),
 			ChunkDerivedCount: chunkDerivedCount,
-		})
+		}
+		if diagnostic := item.AnalysisDiagnostics; diagnostic != nil {
+			analysisCases++
+			caseReport.AnalysisSignalCount = diagnostic.SignalCount
+			caseReport.AnalysisSubqueryCount = diagnostic.SubqueryCount
+			caseReport.AnalysisCandidateCount = diagnostic.CandidateCount
+			caseReport.AnalysisOriginalRetained = diagnostic.OriginalRetained
+			caseReport.AnalysisDisposition = diagnostic.Disposition
+			caseReport.AnalysisFallback = diagnostic.Fallback
+			caseReport.AnalysisCategories = append([]QueryAnalysisDiagnosticCount(nil), diagnostic.Categories...)
+			sort.Slice(caseReport.AnalysisCategories, func(i, j int) bool {
+				return caseReport.AnalysisCategories[i].Category < caseReport.AnalysisCategories[j].Category
+			})
+			caseReport.AnalysisElapsedMS = float64(diagnostic.Elapsed) / float64(1_000_000)
+			report.Metrics.AnalysisSignalCount += diagnostic.SignalCount
+			report.Metrics.AnalysisSubqueryCount += diagnostic.SubqueryCount
+			report.Metrics.AnalysisCandidateCount += diagnostic.CandidateCount
+			report.AnalysisFallbackAggregates[string(diagnostic.Fallback)] = boundedEvaluationCount(report.AnalysisFallbackAggregates[string(diagnostic.Fallback)], 1)
+			for _, count := range diagnostic.Categories {
+				key := string(count.Category)
+				report.AnalysisCategoryAggregates[key] = boundedEvaluationCount(report.AnalysisCategoryAggregates[key], count.Count)
+			}
+		}
+		report.Cases = append(report.Cases, caseReport)
 		latencies = append(latencies, float64(item.Latency)/float64(1_000_000))
 		report.Metrics.RecallAt1 += metrics.RecallAt1
 		report.Metrics.RecallAt5 += metrics.RecallAt5
@@ -61,7 +94,18 @@ func CalculateEvaluationMetrics(replay EvaluationReplay) (EvaluationReport, erro
 		report.Metrics.NDCGAt1 += metrics.NDCGAt1
 		report.Metrics.NDCGAt5 += metrics.NDCGAt5
 		report.Metrics.NDCGAt10 += metrics.NDCGAt10
-		report.Metrics.MultiHopEvidenceCoverage += metrics.MultiHopEvidenceCoverage
+		report.Metrics.EvidenceCoverage += metrics.EvidenceCoverage
+		switch {
+		case item.Category == "single-fact":
+			protectedCases++
+			report.Metrics.ProtectedRecall += metrics.RecallAt10
+		case item.Category == "temporal":
+			temporalCases++
+			report.Metrics.TemporalEvidenceCoverage += metrics.EvidenceCoverage
+		case strings.HasPrefix(item.Category, "multi-hop"):
+			multiHopCases++
+			report.Metrics.MultiHopEvidenceCoverage += metrics.MultiHopEvidenceCoverage
+		}
 		report.Metrics.DuplicateRate += metrics.DuplicateRate
 		report.Metrics.CandidatePoolSize += metrics.CandidatePoolSize
 	}
@@ -87,17 +131,59 @@ func CalculateEvaluationMetrics(replay EvaluationReplay) (EvaluationReport, erro
 	report.Metrics.NDCGAt1 /= caseCount
 	report.Metrics.NDCGAt5 /= caseCount
 	report.Metrics.NDCGAt10 /= caseCount
-	report.Metrics.MultiHopEvidenceCoverage /= caseCount
+	report.Metrics.EvidenceCoverage /= caseCount
+	if protectedCases > 0 {
+		report.Metrics.ProtectedRecall /= float64(protectedCases)
+	} else {
+		report.Metrics.ProtectedRecall = report.Metrics.RecallAt10
+	}
+	if temporalCases > 0 {
+		report.Metrics.TemporalEvidenceCoverage /= float64(temporalCases)
+	}
+	if multiHopCases > 0 {
+		report.Metrics.MultiHopEvidenceCoverage /= float64(multiHopCases)
+	} else {
+		report.Metrics.MultiHopEvidenceCoverage = report.Metrics.EvidenceCoverage
+	}
+	if analysisCases > 0 {
+		report.Metrics.AnalysisSignalCount = int(math.Round(float64(report.Metrics.AnalysisSignalCount) / float64(analysisCases)))
+		report.Metrics.AnalysisSubqueryCount = int(math.Round(float64(report.Metrics.AnalysisSubqueryCount) / float64(analysisCases)))
+		report.Metrics.AnalysisCandidateCount = int(math.Round(float64(report.Metrics.AnalysisCandidateCount) / float64(analysisCases)))
+	}
 	report.Metrics.DuplicateRate /= caseCount
 	report.Metrics.CandidatePoolSize = int(math.Round(float64(report.Metrics.CandidatePoolSize) / caseCount))
 	report.Metrics.P50LatencyMS = evaluationPercentile(latencies, 0.50)
 	report.Metrics.P95LatencyMS = evaluationPercentile(latencies, 0.95)
-	report.Metrics.ProtectedRecall = report.Metrics.RecallAt10
-	report.Metrics.EvidenceCoverage = report.Metrics.MultiHopEvidenceCoverage
 	if total := dispositionTotal(report.DispositionAggregates); total > 0 {
 		report.Metrics.BudgetOmissionRate = float64(report.DispositionAggregates["omitted_by_budget"]) / float64(total)
 	}
 	return report, nil
+}
+
+func validateEvaluationReplayAnalysis(diagnostic *QueryAnalysisDiagnostics, metadata EvaluationRankingMetadata) error {
+	if diagnostic == nil {
+		if metadata.AnalysisVersion != "" {
+			return fmt.Errorf("query-analysis diagnostics are missing")
+		}
+		return nil
+	}
+	if err := diagnostic.Validate(evaluationHardQueryAnalysisLimits()); err != nil {
+		return err
+	}
+	if string(diagnostic.PolicyVersion) != metadata.AnalysisVersion || string(diagnostic.LimitsVersion) != metadata.AnalysisLimitsVersion || !evaluationRolloutDiagnosticsMatch(metadata.RolloutDisposition, diagnostic.RolloutStage) {
+		return fmt.Errorf("query-analysis diagnostic identity mismatch")
+	}
+	return nil
+}
+
+func boundedEvaluationCount(current, increment int) int {
+	if increment <= 0 {
+		return current
+	}
+	if current >= QueryAnalysisHardMaxDiagnosticCount-increment {
+		return QueryAnalysisHardMaxDiagnosticCount
+	}
+	return current + increment
 }
 
 func dispositionTotal(dispositions map[string]int) int {

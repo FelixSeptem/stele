@@ -428,3 +428,146 @@ func TestRecordEvaluationReleaseDecisionUsesBoundedTelemetry(t *testing.T) {
 		t.Fatalf("telemetry event = %+v, want bounded release decision", observer.event)
 	}
 }
+
+func TestEvaluationReplayCarriesBoundedAnalysisEvidenceAndStableReport(t *testing.T) {
+	scope := memory.Scope{Tenant: "eval", Project: "baseline", Namespace: "analysis"}
+	limits := DefaultQueryAnalysisLimits()
+	input := QueryAnalysisInput{AcceptedQuery: "temporal multi-hop", PolicyVersion: QueryAnalysisPolicyVersionV1, Limits: limits}
+	result, err := NewQueryAnalysisResult(input, QueryAnalysisDispositionComplete, []QueryAnalysisHint{{Kind: QueryAnalysisHintTemporal, Disposition: QueryAnalysisHintPresent, Value: "current"}}, []QueryAnalysisSignal{{Kind: QueryAnalysisSignalSubquery, Text: "hidden"}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	diagnostics, err := QueryAnalysisDiagnosticsFromResult(result, limits, QueryAnalysisFallbackNone, 12*time.Millisecond, 4, "active")
+	if err != nil {
+		t.Fatal(err)
+	}
+	run := EvaluationReplay{Metadata: EvaluationRankingMetadata{FixtureVersion: "fixture-v1", RepresentationVersion: "canonical-v1", RankingVersion: "ranking-v1", CompatibleEmbeddingRevision: "embedding-v1", PolicyVersion: "policy-v1", AnalysisVersion: string(QueryAnalysisPolicyVersionV1), AnalysisLimitsVersion: string(QueryAnalysisLimitsVersionV1), RolloutDisposition: "active_for_scope"}, Cases: []EvaluationReplayCase{{CaseID: "temporal", Category: "temporal", Scope: scope, AnalysisDiagnostics: &diagnostics, ExpectedEvidenceGroups: [][]string{{"fact"}}, CandidatePoolSize: 4, Latency: 12 * time.Millisecond}}}
+	report, err := CalculateEvaluationMetrics(run)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if report.Metadata.AnalysisVersion != string(QueryAnalysisPolicyVersionV1) || report.Metadata.AnalysisLimitsVersion != string(QueryAnalysisLimitsVersionV1) || report.Metadata.RolloutDisposition != "active_for_scope" {
+		t.Fatalf("metadata = %+v", report.Metadata)
+	}
+	if report.Cases[0].AnalysisSignalCount != 2 || report.Cases[0].AnalysisSubqueryCount != 1 || report.Cases[0].AnalysisCandidateCount != 4 || !report.Cases[0].AnalysisOriginalRetained {
+		t.Fatalf("analysis case = %+v", report.Cases[0])
+	}
+	if report.Metrics.TemporalEvidenceCoverage != 0 || report.Metrics.AnalysisSignalCount != 2 || report.Metrics.AnalysisSubqueryCount != 1 || report.Metrics.AnalysisCandidateCount != 4 {
+		t.Fatalf("analysis metrics = %+v", report.Metrics)
+	}
+	one, err := MarshalEvaluationReport(report)
+	if err != nil {
+		t.Fatal(err)
+	}
+	repeated, err := CalculateEvaluationMetrics(run)
+	if err != nil {
+		t.Fatal(err)
+	}
+	two, err := MarshalEvaluationReport(repeated)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(one) != string(two) {
+		t.Fatalf("compatible report serialization is not stable:\n%s\n%s", one, two)
+	}
+	rendered, err := RenderEvaluationReport(report)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, want := range []string{"analysis_version=query-analysis-v1", "analysis_limits_version=query-analysis-limits-v1", "rollout_disposition=active_for_scope", "temporal_evidence_coverage=0.0000", "analysis_signal_count=2", "analysis_subquery_count=1", "analysis_candidate_count=4"} {
+		if !strings.Contains(rendered, want) {
+			t.Fatalf("rendered report %q does not contain %q", rendered, want)
+		}
+	}
+	for _, forbidden := range []string{"temporal multi-hop", "hidden", "postgres://", "dsn", "password"} {
+		if strings.Contains(string(one), forbidden) {
+			t.Fatalf("report leaked %q: %s", forbidden, one)
+		}
+	}
+}
+
+func TestMarshalEvaluationReportRejectsUnsafeCaseIdentity(t *testing.T) {
+	report := EvaluationReport{Metadata: EvaluationRankingMetadata{FixtureVersion: "fixture-v1", RepresentationVersion: "canonical-v1", RankingVersion: "ranking-v1", CompatibleEmbeddingRevision: "embedding-v1", PolicyVersion: "policy-v1"}, Cases: []EvaluationCaseReport{{CaseID: "postgres://operator:secret@db/internal", Category: "single-fact"}}}
+	_, err := MarshalEvaluationReport(report)
+	if err == nil {
+		t.Fatal("MarshalEvaluationReport() error = nil, want unsafe case identity rejection")
+	}
+}
+
+func TestMarshalEvaluationReportRejectsUnsafeSafetyCategory(t *testing.T) {
+	report := EvaluationReport{Metadata: EvaluationRankingMetadata{FixtureVersion: "fixture-v1", RepresentationVersion: "canonical-v1", RankingVersion: "ranking-v1", CompatibleEmbeddingRevision: "embedding-v1", PolicyVersion: "policy-v1"}, SafetyFailures: []EvaluationSafetyFailure{{Category: "postgres://operator:secret@db/internal", Count: 1}}}
+	_, err := MarshalEvaluationReport(report)
+	if err == nil {
+		t.Fatal("MarshalEvaluationReport() error = nil, want unsafe safety category rejection")
+	}
+	if strings.Contains(err.Error(), "secret") || strings.Contains(err.Error(), "postgres://") {
+		t.Fatalf("error leaked unsafe category: %v", err)
+	}
+}
+
+func TestEvaluationRunnerCopiesOnlyAuthorizedBoundedAnalysisDiagnostics(t *testing.T) {
+	scope := memory.Scope{Tenant: "eval", Project: "baseline", Namespace: "runner-analysis"}
+	fixture := EvaluationFixture{Version: "fixture-v1", Cases: []EvaluationCase{{ID: "analysis-case", Category: "multi-hop", Scope: scope, Query: "private query", Sources: []EvaluationSource{{Alias: "fact", EventType: "fixture", Content: "private evidence"}}, ExpectedEvidenceGroups: [][]string{{"fact"}}, ExpectedAnalysis: &EvaluationAnalysisExpectation{PolicyVersion: QueryAnalysisPolicyVersionV1, LimitsVersion: QueryAnalysisLimitsVersionV1, Disposition: QueryAnalysisDispositionComplete, Fallback: QueryAnalysisFallbackNone, OriginalRetained: true, MaxSignalCount: 8, MaxSubqueryCount: 4, MaxCandidateCount: 200}}}}
+	searcher := &stubEvaluationSearcher{result: SearchResult{Diagnostics: []ContextDiagnostic{{Section: "query_analysis", PolicyVersion: QueryAnalysisPolicyVersionV1, LimitsVersion: QueryAnalysisLimitsVersionV1, OriginalRetained: true, SignalCount: 3, SubqueryCount: 2, CandidateCount: 5, ElapsedNS: int64(10 * time.Millisecond), Fallback: QueryAnalysisFallbackNone, Disposition: QueryAnalysisDispositionComplete, RolloutStage: "active", TimeStatus: "present"}, {Section: "other", Reason: "postgres://operator:secret@db/private"}}}}
+	run, err := NewEvaluationRunner(searcher).Replay(context.Background(), fixture, EvaluationFixtureSeed{FixtureVersion: fixture.Version, Aliases: []EvaluationSeededAlias{{CaseID: "analysis-case", Alias: "fact", Scope: scope, MemoryID: "memory-1", State: memory.MemoryStateActive}}}, EvaluationRankingMetadata{FixtureVersion: fixture.Version, RepresentationVersion: "canonical-v1", RankingVersion: "ranking-v1", CompatibleEmbeddingRevision: "embedding-v1", PolicyVersion: "policy-v1", AnalysisVersion: string(QueryAnalysisPolicyVersionV1), AnalysisLimitsVersion: string(QueryAnalysisLimitsVersionV1), RolloutDisposition: "active_for_scope"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if searcher.input.rankingPolicyDisabled || !searcher.input.IncludeFeedbackDiagnostics || !searcher.input.queryAnalysisDiagnosticsAuthorized {
+		t.Fatalf("evaluation search input did not authorize active bounded analysis: %+v", searcher.input)
+	}
+	if run.Cases[0].AnalysisDiagnostics == nil || run.Cases[0].AnalysisDiagnostics.SignalCount != 3 || run.Cases[0].AnalysisDiagnostics.CandidateCount != 5 {
+		t.Fatalf("analysis diagnostics = %+v", run.Cases[0].AnalysisDiagnostics)
+	}
+}
+
+func TestCalculateEvaluationMetricsRejectsUnboundedAnalysisCounts(t *testing.T) {
+	scope := memory.Scope{Tenant: "eval", Project: "baseline", Namespace: "bounds"}
+	diagnostics := QueryAnalysisDiagnostics{PolicyVersion: QueryAnalysisPolicyVersionV1, LimitsVersion: QueryAnalysisLimitsVersionV1, Disposition: QueryAnalysisDispositionComplete, Fallback: QueryAnalysisFallbackNone, OriginalRetained: true, SignalCount: QueryAnalysisHardMaxSignals + 1}
+	_, err := CalculateEvaluationMetrics(EvaluationReplay{Metadata: EvaluationRankingMetadata{FixtureVersion: "fixture-v1", RepresentationVersion: "canonical-v1", RankingVersion: "ranking-v1", CompatibleEmbeddingRevision: "embedding-v1", PolicyVersion: "policy-v1", AnalysisVersion: string(QueryAnalysisPolicyVersionV1), AnalysisLimitsVersion: string(QueryAnalysisLimitsVersionV1), RolloutDisposition: "active_for_scope"}, Cases: []EvaluationReplayCase{{CaseID: "bounds", Category: "single-fact", Scope: scope, AnalysisDiagnostics: &diagnostics, ExpectedEvidenceGroups: [][]string{{"fact"}}}}})
+	if err == nil {
+		t.Fatal("CalculateEvaluationMetrics() error = nil, want unbounded analysis rejection")
+	}
+}
+
+func TestCalculateEvaluationMetricsSeparatesProtectedTemporalAndMultiHopCoverage(t *testing.T) {
+	scope := memory.Scope{Tenant: "eval", Project: "baseline", Namespace: "coverage"}
+	caseWith := func(id, category string, expected [][]string, candidates []EvaluationReplayCandidate) EvaluationReplayCase {
+		return EvaluationReplayCase{CaseID: id, Category: category, Scope: scope, ExpectedEvidenceGroups: expected, Candidates: candidates}
+	}
+	report, err := CalculateEvaluationMetrics(EvaluationReplay{Metadata: EvaluationRankingMetadata{FixtureVersion: "fixture-v1", RepresentationVersion: "canonical-v1", RankingVersion: "ranking-v1", CompatibleEmbeddingRevision: "embedding-v1", PolicyVersion: "policy-v1"}, Cases: []EvaluationReplayCase{
+		caseWith("protected", "single-fact", [][]string{{"fact"}}, []EvaluationReplayCandidate{{Alias: "fact", Scope: scope, State: memory.MemoryStateActive, FinalRank: 1}}),
+		caseWith("temporal", "temporal", [][]string{{"now"}}, nil),
+		caseWith("multi-hop", "multi-hop", [][]string{{"left"}, {"right"}}, []EvaluationReplayCandidate{{Alias: "left", Scope: scope, State: memory.MemoryStateActive, FinalRank: 1}}),
+	}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if report.Metrics.ProtectedRecall != 1 || report.Metrics.TemporalEvidenceCoverage != 0 || report.Metrics.MultiHopEvidenceCoverage != 0.5 {
+		t.Fatalf("coverage metrics = %+v", report.Metrics)
+	}
+}
+
+func TestEvaluationRunnerRecordsOriginalOnlyFallbackUnderActiveRollout(t *testing.T) {
+	scope := memory.Scope{Tenant: "eval", Project: "baseline", Namespace: "fallback"}
+	fixture := EvaluationFixture{Version: "fixture-v1", Cases: []EvaluationCase{{ID: "unavailable", Category: "analyzer-unavailable", Scope: scope, Query: "private", Sources: []EvaluationSource{{Alias: "fact", EventType: "fixture", Content: "private"}}, ExpectedEvidenceGroups: [][]string{{"fact"}}, ExpectedAnalysis: &EvaluationAnalysisExpectation{PolicyVersion: QueryAnalysisPolicyVersionV1, LimitsVersion: QueryAnalysisLimitsVersionV1, Disposition: QueryAnalysisDispositionOriginalOnly, Fallback: QueryAnalysisFallbackUnavailable, OriginalRetained: true, Categories: []QueryAnalysisDiagnosticCategory{QueryAnalysisDiagnosticUnavailable}, MaxSignalCount: 1, MaxCandidateCount: 200}}}}
+	searcher := &stubEvaluationSearcher{result: SearchResult{Diagnostics: []ContextDiagnostic{{Section: "query_analysis", PolicyVersion: QueryAnalysisPolicyVersionV1, LimitsVersion: QueryAnalysisLimitsVersionV1, OriginalRetained: true, Fallback: QueryAnalysisFallbackUnavailable, Disposition: QueryAnalysisDispositionOriginalOnly, Categories: []QueryAnalysisDiagnosticCount{{Category: QueryAnalysisDiagnosticUnavailable, Count: 1}}, RolloutStage: "original_only"}}}}
+	run, err := NewEvaluationRunner(searcher).Replay(context.Background(), fixture, EvaluationFixtureSeed{FixtureVersion: fixture.Version, Aliases: []EvaluationSeededAlias{{CaseID: "unavailable", Alias: "fact", Scope: scope, MemoryID: "memory-1", State: memory.MemoryStateActive}}}, EvaluationRankingMetadata{FixtureVersion: fixture.Version, RepresentationVersion: "canonical-v1", RankingVersion: "ranking-v1", CompatibleEmbeddingRevision: "embedding-v1", PolicyVersion: "policy-v1", AnalysisVersion: string(QueryAnalysisPolicyVersionV1), AnalysisLimitsVersion: string(QueryAnalysisLimitsVersionV1), RolloutDisposition: "active_for_scope"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if run.Cases[0].AnalysisDiagnostics == nil || run.Cases[0].AnalysisDiagnostics.SignalCount != 1 || run.Cases[0].AnalysisDiagnostics.Fallback != QueryAnalysisFallbackUnavailable {
+		t.Fatalf("fallback diagnostics = %+v", run.Cases[0].AnalysisDiagnostics)
+	}
+}
+
+func TestEvaluationRunnerRejectsAnalysisOutsideFixtureExpectation(t *testing.T) {
+	scope := memory.Scope{Tenant: "eval", Project: "baseline", Namespace: "expectation"}
+	expectation := &EvaluationAnalysisExpectation{PolicyVersion: QueryAnalysisPolicyVersionV1, LimitsVersion: QueryAnalysisLimitsVersionV1, Disposition: QueryAnalysisDispositionOriginalOnly, Fallback: QueryAnalysisFallbackUnavailable, OriginalRetained: true, Categories: []QueryAnalysisDiagnosticCategory{QueryAnalysisDiagnosticUnavailable}, MaxSignalCount: 1, MaxCandidateCount: 4}
+	fixture := EvaluationFixture{Version: "fixture-v1", Cases: []EvaluationCase{{ID: "expectation", Category: "analyzer-unavailable", Scope: scope, Query: "private", Sources: []EvaluationSource{{Alias: "fact", EventType: "fixture", Content: "private"}}, ExpectedEvidenceGroups: [][]string{{"fact"}}, ExpectedAnalysis: expectation}}}
+	searcher := &stubEvaluationSearcher{result: SearchResult{Diagnostics: []ContextDiagnostic{{Section: "query_analysis", PolicyVersion: QueryAnalysisPolicyVersionV1, LimitsVersion: QueryAnalysisLimitsVersionV1, OriginalRetained: true, SignalCount: 1, CandidateCount: 5, Fallback: QueryAnalysisFallbackMalformed, Disposition: QueryAnalysisDispositionOriginalOnly, Categories: []QueryAnalysisDiagnosticCount{{Category: QueryAnalysisDiagnosticMalformed, Count: 1}}, RolloutStage: "original_only"}}}}
+	_, err := NewEvaluationRunner(searcher).Replay(context.Background(), fixture, EvaluationFixtureSeed{FixtureVersion: fixture.Version, Aliases: []EvaluationSeededAlias{{CaseID: "expectation", Alias: "fact", Scope: scope, MemoryID: "memory-1", State: memory.MemoryStateActive}}}, EvaluationRankingMetadata{FixtureVersion: fixture.Version, RepresentationVersion: "canonical-v1", RankingVersion: "ranking-v1", CompatibleEmbeddingRevision: "embedding-v1", PolicyVersion: "policy-v1", AnalysisVersion: string(QueryAnalysisPolicyVersionV1), AnalysisLimitsVersion: string(QueryAnalysisLimitsVersionV1), RolloutDisposition: "active_for_scope"})
+	if err == nil {
+		t.Fatal("Replay() error = nil, want fixture analysis expectation rejection")
+	}
+}

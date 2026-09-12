@@ -137,32 +137,43 @@ type EvaluationMetricReport struct {
 	ProtectedRecall          float64 `json:"protected_recall"`
 	EvidenceCoverage         float64 `json:"evidence_coverage"`
 	BudgetOmissionRate       float64 `json:"budget_omission_rate"`
+	TemporalEvidenceCoverage float64 `json:"temporal_evidence_coverage"`
+	AnalysisSignalCount      int     `json:"analysis_signal_count"`
+	AnalysisSubqueryCount    int     `json:"analysis_subquery_count"`
+	AnalysisCandidateCount   int     `json:"analysis_candidate_count"`
 }
 
 // EvaluationCaseReport is a bounded per-case contribution to an evaluation report.
 type EvaluationCaseReport struct {
-	CaseID                string                    `json:"case_id"`
-	Category              string                    `json:"category,omitempty"`
-	Metrics               EvaluationMetricReport    `json:"metrics"`
-	SafetyFailures        []EvaluationSafetyFailure `json:"safety_failures,omitempty"`
-	CandidatePoolSize     int                       `json:"candidate_pool_size"`
-	LatencyMS             float64                   `json:"latency_ms"`
-	ChunkDerivedCount     int                       `json:"chunk_derived_count,omitempty"`
-	AnalysisSignalCount   int                       `json:"analysis_signal_count,omitempty"`
-	AnalysisSubqueryCount int                       `json:"analysis_subquery_count,omitempty"`
-	AnalysisFallback      string                    `json:"analysis_fallback,omitempty"`
+	CaseID                   string                         `json:"case_id"`
+	Category                 string                         `json:"category,omitempty"`
+	Metrics                  EvaluationMetricReport         `json:"metrics"`
+	SafetyFailures           []EvaluationSafetyFailure      `json:"safety_failures,omitempty"`
+	CandidatePoolSize        int                            `json:"candidate_pool_size"`
+	LatencyMS                float64                        `json:"latency_ms"`
+	ChunkDerivedCount        int                            `json:"chunk_derived_count,omitempty"`
+	AnalysisSignalCount      int                            `json:"analysis_signal_count,omitempty"`
+	AnalysisSubqueryCount    int                            `json:"analysis_subquery_count,omitempty"`
+	AnalysisCandidateCount   int                            `json:"analysis_candidate_count,omitempty"`
+	AnalysisOriginalRetained bool                           `json:"analysis_original_retained,omitempty"`
+	AnalysisDisposition      QueryAnalysisDisposition       `json:"analysis_disposition,omitempty"`
+	AnalysisFallback         QueryAnalysisFallbackCategory  `json:"analysis_fallback,omitempty"`
+	AnalysisCategories       []QueryAnalysisDiagnosticCount `json:"analysis_categories,omitempty"`
+	AnalysisElapsedMS        float64                        `json:"analysis_elapsed_ms,omitempty"`
 }
 
 // EvaluationReport is the versioned data model rendered by local and CI replay.
 type EvaluationReport struct {
-	Metadata              EvaluationRankingMetadata `json:"metadata"`
-	Cases                 []EvaluationCaseReport    `json:"cases"`
-	Metrics               EvaluationMetricReport    `json:"metrics"`
-	SafetyFailures        []EvaluationSafetyFailure `json:"safety_failures,omitempty"`
-	DispositionAggregates map[string]int            `json:"disposition_aggregates,omitempty"`
-	GeneratedAt           time.Time                 `json:"generated_at"`
-	RealStack             bool                      `json:"real_stack"`
-	ReleaseEligible       bool                      `json:"release_eligible"`
+	Metadata                   EvaluationRankingMetadata `json:"metadata"`
+	Cases                      []EvaluationCaseReport    `json:"cases"`
+	Metrics                    EvaluationMetricReport    `json:"metrics"`
+	SafetyFailures             []EvaluationSafetyFailure `json:"safety_failures,omitempty"`
+	DispositionAggregates      map[string]int            `json:"disposition_aggregates,omitempty"`
+	AnalysisFallbackAggregates map[string]int            `json:"analysis_fallback_aggregates,omitempty"`
+	AnalysisCategoryAggregates map[string]int            `json:"analysis_category_aggregates,omitempty"`
+	GeneratedAt                time.Time                 `json:"generated_at"`
+	RealStack                  bool                      `json:"real_stack"`
+	ReleaseEligible            bool                      `json:"release_eligible"`
 }
 
 // EvaluationFixtureSeed is the alias-to-record resolution produced by a fixture
@@ -211,6 +222,9 @@ func MarshalEvaluationReport(report EvaluationReport) ([]byte, error) {
 	if err := report.Metadata.Validate(); err != nil {
 		return nil, NewEvaluationFailure(EvaluationSafetyFailureUnsafeDiagnostics, err.Error())
 	}
+	if err := report.validateSafeOutput(); err != nil {
+		return nil, NewEvaluationFailure(EvaluationSafetyFailureUnsafeDiagnostics, err.Error())
+	}
 	return json.Marshal(report)
 }
 
@@ -245,7 +259,84 @@ func (m EvaluationRankingMetadata) Validate() error {
 	if m.RolloutDisposition != "" && !evaluationSafeIdentity(m.RolloutDisposition) {
 		return fmt.Errorf("rollout disposition is invalid")
 	}
+	if m.RolloutDisposition != "" && !evaluationRolloutDispositionValid(m.RolloutDisposition) {
+		return fmt.Errorf("rollout disposition is unsupported")
+	}
 	return nil
+}
+
+func evaluationRolloutDispositionValid(disposition string) bool {
+	switch disposition {
+	case "original_only", "diagnostics_only", "shadow", "active", "active_for_scope", "disabled", "rollback":
+		return true
+	default:
+		return false
+	}
+}
+
+func (report EvaluationReport) validateSafeOutput() error {
+	if err := validateEvaluationSafetyFailures(report.SafetyFailures); err != nil {
+		return err
+	}
+	for _, item := range report.Cases {
+		if !evaluationSafeIdentity(item.CaseID) || !evaluationSafeIdentity(item.Category) {
+			return fmt.Errorf("evaluation case identity is invalid")
+		}
+		if item.CandidatePoolSize < 0 || item.CandidatePoolSize > QueryAnalysisHardMaxAggregateCandidates ||
+			item.AnalysisSignalCount < 0 || item.AnalysisSignalCount > QueryAnalysisHardMaxSignals ||
+			item.AnalysisSubqueryCount < 0 || item.AnalysisSubqueryCount > QueryAnalysisHardMaxSubqueries ||
+			item.AnalysisCandidateCount < 0 || item.AnalysisCandidateCount > QueryAnalysisHardMaxAggregateCandidates {
+			return fmt.Errorf("evaluation case count is outside its bound")
+		}
+		if err := validateEvaluationSafetyFailures(item.SafetyFailures); err != nil {
+			return err
+		}
+		if item.AnalysisDisposition != "" && !item.AnalysisDisposition.valid() {
+			return fmt.Errorf("evaluation analysis disposition is invalid")
+		}
+		if item.AnalysisFallback != "" && !item.AnalysisFallback.valid() {
+			return fmt.Errorf("evaluation analysis fallback is invalid")
+		}
+		for _, count := range item.AnalysisCategories {
+			if !count.Category.valid() || count.Count < 0 || count.Count > QueryAnalysisHardMaxDiagnosticCount {
+				return fmt.Errorf("evaluation analysis category is invalid")
+			}
+		}
+	}
+	for key, count := range report.DispositionAggregates {
+		if !evaluationCandidateDispositionValid(EvaluationCandidateDisposition(key)) || count < 0 || count > QueryAnalysisHardMaxDiagnosticCount {
+			return fmt.Errorf("evaluation disposition aggregate is invalid")
+		}
+	}
+	for key, count := range report.AnalysisFallbackAggregates {
+		if !QueryAnalysisFallbackCategory(key).valid() || count < 0 || count > QueryAnalysisHardMaxDiagnosticCount {
+			return fmt.Errorf("evaluation fallback aggregate is invalid")
+		}
+	}
+	for key, count := range report.AnalysisCategoryAggregates {
+		if !QueryAnalysisDiagnosticCategory(key).valid() || count < 0 || count > QueryAnalysisHardMaxDiagnosticCount {
+			return fmt.Errorf("evaluation category aggregate is invalid")
+		}
+	}
+	return nil
+}
+
+func validateEvaluationSafetyFailures(failures []EvaluationSafetyFailure) error {
+	for _, failure := range failures {
+		if !evaluationSafetyFailureCategoryValid(failure.Category) || failure.Count <= 0 || failure.Count > QueryAnalysisHardMaxDiagnosticCount {
+			return fmt.Errorf("evaluation safety failure is invalid")
+		}
+	}
+	return nil
+}
+
+func evaluationCandidateDispositionValid(disposition EvaluationCandidateDisposition) bool {
+	switch disposition {
+	case EvaluationCandidateDispositionReturned, EvaluationCandidateDispositionNotReturned:
+		return true
+	default:
+		return false
+	}
 }
 
 func evaluationSafeIdentity(value string) bool {

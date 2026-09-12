@@ -47,6 +47,7 @@ type EvaluationReplayCase struct {
 	ChannelAvailability    map[string]EvaluationChannelStatus
 	CandidatePoolSize      int
 	Latency                time.Duration
+	AnalysisDiagnostics    *QueryAnalysisDiagnostics
 }
 
 type EvaluationCandidateDisposition string
@@ -162,13 +163,15 @@ func (r *EvaluationRunner) Replay(ctx context.Context, fixture EvaluationFixture
 
 		started := time.Now()
 		result, err := r.searcher.Search(ctx, SearchInput{
-			Scope:                 item.Scope,
-			Query:                 item.Query,
-			LexicalMatchMode:      metadata.LexicalMatchMode,
-			TopK:                  evaluationReplayTopK,
-			IncludeSummaries:      true,
-			IncludeRelations:      true,
-			rankingPolicyDisabled: true,
+			Scope:                              item.Scope,
+			Query:                              item.Query,
+			LexicalMatchMode:                   metadata.LexicalMatchMode,
+			TopK:                               evaluationReplayTopK,
+			IncludeSummaries:                   true,
+			IncludeRelations:                   true,
+			rankingPolicyDisabled:              metadata.RolloutDisposition == "" || metadata.RolloutDisposition == "original_only",
+			IncludeFeedbackDiagnostics:         metadata.AnalysisVersion != "",
+			queryAnalysisDiagnosticsAuthorized: metadata.AnalysisVersion != "",
 		})
 		if err != nil {
 			return EvaluationReplay{}, fmt.Errorf("execute evaluation retrieval query")
@@ -185,6 +188,11 @@ func (r *EvaluationRunner) Replay(ctx context.Context, fixture EvaluationFixture
 			Latency:                time.Since(started),
 			ChannelAvailability:    evaluationChannelAvailability(result.fusionChannelAvailability),
 		}
+		analysisDiagnostics, err := evaluationReplayAnalysisDiagnostics(result.Diagnostics, metadata, item.ExpectedAnalysis)
+		if err != nil {
+			return EvaluationReplay{}, NewEvaluationFailure(EvaluationSafetyFailureUnsafeDiagnostics, err.Error())
+		}
+		caseRun.AnalysisDiagnostics = analysisDiagnostics
 		if result.fusionStrategy.Name != "" {
 			metadata.FusionStrategy = fusionStrategyIdentity(result.fusionStrategy)
 			run.Metadata.FusionStrategy = metadata.FusionStrategy
@@ -213,6 +221,103 @@ func (r *EvaluationRunner) Replay(ctx context.Context, fixture EvaluationFixture
 		run.Cases = append(run.Cases, caseRun)
 	}
 	return run, nil
+}
+
+func evaluationReplayAnalysisDiagnostics(diagnostics []ContextDiagnostic, metadata EvaluationRankingMetadata, expectation *EvaluationAnalysisExpectation) (*QueryAnalysisDiagnostics, error) {
+	var result *QueryAnalysisDiagnostics
+	for _, diagnostic := range diagnostics {
+		if diagnostic.Section != "query_analysis" {
+			continue
+		}
+		if result != nil {
+			return nil, fmt.Errorf("multiple query-analysis diagnostics")
+		}
+		bounded := QueryAnalysisDiagnostics{
+			PolicyVersion:       diagnostic.PolicyVersion,
+			LimitsVersion:       diagnostic.LimitsVersion,
+			Disposition:         diagnostic.Disposition,
+			Fallback:            diagnostic.Fallback,
+			OriginalRetained:    diagnostic.OriginalRetained,
+			Categories:          append([]QueryAnalysisDiagnosticCount(nil), diagnostic.Categories...),
+			HintCount:           diagnostic.HintCount,
+			SignalCount:         diagnostic.SignalCount,
+			SubqueryCount:       diagnostic.SubqueryCount,
+			CandidateCount:      diagnostic.CandidateCount,
+			Elapsed:             time.Duration(diagnostic.ElapsedNS),
+			RolloutStage:        diagnostic.RolloutStage,
+			NormalizationStatus: diagnostic.NormalizationStatus,
+			TimeStatus:          diagnostic.TimeStatus,
+		}
+		if bounded.OriginalRetained && bounded.SignalCount == 0 {
+			bounded.SignalCount = 1
+		}
+		if err := bounded.Validate(evaluationHardQueryAnalysisLimits()); err != nil {
+			return nil, err
+		}
+		if string(bounded.PolicyVersion) != metadata.AnalysisVersion || string(bounded.LimitsVersion) != metadata.AnalysisLimitsVersion || !evaluationRolloutDiagnosticsMatch(metadata.RolloutDisposition, bounded.RolloutStage) {
+			return nil, fmt.Errorf("query-analysis diagnostic identity mismatch")
+		}
+		if err := evaluationAnalysisMatchesExpectation(bounded, expectation); err != nil {
+			return nil, err
+		}
+		result = &bounded
+	}
+	if (metadata.AnalysisVersion != "" || expectation != nil) && result == nil {
+		return nil, fmt.Errorf("query-analysis diagnostics are missing")
+	}
+	return result, nil
+}
+
+func evaluationAnalysisMatchesExpectation(diagnostic QueryAnalysisDiagnostics, expectation *EvaluationAnalysisExpectation) error {
+	if expectation == nil {
+		return nil
+	}
+	if diagnostic.PolicyVersion != expectation.PolicyVersion || diagnostic.LimitsVersion != expectation.LimitsVersion ||
+		diagnostic.Disposition != expectation.Disposition || diagnostic.Fallback != expectation.Fallback ||
+		diagnostic.OriginalRetained != expectation.OriginalRetained {
+		return fmt.Errorf("query-analysis result does not match fixture expectation")
+	}
+	if diagnostic.SignalCount > expectation.MaxSignalCount || diagnostic.SubqueryCount > expectation.MaxSubqueryCount || diagnostic.CandidateCount > expectation.MaxCandidateCount {
+		return fmt.Errorf("query-analysis result exceeds fixture expectation")
+	}
+	actualCategories := make(map[QueryAnalysisDiagnosticCategory]struct{}, len(diagnostic.Categories))
+	for _, count := range diagnostic.Categories {
+		if count.Count > 0 {
+			actualCategories[count.Category] = struct{}{}
+		}
+	}
+	for _, expected := range expectation.Categories {
+		if _, found := actualCategories[expected]; !found {
+			return fmt.Errorf("query-analysis result is missing expected category")
+		}
+	}
+	return nil
+}
+
+func evaluationRolloutDiagnosticsMatch(disposition, stage string) bool {
+	if disposition == stage {
+		return true
+	}
+	if stage == "original_only" {
+		return disposition == "diagnostics_only" || disposition == "shadow" || disposition == "active" || disposition == "active_for_scope" || disposition == "disabled" || disposition == "rollback"
+	}
+	return disposition == "active_for_scope" && stage == "active"
+}
+
+func evaluationHardQueryAnalysisLimits() QueryAnalysisLimits {
+	return QueryAnalysisLimits{
+		Version:                QueryAnalysisLimitsVersionV1,
+		MaxQueryBytes:          QueryAnalysisHardMaxQueryBytes,
+		MaxHints:               QueryAnalysisHardMaxHints,
+		MaxSignals:             QueryAnalysisHardMaxSignals,
+		MaxSubqueries:          QueryAnalysisHardMaxSubqueries,
+		MaxTermBytes:           QueryAnalysisHardMaxTermBytes,
+		MaxSubqueryBytes:       QueryAnalysisHardMaxSubqueryBytes,
+		MaxAnalysisWork:        QueryAnalysisHardMaxAnalysisWork,
+		MaxCandidatesPerSignal: QueryAnalysisHardMaxCandidatesPerSignal,
+		MaxAggregateCandidates: QueryAnalysisHardMaxAggregateCandidates,
+		MaxElapsed:             QueryAnalysisHardMaxElapsed,
+	}
 }
 
 func evaluationMissingCandidateDiagnostics(returned []EvaluationCandidateDiagnostic, activeAliases []string, fusionStrategy string) []EvaluationCandidateDiagnostic {
