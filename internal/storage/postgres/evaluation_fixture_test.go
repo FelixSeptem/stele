@@ -242,12 +242,12 @@ func TestEvaluationFixtureRunsOwnedPostgresEvaluation(t *testing.T) {
 		Version:                       "quality-policy-v1",
 		ProtectedCutoffs:              []int{1, 5, 10},
 		ProtectedCategories:           []string{"single-fact", "temporal", "multi-hop", "multi-hop-budget"},
-		MaxRecallRegression:           1,
-		MaxMultiHopCoverageRegression: 1,
-		MaxEvidenceCoverageRegression: 1,
-		MaxBudgetOmissionIncrease:     1,
-		MaxP95LatencyMS:               300000,
-		MaxP95LatencyRegressionMS:     300000,
+		MaxRecallRegression:           0,
+		MaxMultiHopCoverageRegression: 0,
+		MaxEvidenceCoverageRegression: 0,
+		MaxBudgetOmissionIncrease:     0,
+		MaxP95LatencyMS:               5000,
+		MaxP95LatencyRegressionMS:     500,
 	}
 	decision, err := retrieval.EvaluateReleasePolicy(releasePolicy, baselineReport, candidateReport)
 	if err != nil {
@@ -258,31 +258,36 @@ func TestEvaluationFixtureRunsOwnedPostgresEvaluation(t *testing.T) {
 	}
 
 	now := time.Now().UTC()
+	phase64Metrics := retrieval.RetrievalEvaluationPrerequisiteMetrics{
+		DuplicateRate:        baselineReport.Metrics.DuplicateRate,
+		MaxDuplicateRate:     0.1,
+		ProtectedCoverage:    baselineReport.Metrics.ProtectedRecall,
+		MinProtectedCoverage: 1,
+		CandidatePoolSize:    baselineReport.Metrics.CandidatePoolSize,
+		MaxCandidatePoolSize: 200,
+		P95LatencyMS:         baselineReport.Metrics.P95LatencyMS,
+		MaxP95LatencyMS:      5000,
+	}
+	phase64Status := retrieval.RetrievalEvaluationEvidencePassed
+	if phase64Metrics.DuplicateRate > phase64Metrics.MaxDuplicateRate ||
+		phase64Metrics.ProtectedCoverage < phase64Metrics.MinProtectedCoverage ||
+		phase64Metrics.CandidatePoolSize > phase64Metrics.MaxCandidatePoolSize ||
+		phase64Metrics.P95LatencyMS > phase64Metrics.MaxP95LatencyMS {
+		phase64Status = retrieval.RetrievalEvaluationEvidenceFailed
+	}
 	phase64 := retrieval.RetrievalEvaluationPrerequisiteEvidence{
 		Stage:       retrieval.RetrievalEvaluationPhase64,
-		Status:      retrieval.RetrievalEvaluationEvidencePassed,
+		Status:      phase64Status,
 		RealStack:   true,
 		Metadata:    baselineReport.Metadata,
 		GeneratedAt: now,
 		ExpiresAt:   now.Add(24 * time.Hour),
-		Metrics: retrieval.RetrievalEvaluationPrerequisiteMetrics{
-			DuplicateRate:        baselineReport.Metrics.DuplicateRate,
-			MaxDuplicateRate:     1,
-			ProtectedCoverage:    baselineReport.Metrics.ProtectedRecall,
-			MinProtectedCoverage: 0,
-			CandidatePoolSize:    baselineReport.Metrics.CandidatePoolSize,
-			MaxCandidatePoolSize: retrieval.QueryAnalysisHardMaxAggregateCandidates,
-			P95LatencyMS:         baselineReport.Metrics.P95LatencyMS,
-			MaxP95LatencyMS:      300000,
-		},
+		Metrics:     phase64Metrics,
 	}
 	gate := retrieval.RetrievalEvaluationGate{Now: now, CandidateMetadata: candidateReport.Metadata, Phase64Evidence: &phase64, BaselineCandidateCompatible: decision.Eligible}
-	if !gate.ActiveEligible() {
-		t.Fatalf("active query-analysis gate rejected compatible real-stack reports: %s", gate.SkipReason())
-	}
 
 	baselineReport.GeneratedAt, baselineReport.RealStack = now, true
-	candidateReport.GeneratedAt, candidateReport.RealStack, candidateReport.ReleaseEligible = now, true, decision.Eligible
+	candidateReport.GeneratedAt, candidateReport.RealStack, candidateReport.ReleaseEligible = now, true, decision.Eligible && gate.ActiveEligible()
 	writeOwnedEvaluationArtifacts(t, baselineReport, candidateReport, phase64, comparison, decision)
 }
 
