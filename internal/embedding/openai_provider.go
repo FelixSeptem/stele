@@ -13,16 +13,18 @@ import (
 )
 
 type OpenAIProviderConfig struct {
-	APIKey     string
-	BaseURL    string
-	Timeout    time.Duration
-	HTTPClient *http.Client
+	APIKey         string
+	BaseURL        string
+	Timeout        time.Duration
+	HTTPClient     *http.Client
+	OmitDimensions bool
 }
 
 type openAIProvider struct {
-	apiKey  string
-	baseURL string
-	client  *http.Client
+	apiKey         string
+	baseURL        string
+	client         *http.Client
+	omitDimensions bool
 }
 
 type openAIEmbeddingRequest struct {
@@ -61,9 +63,10 @@ func NewOpenAIProvider(cfg OpenAIProviderConfig) (Provider, error) {
 	}
 
 	return &openAIProvider{
-		apiKey:  apiKey,
-		baseURL: strings.TrimRight(baseURL, "/"),
-		client:  client,
+		apiKey:         apiKey,
+		baseURL:        strings.TrimRight(baseURL, "/"),
+		client:         client,
+		omitDimensions: cfg.OmitDimensions,
 	}, nil
 }
 
@@ -75,11 +78,14 @@ func (p *openAIProvider) GenerateEmbedding(ctx context.Context, input ProviderRe
 		return ProviderResult{}, fmt.Errorf("embedding input text is required")
 	}
 
-	payload, err := json.Marshal(openAIEmbeddingRequest{
-		Model:      input.Target.Model,
-		Input:      input.Text,
-		Dimensions: input.Target.Dimensions,
-	})
+	embeddingRequest := openAIEmbeddingRequest{
+		Model: input.Target.Model,
+		Input: input.Text,
+	}
+	if !p.omitDimensions {
+		embeddingRequest.Dimensions = input.Target.Dimensions
+	}
+	payload, err := json.Marshal(embeddingRequest)
 	if err != nil {
 		return ProviderResult{}, fmt.Errorf("marshal openai embedding request: %w", err)
 	}

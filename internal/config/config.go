@@ -84,9 +84,10 @@ type EmbeddingRouteConfig struct {
 }
 
 type OpenAIEmbeddingProviderConfig struct {
-	APIKey  string
-	BaseURL string
-	Timeout time.Duration
+	APIKey         string
+	BaseURL        string
+	Timeout        time.Duration
+	OmitDimensions bool
 }
 
 type EmbeddingConfig struct {
@@ -377,6 +378,7 @@ func LoadFromEnv() (Config, error) {
 	if err != nil {
 		return Config{}, err
 	}
+	openAIEmbeddingSendDimensions := loadBoolEnvWithDefault("STELE_EMBEDDING_OPENAI_SEND_DIMENSIONS", true)
 	rerankerTimeout, err := loadDurationWithDefault("STELE_RERANK_TIMEOUT", 30*time.Second)
 	if err != nil {
 		return Config{}, err
@@ -450,9 +452,10 @@ func LoadFromEnv() (Config, error) {
 			DefaultDimensions: defaultEmbeddingDimensions,
 			ClassRoutes:       classRoutes,
 			OpenAI: OpenAIEmbeddingProviderConfig{
-				APIKey:  strings.TrimSpace(os.Getenv("STELE_EMBEDDING_OPENAI_API_KEY")),
-				BaseURL: strings.TrimSpace(getEnvOrDefault("STELE_EMBEDDING_OPENAI_BASE_URL", "https://api.openai.com/v1")),
-				Timeout: openAIEmbeddingTimeout,
+				APIKey:         strings.TrimSpace(os.Getenv("STELE_EMBEDDING_OPENAI_API_KEY")),
+				BaseURL:        strings.TrimSpace(getEnvOrDefault("STELE_EMBEDDING_OPENAI_BASE_URL", "https://api.openai.com/v1")),
+				Timeout:        openAIEmbeddingTimeout,
+				OmitDimensions: !openAIEmbeddingSendDimensions,
 			},
 		},
 		Reranker: rerankerConfig,
@@ -595,6 +598,13 @@ func loadIntWithDefault(key string, fallback int) (int, error) {
 func loadBoolEnv(key string) bool {
 	raw := strings.TrimSpace(strings.ToLower(os.Getenv(key)))
 	return raw == "1" || raw == "true" || raw == "yes"
+}
+
+func loadBoolEnvWithDefault(key string, fallback bool) bool {
+	if strings.TrimSpace(os.Getenv(key)) == "" {
+		return fallback
+	}
+	return loadBoolEnv(key)
 }
 
 func loadHeaderMap(key string) map[string]string {

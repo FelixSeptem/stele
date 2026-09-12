@@ -2061,6 +2061,12 @@ STELE_RERANK_MAX_CANDIDATES=50
 STELE_RERANK_MAX_TEXT_BYTES=8192
 ```
 
+For OpenAI-compatible embedding services that reject the optional
+`dimensions` request field (for example, some SiliconFlow deployments), set
+`STELE_EMBEDDING_OPENAI_SEND_DIMENSIONS=false`. Stele will still validate and
+record the configured target dimension; only the outbound request field is
+omitted.
+
 Use diagnostics-only/shadow first and evaluate against a disposable real
 PostgreSQL + pgvector stack. Active mode requires an exact scoped rollout with
 matching logical provider/version/mode plus the existing dry-run, evidence,

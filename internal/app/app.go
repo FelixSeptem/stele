@@ -1211,9 +1211,10 @@ func buildEmbeddingRuntime(cfg config.EmbeddingConfig, overrides map[string]embe
 	}
 	if len(overrides) == 0 && strings.TrimSpace(cfg.OpenAI.APIKey) != "" {
 		provider, err := embedding.NewOpenAIProvider(embedding.OpenAIProviderConfig{
-			APIKey:  cfg.OpenAI.APIKey,
-			BaseURL: cfg.OpenAI.BaseURL,
-			Timeout: cfg.OpenAI.Timeout,
+			APIKey:         cfg.OpenAI.APIKey,
+			BaseURL:        cfg.OpenAI.BaseURL,
+			Timeout:        cfg.OpenAI.Timeout,
+			OmitDimensions: cfg.OpenAI.OmitDimensions,
 		})
 		if err != nil {
 			return embeddingRuntime{}, fmt.Errorf("configure openai embedding provider: %w", err)

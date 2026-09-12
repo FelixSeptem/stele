@@ -68,3 +68,18 @@ func TestLoadFromEnvParsesOpenAIEmbeddingProviderSettings(t *testing.T) {
 		t.Fatalf("OpenAI.Timeout = %v, want 45s", cfg.Embedding.OpenAI.Timeout)
 	}
 }
+
+func TestLoadFromEnvCanDisableOpenAIEmbeddingDimensionsParameter(t *testing.T) {
+	t.Setenv("STELE_MODE", "api")
+	t.Setenv("STELE_POSTGRES_DSN", "postgres://example")
+	t.Setenv("STELE_EMBEDDING_OPENAI_API_KEY", "test-openai-key")
+	t.Setenv("STELE_EMBEDDING_OPENAI_SEND_DIMENSIONS", "false")
+
+	cfg, err := LoadFromEnv()
+	if err != nil {
+		t.Fatalf("LoadFromEnv() error = %v", err)
+	}
+	if !cfg.Embedding.OpenAI.OmitDimensions {
+		t.Fatal("OpenAI.OmitDimensions = false, want true when send-dimensions is disabled")
+	}
+}

@@ -84,3 +84,40 @@ func TestOpenAIProviderGenerateEmbeddingUsesConfiguredEndpointAndDimensions(t *t
 		t.Fatalf("len(Embedding) = %d, want 3", len(result.Embedding))
 	}
 }
+
+func TestOpenAIProviderCanOmitDimensionsForCompatibleEndpoints(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		var payload map[string]any
+		if err := json.NewDecoder(r.Body).Decode(&payload); err != nil {
+			t.Fatalf("json.NewDecoder() error = %v", err)
+		}
+		if _, ok := payload["dimensions"]; ok {
+			t.Fatalf("dimensions field = %v, want omitted", payload["dimensions"])
+		}
+		w.Header().Set("Content-Type", "application/json")
+		_ = json.NewEncoder(w).Encode(map[string]any{
+			"data": []map[string]any{{"embedding": []float64{0.1, 0.2, 0.3}}},
+		})
+	}))
+	defer server.Close()
+
+	provider, err := NewOpenAIProvider(OpenAIProviderConfig{
+		APIKey:         "test-openai-key",
+		BaseURL:        server.URL,
+		OmitDimensions: true,
+		HTTPClient:     server.Client(),
+	})
+	if err != nil {
+		t.Fatalf("NewOpenAIProvider() error = %v", err)
+	}
+	result, err := provider.GenerateEmbedding(context.Background(), ProviderRequest{
+		Text:   "hello semantic world",
+		Target: Target{Provider: "openai", Model: "bge-m3", Dimensions: 1024},
+	})
+	if err != nil {
+		t.Fatalf("GenerateEmbedding() error = %v", err)
+	}
+	if len(result.Embedding) != 3 {
+		t.Fatalf("len(Embedding) = %d, want 3", len(result.Embedding))
+	}
+}
