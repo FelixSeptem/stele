@@ -198,3 +198,31 @@ evaluator prints `SKIP_RETRIEVAL_EVALUATION_DSN_REQUIRED` and exits with code
 evaluator never falls back to `STELE_POSTGRES_DSN` or any ambient operator
 database. Remove the fixture scope after the run and keep reports free of
 credentials and raw candidate content.
+
+### Bounded query understanding rollout
+
+Query analysis retains the caller's original query as the first mandatory signal.
+Normalization, aliases, hints, and decomposition are deterministic and bounded
+by the versioned `query-analysis-v1` and `query-analysis-limits-v1` contracts;
+derived signals copy the exact request scope, lifecycle visibility, memory-class,
+and time-window constraints. Analyzer errors, malformed output, timeout, or an
+ineligible policy fall back to original-only retrieval.
+
+Query-analysis rollout policies use the existing exact-scope ranking governance.
+`diagnostics_only` and `dry_run`/shadow may collect bounded aggregate evidence but
+cannot alter ordinary ranking; only an exact-scope `active_for_scope` policy may
+allow derived signals into the common fusion pipeline. Disabled, expired, foreign,
+malformed, and rolled-back policies resolve to original-only behavior.
+
+Authorized diagnostics expose only policy and limits versions, rollout disposition,
+normalization/time status, bounded hint/signal/subquery/candidate counts, fallback
+category, and elapsed budget. They never include query text, normalized text,
+subqueries, scores, plans, identifiers, or scope values. Ordinary search and
+context responses retain their existing schemas and do not include these fields
+unless an explicitly diagnostic path requests them.
+
+Active decomposition remains ineligible until the real-stack prerequisite and
+original-versus-analyzed comparison pass with an explicitly owned disposable
+PostgreSQL + pgvector DSN. Without that DSN the stable result is
+`SKIP_RETRIEVAL_EVALUATION_DSN_REQUIRED`; this is a non-pass skip and must not be
+treated as release evidence.
