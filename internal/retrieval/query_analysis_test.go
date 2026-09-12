@@ -36,6 +36,31 @@ func TestNewQueryAnalysisResultRetainsImmutableOriginalFirst(t *testing.T) {
 	}
 }
 
+func TestQueryAnalysisDiagnosticsFromResultIsAllowlistedAndBounded(t *testing.T) {
+	limits := DefaultQueryAnalysisLimits()
+	input := QueryAnalysisInput{AcceptedQuery: "caller secret", PolicyVersion: QueryAnalysisPolicyVersionV1, Limits: limits}
+	result, err := NewQueryAnalysisResult(input, QueryAnalysisDispositionComplete, []QueryAnalysisHint{{Kind: QueryAnalysisHintIntent, Disposition: QueryAnalysisHintPresent, Value: "lookup"}}, []QueryAnalysisSignal{{Kind: QueryAnalysisSignalSubquery, Text: "hidden subquery"}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	diagnostics, err := QueryAnalysisDiagnosticsFromResult(result, limits, QueryAnalysisFallbackNone, 10*time.Millisecond, 3, "active")
+	if err != nil {
+		t.Fatal(err)
+	}
+	b, err := MarshalQueryAnalysisDiagnostics(diagnostics, limits)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, forbidden := range []string{"caller secret", "hidden subquery", "lookup"} {
+		if strings.Contains(string(b), forbidden) {
+			t.Fatalf("diagnostics leaked %q: %s", forbidden, b)
+		}
+	}
+	if diagnostics.SignalCount != 2 || diagnostics.SubqueryCount != 1 || diagnostics.CandidateCount != 3 || diagnostics.RolloutStage != "active" {
+		t.Fatalf("diagnostics=%+v", diagnostics)
+	}
+}
+
 func TestQueryAnalysisResultValidateRequiresMatchingVersionedIdentity(t *testing.T) {
 	input := validQueryAnalysisInput()
 	result, err := NewQueryAnalysisResult(input, QueryAnalysisDispositionComplete, nil, nil)

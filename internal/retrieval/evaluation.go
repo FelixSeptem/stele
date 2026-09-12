@@ -53,6 +53,9 @@ type EvaluationRankingMetadata struct {
 	CompatibleEmbeddingRevision string           `json:"compatible_embedding_revision"`
 	LexicalMatchMode            LexicalMatchMode `json:"lexical_match_mode,omitempty"`
 	PolicyVersion               string           `json:"policy_version"`
+	AnalysisVersion             string           `json:"analysis_version,omitempty"`
+	AnalysisLimitsVersion       string           `json:"analysis_limits_version,omitempty"`
+	RolloutDisposition          string           `json:"rollout_disposition,omitempty"`
 }
 
 // EvaluationSafetyFailureCategory is a stable non-sensitive failure reason.
@@ -114,13 +117,16 @@ type EvaluationMetricReport struct {
 
 // EvaluationCaseReport is a bounded per-case contribution to an evaluation report.
 type EvaluationCaseReport struct {
-	CaseID            string                    `json:"case_id"`
-	Category          string                    `json:"category,omitempty"`
-	Metrics           EvaluationMetricReport    `json:"metrics"`
-	SafetyFailures    []EvaluationSafetyFailure `json:"safety_failures,omitempty"`
-	CandidatePoolSize int                       `json:"candidate_pool_size"`
-	LatencyMS         float64                   `json:"latency_ms"`
-	ChunkDerivedCount int                       `json:"chunk_derived_count,omitempty"`
+	CaseID                string                    `json:"case_id"`
+	Category              string                    `json:"category,omitempty"`
+	Metrics               EvaluationMetricReport    `json:"metrics"`
+	SafetyFailures        []EvaluationSafetyFailure `json:"safety_failures,omitempty"`
+	CandidatePoolSize     int                       `json:"candidate_pool_size"`
+	LatencyMS             float64                   `json:"latency_ms"`
+	ChunkDerivedCount     int                       `json:"chunk_derived_count,omitempty"`
+	AnalysisSignalCount   int                       `json:"analysis_signal_count,omitempty"`
+	AnalysisSubqueryCount int                       `json:"analysis_subquery_count,omitempty"`
+	AnalysisFallback      string                    `json:"analysis_fallback,omitempty"`
 }
 
 // EvaluationReport is the versioned data model rendered by local and CI replay.
@@ -131,6 +137,8 @@ type EvaluationReport struct {
 	SafetyFailures        []EvaluationSafetyFailure `json:"safety_failures,omitempty"`
 	DispositionAggregates map[string]int            `json:"disposition_aggregates,omitempty"`
 	GeneratedAt           time.Time                 `json:"generated_at"`
+	RealStack             bool                      `json:"real_stack"`
+	ReleaseEligible       bool                      `json:"release_eligible"`
 }
 
 // EvaluationFixtureSeed is the alias-to-record resolution produced by a fixture
@@ -203,6 +211,15 @@ func (m EvaluationRankingMetadata) Validate() error {
 	}
 	if strings.TrimSpace(m.PolicyVersion) == "" {
 		return fmt.Errorf("policy version is required")
+	}
+	if m.AnalysisVersion != "" && !evaluationSafeIdentity(m.AnalysisVersion) {
+		return fmt.Errorf("analysis version is invalid")
+	}
+	if m.AnalysisLimitsVersion != "" && !evaluationSafeIdentity(m.AnalysisLimitsVersion) {
+		return fmt.Errorf("analysis limits version is invalid")
+	}
+	if m.RolloutDisposition != "" && !evaluationSafeIdentity(m.RolloutDisposition) {
+		return fmt.Errorf("rollout disposition is invalid")
 	}
 	return nil
 }

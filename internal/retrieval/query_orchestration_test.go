@@ -2,8 +2,10 @@ package retrieval
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"reflect"
+	"strings"
 	"testing"
 	"time"
 
@@ -255,6 +257,94 @@ func TestSearchOriginalSemanticIsProcessedBeforeDerivedLexical(t *testing.T) {
 	}
 	if !ids["original-lexical"] || !ids["original-semantic"] || ids["derived-lexical"] {
 		t.Fatalf("hits=%+v", result.Hits)
+	}
+}
+
+func TestQueryAnalysisDiagnosticsAndShadowRemainOriginalOnly(t *testing.T) {
+	scope := memory.Scope{Tenant: "t", Project: "p", Namespace: "n"}
+	limits := DefaultQueryAnalysisLimits()
+	ai := QueryAnalysisInput{AcceptedQuery: "Original", PolicyVersion: QueryAnalysisPolicyVersionV1, Limits: limits}
+	analysis, err := NewQueryAnalysisResult(ai, QueryAnalysisDispositionComplete, []QueryAnalysisHint{{Kind: QueryAnalysisHintIntent, Disposition: QueryAnalysisHintPresent, Value: "lookup"}}, []QueryAnalysisSignal{{Kind: QueryAnalysisSignalTerm, Text: "derived"}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, status := range []memory.RankingRolloutPolicyStatus{memory.RankingRolloutPolicyStatusDiagnosticsOnly, memory.RankingRolloutPolicyStatusDryRun} {
+		policy := activeQAPolicy(scope, limits)
+		policy.Status = status
+		if status == memory.RankingRolloutPolicyStatusDiagnosticsOnly {
+			policy.Mode = memory.RankingRolloutModeDiagnosticsOnly
+		} else {
+			policy.Mode = memory.RankingRolloutModeDryRun
+		}
+		s := NewService(ServiceDependencies{RankingRolloutPolicyReader: effectiveOnlyReader{policy: policy}, QueryAnalyzer: orchestrationAnalyzer{result: analysis}, QueryAnalysisLimits: limits})
+		got, diagnostics := s.queryRecallInputs(context.Background(), SearchInput{Scope: scope, Query: "Original", IncludeFeedbackDiagnostics: true}, &policy, memory.RankingRolloutSurfaceSearch)
+		if len(got) != 1 || got[0].Query != "Original" {
+			t.Fatalf("status=%s inputs=%+v", status, got)
+		}
+		if len(diagnostics) != 1 || diagnostics[0].OriginalRetained != true || diagnostics[0].RolloutStage == string(memory.QueryAnalysisRolloutStageActive) {
+			t.Fatalf("status=%s diagnostics=%+v", status, diagnostics)
+		}
+	}
+}
+
+func TestQueryAnalysisActiveDisabledAndRollbackResolution(t *testing.T) {
+	scope := memory.Scope{Tenant: "t", Project: "p", Namespace: "n"}
+	limits := DefaultQueryAnalysisLimits()
+	ai := QueryAnalysisInput{AcceptedQuery: "Original", PolicyVersion: QueryAnalysisPolicyVersionV1, Limits: limits}
+	analysis, err := NewQueryAnalysisResult(ai, QueryAnalysisDispositionComplete, nil, []QueryAnalysisSignal{{Kind: QueryAnalysisSignalTerm, Text: "derived"}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, tc := range []struct {
+		name   string
+		status memory.RankingRolloutPolicyStatus
+		mode   memory.RankingRolloutMode
+		want   int
+	}{
+		{"active", memory.RankingRolloutPolicyStatusActiveForScope, memory.RankingRolloutModeActiveForScope, 2},
+		{"disabled", memory.RankingRolloutPolicyStatusDisabled, memory.RankingRolloutModeActiveForScope, 1},
+		{"rollback", memory.RankingRolloutPolicyStatusRolledBack, memory.RankingRolloutModeActiveForScope, 1},
+	} {
+		policy := activeQAPolicy(scope, limits)
+		policy.Status, policy.Mode = tc.status, tc.mode
+		s := NewService(ServiceDependencies{QueryAnalyzer: orchestrationAnalyzer{result: analysis}, QueryAnalysisLimits: limits})
+		got, _ := s.queryRecallInputs(context.Background(), SearchInput{Scope: scope, Query: "Original"}, &policy, memory.RankingRolloutSurfaceSearch)
+		if len(got) != tc.want {
+			t.Fatalf("%s inputs=%+v", tc.name, got)
+		}
+	}
+}
+
+func TestQueryAnalysisDiagnosticsAreRedactedAndOrdinarySearchDoesNotExposeThem(t *testing.T) {
+	scope := memory.Scope{Tenant: "tenant-secret", Project: "project-secret", Namespace: "namespace-secret"}
+	limits := DefaultQueryAnalysisLimits()
+	ai := QueryAnalysisInput{AcceptedQuery: "password=super-secret", PolicyVersion: QueryAnalysisPolicyVersionV1, Limits: limits}
+	analysis, err := NewQueryAnalysisResult(ai, QueryAnalysisDispositionComplete, nil, []QueryAnalysisSignal{{Kind: QueryAnalysisSignalSubquery, Text: "secret-subquery"}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	policy := activeQAPolicy(scope, limits)
+	s := NewService(ServiceDependencies{QueryAnalyzer: orchestrationAnalyzer{result: analysis}, QueryAnalysisLimits: limits})
+	got, diagnostics := s.queryRecallInputs(context.Background(), SearchInput{Scope: scope, Query: ai.AcceptedQuery, IncludeFeedbackDiagnostics: true}, &policy, memory.RankingRolloutSurfaceSearch)
+	if len(got) != 2 || len(diagnostics) != 1 {
+		t.Fatalf("inputs=%+v diagnostics=%+v", got, diagnostics)
+	}
+	b, err := json.Marshal(diagnostics)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, forbidden := range []string{"password=super-secret", "secret-subquery", "tenant-secret", "project-secret", "namespace-secret"} {
+		if strings.Contains(string(b), forbidden) {
+			t.Fatalf("diagnostic leaked %q: %s", forbidden, b)
+		}
+	}
+	s2 := NewService(ServiceDependencies{QueryAnalyzer: orchestrationAnalyzer{result: analysis}, QueryAnalysisLimits: limits})
+	result, err := s2.Search(context.Background(), SearchInput{Scope: scope, Query: ai.AcceptedQuery})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(result.Diagnostics) != 0 {
+		t.Fatalf("ordinary diagnostics=%+v", result.Diagnostics)
 	}
 }
 

@@ -153,6 +153,23 @@ type ContextDiagnostic struct {
 	Included    int                       `json:"included,omitempty"`
 	Omitted     int                       `json:"omitted,omitempty"`
 	Hidden      int                       `json:"hidden,omitempty"`
+	// Query-analysis fields are bounded aggregate diagnostics. They are only
+	// populated for explicitly requested diagnostic/evaluation paths; no query
+	// text, plans, identifiers, scope values, or raw scores are carried here.
+	PolicyVersion       QueryAnalysisPolicyVersion     `json:"policy_version,omitempty"`
+	LimitsVersion       QueryAnalysisLimitsVersion     `json:"limits_version,omitempty"`
+	OriginalRetained    bool                           `json:"original_retained,omitempty"`
+	HintCount           int                            `json:"hint_count,omitempty"`
+	SignalCount         int                            `json:"signal_count,omitempty"`
+	SubqueryCount       int                            `json:"subquery_count,omitempty"`
+	CandidateCount      int                            `json:"candidate_count,omitempty"`
+	ElapsedNS           int64                          `json:"elapsed_ns,omitempty"`
+	Fallback            QueryAnalysisFallbackCategory  `json:"fallback,omitempty"`
+	Disposition         QueryAnalysisDisposition       `json:"disposition,omitempty"`
+	Categories          []QueryAnalysisDiagnosticCount `json:"categories,omitempty"`
+	NormalizationStatus string                         `json:"normalization_status,omitempty"`
+	TimeStatus          string                         `json:"time_status,omitempty"`
+	RolloutStage        string                         `json:"rollout_stage,omitempty"`
 }
 
 type AssembledContext struct {
@@ -392,7 +409,7 @@ func (s *Service) Search(ctx context.Context, input SearchInput) (result SearchR
 	}
 	// Effective query-analysis policy includes diagnostics/shadow stages that
 	// are intentionally excluded from the ranking active-policy reader.
-	if s.queryAnalyzer != nil && !input.rankingPolicyDisabled {
+	if s.queryAnalyzer != nil {
 		if effectiveReader, ok := s.rankingRolloutPolicyReader.(effectiveQueryAnalysisPolicyReader); ok {
 			policy, policyErr := effectiveReader.ReadEffectiveQueryAnalysisRolloutPolicy(ctx, memory.ReadEffectiveQueryAnalysisRolloutPolicyInput{Scope: input.Scope, Surface: surface, SessionID: input.SessionID, UserID: input.UserID})
 			if policyErr == nil {
@@ -576,6 +593,12 @@ func (s *Service) Search(ctx context.Context, input SearchInput) (result SearchR
 				}
 				accepted++
 				if s.chunkRollout == memory.ChunkRolloutModeActive {
+					if analysisLimits.MaxAggregateCandidates > 0 && aggregateCandidates >= analysisLimits.MaxAggregateCandidates {
+						accepted--
+						omitted++
+						continue
+					}
+					aggregateCandidates++
 					// Parent memory is the public result. Keep chunk metadata private.
 					hit := ScoredMemory{Memory: candidate.Parent, LexicalScore: candidate.Score.Lexical, SemanticScore: candidate.Score.Semantic, RelationScore: candidate.Score.Relation}
 					chunkHits = append(chunkHits, hit)
@@ -697,6 +720,11 @@ func (s *Service) Search(ctx context.Context, input SearchInput) (result SearchR
 	}
 
 	if len(fusionDiagnostics) > 0 {
+		for i := range fusionDiagnostics {
+			if fusionDiagnostics[i].Section == "query_analysis" {
+				fusionDiagnostics[i].CandidateCount = aggregateCandidates
+			}
+		}
 		diagnostics = append(diagnostics, fusionDiagnostics...)
 	}
 	result = SearchResult{
@@ -763,6 +791,7 @@ func (s *Service) queryRecallInputs(ctx context.Context, input SearchInput, rank
 		err    error
 	}
 	outcomes := make(chan analysisOutcome, 1)
+	analysisStarted := time.Now()
 	go func() {
 		result, err := s.queryAnalyzer.Analyze(analysisInput)
 		outcomes <- analysisOutcome{result: result, err: err}
@@ -774,7 +803,7 @@ func (s *Service) queryRecallInputs(ctx context.Context, input SearchInput, rank
 		analysis, err = outcome.result, outcome.err
 	case <-time.After(analysisLimit):
 		if input.IncludeFeedbackDiagnostics {
-			return inputs, []ContextDiagnostic{{Section: "query_analysis", Status: "original_only", Reason: "analysis exceeded elapsed budget"}}
+			return inputs, []ContextDiagnostic{{Section: "query_analysis", Status: "original_only", Reason: "analysis exceeded elapsed budget", PolicyVersion: QueryAnalysisPolicyVersionV1, LimitsVersion: limits.Version, OriginalRetained: true, Fallback: QueryAnalysisFallbackUnavailable, Disposition: QueryAnalysisDispositionOriginalOnly, RolloutStage: string(memory.QueryAnalysisRolloutStageOriginalOnly), ElapsedNS: boundedAnalysisElapsedNS(time.Since(analysisStarted), limits.MaxElapsed)}}
 		}
 		return inputs, nil
 	case <-ctx.Done():
@@ -783,20 +812,22 @@ func (s *Service) queryRecallInputs(ctx context.Context, input SearchInput, rank
 	diagnostics := make([]ContextDiagnostic, 0, 1)
 	if err != nil {
 		if input.IncludeFeedbackDiagnostics {
-			diagnostics = append(diagnostics, ContextDiagnostic{Section: "query_analysis", Status: "original_only", Reason: "analysis unavailable; original query retained"})
+			diagnostics = append(diagnostics, ContextDiagnostic{Section: "query_analysis", Status: "original_only", Reason: "analysis unavailable; original query retained", PolicyVersion: QueryAnalysisPolicyVersionV1, LimitsVersion: limits.Version, OriginalRetained: true, Fallback: QueryAnalysisFallbackUnavailable, Disposition: QueryAnalysisDispositionOriginalOnly, RolloutStage: string(memory.QueryAnalysisRolloutStageOriginalOnly), ElapsedNS: boundedAnalysisElapsedNS(time.Since(analysisStarted), limits.MaxElapsed)})
 		}
 		return inputs, diagnostics
 	}
 	if err := analysis.Validate(analysisInput); err != nil {
 		if input.IncludeFeedbackDiagnostics {
-			diagnostics = append(diagnostics, ContextDiagnostic{Section: "query_analysis", Status: "original_only", Reason: "analysis rejected; original query retained"})
+			diagnostics = append(diagnostics, ContextDiagnostic{Section: "query_analysis", Status: "original_only", Reason: "analysis rejected; original query retained", PolicyVersion: QueryAnalysisPolicyVersionV1, LimitsVersion: limits.Version, OriginalRetained: true, Fallback: QueryAnalysisFallbackMalformed, Disposition: QueryAnalysisDispositionOriginalOnly, RolloutStage: string(memory.QueryAnalysisRolloutStageOriginalOnly), ElapsedNS: boundedAnalysisElapsedNS(time.Since(analysisStarted), limits.MaxElapsed)})
 		}
 		return inputs, diagnostics
 	}
 	resolution := memory.ResolveQueryAnalysisRollout(rankingPolicy, memory.ResolveQueryAnalysisRolloutInput{Scope: input.Scope, Surface: surface, SessionID: input.SessionID, UserID: input.UserID, Now: time.Now().UTC()})
 	if !resolution.DerivedSignalsAffectResults {
 		if input.IncludeFeedbackDiagnostics {
-			diagnostics = append(diagnostics, ContextDiagnostic{Section: "query_analysis", Status: string(resolution.Stage), Reason: "rollout does not permit derived signals"})
+			diagnostic := queryAnalysisDiagnostic(analysis, limits, resolution.Stage, QueryAnalysisFallbackNone, time.Since(analysisStarted))
+			diagnostic.Status, diagnostic.Reason = string(resolution.Stage), "rollout does not permit derived signals"
+			diagnostics = append(diagnostics, diagnostic)
 		}
 		return inputs, diagnostics
 	}
@@ -810,9 +841,42 @@ func (s *Service) queryRecallInputs(ctx context.Context, input SearchInput, rank
 		inputs = append(inputs, derived)
 	}
 	if input.IncludeFeedbackDiagnostics {
-		diagnostics = append(diagnostics, ContextDiagnostic{Section: "query_analysis", Status: "active", Reason: "bounded derived signals enabled", Included: len(inputs) - 1})
+		diagnostic := queryAnalysisDiagnostic(analysis, limits, resolution.Stage, QueryAnalysisFallbackNone, time.Since(analysisStarted))
+		diagnostic.Status, diagnostic.Reason, diagnostic.Included = "active", "bounded derived signals enabled", len(inputs)-1
+		diagnostics = append(diagnostics, diagnostic)
 	}
 	return inputs, diagnostics
+}
+
+func boundedAnalysisElapsedNS(elapsed, max time.Duration) int64 {
+	if elapsed < 0 {
+		return 0
+	}
+	if max > 0 && elapsed > max {
+		elapsed = max
+	}
+	return elapsed.Nanoseconds()
+}
+
+func countAnalysisSubqueries(result QueryAnalysisResult) int {
+	count := 0
+	for index, signal := range result.Signals {
+		if index > 0 && signal.Kind == QueryAnalysisSignalSubquery {
+			count++
+		}
+	}
+	return count
+}
+
+// queryAnalysisDiagnostic converts the validated analyzer result into the
+// allowlisted API diagnostic shape. It intentionally carries aggregate values
+// only; callers may fill CandidateCount after recall completes.
+func queryAnalysisDiagnostic(result QueryAnalysisResult, limits QueryAnalysisLimits, stage memory.QueryAnalysisRolloutStage, fallback QueryAnalysisFallbackCategory, elapsed time.Duration) ContextDiagnostic {
+	diagnostic, err := QueryAnalysisDiagnosticsFromResult(result, limits, fallback, elapsed, 0, string(stage))
+	if err != nil {
+		return ContextDiagnostic{Section: "query_analysis", Status: "original_only", OriginalRetained: true, Fallback: QueryAnalysisFallbackMalformed, Disposition: QueryAnalysisDispositionOriginalOnly, RolloutStage: string(memory.QueryAnalysisRolloutStageOriginalOnly)}
+	}
+	return ContextDiagnostic{Section: "query_analysis", Status: string(stage), PolicyVersion: diagnostic.PolicyVersion, LimitsVersion: diagnostic.LimitsVersion, OriginalRetained: diagnostic.OriginalRetained, HintCount: diagnostic.HintCount, SignalCount: diagnostic.SignalCount, SubqueryCount: diagnostic.SubqueryCount, CandidateCount: diagnostic.CandidateCount, ElapsedNS: diagnostic.Elapsed.Nanoseconds(), Fallback: diagnostic.Fallback, Disposition: diagnostic.Disposition, Categories: append([]QueryAnalysisDiagnosticCount(nil), diagnostic.Categories...), RolloutStage: diagnostic.RolloutStage, NormalizationStatus: diagnostic.NormalizationStatus, TimeStatus: diagnostic.TimeStatus}
 }
 
 func mergeDiversityScoredMemory(left, right ScoredMemory) ScoredMemory {

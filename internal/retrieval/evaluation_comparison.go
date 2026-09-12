@@ -48,6 +48,9 @@ func CompareEvaluationReports(baseline, candidate EvaluationReport, protectedCat
 	if baseline.Metadata.CompatibleEmbeddingRevision != candidate.Metadata.CompatibleEmbeddingRevision {
 		return EvaluationComparison{}, fmt.Errorf("incompatible embedding revision")
 	}
+	if baseline.Metadata.AnalysisVersion != candidate.Metadata.AnalysisVersion || baseline.Metadata.AnalysisLimitsVersion != candidate.Metadata.AnalysisLimitsVersion {
+		return EvaluationComparison{}, fmt.Errorf("incompatible analysis version")
+	}
 
 	comparison := EvaluationComparison{
 		BaselineRankingVersion:  baseline.Metadata.RankingVersion,

@@ -448,17 +448,20 @@ type QueryAnalysisDiagnosticCount struct {
 // no field capable of carrying query, normalized, subquery, candidate, score,
 // provider-reasoning, identifier, or scope text.
 type QueryAnalysisDiagnostics struct {
-	PolicyVersion    QueryAnalysisPolicyVersion     `json:"policy_version"`
-	LimitsVersion    QueryAnalysisLimitsVersion     `json:"limits_version"`
-	Disposition      QueryAnalysisDisposition       `json:"disposition"`
-	Fallback         QueryAnalysisFallbackCategory  `json:"fallback"`
-	OriginalRetained bool                           `json:"original_retained"`
-	Categories       []QueryAnalysisDiagnosticCount `json:"categories"`
-	HintCount        int                            `json:"hint_count"`
-	SignalCount      int                            `json:"signal_count"`
-	SubqueryCount    int                            `json:"subquery_count"`
-	CandidateCount   int                            `json:"candidate_count"`
-	Elapsed          time.Duration                  `json:"elapsed_ns"`
+	PolicyVersion       QueryAnalysisPolicyVersion     `json:"policy_version"`
+	LimitsVersion       QueryAnalysisLimitsVersion     `json:"limits_version"`
+	Disposition         QueryAnalysisDisposition       `json:"disposition"`
+	Fallback            QueryAnalysisFallbackCategory  `json:"fallback"`
+	OriginalRetained    bool                           `json:"original_retained"`
+	Categories          []QueryAnalysisDiagnosticCount `json:"categories"`
+	HintCount           int                            `json:"hint_count"`
+	SignalCount         int                            `json:"signal_count"`
+	SubqueryCount       int                            `json:"subquery_count"`
+	CandidateCount      int                            `json:"candidate_count"`
+	Elapsed             time.Duration                  `json:"elapsed_ns"`
+	RolloutStage        string                         `json:"rollout_stage,omitempty"`
+	NormalizationStatus string                         `json:"normalization_status,omitempty"`
+	TimeStatus          string                         `json:"time_status,omitempty"`
 }
 
 func (diagnostics QueryAnalysisDiagnostics) Validate(limits QueryAnalysisLimits) error {
@@ -527,4 +530,69 @@ func MarshalQueryAnalysisDiagnostics(diagnostics QueryAnalysisDiagnostics, limit
 		return stable.Categories[i].Category < stable.Categories[j].Category
 	})
 	return json.Marshal(stable)
+}
+
+// QueryAnalysisDiagnosticsFromResult converts a validated analyzer result into
+// the bounded, allowlisted diagnostic representation. It deliberately copies
+// only versions, dispositions, categories, and aggregate counts; signal text,
+// hints, scopes, identifiers, and scores are never retained.
+func QueryAnalysisDiagnosticsFromResult(result QueryAnalysisResult, limits QueryAnalysisLimits, fallback QueryAnalysisFallbackCategory, elapsed time.Duration, candidateCount int, rolloutStage string) (QueryAnalysisDiagnostics, error) {
+	if err := limits.Validate(); err != nil {
+		return QueryAnalysisDiagnostics{}, err
+	}
+	if elapsed < 0 {
+		elapsed = 0
+	}
+	if elapsed > limits.MaxElapsed {
+		elapsed = limits.MaxElapsed
+	}
+	if candidateCount < 0 {
+		candidateCount = 0
+	}
+	if candidateCount > limits.MaxAggregateCandidates {
+		candidateCount = limits.MaxAggregateCandidates
+	}
+	diagnostics := QueryAnalysisDiagnostics{
+		PolicyVersion:       result.Identity.PolicyVersion,
+		LimitsVersion:       result.Identity.LimitsVersion,
+		Disposition:         result.Disposition,
+		Fallback:            fallback,
+		OriginalRetained:    len(result.Signals) > 0 && result.Signals[0].Kind == QueryAnalysisSignalOriginal && result.Signals[0].Mandatory,
+		HintCount:           len(result.Hints),
+		SignalCount:         len(result.Signals),
+		SubqueryCount:       0,
+		CandidateCount:      candidateCount,
+		Elapsed:             elapsed,
+		RolloutStage:        rolloutStage,
+		NormalizationStatus: queryAnalysisNormalizationStatus(result),
+		TimeStatus:          queryAnalysisTimeStatus(result),
+		Categories:          append([]QueryAnalysisDiagnosticCount(nil), result.Categories...),
+	}
+	for i, signal := range result.Signals {
+		if i > 0 && signal.Kind == QueryAnalysisSignalSubquery {
+			diagnostics.SubqueryCount++
+		}
+	}
+	if err := diagnostics.Validate(limits); err != nil {
+		return QueryAnalysisDiagnostics{}, err
+	}
+	return diagnostics, nil
+}
+
+func queryAnalysisNormalizationStatus(result QueryAnalysisResult) string {
+	for _, signal := range result.Signals {
+		if signal.Kind == QueryAnalysisSignalNormalized {
+			return "normalized"
+		}
+	}
+	return "unchanged"
+}
+
+func queryAnalysisTimeStatus(result QueryAnalysisResult) string {
+	for _, hint := range result.Hints {
+		if hint.Kind == QueryAnalysisHintTemporal {
+			return "hinted"
+		}
+	}
+	return "not_detected"
 }
