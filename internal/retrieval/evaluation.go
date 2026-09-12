@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"strings"
 	"time"
+	"unicode/utf8"
 
 	"github.com/FelixSeptem/stele/internal/memory"
 )
@@ -17,16 +18,39 @@ type EvaluationFixture struct {
 	Cases   []EvaluationCase `json:"cases"`
 }
 
+const (
+	evaluationFixtureMaxCases           = 1000
+	evaluationFixtureMaxSourcesPerCase  = 100
+	evaluationFixtureMaxEvidenceGroups  = 16
+	evaluationFixtureMaxExcludedAliases = 100
+	evaluationFixtureMaxSourceBytes     = 64 * 1024
+)
+
 // EvaluationCase defines one scoped retrieval assertion. Evidence aliases are stable
 // fixture-local names; database identifiers are resolved only by the fixture seeder.
 type EvaluationCase struct {
-	ID                     string             `json:"id"`
-	Category               string             `json:"category"`
-	Scope                  memory.Scope       `json:"scope"`
-	Query                  string             `json:"query"`
-	Sources                []EvaluationSource `json:"sources"`
-	ExpectedEvidenceGroups [][]string         `json:"expected_evidence_groups"`
-	ExcludedAliases        []string           `json:"excluded_aliases,omitempty"`
+	ID                     string                         `json:"id"`
+	Category               string                         `json:"category"`
+	Scope                  memory.Scope                   `json:"scope"`
+	Query                  string                         `json:"query"`
+	Sources                []EvaluationSource             `json:"sources"`
+	ExpectedEvidenceGroups [][]string                     `json:"expected_evidence_groups"`
+	ExcludedAliases        []string                       `json:"excluded_aliases,omitempty"`
+	ExpectedAnalysis       *EvaluationAnalysisExpectation `json:"expected_analysis,omitempty"`
+}
+
+// EvaluationAnalysisExpectation declares only bounded aggregate outcomes. It
+// cannot carry normalized text, derived queries, candidates, scores, or IDs.
+type EvaluationAnalysisExpectation struct {
+	PolicyVersion     QueryAnalysisPolicyVersion        `json:"policy_version"`
+	LimitsVersion     QueryAnalysisLimitsVersion        `json:"limits_version"`
+	Disposition       QueryAnalysisDisposition          `json:"disposition"`
+	Fallback          QueryAnalysisFallbackCategory     `json:"fallback"`
+	OriginalRetained  bool                              `json:"original_retained"`
+	Categories        []QueryAnalysisDiagnosticCategory `json:"categories,omitempty"`
+	MaxSignalCount    int                               `json:"max_signal_count"`
+	MaxSubqueryCount  int                               `json:"max_subquery_count"`
+	MaxCandidateCount int                               `json:"max_candidate_count"`
 }
 
 // EvaluationSource is a controlled source event used by one evaluation case.
@@ -250,6 +274,9 @@ func (f EvaluationFixture) Validate() error {
 	if len(f.Cases) == 0 {
 		return fmt.Errorf("fixture must include at least one case")
 	}
+	if len(f.Cases) > evaluationFixtureMaxCases {
+		return fmt.Errorf("fixture case count exceeds the safe bound")
+	}
 
 	caseIDs := make(map[string]struct{}, len(f.Cases))
 	for _, item := range f.Cases {
@@ -275,8 +302,14 @@ func (c EvaluationCase) validate() error {
 	if strings.TrimSpace(c.Query) == "" {
 		return fmt.Errorf("fixture query is required")
 	}
+	if !utf8.ValidString(c.Query) || len(c.Query) > QueryAnalysisHardMaxQueryBytes {
+		return fmt.Errorf("fixture query exceeds the safe input bound")
+	}
 	if len(c.Sources) == 0 {
 		return fmt.Errorf("fixture case must include at least one source")
+	}
+	if len(c.Sources) > evaluationFixtureMaxSourcesPerCase {
+		return fmt.Errorf("fixture source count exceeds the safe bound")
 	}
 
 	aliases := make(map[string]struct{}, len(c.Sources))
@@ -285,6 +318,9 @@ func (c EvaluationCase) validate() error {
 		if alias == "" {
 			return fmt.Errorf("source alias is required")
 		}
+		if !evaluationSafeIdentity(alias) {
+			return fmt.Errorf("source alias is invalid")
+		}
 		if _, exists := aliases[alias]; exists {
 			return fmt.Errorf("duplicate source alias")
 		}
@@ -292,8 +328,14 @@ func (c EvaluationCase) validate() error {
 		if strings.TrimSpace(source.EventType) == "" {
 			return fmt.Errorf("source event type is required")
 		}
+		if !evaluationSafeIdentity(strings.TrimSpace(source.EventType)) {
+			return fmt.Errorf("source event type is invalid")
+		}
 		if strings.TrimSpace(source.Content) == "" {
 			return fmt.Errorf("source content is required")
+		}
+		if !utf8.ValidString(source.Content) || len(source.Content) > evaluationFixtureMaxSourceBytes {
+			return fmt.Errorf("source content exceeds the safe input bound")
 		}
 		if !evaluationMemoryClassValid(source.Class) {
 			return fmt.Errorf("invalid source memory class")
@@ -306,6 +348,10 @@ func (c EvaluationCase) validate() error {
 	if len(c.ExpectedEvidenceGroups) == 0 {
 		return fmt.Errorf("fixture case must include expected evidence groups")
 	}
+	if len(c.ExpectedEvidenceGroups) > evaluationFixtureMaxEvidenceGroups {
+		return fmt.Errorf("expected evidence group count exceeds the safe bound")
+	}
+	expectedAliases := make(map[string]struct{})
 	for _, group := range c.ExpectedEvidenceGroups {
 		if len(group) == 0 {
 			return fmt.Errorf("expected evidence group is required")
@@ -318,9 +364,13 @@ func (c EvaluationCase) validate() error {
 			if _, exists := aliases[alias]; !exists {
 				return fmt.Errorf("unknown evidence alias")
 			}
+			expectedAliases[alias] = struct{}{}
 		}
 	}
 
+	if len(c.ExcludedAliases) > evaluationFixtureMaxExcludedAliases {
+		return fmt.Errorf("excluded alias count exceeds the safe bound")
+	}
 	exclusions := make(map[string]struct{}, len(c.ExcludedAliases))
 	for _, alias := range c.ExcludedAliases {
 		alias = strings.TrimSpace(alias)
@@ -330,9 +380,81 @@ func (c EvaluationCase) validate() error {
 		if _, exists := exclusions[alias]; exists {
 			return fmt.Errorf("duplicate excluded alias")
 		}
+		if !evaluationSafeIdentity(alias) {
+			return fmt.Errorf("invalid excluded alias")
+		}
+		if _, expected := expectedAliases[alias]; expected {
+			return fmt.Errorf("excluded alias cannot also be expected evidence")
+		}
 		exclusions[alias] = struct{}{}
 	}
+	if c.ExpectedAnalysis != nil {
+		if err := c.ExpectedAnalysis.validate(); err != nil {
+			return err
+		}
+	} else if evaluationCategoryRequiresAnalysis(c.Category) {
+		return fmt.Errorf("analysis expectation is required for category")
+	}
 	return nil
+}
+
+func (expectation EvaluationAnalysisExpectation) validate() error {
+	if !expectation.PolicyVersion.valid() {
+		return fmt.Errorf("invalid analysis policy version")
+	}
+	if !expectation.LimitsVersion.valid() {
+		return fmt.Errorf("invalid analysis limits version")
+	}
+	if !expectation.Disposition.valid() {
+		return fmt.Errorf("invalid analysis disposition")
+	}
+	if !expectation.Fallback.valid() {
+		return fmt.Errorf("invalid analysis fallback")
+	}
+	if !expectation.OriginalRetained {
+		return fmt.Errorf("analysis expectation must retain original query")
+	}
+	seen := make(map[QueryAnalysisDiagnosticCategory]struct{}, len(expectation.Categories))
+	for _, category := range expectation.Categories {
+		if !category.valid() {
+			return fmt.Errorf("invalid analysis category")
+		}
+		if _, duplicate := seen[category]; duplicate {
+			return fmt.Errorf("duplicate analysis category")
+		}
+		seen[category] = struct{}{}
+	}
+	if expectation.MaxSignalCount < 1 || expectation.MaxSignalCount > QueryAnalysisHardMaxSignals {
+		return fmt.Errorf("analysis signal bound is invalid")
+	}
+	if expectation.MaxSubqueryCount < 0 || expectation.MaxSubqueryCount > QueryAnalysisHardMaxSubqueries || expectation.MaxSubqueryCount >= expectation.MaxSignalCount {
+		return fmt.Errorf("analysis subquery bound is invalid")
+	}
+	if expectation.MaxCandidateCount < 0 || expectation.MaxCandidateCount > QueryAnalysisHardMaxAggregateCandidates {
+		return fmt.Errorf("analysis candidate bound is invalid")
+	}
+	if expectation.Disposition == QueryAnalysisDispositionOriginalOnly && expectation.MaxSignalCount != 1 {
+		return fmt.Errorf("original-only analysis expectation must allow exactly one signal")
+	}
+	if expectation.Disposition != QueryAnalysisDispositionOriginalOnly && expectation.Fallback != QueryAnalysisFallbackNone {
+		return fmt.Errorf("non-original-only analysis expectation cannot require fallback")
+	}
+	if expectation.Fallback != QueryAnalysisFallbackNone {
+		category := QueryAnalysisDiagnosticCategory(expectation.Fallback)
+		if _, exists := seen[category]; !exists {
+			return fmt.Errorf("analysis fallback category must be expected")
+		}
+	}
+	return nil
+}
+
+func evaluationCategoryRequiresAnalysis(category string) bool {
+	switch strings.TrimSpace(category) {
+	case "mixed-language", "ambiguous", "malformed", "adversarial", "analyzer-unavailable":
+		return true
+	default:
+		return false
+	}
 }
 
 func (p EvaluationReleasePolicy) Validate() error {

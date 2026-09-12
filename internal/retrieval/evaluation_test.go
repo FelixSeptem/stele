@@ -25,23 +25,29 @@ func TestRepositoryEvaluationFixtureCoversRequiredRetrievalScenarios(t *testing.
 	}
 
 	wantCategories := map[string]struct{}{
-		"single-fact":       {},
-		"multi-hop":         {},
-		"temporal":          {},
-		"profile":           {},
-		"episodic":          {},
-		"procedural":        {},
-		"summary":           {},
-		"relation":          {},
-		"contradiction":     {},
-		"noisy-neighbor":    {},
-		"duplicate":         {},
-		"hidden-lifecycle":  {},
-		"cross-scope":       {},
-		"lineage-dedup":     {},
-		"near-identical":    {},
-		"multi-hop-budget":  {},
-		"distractor-safety": {},
+		"single-fact":          {},
+		"multi-hop":            {},
+		"temporal":             {},
+		"profile":              {},
+		"episodic":             {},
+		"procedural":           {},
+		"summary":              {},
+		"relation":             {},
+		"contradiction":        {},
+		"noisy-neighbor":       {},
+		"duplicate":            {},
+		"hidden-lifecycle":     {},
+		"cross-scope":          {},
+		"lineage-dedup":        {},
+		"near-identical":       {},
+		"multi-hop-budget":     {},
+		"distractor-safety":    {},
+		"entity-centric":       {},
+		"mixed-language":       {},
+		"ambiguous":            {},
+		"malformed":            {},
+		"adversarial":          {},
+		"analyzer-unavailable": {},
 	}
 	for _, item := range fixture.Cases {
 		delete(wantCategories, item.Category)
@@ -143,6 +149,48 @@ func TestEvaluationFixtureValidateRejectsMalformedScope(t *testing.T) {
 	err := fixture.Validate()
 	if err == nil || !strings.Contains(err.Error(), "namespace is required") {
 		t.Fatalf("Validate() error = %v, want namespace is required", err)
+	}
+}
+
+func TestEvaluationFixtureValidateAnalysisExpectation(t *testing.T) {
+	fixture := EvaluationFixture{Version: "retrieval-fixture-v1", Cases: []EvaluationCase{{
+		ID: "analysis", Category: "malformed", Scope: memory.Scope{Tenant: "eval", Project: "p", Namespace: "n"}, Query: "q",
+		Sources: []EvaluationSource{{Alias: "fact", EventType: "fixture", Content: "fact"}}, ExpectedEvidenceGroups: [][]string{{"fact"}},
+		ExpectedAnalysis: &EvaluationAnalysisExpectation{PolicyVersion: QueryAnalysisPolicyVersionV1, LimitsVersion: QueryAnalysisLimitsVersionV1, Disposition: QueryAnalysisDispositionOriginalOnly, Fallback: QueryAnalysisFallbackMalformed, OriginalRetained: true, Categories: []QueryAnalysisDiagnosticCategory{QueryAnalysisDiagnosticMalformed}, MaxSignalCount: 1, MaxCandidateCount: 200},
+	}}}
+	if err := fixture.Validate(); err != nil {
+		t.Fatalf("Validate() error = %v", err)
+	}
+}
+
+func TestEvaluationFixtureValidateRejectsInvalidAnalysisCategoryAndUnboundedInput(t *testing.T) {
+	base := EvaluationCase{ID: "analysis", Category: "single-fact", Scope: memory.Scope{Tenant: "eval", Project: "p", Namespace: "n"}, Query: "q", Sources: []EvaluationSource{{Alias: "fact", EventType: "fixture", Content: "fact"}}, ExpectedEvidenceGroups: [][]string{{"fact"}}}
+	base.ExpectedAnalysis = &EvaluationAnalysisExpectation{PolicyVersion: QueryAnalysisPolicyVersionV1, LimitsVersion: QueryAnalysisLimitsVersionV1, Disposition: QueryAnalysisDispositionComplete, Fallback: QueryAnalysisFallbackNone, OriginalRetained: true, Categories: []QueryAnalysisDiagnosticCategory{"bogus"}, MaxSignalCount: 8, MaxSubqueryCount: 4, MaxCandidateCount: 200}
+	if err := (EvaluationFixture{Version: "v1", Cases: []EvaluationCase{base}}).Validate(); err == nil || !strings.Contains(err.Error(), "invalid analysis category") {
+		t.Fatalf("error = %v", err)
+	}
+	base.ExpectedAnalysis.Categories = nil
+	base.Query = strings.Repeat("x", QueryAnalysisHardMaxQueryBytes+1)
+	if err := (EvaluationFixture{Version: "v1", Cases: []EvaluationCase{base}}).Validate(); err == nil || !strings.Contains(err.Error(), "query exceeds") {
+		t.Fatalf("error = %v", err)
+	}
+}
+
+func TestEvaluationFixtureValidateRequiresAnalysisForFailureCategories(t *testing.T) {
+	fixture := EvaluationFixture{Version: "v1", Cases: []EvaluationCase{{ID: "bad", Category: "adversarial", Scope: memory.Scope{Tenant: "eval", Project: "p", Namespace: "n"}, Query: "q", Sources: []EvaluationSource{{Alias: "fact", EventType: "fixture", Content: "fact"}}, ExpectedEvidenceGroups: [][]string{{"fact"}}}}}
+	if err := fixture.Validate(); err == nil || !strings.Contains(err.Error(), "analysis expectation is required") {
+		t.Fatalf("error = %v", err)
+	}
+}
+
+func TestEvaluationFixtureValidateRejectsUnsafeOrExpectedExclusion(t *testing.T) {
+	base := EvaluationCase{ID: "excluded", Category: "single-fact", Scope: memory.Scope{Tenant: "eval", Project: "p", Namespace: "n"}, Query: "q", Sources: []EvaluationSource{{Alias: "fact", EventType: "fixture", Content: "fact"}}, ExpectedEvidenceGroups: [][]string{{"fact"}}, ExcludedAliases: []string{"fact"}}
+	if err := (EvaluationFixture{Version: "v1", Cases: []EvaluationCase{base}}).Validate(); err == nil || !strings.Contains(err.Error(), "cannot also be expected") {
+		t.Fatalf("error = %v", err)
+	}
+	base.ExcludedAliases = []string{"foreign scope"}
+	if err := (EvaluationFixture{Version: "v1", Cases: []EvaluationCase{base}}).Validate(); err == nil || !strings.Contains(err.Error(), "invalid excluded alias") {
+		t.Fatalf("error = %v", err)
 	}
 }
 
@@ -274,13 +322,13 @@ func TestCompareEvaluationReportsRejectsIncompatibleFixture(t *testing.T) {
 
 func TestCompareEvaluationReportsReportsDeltaAndProtectedRegression(t *testing.T) {
 	baseline := evaluationComparisonReport("retrieval-fixture-v1", "baseline-v1", 1)
-	candidate := evaluationComparisonReport("retrieval-fixture-v1", "candidate-v1", 0.5)
+	candidate := evaluationComparisonReport("retrieval-fixture-v1", "baseline-v1", 0.5)
 
 	comparison, err := CompareEvaluationReports(baseline, candidate, []string{"single-fact"})
 	if err != nil {
 		t.Fatalf("CompareEvaluationReports() error = %v", err)
 	}
-	if comparison.BaselineRankingVersion != "baseline-v1" || comparison.CandidateRankingVersion != "candidate-v1" {
+	if comparison.BaselineRankingVersion != "baseline-v1" || comparison.CandidateRankingVersion != "baseline-v1" {
 		t.Fatalf("comparison versions = %+v", comparison)
 	}
 	if len(comparison.MetricDeltas) == 0 || comparison.MetricDeltas[0].Delta >= 0 {
@@ -291,11 +339,11 @@ func TestCompareEvaluationReportsReportsDeltaAndProtectedRegression(t *testing.T
 	}
 }
 
-func TestCompareEvaluationReportsIdentifiesFusionStrategies(t *testing.T) {
+func TestCompareEvaluationReportsIdentifiesCompatibleFusionStrategy(t *testing.T) {
 	baseline := evaluationComparisonReport("retrieval-fixture-v1", "ranking-v1", 1)
 	baseline.Metadata.FusionStrategy = "rrf:rrf-v1"
 	candidate := evaluationComparisonReport("retrieval-fixture-v1", "ranking-v1", 1)
-	candidate.Metadata.FusionStrategy = "normalized_weighted:normalized-weighted-v1"
+	candidate.Metadata.FusionStrategy = "rrf:rrf-v1"
 
 	comparison, err := CompareEvaluationReports(baseline, candidate, nil)
 	if err != nil {
@@ -308,8 +356,7 @@ func TestCompareEvaluationReportsIdentifiesFusionStrategies(t *testing.T) {
 
 func TestCompareEvaluationReportsIncludesDiversityPolicyAndExtendedDeltas(t *testing.T) {
 	baseline := evaluationComparisonReport("fixture-v1", "baseline-v1", 1)
-	candidate := evaluationComparisonReport("fixture-v1", "candidate-v1", 0.9)
-	candidate.Metadata.PolicyVersion = "diversity-policy-v2"
+	candidate := evaluationComparisonReport("fixture-v1", "baseline-v1", 0.9)
 	candidate.Metrics.CandidatePoolSize = 7
 	baseline.Metrics.CandidatePoolSize = 10
 	candidate.Metrics.EvidenceCoverage = 0.8
@@ -318,7 +365,7 @@ func TestCompareEvaluationReportsIncludesDiversityPolicyAndExtendedDeltas(t *tes
 	if err != nil {
 		t.Fatalf("CompareEvaluationReports() error = %v", err)
 	}
-	if comparison.CandidatePolicyVersion != "diversity-policy-v2" {
+	if comparison.CandidatePolicyVersion != "quality-policy-v1" {
 		t.Fatalf("candidate policy version = %q", comparison.CandidatePolicyVersion)
 	}
 	want := map[string]bool{"protected_recall": false, "evidence_coverage": false, "candidate_pool_size": false}
@@ -360,7 +407,7 @@ func TestEvaluateReleasePolicyRejectsProtectedRegressionAndAcceptsCandidate(t *t
 		MaxP95LatencyMS:               500,
 	}
 	baseline := evaluationComparisonReport("retrieval-fixture-v1", "baseline-v1", 1)
-	regressed := evaluationComparisonReport("retrieval-fixture-v1", "candidate-v1", 0.5)
+	regressed := evaluationComparisonReport("retrieval-fixture-v1", "baseline-v1", 0.5)
 	decision, err := EvaluateReleasePolicy(policy, baseline, regressed)
 	if err != nil {
 		t.Fatalf("EvaluateReleasePolicy() error = %v", err)
@@ -369,7 +416,7 @@ func TestEvaluateReleasePolicyRejectsProtectedRegressionAndAcceptsCandidate(t *t
 		t.Fatalf("decision = %+v, want protected recall rejection", decision)
 	}
 
-	accepted := evaluationComparisonReport("retrieval-fixture-v1", "candidate-v2", 1)
+	accepted := evaluationComparisonReport("retrieval-fixture-v1", "baseline-v1", 1)
 	decision, err = EvaluateReleasePolicy(policy, baseline, accepted)
 	if err != nil {
 		t.Fatalf("EvaluateReleasePolicy() accepted error = %v", err)
@@ -388,7 +435,7 @@ func TestEvaluateReleasePolicyRejectsSafetyFailureEvenWhenQualityImproves(t *tes
 		MaxP95LatencyMS:               500,
 	}
 	baseline := evaluationComparisonReport("retrieval-fixture-v1", "baseline-v1", 0.5)
-	candidate := evaluationComparisonReport("retrieval-fixture-v1", "candidate-v1", 1)
+	candidate := evaluationComparisonReport("retrieval-fixture-v1", "baseline-v1", 1)
 	candidate.SafetyFailures = []EvaluationSafetyFailure{{Category: EvaluationSafetyFailureLifecycleVisibility, Count: 1}}
 
 	decision, err := EvaluateReleasePolicy(policy, baseline, candidate)
@@ -406,7 +453,7 @@ func TestEvaluateReleasePolicyRejectsCoverageBudgetAndLatencyRegressions(t *test
 	baseline.Metrics.EvidenceCoverage = 1
 	baseline.Metrics.BudgetOmissionRate = 0
 	baseline.Metrics.P95LatencyMS = 20
-	candidate := evaluationComparisonReport("retrieval-fixture-v1", "candidate-v1", 1)
+	candidate := evaluationComparisonReport("retrieval-fixture-v1", "baseline-v1", 1)
 	candidate.Metrics.EvidenceCoverage = 0.5
 	candidate.Metrics.BudgetOmissionRate = 0.5
 	candidate.Metrics.P95LatencyMS = 40
@@ -433,7 +480,7 @@ func TestEvaluateReleasePolicyRejectsCoverageBudgetAndLatencyRegressions(t *test
 func TestEvaluateReleasePolicyRejectsCrossScopeAndLifecycleFailures(t *testing.T) {
 	policy := EvaluationReleasePolicy{Version: "quality-policy-v1", ProtectedCutoffs: []int{1}, MaxP95LatencyMS: 500}
 	baseline := evaluationComparisonReport("retrieval-fixture-v1", "baseline-v1", 0.5)
-	candidate := evaluationComparisonReport("retrieval-fixture-v1", "candidate-v1", 1)
+	candidate := evaluationComparisonReport("retrieval-fixture-v1", "baseline-v1", 1)
 	candidate.SafetyFailures = []EvaluationSafetyFailure{{Category: EvaluationSafetyFailureCrossScope, Count: 1}, {Category: EvaluationSafetyFailureLifecycleVisibility, Count: 1}}
 	decision, err := EvaluateReleasePolicy(policy, baseline, candidate)
 	if err != nil {
