@@ -29,6 +29,8 @@ type SearchInput struct {
 	IncludeRelations           bool
 	IncludeFeedbackDiagnostics bool
 	FeedbackAwareRanking       bool
+	SessionID                  string
+	UserID                     string
 }
 
 // LexicalMatchMode selects the full-text query composition used by an internal
@@ -275,7 +277,17 @@ type ServiceDependencies struct {
 	FusionStrategy FusionStrategy
 	// ChunkRollout defaults to default_off. Shadow evaluates chunk candidates
 	// only for authorized diagnostics; Active permits them to influence results.
-	ChunkRollout memory.ChunkRolloutMode
+	ChunkRollout        memory.ChunkRolloutMode
+	QueryAnalyzer       QueryAnalyzer
+	QueryAnalysisLimits QueryAnalysisLimits
+}
+
+type QueryAnalyzer interface {
+	Analyze(input QueryAnalysisInput) (QueryAnalysisResult, error)
+}
+
+type effectiveQueryAnalysisPolicyReader interface {
+	ReadEffectiveQueryAnalysisRolloutPolicy(ctx context.Context, input memory.ReadEffectiveQueryAnalysisRolloutPolicyInput) (memory.RankingRolloutPolicy, error)
 }
 
 type Service struct {
@@ -292,6 +304,8 @@ type Service struct {
 	chunks                       ChunkCandidateSearcher
 	fusionStrategy               FusionStrategy
 	chunkRollout                 memory.ChunkRolloutMode
+	queryAnalyzer                QueryAnalyzer
+	queryAnalysisLimits          QueryAnalysisLimits
 	observer                     telemetry.Observer
 }
 
@@ -326,6 +340,8 @@ func NewService(deps ServiceDependencies, observers ...telemetry.Observer) *Serv
 		chunks:                       deps.Chunks,
 		fusionStrategy:               fusionStrategy,
 		chunkRollout:                 chunkRollout,
+		queryAnalyzer:                deps.QueryAnalyzer,
+		queryAnalysisLimits:          deps.QueryAnalysisLimits,
 		observer:                     observer,
 	}
 }
@@ -366,12 +382,23 @@ func (s *Service) Search(ctx context.Context, input SearchInput) (result SearchR
 		surface = memory.RankingRolloutSurfaceSearch
 	}
 	var activeRankingPolicy *memory.RankingRolloutPolicy
+	var queryAnalysisPolicy *memory.RankingRolloutPolicy
 	if s.rankingRolloutPolicyReader != nil && !input.rankingPolicyDisabled {
 		policy, policyErr := s.readActiveRankingPolicy(ctx, input.Scope, surface)
 		if policyErr != nil {
 			return SearchResult{}, policyErr
 		}
 		activeRankingPolicy = policy
+	}
+	// Effective query-analysis policy includes diagnostics/shadow stages that
+	// are intentionally excluded from the ranking active-policy reader.
+	if s.queryAnalyzer != nil && !input.rankingPolicyDisabled {
+		if effectiveReader, ok := s.rankingRolloutPolicyReader.(effectiveQueryAnalysisPolicyReader); ok {
+			policy, policyErr := effectiveReader.ReadEffectiveQueryAnalysisRolloutPolicy(ctx, memory.ReadEffectiveQueryAnalysisRolloutPolicyInput{Scope: input.Scope, Surface: surface, SessionID: input.SessionID, UserID: input.UserID})
+			if policyErr == nil {
+				queryAnalysisPolicy = &policy
+			} // malformed/foreign/expired QA policy fails closed to original-only
+		}
 	}
 	fusionStrategy := s.fusionStrategy
 	if input.fusionStrategyOverride != nil {
@@ -387,16 +414,44 @@ func (s *Service) Search(ctx context.Context, input SearchInput) (result SearchR
 		}
 	}
 
+	// Query understanding is strictly rollout-gated. The immutable original
+	// signal is always retained; malformed/unavailable analysis falls back to it.
+	recallInputs, analysisDiagnostics := s.queryRecallInputs(ctx, input, queryAnalysisPolicy, surface)
+
 	channelCandidates := make([]FusionChannelCandidates, 0, 4)
 	diversityMetadata := make(map[string]ScoredMemory)
 	channelAvailability := defaultFusionChannelAvailability()
 	chunkCitationMap := map[string][]Citation{}
 	chunkByMemoryID := map[string]*memory.MemoryChunk{}
 	fusionDiagnostics := []ContextDiagnostic(nil)
+	fusionDiagnostics = append(fusionDiagnostics, analysisDiagnostics...)
+	analysisLimits := s.queryAnalysisLimits
+	if analysisLimits.Version == "" || analysisLimits.Validate() != nil {
+		analysisLimits = DefaultQueryAnalysisLimits()
+	}
+	// Candidate limits affect result-producing retrieval only. Diagnostics and
+	// shadow analysis may use their own analyzer bounds, but must not silently
+	// cap the canonical recall result until an exact-scope active rollout is
+	// authorized.
+	qaResolution := memory.ResolveQueryAnalysisRollout(queryAnalysisPolicy, memory.ResolveQueryAnalysisRolloutInput{Scope: input.Scope, Surface: surface, SessionID: input.SessionID, UserID: input.UserID, Now: time.Now().UTC()})
+	if qaResolution.DerivedSignalsAffectResults && queryAnalysisPolicy != nil && queryAnalysisPolicy.QueryAnalysis != nil {
+		qa := queryAnalysisPolicy.QueryAnalysis
+		analysisLimits = QueryAnalysisLimits{Version: QueryAnalysisLimitsVersionV1, MaxQueryBytes: qa.MaxQueryBytes, MaxHints: qa.MaxHints, MaxSignals: qa.MaxSignals, MaxSubqueries: qa.MaxSubqueries, MaxTermBytes: qa.MaxTermBytes, MaxSubqueryBytes: qa.MaxSubqueryBytes, MaxAnalysisWork: qa.MaxAnalysisWork, MaxCandidatesPerSignal: qa.MaxCandidatesPerSignal, MaxAggregateCandidates: qa.MaxAggregateCandidates, MaxElapsed: qa.MaxElapsed}
+		if analysisLimits.Validate() != nil {
+			analysisLimits = DefaultQueryAnalysisLimits()
+		}
+	}
+	aggregateCandidates := 0
 
 	filterChannel := func(channel FusionChannel, hits []ScoredMemory) {
+		if analysisLimits.MaxCandidatesPerSignal > 0 && len(hits) > analysisLimits.MaxCandidatesPerSignal {
+			hits = hits[:analysisLimits.MaxCandidatesPerSignal]
+		}
 		filtered := make([]ScoredMemory, 0, len(hits))
 		for _, hit := range hits {
+			if aggregateCandidates >= analysisLimits.MaxAggregateCandidates {
+				break
+			}
 			if hit.Memory.Scope.Normalized() != input.Scope.Normalized() || hit.Memory.State != memory.MemoryStateActive {
 				continue
 			}
@@ -411,6 +466,7 @@ func (s *Service) Search(ctx context.Context, input SearchInput) (result SearchR
 			}
 
 			filtered = append(filtered, hit)
+			aggregateCandidates++
 			if existing, exists := diversityMetadata[hit.Memory.ID]; !exists {
 				diversityMetadata[hit.Memory.ID] = hit
 			} else {
@@ -422,37 +478,45 @@ func (s *Service) Search(ctx context.Context, input SearchInput) (result SearchR
 		}
 	}
 
-	if s.lexical != nil {
-		hits, err := s.lexical.SearchLexical(ctx, input)
-		if err != nil {
-			return SearchResult{}, err
-		}
-		channelAvailability[FusionChannelLexical] = fusionChannelAvailable
-		filterChannel(FusionChannelLexical, hits)
-	}
-
-	if s.semantic != nil {
-		hits, err := s.semantic.SearchSemantic(ctx, input)
-		if err != nil {
-			if input.IncludeFeedbackDiagnostics {
-				fusionDiagnostics = append(fusionDiagnostics, ContextDiagnostic{Section: "fusion", Status: "optional_channel_unavailable", Reason: "semantic recall failed closed"})
+	// Process each signal across all physical channels before moving to the
+	// next signal. This reserves aggregate candidate capacity for the immutable
+	// original query even when a derived lexical channel is noisy.
+	for signalIndex, recallInput := range recallInputs {
+		if s.lexical != nil {
+			hits, recallErr := s.lexical.SearchLexical(ctx, recallInput)
+			if recallErr != nil {
+				if signalIndex == 0 {
+					return SearchResult{}, recallErr
+				}
+				if input.IncludeFeedbackDiagnostics {
+					fusionDiagnostics = append(fusionDiagnostics, ContextDiagnostic{Section: "query_analysis", Status: "derived_signal_unavailable", Reason: "derived lexical recall failed closed"})
+				}
+			} else {
+				channelAvailability[FusionChannelLexical] = fusionChannelAvailable
+				filterChannel(FusionChannelLexical, hits)
 			}
-		} else {
-			channelAvailability[FusionChannelSemantic] = fusionChannelAvailable
-			filterChannel(FusionChannelSemantic, hits)
 		}
-	}
-
-	if input.IncludeRelations && s.relations != nil {
-		hits, err := s.relations.SearchRelations(ctx, input)
-		if err != nil {
-			// Relation recall is optional; preserve lexical/semantic retrieval.
-			if input.IncludeFeedbackDiagnostics {
-				fusionDiagnostics = append(fusionDiagnostics, ContextDiagnostic{Section: "fusion", Status: "optional_channel_unavailable", Reason: "relation recall failed closed"})
+		if s.semantic != nil {
+			hits, recallErr := s.semantic.SearchSemantic(ctx, recallInput)
+			if recallErr != nil {
+				if input.IncludeFeedbackDiagnostics {
+					fusionDiagnostics = append(fusionDiagnostics, ContextDiagnostic{Section: "fusion", Status: "optional_channel_unavailable", Reason: "semantic recall failed closed"})
+				}
+			} else {
+				channelAvailability[FusionChannelSemantic] = fusionChannelAvailable
+				filterChannel(FusionChannelSemantic, hits)
 			}
-		} else {
-			channelAvailability[FusionChannelRelation] = fusionChannelAvailable
-			filterChannel(FusionChannelRelation, hits)
+		}
+		if input.IncludeRelations && s.relations != nil {
+			hits, recallErr := s.relations.SearchRelations(ctx, recallInput)
+			if recallErr != nil {
+				if input.IncludeFeedbackDiagnostics {
+					fusionDiagnostics = append(fusionDiagnostics, ContextDiagnostic{Section: "fusion", Status: "optional_channel_unavailable", Reason: "relation recall failed closed"})
+				}
+			} else {
+				channelAvailability[FusionChannelRelation] = fusionChannelAvailable
+				filterChannel(FusionChannelRelation, hits)
+			}
 		}
 	}
 
@@ -460,10 +524,32 @@ func (s *Service) Search(ctx context.Context, input SearchInput) (result SearchR
 	// only to produce diagnostics for explicitly requested evaluation callers;
 	// ordinary responses remain byte-for-byte compatible with canonical retrieval.
 	if s.chunks != nil && s.chunkRollout != memory.ChunkRolloutModeDefaultOff {
-		chunkCandidates, chunkErr := s.chunks.SearchChunks(ctx, ChunkSearchInput{
-			Scope: input.Scope, Query: input.Query, QueryEmbedding: input.QueryEmbedding,
-			Classes: input.Classes, TopK: input.TopK,
-		})
+		allChunkCandidates := make([]ChunkCandidate, 0)
+		var chunkErr error
+		for _, recallInput := range recallInputs {
+			if analysisLimits.MaxAggregateCandidates > 0 && aggregateCandidates >= analysisLimits.MaxAggregateCandidates {
+				break
+			}
+			chunkCandidates, err := s.chunks.SearchChunks(ctx, ChunkSearchInput{Scope: recallInput.Scope, Query: recallInput.Query, QueryEmbedding: recallInput.QueryEmbedding, Classes: recallInput.Classes, TopK: recallInput.TopK})
+			if err != nil {
+				chunkErr = err
+				continue
+			}
+			if analysisLimits.MaxCandidatesPerSignal > 0 && len(chunkCandidates) > analysisLimits.MaxCandidatesPerSignal {
+				chunkCandidates = chunkCandidates[:analysisLimits.MaxCandidatesPerSignal]
+			}
+			if analysisLimits.MaxAggregateCandidates > 0 {
+				remaining := analysisLimits.MaxAggregateCandidates - aggregateCandidates - len(allChunkCandidates)
+				if remaining <= 0 {
+					break
+				}
+				if len(chunkCandidates) > remaining {
+					chunkCandidates = chunkCandidates[:remaining]
+				}
+			}
+			allChunkCandidates = append(allChunkCandidates, chunkCandidates...)
+		}
+		chunkCandidates := allChunkCandidates
 		if chunkErr != nil {
 			if s.chunkRollout == memory.ChunkRolloutModeActive {
 				if input.IncludeFeedbackDiagnostics {
@@ -509,6 +595,7 @@ func (s *Service) Search(ctx context.Context, input SearchInput) (result SearchR
 		}
 	}
 
+	channelCandidates = mergeSignalChannels(channelCandidates)
 	fused, err := FuseCandidates(fusionStrategy, channelCandidates)
 	if err != nil {
 		return SearchResult{}, err
@@ -619,6 +706,113 @@ func (s *Service) Search(ctx context.Context, input SearchInput) (result SearchR
 		fusionStrategy:            fusionStrategy,
 	}
 	return result, nil
+}
+
+// mergeSignalChannels converts per-signal recall streams into one stable rank
+// stream per physical channel. Candidate identity is kept once at its earliest
+// rank, so repeated aliases cannot add incomparable raw scores.
+func mergeSignalChannels(inputs []FusionChannelCandidates) []FusionChannelCandidates {
+	order := []FusionChannel{FusionChannelLexical, FusionChannelSemantic, FusionChannelRelation, FusionChannelChunk}
+	byChannel := make(map[FusionChannel][]ScoredMemory, len(order))
+	seen := make(map[FusionChannel]map[string]struct{}, len(order))
+	for _, input := range inputs {
+		if seen[input.Channel] == nil {
+			seen[input.Channel] = make(map[string]struct{})
+		}
+		for _, candidate := range input.Candidates {
+			if _, ok := seen[input.Channel][candidate.Memory.ID]; ok {
+				continue
+			}
+			seen[input.Channel][candidate.Memory.ID] = struct{}{}
+			byChannel[input.Channel] = append(byChannel[input.Channel], candidate)
+		}
+	}
+	result := make([]FusionChannelCandidates, 0, len(byChannel))
+	for _, channel := range order {
+		if candidates := byChannel[channel]; len(candidates) > 0 {
+			result = append(result, FusionChannelCandidates{Channel: channel, Candidates: candidates})
+		}
+	}
+	return result
+}
+
+// queryRecallInputs returns the original input first and, only for an
+// authorized active query-analysis rollout, bounded derived signals. Every
+// derived input copies the caller's narrowing constraints verbatim.
+func (s *Service) queryRecallInputs(ctx context.Context, input SearchInput, rankingPolicy *memory.RankingRolloutPolicy, surface memory.RankingRolloutSurface) ([]SearchInput, []ContextDiagnostic) {
+	original := input
+	inputs := []SearchInput{original}
+	if s.queryAnalyzer == nil {
+		return inputs, nil
+	}
+	limits := s.queryAnalysisLimits
+	if limits.Version == "" {
+		limits = DefaultQueryAnalysisLimits()
+	}
+	if rankingPolicy != nil && rankingPolicy.QueryAnalysis != nil {
+		qa := rankingPolicy.QueryAnalysis
+		limits = QueryAnalysisLimits{Version: QueryAnalysisLimitsVersionV1, MaxQueryBytes: qa.MaxQueryBytes, MaxHints: qa.MaxHints, MaxSignals: qa.MaxSignals, MaxSubqueries: qa.MaxSubqueries, MaxTermBytes: qa.MaxTermBytes, MaxSubqueryBytes: qa.MaxSubqueryBytes, MaxAnalysisWork: qa.MaxAnalysisWork, MaxCandidatesPerSignal: qa.MaxCandidatesPerSignal, MaxAggregateCandidates: qa.MaxAggregateCandidates, MaxElapsed: qa.MaxElapsed}
+	}
+	analysisInput := QueryAnalysisInput{AcceptedQuery: input.Query, PolicyVersion: QueryAnalysisPolicyVersionV1, Limits: limits, Constraints: QueryAnalysisConstraints{Classes: append([]memory.MemoryClass(nil), input.Classes...), TimeFrom: input.TimeFrom, TimeTo: input.TimeTo}}
+	analysisLimit := limits.MaxElapsed
+	if analysisLimit <= 0 {
+		analysisLimit = DefaultQueryAnalysisLimits().MaxElapsed
+	}
+	type analysisOutcome struct {
+		result QueryAnalysisResult
+		err    error
+	}
+	outcomes := make(chan analysisOutcome, 1)
+	go func() {
+		result, err := s.queryAnalyzer.Analyze(analysisInput)
+		outcomes <- analysisOutcome{result: result, err: err}
+	}()
+	var analysis QueryAnalysisResult
+	var err error
+	select {
+	case outcome := <-outcomes:
+		analysis, err = outcome.result, outcome.err
+	case <-time.After(analysisLimit):
+		if input.IncludeFeedbackDiagnostics {
+			return inputs, []ContextDiagnostic{{Section: "query_analysis", Status: "original_only", Reason: "analysis exceeded elapsed budget"}}
+		}
+		return inputs, nil
+	case <-ctx.Done():
+		return inputs, nil
+	}
+	diagnostics := make([]ContextDiagnostic, 0, 1)
+	if err != nil {
+		if input.IncludeFeedbackDiagnostics {
+			diagnostics = append(diagnostics, ContextDiagnostic{Section: "query_analysis", Status: "original_only", Reason: "analysis unavailable; original query retained"})
+		}
+		return inputs, diagnostics
+	}
+	if err := analysis.Validate(analysisInput); err != nil {
+		if input.IncludeFeedbackDiagnostics {
+			diagnostics = append(diagnostics, ContextDiagnostic{Section: "query_analysis", Status: "original_only", Reason: "analysis rejected; original query retained"})
+		}
+		return inputs, diagnostics
+	}
+	resolution := memory.ResolveQueryAnalysisRollout(rankingPolicy, memory.ResolveQueryAnalysisRolloutInput{Scope: input.Scope, Surface: surface, SessionID: input.SessionID, UserID: input.UserID, Now: time.Now().UTC()})
+	if !resolution.DerivedSignalsAffectResults {
+		if input.IncludeFeedbackDiagnostics {
+			diagnostics = append(diagnostics, ContextDiagnostic{Section: "query_analysis", Status: string(resolution.Stage), Reason: "rollout does not permit derived signals"})
+		}
+		return inputs, diagnostics
+	}
+	for _, signal := range analysis.Signals[1:] {
+		if len(inputs) >= limits.MaxSignals {
+			break
+		}
+		derived := input
+		derived.Query = signal.Text
+		derived.QueryEmbedding = nil // embeddings are authoritative only for original query
+		inputs = append(inputs, derived)
+	}
+	if input.IncludeFeedbackDiagnostics {
+		diagnostics = append(diagnostics, ContextDiagnostic{Section: "query_analysis", Status: "active", Reason: "bounded derived signals enabled", Included: len(inputs) - 1})
+	}
+	return inputs, diagnostics
 }
 
 func mergeDiversityScoredMemory(left, right ScoredMemory) ScoredMemory {

@@ -21,11 +21,11 @@
 
 ## 4. Bounded retrieval orchestration
 
-- [ ] 4.1 Add failing service tests proving the original query is always the first mandatory signal and analysis failure, unavailability, malformed output, rejection, or timeout continues through the existing original-query path; implement analyzer injection and fail-closed orchestration until the focused tests pass.
-- [ ] 4.2 Add failing tests proving every derived signal reuses the exact resolved scope, lifecycle visibility, memory-class, and explicit time-window constraints; implement signal validation/fan-out and verify foreign, hidden, expired, suppressed, forgotten, deleted, or time-conflicting evidence cannot enter candidates.
-- [ ] 4.3 Add failing tests for per-signal recall limits, total signal/subquery limits, aggregate candidate limits, elapsed-budget cancellation, and deterministic truncation; implement global bounded fan-out and verify excess derived work is discarded while the original signal remains eligible.
-- [ ] 4.4 Add failing fusion tests where original and derived signals overlap across lexical, semantic, relation, and chunk channels; route all candidates through existing stable rank fusion, identity/lineage deduplication, diversity, citation, and result budgets and verify one stable canonical identity without cross-signal raw-score addition.
-- [ ] 4.5 Add fault-injection tests for one or all optional signal/channel failures and for an independent original retrieval failure; verify optional failures preserve original-only results while original-path failures preserve existing public error semantics.
+- [x] 4.1 Add failing service tests proving the original query is always the first mandatory signal and analysis failure, unavailability, malformed output, rejection, or timeout continues through the existing original-query path; implement analyzer injection and fail-closed orchestration until the focused tests pass.
+- [x] 4.2 Add failing tests proving every derived signal reuses the exact resolved scope, lifecycle visibility, memory-class, and explicit time-window constraints; implement signal validation/fan-out and verify foreign, hidden, expired, suppressed, forgotten, deleted, or time-conflicting evidence cannot enter candidates.
+- [x] 4.3 Add failing tests for per-signal recall limits, total signal/subquery limits, aggregate candidate limits, elapsed-budget cancellation, and deterministic truncation; implement global bounded fan-out and verify excess derived work is discarded while the original signal remains eligible.
+- [x] 4.4 Add failing fusion tests where original and derived signals overlap across lexical, semantic, relation, and chunk channels; route all candidates through existing stable rank fusion, identity/lineage deduplication, diversity, citation, and result budgets and verify one stable canonical identity without cross-signal raw-score addition.
+- [x] 4.5 Add fault-injection tests for one or all optional signal/channel failures and for an independent original retrieval failure; verify optional failures preserve original-only results while original-path failures preserve existing public error semantics.
 
 ## 5. Rollout effects, diagnostics, and API compatibility
 
