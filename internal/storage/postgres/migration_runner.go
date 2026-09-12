@@ -101,7 +101,7 @@ func (r MigrationRunner) Apply(ctx context.Context, dsn string) error {
 	// A migration runner is short-lived and serial by design. One connection
 	// keeps the session advisory lock and every reconciliation statement on the
 	// same PostgreSQL session.
-	db.SetMaxOpenConns(1)
+	db.SetMaxOpenConns(2)
 	if err := db.PingContext(ctx); err != nil {
 		return fmt.Errorf("ping migration database: %w", err)
 	}
@@ -126,8 +126,7 @@ func (r MigrationRunner) Apply(ctx context.Context, dsn string) error {
 		return fmt.Errorf("open embedded migrations: %w", err)
 	}
 	driver, err := migratepgx.WithInstance(db, &migratepgx.Config{
-		MigrationsTable:       "schema_migrations",
-		MultiStatementEnabled: true,
+		MigrationsTable: "schema_migrations",
 	})
 	if err != nil {
 		return fmt.Errorf("configure postgres migration driver: %w", err)
