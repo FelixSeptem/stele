@@ -29,10 +29,10 @@
 
 ## 5. Rollout effects, diagnostics, and API compatibility
 
-- [ ] 5.1 Add diagnostics-only and shadow integration tests proving bounded analysis/comparison may run but ordinary ranking remains original-only; implement rollout-stage effects and verify active is the only approved stage in which derived signals can affect the common pipeline.
-- [ ] 5.2 Add active, disabled, and rollback integration tests for one exact scope alongside adjacent foreign scopes; implement reversible resolution and verify rollback restores original-only behavior without canonical-memory rewrites.
-- [ ] 5.3 Add authorized diagnostic tests for policy/version identity, original-retained and normalization status, hint/subquery/signal counts, time status, fallback category, rollout disposition, candidate counts, and elapsed budget; implement allowlisted aggregate diagnostics and verify raw query plans, normalized text, subqueries, candidates, scores, hidden/foreign IDs, and scope values are absent.
-- [ ] 5.4 Add ordinary search/context and OpenAPI compatibility tests around all rollout stages; verify existing public request/response schemas and result identity/citation shapes remain unchanged and no analysis or shadow internals are exposed.
+- [x] 5.1 Add diagnostics-only and shadow integration tests proving bounded analysis/comparison may run but ordinary ranking remains original-only; implement rollout-stage effects and verify active is the only approved stage in which derived signals can affect the common pipeline.
+- [x] 5.2 Add active, disabled, and rollback integration tests for one exact scope alongside adjacent foreign scopes; implement reversible resolution and verify rollback restores original-only behavior without canonical-memory rewrites.
+- [x] 5.3 Add authorized diagnostic tests for policy/version identity, original-retained and normalization status, hint/subquery/signal counts, time status, fallback category, rollout disposition, candidate counts, and elapsed budget; implement allowlisted aggregate diagnostics and verify raw query plans, normalized text, subqueries, candidates, scores, hidden/foreign IDs, and scope values are absent.
+- [x] 5.4 Add ordinary search/context and OpenAPI compatibility tests around all rollout stages; verify existing public request/response schemas and result identity/citation shapes remain unchanged and no analysis or shadow internals are exposed.
 
 ## 6. Evaluation fixtures, reports, and release gates
 

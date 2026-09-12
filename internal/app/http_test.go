@@ -38,6 +38,57 @@ type projectionReaderForHTTPTest struct {
 	projection memory.ContextProjection
 }
 
+type queryAnalysisHTTPAnalyzer struct{}
+
+func (queryAnalysisHTTPAnalyzer) Analyze(input retrieval.QueryAnalysisInput) (retrieval.QueryAnalysisResult, error) {
+	return retrieval.NewQueryAnalysisResult(input, retrieval.QueryAnalysisDispositionComplete, nil, []retrieval.QueryAnalysisSignal{{
+		Kind: retrieval.QueryAnalysisSignalTerm,
+		Text: "private derived signal",
+	}})
+}
+
+type queryAnalysisHTTPPolicyReader struct {
+	policy memory.RankingRolloutPolicy
+}
+
+func (queryAnalysisHTTPPolicyReader) ReadActiveRankingRolloutPolicy(context.Context, memory.ReadActiveRankingRolloutPolicyInput) (memory.RankingRolloutPolicy, error) {
+	return memory.RankingRolloutPolicy{}, pgx.ErrNoRows
+}
+
+func (r queryAnalysisHTTPPolicyReader) ReadEffectiveQueryAnalysisRolloutPolicy(_ context.Context, _ memory.ReadEffectiveQueryAnalysisRolloutPolicyInput) (memory.RankingRolloutPolicy, error) {
+	return r.policy, nil
+}
+
+type queryAnalysisHTTPLexical struct{}
+
+func (queryAnalysisHTTPLexical) SearchLexical(_ context.Context, input retrieval.SearchInput) ([]retrieval.ScoredMemory, error) {
+	id := "mem-original"
+	if input.Query == "private derived signal" {
+		id = "mem-derived"
+	}
+	return []retrieval.ScoredMemory{{
+		Memory: memory.CanonicalMemory{
+			ID:         id,
+			Scope:      input.Scope,
+			Class:      memory.MemoryClassEpisodic,
+			State:      memory.MemoryStateActive,
+			Content:    "bounded public result",
+			CreatedAt:  time.Date(2026, 9, 11, 1, 0, 0, 0, time.UTC),
+			ModifiedAt: time.Date(2026, 9, 11, 1, 0, 0, 0, time.UTC),
+		},
+	}}, nil
+}
+
+type queryAnalysisHTTPCitations struct{}
+
+func (queryAnalysisHTTPCitations) ListCitations(_ context.Context, _ memory.Scope, memoryIDs []string) (map[string][]retrieval.Citation, error) {
+	result := make(map[string][]retrieval.Citation, len(memoryIDs))
+	for _, memoryID := range memoryIDs {
+		result[memoryID] = []retrieval.Citation{{MemoryID: memoryID, RawEventID: "event-1", Operation: "promote_candidate"}}
+	}
+	return result, nil
+}
+
 func (r projectionReaderForHTTPTest) ReadLatestContextProjection(_ context.Context, scope memory.Scope, kind memory.ContextProjectionKind) (memory.ContextProjection, error) {
 	if kind != r.projection.Kind || scope != r.projection.Scope {
 		return memory.ContextProjection{}, pgx.ErrNoRows
@@ -1757,6 +1808,113 @@ func TestNewHTTPHandlerAssemblesContext(t *testing.T) {
 	}
 	if !assembler.gotInput.IncludeFeedbackDiagnostics || !assembler.gotInput.FeedbackAwareRanking {
 		t.Fatalf("feedback flags = %v/%v, want per-request diagnostics and ranking", assembler.gotInput.IncludeFeedbackDiagnostics, assembler.gotInput.FeedbackAwareRanking)
+	}
+}
+
+func TestQueryAnalysisRolloutPreservesOrdinarySearchAndContextHTTPContracts(t *testing.T) {
+	scope := memory.Scope{Tenant: "tenant-a", Project: "project-a", Namespace: "namespace-a"}
+	limits := retrieval.DefaultQueryAnalysisLimits()
+	stages := []struct {
+		name       string
+		status     memory.RankingRolloutPolicyStatus
+		mode       memory.RankingRolloutMode
+		wantActive bool
+	}{
+		{name: "diagnostics-only", status: memory.RankingRolloutPolicyStatusDiagnosticsOnly, mode: memory.RankingRolloutModeDiagnosticsOnly},
+		{name: "shadow", status: memory.RankingRolloutPolicyStatusDryRun, mode: memory.RankingRolloutModeDryRun},
+		{name: "active", status: memory.RankingRolloutPolicyStatusActiveForScope, mode: memory.RankingRolloutModeActiveForScope, wantActive: true},
+		{name: "disabled", status: memory.RankingRolloutPolicyStatusDisabled, mode: memory.RankingRolloutModeActiveForScope},
+		{name: "rolled-back", status: memory.RankingRolloutPolicyStatusRolledBack, mode: memory.RankingRolloutModeActiveForScope},
+	}
+
+	for _, stage := range stages {
+		t.Run(stage.name, func(t *testing.T) {
+			policy := memory.RankingRolloutPolicy{
+				Scope:    scope,
+				Status:   stage.status,
+				Mode:     stage.mode,
+				Surfaces: []memory.RankingRolloutSurface{memory.RankingRolloutSurfaceSearch, memory.RankingRolloutSurfaceContext},
+				QueryAnalysis: &memory.QueryAnalysisRolloutPolicy{
+					SchemaVersion:          memory.QueryAnalysisRolloutSchemaVersionV1,
+					PolicyVersion:          memory.QueryAnalysisPolicyVersionV1,
+					LimitsVersion:          memory.QueryAnalysisLimitsVersionV1,
+					MaxQueryBytes:          limits.MaxQueryBytes,
+					MaxHints:               limits.MaxHints,
+					MaxSignals:             limits.MaxSignals,
+					MaxSubqueries:          limits.MaxSubqueries,
+					MaxTermBytes:           limits.MaxTermBytes,
+					MaxSubqueryBytes:       limits.MaxSubqueryBytes,
+					MaxAnalysisWork:        limits.MaxAnalysisWork,
+					MaxCandidatesPerSignal: limits.MaxCandidatesPerSignal,
+					MaxAggregateCandidates: limits.MaxAggregateCandidates,
+					MaxElapsed:             limits.MaxElapsed,
+					ExpiresAt:              time.Date(2100, 1, 1, 0, 0, 0, 0, time.UTC),
+				},
+			}
+			service := retrieval.NewService(retrieval.ServiceDependencies{
+				Lexical:                    queryAnalysisHTTPLexical{},
+				Citations:                  queryAnalysisHTTPCitations{},
+				RankingRolloutPolicyReader: queryAnalysisHTTPPolicyReader{policy: policy},
+				QueryAnalyzer:              queryAnalysisHTTPAnalyzer{},
+				QueryAnalysisLimits:        limits,
+			})
+			handler := NewHTTPHandler(HTTPDependencies{
+				APIKeys:          map[string]struct{}{"test-key": {}},
+				MemorySearcher:   service,
+				ContextAssembler: service,
+			})
+
+			requests := []struct {
+				name string
+				path string
+				body string
+			}{
+				{name: "search", path: "/v1/memories/search", body: `{"query":"original query","top_k":10,"include_feedback_diagnostics":true}`},
+				{name: "context", path: "/v1/context/assemble", body: `{"query":"original query","budget":10,"include_diagnostics":true,"include_feedback_diagnostics":true}`},
+			}
+			for _, request := range requests {
+				t.Run(request.name, func(t *testing.T) {
+					req := httptest.NewRequest(http.MethodPost, request.path, strings.NewReader(request.body))
+					req.Header.Set("Content-Type", "application/json")
+					setAPIScopeHeaders(req)
+					rec := httptest.NewRecorder()
+					handler.ServeHTTP(rec, req)
+					if rec.Code != http.StatusOK {
+						t.Fatalf("status = %d body=%s, want 200", rec.Code, rec.Body.String())
+					}
+					body := rec.Body.String()
+					for _, forbidden := range []string{
+						"query_analysis", "policy_version", "limits_version", "original_retained",
+						"normalization_status", "subquery_count", "signal_count", "candidate_count",
+						"rollout_stage", "private derived signal",
+					} {
+						if strings.Contains(body, forbidden) {
+							t.Fatalf("ordinary response exposes query-analysis detail %q: %s", forbidden, body)
+						}
+					}
+					if !strings.Contains(body, `"id":"mem-original"`) || !strings.Contains(body, `"memory_id":"mem-original"`) {
+						t.Fatalf("ordinary response lost public identity/citation shape: %s", body)
+					}
+					if gotDerived := strings.Contains(body, `"id":"mem-derived"`); gotDerived != stage.wantActive {
+						t.Fatalf("derived public result present = %v, want %v for %s: %s", gotDerived, stage.wantActive, stage.name, body)
+					}
+				})
+			}
+			if stage.wantActive {
+				req := httptest.NewRequest(http.MethodPost, "/v1/memories/search", strings.NewReader(`{"query":"original query","top_k":10}`))
+				req.Header.Set("Content-Type", "application/json")
+				setAPIScopeHeaders(req)
+				req.Header.Set("X-Stele-Namespace", "namespace-adjacent")
+				rec := httptest.NewRecorder()
+				handler.ServeHTTP(rec, req)
+				if rec.Code != http.StatusOK {
+					t.Fatalf("adjacent scope status = %d body=%s, want 200", rec.Code, rec.Body.String())
+				}
+				if body := rec.Body.String(); strings.Contains(body, `"id":"mem-derived"`) || !strings.Contains(body, `"id":"mem-original"`) {
+					t.Fatalf("active exact-scope policy affected adjacent scope: %s", body)
+				}
+			}
+		})
 	}
 }
 

@@ -17,6 +17,28 @@ func TestSpecYAMLContainsBaselineEndpoints(t *testing.T) {
 	}
 }
 
+func TestPublicRetrievalSchemasDoNotExposeQueryAnalysisInternals(t *testing.T) {
+	loader := openapi3.NewLoader()
+	doc, err := loader.LoadFromData([]byte(SpecYAML()))
+	if err != nil {
+		t.Fatalf("LoadFromData() error = %v", err)
+	}
+	for _, schemaName := range []string{"MemorySearchRequest", "MemorySearchResponse", "ContextAssembleRequest", "ContextAssembleResponse", "ContextDiagnostic"} {
+		schema := doc.Components.Schemas[schemaName]
+		if schema == nil || schema.Value == nil {
+			t.Fatalf("public schema %q is missing", schemaName)
+		}
+		for _, forbidden := range []string{
+			"query_analysis", "query_plan", "normalized_query", "subqueries", "analysis_policy_version",
+			"limits_version", "original_retained", "normalization_status", "signal_count", "candidate_count", "rollout_stage",
+		} {
+			if _, exposed := schema.Value.Properties[forbidden]; exposed {
+				t.Fatalf("public schema %q exposes query-analysis property %q", schemaName, forbidden)
+			}
+		}
+	}
+}
+
 func TestEventIngestContractRequiresIdempotencyAndDocumentsReplay(t *testing.T) {
 	loader := openapi3.NewLoader()
 	doc, err := loader.LoadFromData([]byte(SpecYAML()))
