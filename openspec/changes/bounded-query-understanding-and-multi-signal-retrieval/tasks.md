@@ -45,9 +45,9 @@
 
 ## 7. Documentation and final verification
 
-- [ ] 7.1 Update retrieval quality and operator documentation with deterministic policy/version semantics, bounds, exact-scope rollout stages, redacted diagnostics, original-only fallback/rollback, and the owned-DSN activation gate; verify documentation consistency checks and examples match executable configuration.
+- [x] 7.1 Update retrieval quality and operator documentation with deterministic policy/version semantics, bounds, exact-scope rollout stages, redacted diagnostics, original-only fallback/rollback, and the owned-DSN activation gate; verify documentation consistency checks and examples match executable configuration.
 - [ ] 7.2 Update the Phase 6 roadmap status only to the implementation state actually evidenced, keeping Task 6.6 separate; verify roadmap/OpenSpec consistency checks pass and do not mark active decomposition complete when real-stack gates are skipped.
-- [ ] 7.3 Run focused analyzer, rollout, retrieval, evaluation, PostgreSQL repository, migration, and OpenAPI tests with uncached execution; verify all targeted packages pass and no test depends on ambient runtime database credentials.
+- [x] 7.3 Run focused analyzer, rollout, retrieval, evaluation, PostgreSQL repository, migration, and OpenAPI tests with uncached execution; verify all targeted packages pass and no test depends on ambient runtime database credentials.
 - [ ] 7.4 Run `go test ./... -count=1 -timeout 15m` and the repository quality gate; verify both exit successfully with zero failures.
 - [ ] 7.5 Run `go test -race ./... -count=1 -timeout 20m`; verify it passes, or if the host lacks the required C toolchain, record that environmental blocker verbatim and run the same command in a supported CI/toolchain before completion is claimed.
-- [ ] 7.6 Run `openspec validate bounded-query-understanding-and-multi-signal-retrieval --strict`, `openspec validate --all`, `git diff --check`, and a template-marker scan; verify zero validation failures, whitespace errors, or unfinished template markers in this change.
+- [x] 7.6 Run `openspec validate bounded-query-understanding-and-multi-signal-retrieval --strict`, `openspec validate --all`, `git diff --check`, and a template-marker scan; verify zero validation failures, whitespace errors, or unfinished template markers in this change.
