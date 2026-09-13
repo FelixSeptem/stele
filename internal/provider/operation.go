@@ -88,6 +88,20 @@ func (s *SequenceTracker) Accept(session string, seq int64) SequenceDisposition 
 	return SequenceAccepted
 }
 
+// Reject rolls back a tentative sequence reservation when the durable
+// operation did not complete. It is intentionally conditional so a later
+// sequence cannot be clobbered by an earlier failed request.
+func (s *SequenceTracker) Reject(session string, seq int64) {
+	if s == nil || seq <= 0 {
+		return
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.last[session] == seq {
+		delete(s.last, session)
+	}
+}
+
 type AdapterDependencies struct {
 	Ingestor           memory.EventIngestor
 	IdempotentIngestor memory.IdempotentEventIngestor
@@ -176,6 +190,9 @@ func (a *Adapter) Ingest(ctx context.Context, binding RuntimeBinding, meta Opera
 	}
 	if a.deps.IdempotentIngestor != nil && meta.IdempotencyKey != "" {
 		r, err := a.deps.IdempotentIngestor.IngestIdempotent(ctx, input, binding.PrincipalID, meta.IdempotencyKey)
+		if err != nil {
+			a.seq.Reject(binding.SessionID, meta.EventSeq)
+		}
 		out := IngestResult{EventID: r.Event.ID, Replayed: r.Replayed, Admission: r.Event.Admission, Metadata: meta}
 		if err == nil && meta.IdempotencyKey != "" {
 			a.mu.Lock()
@@ -188,6 +205,9 @@ func (a *Adapter) Ingest(ctx context.Context, binding RuntimeBinding, meta Opera
 		return IngestResult{}, fmt.Errorf("provider ingest service is not configured")
 	}
 	e, err := a.deps.Ingestor.Ingest(ctx, input)
+	if err != nil {
+		a.seq.Reject(binding.SessionID, meta.EventSeq)
+	}
 	out := IngestResult{EventID: e.ID, Admission: e.Admission, Metadata: meta}
 	if err == nil && meta.IdempotencyKey != "" {
 		a.mu.Lock()

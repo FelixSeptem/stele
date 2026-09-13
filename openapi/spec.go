@@ -102,9 +102,14 @@ paths:
         required: true
         content:
           application/json:
-            schema: {type: object}
+            schema:
+              $ref: '#/components/schemas/ProviderIntentRequest'
       responses:
-        '202': {description: 'Governed memory intent accepted'}
+        '202':
+          description: 'Governed memory intent accepted'
+          content:
+            application/json:
+              schema: {$ref: '#/components/schemas/ProviderIntentResponse'}
         '400': {description: 'Bounded provider error'}
         '403': {description: 'Runtime binding or scope denied'}
   /v1/provider/retrieve:
@@ -119,9 +124,14 @@ paths:
         required: true
         content:
           application/json:
-            schema: {type: object}
+            schema:
+              $ref: '#/components/schemas/ProviderRetrieveRequest'
       responses:
-        '200': {description: 'Scoped lifecycle-safe retrieval result'}
+        '200':
+          description: 'Scoped lifecycle-safe retrieval result'
+          content:
+            application/json:
+              schema: {$ref: '#/components/schemas/ProviderOperationResponse'}
         '400': {description: 'Bounded provider error'}
         '403': {description: 'Runtime binding or scope denied'}
   /v1/provider/context:
@@ -136,9 +146,14 @@ paths:
         required: true
         content:
           application/json:
-            schema: {type: object}
+            schema:
+              $ref: '#/components/schemas/ProviderContextRequest'
       responses:
-        '200': {description: 'Scoped assembled context with citations'}
+        '200':
+          description: 'Scoped assembled context with citations'
+          content:
+            application/json:
+              schema: {$ref: '#/components/schemas/ProviderOperationResponse'}
         '400': {description: 'Bounded provider error'}
         '403': {description: 'Runtime binding or scope denied'}
   /v1/provider/lifecycle:
@@ -4033,6 +4048,50 @@ components:
         event_id: {type: string}
         replayed: {type: boolean}
         metadata: {$ref: '#/components/schemas/ProviderOperationMetadata'}
+    ProviderIntentRequest:
+      type: object
+      additionalProperties: false
+      required: [metadata, intent]
+      properties:
+        metadata: {$ref: '#/components/schemas/ProviderOperationMetadata'}
+        intent: {type: object}
+    ProviderRetrieveRequest:
+      type: object
+      additionalProperties: false
+      required: [metadata, input]
+      properties:
+        metadata: {$ref: '#/components/schemas/ProviderOperationMetadata'}
+        input: {type: object}
+    ProviderContextRequest:
+      type: object
+      additionalProperties: false
+      required: [metadata, input]
+      properties:
+        metadata: {$ref: '#/components/schemas/ProviderOperationMetadata'}
+        input: {type: object}
+    ProviderIntentResponse:
+      type: object
+      required: [metadata, result]
+      properties:
+        metadata: {$ref: '#/components/schemas/ProviderOperationMetadata'}
+        result: {type: object}
+        citations: {type: array, items: {$ref: '#/components/schemas/ProviderCitation'}}
+    ProviderOperationResponse:
+      type: object
+      required: [metadata, result]
+      properties:
+        metadata: {$ref: '#/components/schemas/ProviderOperationMetadata'}
+        result: {type: object}
+        citations: {type: array, items: {$ref: '#/components/schemas/ProviderCitation'}}
+    ProviderCitation:
+      type: object
+      required: [source_kind, reference, availability]
+      properties:
+        source_kind: {type: string}
+        reference: {type: string}
+        version: {type: string}
+        watermark: {type: string}
+        availability: {type: string}
     ProviderError:
       type: object
       required: [category, code, message, retryable]

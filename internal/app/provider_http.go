@@ -2,6 +2,7 @@ package app
 
 import (
 	"encoding/json"
+	"errors"
 	"github.com/FelixSeptem/stele/internal/auth"
 	"github.com/FelixSeptem/stele/internal/memory"
 	"github.com/FelixSeptem/stele/internal/policy"
@@ -70,7 +71,7 @@ func registerProviderOperationRoutes(mux *http.ServeMux, deps HTTPDependencies) 
 		}
 		out, err := deps.ProviderAdapter.Ingest(r.Context(), b, req.Metadata, memory.IngestEventInput{EventType: req.EventType, Content: req.Content, Metadata: req.MetadataMap})
 		if err != nil {
-			writeProviderError(w, 400, "validation", "operation_failed", boundedProviderMessage(err), false)
+			writeProviderError(w, 400, providerErrorCategory(err), "operation_failed", boundedProviderMessage(err), providerErrorCategory(err) == provider.ErrorCategoryRetryable)
 			return
 		}
 		writeJSON(w, 201, out)
@@ -91,7 +92,7 @@ func registerProviderOperationRoutes(mux *http.ServeMux, deps HTTPDependencies) 
 		}
 		out, err := deps.ProviderAdapter.SubmitIntent(r.Context(), b, req.Metadata, req.Intent)
 		if err != nil {
-			writeProviderError(w, 400, provider.ErrorCategoryValidation, "operation_failed", boundedProviderMessage(err), false)
+			writeProviderError(w, 400, providerErrorCategory(err), "operation_failed", boundedProviderMessage(err), providerErrorCategory(err) == provider.ErrorCategoryRetryable)
 			return
 		}
 		writeJSON(w, http.StatusAccepted, map[string]any{"metadata": req.Metadata, "result": out, "citations": provider.ShapeIntentCitation(out)})
@@ -112,7 +113,7 @@ func registerProviderOperationRoutes(mux *http.ServeMux, deps HTTPDependencies) 
 		}
 		out, meta, err := deps.ProviderAdapter.Search(r.Context(), b, req.Metadata, req.Input)
 		if err != nil {
-			writeProviderError(w, 400, provider.ErrorCategoryValidation, "operation_failed", boundedProviderMessage(err), false)
+			writeProviderError(w, 400, providerErrorCategory(err), "operation_failed", boundedProviderMessage(err), providerErrorCategory(err) == provider.ErrorCategoryRetryable)
 			return
 		}
 		writeJSON(w, http.StatusOK, map[string]any{"metadata": meta, "result": out, "citations": provider.ShapeSearchCitationsWithLimit(out, providerCitationLimit(deps.ProviderLimits))})
@@ -133,7 +134,7 @@ func registerProviderOperationRoutes(mux *http.ServeMux, deps HTTPDependencies) 
 		}
 		out, meta, err := deps.ProviderAdapter.AssembleContext(r.Context(), b, req.Metadata, req.Input)
 		if err != nil {
-			writeProviderError(w, 400, provider.ErrorCategoryValidation, "operation_failed", boundedProviderMessage(err), false)
+			writeProviderError(w, 400, providerErrorCategory(err), "operation_failed", boundedProviderMessage(err), providerErrorCategory(err) == provider.ErrorCategoryRetryable)
 			return
 		}
 		writeJSON(w, http.StatusOK, map[string]any{"metadata": meta, "result": out, "citations": provider.ShapeContextCitationsWithLimit(out, providerCitationLimit(deps.ProviderLimits))})
@@ -223,6 +224,26 @@ func boundedProviderMessage(err error) string {
 		s = s[:256]
 	}
 	return s
+}
+func providerErrorCategory(err error) provider.ErrorCategory {
+	if err == nil {
+		return provider.ErrorCategoryValidation
+	}
+	s := strings.ToLower(err.Error())
+	switch {
+	case strings.Contains(s, "stale") || strings.Contains(s, "sequence"):
+		return provider.ErrorCategoryStale
+	case strings.Contains(s, "idempotency conflict") || errors.Is(err, memory.ErrIdempotencyConflict):
+		return provider.ErrorCategoryConflict
+	case strings.Contains(s, "not configured") || strings.Contains(s, "unavailable"):
+		return provider.ErrorCategoryDependency
+	case strings.Contains(s, "lifecycle") || strings.Contains(s, "privileged"):
+		return provider.ErrorCategoryLifecycle
+	case strings.Contains(s, "retry") || errors.Is(err, memory.ErrIdempotencyInProgress):
+		return provider.ErrorCategoryRetryable
+	default:
+		return provider.ErrorCategoryValidation
+	}
 }
 func writeProviderError(w http.ResponseWriter, status int, category provider.ErrorCategory, code, msg string, retry bool) {
 	writeJSON(w, status, map[string]any{"error": provider.ProviderError{Category: category, Code: code, Message: msg, Retryable: retry}})
