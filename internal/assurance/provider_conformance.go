@@ -149,6 +149,11 @@ func (s *Service) RunProviderConformance(ctx context.Context, input ProviderConf
 					diagnostics = append(diagnostics, MissingEvidenceDiagnostic{ID: s.newID("provider_diagnostic"), ConformanceRunID: id, Scope: input.Profile.Scope, EvidenceKind: ExpectedEvidenceContext, Category: MissingEvidenceHidden, ReadinessImpact: ReadinessStatusBlocked, CreatedAt: now})
 				}
 			}
+		} else {
+			// A passing run requires execution of every declared fixture. Missing
+			// executor evidence is a dependency degradation, never an implicit pass.
+			result = ConformanceResultDegraded
+			diagnostics = append(diagnostics, MissingEvidenceDiagnostic{ID: s.newID("provider_diagnostic"), ConformanceRunID: id, Scope: input.Profile.Scope, EvidenceKind: ExpectedEvidenceContext, Category: MissingEvidenceStale, ReadinessImpact: ReadinessStatusDegraded, CreatedAt: now})
 		}
 	}
 	run, err := s.store.CreateConformanceRun(ctx, ConformanceRun{ID: id, ProfileID: input.Profile.ProfileID, Scope: input.Profile.Scope.Normalized(), Result: result, EvidenceCounts: counts, StartedAt: input.StartedAt.UTC(), FinishedAt: now, CreatedAt: now})

@@ -102,6 +102,24 @@ func TestServiceProviderConformanceCannotClaimReadyWhenDependencyIsDegraded(t *t
 	}
 }
 
+func TestServiceProviderConformanceCannotPassWithoutExecutor(t *testing.T) {
+	now := time.Date(2026, 9, 13, 10, 0, 0, 0, time.UTC)
+	scope := memory.Scope{Tenant: "tenant-a", Project: "project-a", Namespace: "namespace-a"}
+	profile := providerProfile(scope)
+	store := &stubAssuranceStore{conformanceProfiles: []ConformanceProfile{{ID: profile.ProfileID, Scope: scope, Status: ConformanceProfileStatusActive, ExpectedEvidence: []ExpectedEvidence{{Kind: ExpectedEvidenceProof, MinimumCount: 1, FreshnessWindow: time.Hour}}, Actor: "operator", Reason: "provider check", CreatedAt: now, UpdatedAt: now}}}
+	service := NewService(ServiceOptions{Store: store, Now: func() time.Time { return now }})
+	run, diagnostics, err := service.RunProviderConformance(context.Background(), ProviderConformanceRunInput{Profile: profile, Binding: provider.RuntimeBinding{BindingID: "rb-1", PrincipalID: "principal-1", Scope: scope, AgentID: "agent-1", SessionID: "session-1", ProviderInstanceID: "instance-1", CreatedAt: now.Add(-time.Minute), ExpiresAt: now.Add(time.Hour)}, Dependencies: ProviderDependencySnapshot{Compatible: true, PostgreSQLReady: true, ProjectionFresh: true, WorkerReady: true}, StartedAt: now})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if run.Result != ConformanceResultDegraded {
+		t.Fatalf("result=%s want degraded", run.Result)
+	}
+	if len(diagnostics) == 0 || diagnostics[0].ReadinessImpact != ReadinessStatusDegraded {
+		t.Fatalf("diagnostics=%+v want degraded diagnostic", diagnostics)
+	}
+}
+
 func TestServiceProviderConformanceFailsClosedOnHiddenOrForeignEvidence(t *testing.T) {
 	now := time.Date(2026, 9, 13, 12, 0, 0, 0, time.UTC)
 	scope := memory.Scope{Tenant: "tenant-a", Project: "project-a", Namespace: "namespace-a"}
