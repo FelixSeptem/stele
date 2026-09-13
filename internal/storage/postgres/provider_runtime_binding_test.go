@@ -16,7 +16,8 @@ func TestRepositoryCreatesAndLooksUpProviderRuntimeBinding(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer mock.Close()
-	now := time.Date(2026, 9, 13, 10, 0, 0, 0, time.UTC)
+	// Keep the fixture valid against the repository's current-time expiry check.
+	now := time.Now().UTC()
 	binding := provider.RuntimeBinding{BindingID: "rb_opaque", PrincipalID: "principal-1", Scope: memory.Scope{Tenant: "tenant-a", Project: "project-a", Namespace: "namespace-a"}, AgentID: "agent-1", SessionID: "session-1", ConversationID: "conversation-1", ProviderInstanceID: "instance-1", CreatedAt: now, ExpiresAt: now.Add(time.Hour)}
 	mock.ExpectExec("INSERT INTO provider_runtime_bindings").WithArgs(binding.BindingID, binding.PrincipalID, "tenant-a", "project-a", "namespace-a", binding.AgentID, binding.SessionID, binding.ConversationID, binding.ProviderInstanceID, binding.CreatedAt, binding.ExpiresAt).WillReturnResult(pgxmock.NewResult("INSERT", 1))
 	if err := NewRepository(mock).Create(context.Background(), binding); err != nil {

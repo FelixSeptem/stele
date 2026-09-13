@@ -348,13 +348,18 @@ func ShapeSearchCitationsWithLimit(result retrieval.SearchResult, limit int) []C
 // ShapeContextCitations projects only lifecycle-visible memory references from
 // assembled context. Query text, scores and internal diagnostics are omitted.
 func ShapeContextCitations(ctx retrieval.AssembledContext) []Citation {
+	return ShapeContextCitationsWithLimit(ctx, 100)
+}
+
+// ShapeContextCitationsWithLimit projects context citations up to limit.
+func ShapeContextCitationsWithLimit(ctx retrieval.AssembledContext, limit int) []Citation {
 	result := retrieval.SearchResult{}
 	result.Hits = append(result.Hits, ctx.Profile...)
 	result.Hits = append(result.Hits, ctx.RecentSession...)
 	result.Hits = append(result.Hits, ctx.RecentEpisodes...)
 	result.Hits = append(result.Hits, ctx.RelevantSummaries...)
 	result.Hits = append(result.Hits, ctx.RelatedEntities...)
-	return ShapeSearchCitations(result)
+	return ShapeSearchCitationsWithLimit(result, limit)
 }
 
 type OperationOutcome struct {

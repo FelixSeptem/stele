@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"github.com/FelixSeptem/stele/internal/auth"
 	"github.com/FelixSeptem/stele/internal/memory"
+	"github.com/FelixSeptem/stele/internal/policy"
 	"github.com/FelixSeptem/stele/internal/provider"
 	"github.com/FelixSeptem/stele/internal/retrieval"
 	"io"
@@ -63,6 +64,10 @@ func registerProviderOperationRoutes(mux *http.ServeMux, deps HTTPDependencies) 
 			writeProviderError(w, 400, "validation", "invalid_request", "invalid request", false)
 			return
 		}
+		if !supportsProviderSchema(deps.ProviderSchemaVersions, req.Metadata.SchemaVersion) {
+			writeProviderCompatibilityError(w, deps.ProviderSchemaVersions)
+			return
+		}
 		out, err := deps.ProviderAdapter.Ingest(r.Context(), b, req.Metadata, memory.IngestEventInput{EventType: req.EventType, Content: req.Content, Metadata: req.MetadataMap})
 		if err != nil {
 			writeProviderError(w, 400, "validation", "operation_failed", boundedProviderMessage(err), false)
@@ -81,7 +86,7 @@ func registerProviderOperationRoutes(mux *http.ServeMux, deps HTTPDependencies) 
 			return
 		}
 		if !supportsProviderSchema(deps.ProviderSchemaVersions, req.Metadata.SchemaVersion) {
-			writeProviderError(w, 400, provider.ErrorCategoryCompatibility, "unsupported_schema", "unsupported provider schema version", false)
+			writeProviderCompatibilityError(w, deps.ProviderSchemaVersions)
 			return
 		}
 		out, err := deps.ProviderAdapter.SubmitIntent(r.Context(), b, req.Metadata, req.Intent)
@@ -102,7 +107,7 @@ func registerProviderOperationRoutes(mux *http.ServeMux, deps HTTPDependencies) 
 			return
 		}
 		if !supportsProviderSchema(deps.ProviderSchemaVersions, req.Metadata.SchemaVersion) {
-			writeProviderError(w, 400, provider.ErrorCategoryCompatibility, "unsupported_schema", "unsupported provider schema version", false)
+			writeProviderCompatibilityError(w, deps.ProviderSchemaVersions)
 			return
 		}
 		out, meta, err := deps.ProviderAdapter.Search(r.Context(), b, req.Metadata, req.Input)
@@ -110,7 +115,7 @@ func registerProviderOperationRoutes(mux *http.ServeMux, deps HTTPDependencies) 
 			writeProviderError(w, 400, provider.ErrorCategoryValidation, "operation_failed", boundedProviderMessage(err), false)
 			return
 		}
-		writeJSON(w, http.StatusOK, map[string]any{"metadata": meta, "result": out, "citations": provider.ShapeSearchCitations(out)})
+		writeJSON(w, http.StatusOK, map[string]any{"metadata": meta, "result": out, "citations": provider.ShapeSearchCitationsWithLimit(out, providerCitationLimit(deps.ProviderLimits))})
 	})))
 	mux.Handle("POST /v1/provider/context", wrap(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		b, _ := provider.RuntimeBindingFromContext(r.Context())
@@ -123,7 +128,7 @@ func registerProviderOperationRoutes(mux *http.ServeMux, deps HTTPDependencies) 
 			return
 		}
 		if !supportsProviderSchema(deps.ProviderSchemaVersions, req.Metadata.SchemaVersion) {
-			writeProviderError(w, 400, provider.ErrorCategoryCompatibility, "unsupported_schema", "unsupported provider schema version", false)
+			writeProviderCompatibilityError(w, deps.ProviderSchemaVersions)
 			return
 		}
 		out, meta, err := deps.ProviderAdapter.AssembleContext(r.Context(), b, req.Metadata, req.Input)
@@ -131,8 +136,67 @@ func registerProviderOperationRoutes(mux *http.ServeMux, deps HTTPDependencies) 
 			writeProviderError(w, 400, provider.ErrorCategoryValidation, "operation_failed", boundedProviderMessage(err), false)
 			return
 		}
-		writeJSON(w, http.StatusOK, map[string]any{"metadata": meta, "result": out, "citations": provider.ShapeContextCitations(out)})
+		writeJSON(w, http.StatusOK, map[string]any{"metadata": meta, "result": out, "citations": provider.ShapeContextCitationsWithLimit(out, providerCitationLimit(deps.ProviderLimits))})
 	})))
+	mux.Handle("POST /v1/provider/lifecycle", wrap(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		binding, ok := provider.RuntimeBindingFromContext(r.Context())
+		if !ok {
+			writeProviderError(w, http.StatusForbidden, provider.ErrorCategoryScope, "forbidden", "runtime binding denied", false)
+			return
+		}
+		principal, ok := auth.PrincipalFromContext(r.Context())
+		if !ok || principal.Role != auth.PrincipalRoleAdmin {
+			writeProviderError(w, http.StatusForbidden, provider.ErrorCategoryLifecycle, "lifecycle_denied", "provider lifecycle operation requires privileged authorization", false)
+			return
+		}
+		var req struct {
+			Metadata provider.OperationMetadata `json:"metadata"`
+			MemoryID string                     `json:"memory_id"`
+			Action   policy.ForgettingAction    `json:"action"`
+			Reason   string                     `json:"reason"`
+		}
+		if err := provider.DecodeStrict(readBody(r), &req); err != nil {
+			writeProviderError(w, http.StatusBadRequest, provider.ErrorCategoryValidation, "invalid_request", "invalid request", false)
+			return
+		}
+		if !supportsProviderSchema(deps.ProviderSchemaVersions, req.Metadata.SchemaVersion) {
+			writeProviderCompatibilityError(w, deps.ProviderSchemaVersions)
+			return
+		}
+		if err := req.Action.Validate(); err != nil || strings.TrimSpace(req.MemoryID) == "" || strings.TrimSpace(req.Reason) == "" {
+			writeProviderError(w, http.StatusBadRequest, provider.ErrorCategoryValidation, "invalid_request", "invalid lifecycle request", false)
+			return
+		}
+		out, err := deps.ProviderAdapter.ApplyLifecycle(r.Context(), binding, req.Metadata, req.MemoryID, req.Action, req.Reason, principal.ID)
+		if err != nil {
+			writeProviderError(w, http.StatusForbidden, provider.ErrorCategoryLifecycle, "lifecycle_denied", boundedProviderMessage(err), false)
+			return
+		}
+		writeJSON(w, http.StatusOK, out)
+	})))
+	mux.Handle("GET /v1/provider/status", wrap(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		binding, ok := provider.RuntimeBindingFromContext(r.Context())
+		if !ok {
+			writeProviderError(w, http.StatusForbidden, provider.ErrorCategoryScope, "forbidden", "runtime binding denied", false)
+			return
+		}
+		writeJSON(w, http.StatusOK, map[string]any{
+			"status":               "ready",
+			"scope":                binding.Scope,
+			"agent_id":             binding.AgentID,
+			"session_id":           binding.SessionID,
+			"conversation_id":      binding.ConversationID,
+			"provider_instance_id": binding.ProviderInstanceID,
+			"expires_at":           binding.ExpiresAt,
+		})
+	})))
+}
+
+func providerCitationLimit(l provider.ProviderLimits) int {
+	if l.Validate() != nil {
+		return provider.Discover(provider.CapabilityInput{}).Limits.MaxCitations
+	}
+	return l.MaxCitations
 }
 
 func supportsProviderSchema(supported []string, requested string) bool {
@@ -162,4 +226,11 @@ func boundedProviderMessage(err error) string {
 }
 func writeProviderError(w http.ResponseWriter, status int, category provider.ErrorCategory, code, msg string, retry bool) {
 	writeJSON(w, status, map[string]any{"error": provider.ProviderError{Category: category, Code: code, Message: msg, Retryable: retry}})
+}
+
+func writeProviderCompatibilityError(w http.ResponseWriter, supported []string) {
+	if len(supported) > 16 {
+		supported = supported[:16]
+	}
+	writeJSON(w, http.StatusBadRequest, map[string]any{"error": provider.ProviderError{Category: provider.ErrorCategoryCompatibility, Code: "unsupported_schema", Message: "unsupported provider schema version", SupportedVersions: supported}})
 }

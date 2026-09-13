@@ -90,6 +90,99 @@ paths:
           description: Bounded provider error
         '403':
           description: Runtime binding or scope denied
+  /v1/provider/intents:
+    post:
+      operationId: providerSubmitIntent
+      security:
+        - PublicAPIKey: []
+      parameters:
+        - $ref: '#/components/parameters/RuntimeBindingHeader'
+        - $ref: '#/components/parameters/RuntimeSessionHeader'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: {type: object}
+      responses:
+        '202': {description: 'Governed memory intent accepted'}
+        '400': {description: 'Bounded provider error'}
+        '403': {description: 'Runtime binding or scope denied'}
+  /v1/provider/retrieve:
+    post:
+      operationId: providerRetrieveMemory
+      security:
+        - PublicAPIKey: []
+      parameters:
+        - $ref: '#/components/parameters/RuntimeBindingHeader'
+        - $ref: '#/components/parameters/RuntimeSessionHeader'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: {type: object}
+      responses:
+        '200': {description: 'Scoped lifecycle-safe retrieval result'}
+        '400': {description: 'Bounded provider error'}
+        '403': {description: 'Runtime binding or scope denied'}
+  /v1/provider/context:
+    post:
+      operationId: providerAssembleContext
+      security:
+        - PublicAPIKey: []
+      parameters:
+        - $ref: '#/components/parameters/RuntimeBindingHeader'
+        - $ref: '#/components/parameters/RuntimeSessionHeader'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: {type: object}
+      responses:
+        '200': {description: 'Scoped assembled context with citations'}
+        '400': {description: 'Bounded provider error'}
+        '403': {description: 'Runtime binding or scope denied'}
+  /v1/provider/lifecycle:
+    post:
+      operationId: providerApplyLifecycle
+      summary: Apply an admin-authorized governed lifecycle action
+      security:
+        - PublicAPIKey: []
+      parameters:
+        - $ref: '#/components/parameters/RuntimeBindingHeader'
+        - $ref: '#/components/parameters/RuntimeSessionHeader'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              additionalProperties: false
+              required: [metadata, memory_id, action, reason]
+              properties:
+                metadata: {$ref: '#/components/schemas/ProviderOperationMetadata'}
+                memory_id: {type: string, maxLength: 256}
+                action: {type: string, enum: [suppress, expire, delete]}
+                reason: {type: string, maxLength: 512}
+      responses:
+        '200': {description: 'Governed lifecycle outcome with citation'}
+        '400': {description: 'Validation or compatibility error'}
+        '403': {description: 'Admin role, runtime binding, or scope denied'}
+  /v1/provider/status:
+    get:
+      operationId: providerReadStatus
+      summary: Read bounded status for the exact runtime scope
+      security:
+        - PublicAPIKey: []
+      parameters:
+        - $ref: '#/components/parameters/RuntimeBindingHeader'
+        - $ref: '#/components/parameters/RuntimeSessionHeader'
+      responses:
+        '200':
+          description: 'Scoped provider status without principal or operational internals'
+          content:
+            application/json:
+              schema: {type: object}
+        '403': {description: 'Runtime binding or scope denied'}
   /health:
     get:
       operationId: getHealth

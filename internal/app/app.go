@@ -556,12 +556,22 @@ func buildAPIRuntime(ctx context.Context, cfg config.Config, deps apiRuntimeDepe
 	}
 	httpDeps.ProviderEnabled = cfg.Provider.Enabled
 	httpDeps.ProviderSchemaVersions = cfg.Provider.SchemaVersions
+	httpDeps.ProviderLimits = cfg.Provider.Limits
 	if cfg.Provider.Enabled && httpDeps.PrincipalAuthorizer != nil {
 		httpDeps.ProviderCapabilities = provider.Discover(provider.CapabilityInput{ProviderVersion: "provider-v1", SchemaVersion: cfg.Provider.SchemaVersions[0], ServiceVersion: BuildVersion, BuildID: BuildID})
+		httpDeps.ProviderCapabilities.Limits = cfg.Provider.Limits
 		httpDeps.ProviderBindings = repo
 		httpDeps.ProviderInitializer = provider.NewRuntimeInitializer(provider.RuntimeInitializerOptions{Authorizer: httpDeps.PrincipalAuthorizer, Bindings: repo, BindingTTL: cfg.Provider.BindingLifetime, Now: time.Now})
 		intentService := memory.MemoryIntentService{Processor: repo, Now: time.Now}
-		httpDeps.ProviderAdapter = provider.NewAdapter(provider.AdapterDependencies{Ingestor: ingestor, IdempotentIngestor: ingestor, Intent: intentService, Searcher: retrievalService, Assembler: retrievalService, Lifecycle: lifecycleService})
+		httpDeps.ProviderAdapter = provider.NewAdapter(provider.AdapterDependencies{
+			Ingestor: ingestor, IdempotentIngestor: ingestor, Intent: intentService,
+			Searcher: retrievalService, Assembler: retrievalService, Lifecycle: lifecycleService,
+			Limits: cfg.Provider.Limits,
+			AllowLifecycle: func(ctx context.Context, binding provider.RuntimeBinding) bool {
+				principal, ok := auth.PrincipalFromContext(ctx)
+				return ok && principal.Role == auth.PrincipalRoleAdmin && principal.ID == binding.PrincipalID
+			},
+		})
 	}
 	readiness := &readinessGate{checker: runtimeReadinessChecker(config.ModeAPI, pool, embeddingRuntime, false, deps.observer)}
 	httpDeps.Readiness = readiness

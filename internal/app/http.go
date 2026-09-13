@@ -74,6 +74,7 @@ type HTTPDependencies struct {
 	ProviderBindings          provider.RuntimeBindingStore
 	ProviderAdapter           *provider.Adapter
 	ProviderSchemaVersions    []string
+	ProviderLimits            provider.ProviderLimits
 }
 
 type ContextProjectionAdminService interface {
