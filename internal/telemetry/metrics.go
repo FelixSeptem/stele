@@ -97,6 +97,23 @@ type RetrievalRerankEvent struct {
 	CandidateCount   int
 }
 
+// RecordRetrievalEvaluation records only bounded release-gate categories.
+// Query, scope, identifiers, provider payloads, credentials, and raw errors
+// are intentionally not accepted by the event model.
+func (o *MetricsObserver) RecordRetrievalEvaluation(ctx context.Context, event RetrievalEvaluationEvent) {
+	if o == nil {
+		return
+	}
+	o.addCounter("stele_retrieval_evaluation_total", map[string]string{
+		"status":           labelOrUnknown(event.Status),
+		"fixture_version":  labelOrUnknown(event.FixtureVersion),
+		"ranking_version":  labelOrUnknown(event.RankingVersion),
+		"policy_version":   labelOrUnknown(event.PolicyVersion),
+		"failure_category": labelOrUnknown(event.FailureCategory),
+		"decision":         labelOrUnknown(event.Decision),
+	}, 1)
+}
+
 type DerivedInsightReplayEvent struct {
 	Mode        string
 	Result      string
@@ -734,6 +751,7 @@ func (o *MetricsObserver) RenderPrometheus() string {
 	writeMetricFamilyHeader(&builder, "stele_ranking_rollout_total", "counter", "Ranking rollout lifecycle and impact operations by bounded categories.")
 	writeMetricFamilyHeader(&builder, "stele_retrieval_fusion_total", "counter", "Retrieval fusion availability and bounded candidate-pool outcomes.")
 	writeMetricFamilyHeader(&builder, "stele_retrieval_rerank_total", "counter", "Optional retrieval rerank outcomes by bounded categories.")
+	writeMetricFamilyHeader(&builder, "stele_retrieval_evaluation_total", "counter", "Retrieval release-gate outcomes by bounded categories.")
 	writeMetricFamilyHeader(&builder, "stele_derived_insight_replay_total", "counter", "Derived insight replay outcomes by low-cardinality categories.")
 	writeMetricFamilyHeader(&builder, "stele_quality_evaluation_total", "counter", "Memory quality evaluation outcomes.")
 	writeMetricFamilyHeader(&builder, "stele_quality_repair_actions_total", "counter", "Memory quality repair action outcomes.")

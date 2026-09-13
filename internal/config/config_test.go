@@ -130,6 +130,32 @@ func TestLoadFromEnvRejectsMissingDatabaseDSN(t *testing.T) {
 	}
 }
 
+func TestLoadFromEnvReadsOwnedEvaluationConfiguration(t *testing.T) {
+	t.Setenv("STELE_POSTGRES_DSN", "postgres://runtime/db")
+	t.Setenv("STELE_TEST_RETRIEVAL_EVALUATION_DSN", "postgres://owned/eval")
+	t.Setenv("STELE_RETRIEVAL_EVALUATION_PROVIDER_PROFILE", "canonical-v1")
+	cfg, err := LoadFromEnv()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cfg.Evaluation.OwnedDSN != "postgres://owned/eval" || cfg.Evaluation.ProviderProfile != "canonical-v1" {
+		t.Fatalf("evaluation=%+v", cfg.Evaluation)
+	}
+}
+
+func TestLoadFromEnvRejectsEvaluationDSNFallbackOrUnsafeProfile(t *testing.T) {
+	t.Setenv("STELE_POSTGRES_DSN", "postgres://runtime/db")
+	t.Setenv("STELE_TEST_RETRIEVAL_EVALUATION_DSN", "postgres://runtime/db")
+	if _, err := LoadFromEnv(); err == nil {
+		t.Fatal("expected evaluation DSN reuse rejection")
+	}
+	t.Setenv("STELE_TEST_RETRIEVAL_EVALUATION_DSN", "postgres://owned/eval")
+	t.Setenv("STELE_RETRIEVAL_EVALUATION_PROVIDER_PROFILE", "profile secret")
+	if _, err := LoadFromEnv(); err == nil {
+		t.Fatal("expected unsafe provider profile rejection")
+	}
+}
+
 func TestLoadFromEnvRejectsUnknownMode(t *testing.T) {
 	t.Setenv("STELE_MODE", "unknown")
 	t.Setenv("STELE_POSTGRES_DSN", "postgres://stele:stele@localhost:5432/stele?sslmode=disable")
