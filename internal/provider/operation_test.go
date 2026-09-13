@@ -2,6 +2,7 @@ package provider
 
 import (
 	"context"
+	"strings"
 	"testing"
 
 	"github.com/FelixSeptem/stele/internal/memory"
@@ -29,6 +30,13 @@ func TestOperationMetadataNormalizeValidateAndSequence(t *testing.T) {
 	}
 	if got := tracker.Accept("session-1", 1); got != SequenceStale {
 		t.Fatalf("stale=%s", got)
+	}
+}
+
+func TestOperationMetadataRejectsSchemaVersionLongerThanContractLimit(t *testing.T) {
+	meta := OperationMetadata{RequestID: "request-1", OperationID: "operation-1", SchemaVersion: strings.Repeat("v", MaxSchemaVersionBytes+1)}
+	if err := meta.NormalizeValidate(); err == nil {
+		t.Fatal("schema version longer than capability/OpenAPI limit was accepted")
 	}
 }
 

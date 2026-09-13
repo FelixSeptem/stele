@@ -13,31 +13,31 @@
 ## 3. Operation Metadata And Replay Safety
 
 - [x] 3.1 Implement normalization/validation for `request_id`, `operation_id`, `idempotency_key`, `event_seq`, and `schema_version`; verify bounded lengths, character rules, monotonic session sequence handling, and stable duplicate/stale dispositions.
-- [x] 3.2 Thread the common metadata envelope through event ingest and session outcome writes using existing durable idempotency repositories; verify equivalent retries return the original result and conflicting reuse creates no duplicate event, provenance, or feedback record.
-- [x] 3.3 Extend metadata propagation to intents, retrieval/context reads, forgetting/lifecycle requests, and status/report reads; verify operation correlation is preserved while read paths remain side-effect free and scope-safe.
+- [ ] 3.2 Thread the common metadata envelope through event ingest and session outcome writes using existing durable idempotency repositories; verify equivalent retries return the original result and conflicting reuse creates no duplicate event, provenance, or feedback record.
+- [ ] 3.3 Extend metadata propagation to intents, retrieval/context reads, forgetting/lifecycle requests, and status/report reads; verify operation correlation is preserved while read paths remain side-effect free and scope-safe.
 
 ## 4. Provider Operation Adapters And Safe Citations
 
 - [x] 4.1 Add provider handlers that delegate event ingest and governed memory intents to existing services; verify admission, provenance, lifecycle, and event-to-candidate-to-active governance cannot be bypassed by provider payloads.
 - [x] 4.2 Add provider retrieval and context assembly handlers with session binding, projection freshness, deterministic budgets, and lifecycle-safe defaults; verify hidden, stale, and foreign items never enter ordinary provider results.
-- [x] 4.3 Add provider forgetting/lifecycle request and scoped status/report handlers that route privileged actions through existing admin authorization; verify public provider callers cannot mutate canonical state directly.
+- [ ] 4.3 Add provider forgetting/lifecycle request and scoped status/report handlers that route privileged actions through existing admin authorization; verify public provider callers cannot mutate canonical state directly.
 - [x] 4.4 Implement citation/provenance shaping for visible memory, projection, intent, and lifecycle outcomes; verify source kind/reference, version/watermark, and bounded availability are present while raw query, scores, hidden IDs, provider payloads, and credentials are absent.
 
 ## 5. OpenAPI Publication And Compatibility Errors
 
-- [x] 5.1 Publish provider discovery, runtime initialization, and operation routes plus schemas/examples in the authoritative OpenAPI document; verify the live endpoint advertises authentication, exact scope, idempotency, limits, citations, and error categories.
-- [x] 5.2 Add stable machine-readable compatibility, scope, validation, conflict, lifecycle, stale, dependency, and retryable error responses; verify unsupported schema versions fail before dispatch and never reveal hidden-record existence or stack traces.
+- [ ] 5.1 Publish provider discovery, runtime initialization, and operation routes plus schemas/examples in the authoritative OpenAPI document; verify the live endpoint advertises authentication, exact scope, idempotency, limits, citations, and error categories.
+- [ ] 5.2 Add stable machine-readable compatibility, scope, validation, conflict, lifecycle, stale, dependency, and retryable error responses; verify unsupported schema versions fail before dispatch and never reveal hidden-record existence or stack traces.
 - [x] 5.3 Add contract tests that invoke the published OpenAPI document against API mode and confirm cache/version metadata remain consistent with the existing runtime API publication contract.
 
 ## 6. Provider Conformance And Assurance Integration
 
 - [x] 6.1 Define bounded provider conformance profiles and fixture operation manifests for capability, scope, replay, lifecycle, citation, restart/fallback, and freshness checks; verify unsupported evidence kinds and out-of-scope fixtures are rejected.
-- [x] 6.2 Implement a service-side conformance runner over an isolated exact scope using ordinary provider handlers; verify runs never execute an external agent/model and preserve canonical records except governed fixture ingestion.
+- [ ] 6.2 Implement a service-side conformance runner over an isolated exact scope using ordinary provider handlers; verify runs never execute an external agent/model and preserve canonical records except governed fixture ingestion.
 - [x] 6.3 Persist conformance outcomes through existing assurance records with bounded counters, verdicts, evidence references, schema provenance, and next actions; verify reruns create linked history and diagnostics do not become metric labels.
-- [x] 6.4 Add readiness/conformance tests for missing or stale dependencies, projection freshness, revoked scope, hidden memory, idempotency conflict, and interrupted durable operations; verify degraded/incomplete results cannot claim provider readiness.
+- [ ] 6.4 Add readiness/conformance tests for missing or stale dependencies, projection freshness, revoked scope, hidden memory, idempotency conflict, and interrupted durable operations; verify degraded/incomplete results cannot claim provider readiness.
 
 ## 7. Documentation, Rollout, And Verification
 
 - [x] 7.1 Document provider initialization, server-resolved scope, operation metadata, citations, supported errors, enablement, and rollback in OpenAPI/operator docs; verify docs consistency checks pass and no secrets/placeholders are introduced.
-- [x] 7.2 Add deterministic CI coverage for provider models, handlers, OpenAPI contract, isolation/redaction, idempotent replay, and conformance without provider credentials or ambient production DSNs; verify focused and full Go tests pass.
-- [x] 7.3 Run `openspec validate agent-runtime-memory-provider-contract --strict`, `openspec status --change agent-runtime-memory-provider-contract --json`, and `git diff --check`; verify all required artifacts are complete and the change is ready for `/opsx:apply`.
+- [ ] 7.2 Add deterministic CI coverage for provider models, handlers, OpenAPI contract, isolation/redaction, idempotent replay, and conformance without provider credentials or ambient production DSNs; verify focused and full Go tests pass.
+- [ ] 7.3 Run `openspec validate agent-runtime-memory-provider-contract --strict`, `openspec status --change agent-runtime-memory-provider-contract --json`, and `git diff --check`; verify all required artifacts are complete and the change is ready for `/opsx:apply`.

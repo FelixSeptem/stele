@@ -37,7 +37,10 @@ func (m *OperationMetadata) NormalizeValidate() error {
 	m.OperationID = strings.TrimSpace(m.OperationID)
 	m.IdempotencyKey = strings.TrimSpace(m.IdempotencyKey)
 	m.SchemaVersion = strings.TrimSpace(m.SchemaVersion)
-	for name, value := range map[string]string{"request_id": m.RequestID, "operation_id": m.OperationID, "schema_version": m.SchemaVersion} {
+	if !boundedToken(m.SchemaVersion, MaxSchemaVersionBytes) {
+		return fmt.Errorf("schema_version is invalid")
+	}
+	for name, value := range map[string]string{"request_id": m.RequestID, "operation_id": m.OperationID} {
 		if !boundedToken(value, MaxOperationTokenBytes) {
 			return fmt.Errorf("%s is invalid", name)
 		}
@@ -96,6 +99,7 @@ type AdapterDependencies struct {
 	Session            SessionAdapter
 	Limits             ProviderLimits
 }
+
 type MemoryIntentSubmitter interface {
 	Submit(context.Context, memory.MemoryIntentInput) (memory.MemoryIntentRecord, error)
 }
