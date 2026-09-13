@@ -825,6 +825,17 @@ func TestScopeDispatchJobRunsScopedMaintenanceAcrossEligibleScopes(t *testing.T)
 	}
 }
 
+func TestScopeDispatchJobCanWrapDurableExecutionWhenConfigured(t *testing.T) {
+	scope := memory.Scope{Tenant: "t", Project: "p", Namespace: "n"}
+	store := &durableStoreStub{acquired: true}
+	inner := &durableInnerJob{}
+	job := ScopeDispatchJob{NameValue: "projection_refresh_dispatch", ScopeSource: &stubMaintenanceScopeSource{scopes: []memory.Scope{scope}}, DurableStore: store, WorkerID: "w", DurableCadence: time.Hour, Now: func() time.Time { return time.Unix(1700000000, 0) }, Dispatch: func(memory.Scope) MaintenanceJob { return inner }}
+	processed, err := job.Run(context.Background())
+	if err != nil || processed != 3 || inner.runs != 1 || store.completed != 1 {
+		t.Fatalf("processed=%d err=%v runs=%d completed=%d", processed, err, inner.runs, store.completed)
+	}
+}
+
 func TestScopeDispatchJobUsesFallbackScopeWhenDiscoveryReturnsNone(t *testing.T) {
 	fallback := memory.Scope{Tenant: "tenant-a", Project: "project-a", Namespace: "namespace-a"}
 	dispatched := make([]memory.Scope, 0, 1)
