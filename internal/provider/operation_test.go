@@ -35,10 +35,11 @@ func TestOperationMetadataNormalizeValidateAndSequence(t *testing.T) {
 func TestProviderAdapterIngestUsesIdempotencyAndIntentGovernance(t *testing.T) {
 	var got memory.IngestEventInput
 	ing := &adapterIngestor{event: memory.RawEvent{ID: "evt-1", Admission: &memory.AdmissionPressureReport{}}}
+	idem := &adapterIdempotentIngestor{adapterIngestor: ing}
 	intent := &adapterIntentService{}
-	a := NewAdapter(AdapterDependencies{Ingestor: ing, Intent: intent})
+	a := NewAdapter(AdapterDependencies{Ingestor: ing, IdempotentIngestor: idem, Intent: intent})
 	b := RuntimeBinding{BindingID: "b", PrincipalID: "p", Scope: memory.Scope{Tenant: "t", Project: "p", Namespace: "n"}, AgentID: "a", SessionID: "s", ConversationID: "c", ProviderInstanceID: "pi"}
-	meta := OperationMetadata{RequestID: "req", OperationID: "op", IdempotencyKey: "idem", SchemaVersion: "schema-v1"}
+	meta := OperationMetadata{RequestID: "req", OperationID: "op", SchemaVersion: "schema-v1"}
 	r, err := a.Ingest(context.Background(), b, meta, memory.IngestEventInput{EventType: "message", Content: "hello"})
 	if err != nil {
 		t.Fatal(err)
@@ -63,6 +64,13 @@ func TestShapeCitationsOmitsScoresAndHiddenItems(t *testing.T) {
 type adapterIngestor struct {
 	got   memory.IngestEventInput
 	event memory.RawEvent
+}
+
+type adapterIdempotentIngestor struct{ *adapterIngestor }
+
+func (s *adapterIdempotentIngestor) IngestIdempotent(ctx context.Context, in memory.IngestEventInput, principalID, key string) (memory.IdempotentEventIngestResult, error) {
+	e, err := s.Ingest(ctx, in)
+	return memory.IdempotentEventIngestResult{Event: e}, err
 }
 
 func (s *adapterIngestor) Ingest(_ context.Context, in memory.IngestEventInput) (memory.RawEvent, error) {

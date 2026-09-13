@@ -19,6 +19,7 @@ import (
 	"github.com/FelixSeptem/stele/internal/jobs"
 	"github.com/FelixSeptem/stele/internal/memory"
 	"github.com/FelixSeptem/stele/internal/policy"
+	"github.com/FelixSeptem/stele/internal/provider"
 	"github.com/FelixSeptem/stele/internal/retrieval"
 	"github.com/FelixSeptem/stele/internal/telemetry"
 	"github.com/FelixSeptem/stele/internal/workflow"
@@ -67,6 +68,12 @@ type HTTPDependencies struct {
 	JobExecutionRead          JobExecutionReader
 	Metrics                   MetricsRecorder
 	Logger                    *log.Logger
+	ProviderEnabled           bool
+	ProviderCapabilities      provider.CapabilityDocument
+	ProviderInitializer       *provider.RuntimeInitializer
+	ProviderBindings          provider.RuntimeBindingStore
+	ProviderAdapter           *provider.Adapter
+	ProviderSchemaVersions    []string
 }
 
 type ContextProjectionAdminService interface {
@@ -717,6 +724,9 @@ type contextAssembleRequest struct {
 
 func NewHTTPHandler(deps HTTPDependencies) http.Handler {
 	mux := http.NewServeMux()
+	if deps.ProviderEnabled {
+		registerProviderRoutes(mux, deps)
+	}
 	mux.HandleFunc("GET /openapi.yaml", func(w http.ResponseWriter, r *http.Request) {
 		body := []byte(openapi.SpecYAML())
 		etag := fmt.Sprintf(`"%x"`, sha256.Sum256(body))

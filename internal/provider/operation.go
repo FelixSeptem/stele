@@ -2,6 +2,8 @@ package provider
 
 import (
 	"context"
+	"crypto/sha256"
+	"encoding/json"
 	"fmt"
 	"strings"
 	"sync"
@@ -90,6 +92,7 @@ type AdapterDependencies struct {
 	Searcher           retrieval.MemorySearcher
 	Assembler          retrieval.ContextAssembler
 	Lifecycle          LifecycleApplier
+	AllowLifecycle     func(context.Context, RuntimeBinding) bool
 	Session            SessionAdapter
 }
 type MemoryIntentSubmitter interface {
@@ -106,11 +109,16 @@ type Adapter struct {
 	deps          AdapterDependencies
 	seq           *SequenceTracker
 	mu            sync.Mutex
-	ingestResults map[string]IngestResult
+	ingestResults map[string]cachedIngestResult
 }
 
 func NewAdapter(deps AdapterDependencies) *Adapter {
-	return &Adapter{deps: deps, seq: NewSequenceTracker(), ingestResults: make(map[string]IngestResult)}
+	return &Adapter{deps: deps, seq: NewSequenceTracker(), ingestResults: make(map[string]cachedIngestResult)}
+}
+
+type cachedIngestResult struct {
+	fingerprint [32]byte
+	result      IngestResult
 }
 
 type IngestResult struct {
@@ -125,6 +133,8 @@ func (a *Adapter) Ingest(ctx context.Context, binding RuntimeBinding, meta Opera
 		return IngestResult{}, err
 	}
 	input.Scope = binding.Scope
+	fingerprintBytes, _ := json.Marshal(input)
+	fingerprint := sha256.Sum256(fingerprintBytes)
 	if err := input.Validate(); err != nil {
 		return IngestResult{}, err
 	}
@@ -132,21 +142,30 @@ func (a *Adapter) Ingest(ctx context.Context, binding RuntimeBinding, meta Opera
 	if disposition == SequenceStale {
 		return IngestResult{Metadata: meta}, fmt.Errorf("stale event sequence")
 	}
-	if disposition == SequenceDuplicate && meta.IdempotencyKey != "" {
+	if disposition == SequenceDuplicate {
+		if meta.IdempotencyKey == "" {
+			return IngestResult{Metadata: meta}, fmt.Errorf("duplicate event sequence")
+		}
 		a.mu.Lock()
-		cached, ok := a.ingestResults[binding.SessionID+":"+meta.IdempotencyKey]
+		cached, ok := a.ingestResults[ingestCacheKey(binding, meta.IdempotencyKey)]
 		a.mu.Unlock()
 		if ok {
-			cached.Replayed = true
-			return cached, nil
+			if cached.fingerprint != fingerprint {
+				return IngestResult{Metadata: meta}, fmt.Errorf("idempotency conflict")
+			}
+			cached.result.Replayed = true
+			return cached.result, nil
 		}
+	}
+	if meta.IdempotencyKey != "" && a.deps.IdempotentIngestor == nil {
+		return IngestResult{Metadata: meta}, fmt.Errorf("durable idempotent ingest is required")
 	}
 	if a.deps.IdempotentIngestor != nil && meta.IdempotencyKey != "" {
 		r, err := a.deps.IdempotentIngestor.IngestIdempotent(ctx, input, binding.PrincipalID, meta.IdempotencyKey)
 		out := IngestResult{EventID: r.Event.ID, Replayed: r.Replayed, Admission: r.Event.Admission, Metadata: meta}
 		if err == nil && meta.IdempotencyKey != "" {
 			a.mu.Lock()
-			a.ingestResults[binding.SessionID+":"+meta.IdempotencyKey] = out
+			a.ingestResults[ingestCacheKey(binding, meta.IdempotencyKey)] = cachedIngestResult{fingerprint: fingerprint, result: out}
 			a.mu.Unlock()
 		}
 		return out, err
@@ -158,7 +177,7 @@ func (a *Adapter) Ingest(ctx context.Context, binding RuntimeBinding, meta Opera
 	out := IngestResult{EventID: e.ID, Admission: e.Admission, Metadata: meta}
 	if err == nil && meta.IdempotencyKey != "" {
 		a.mu.Lock()
-		a.ingestResults[binding.SessionID+":"+meta.IdempotencyKey] = out
+		a.ingestResults[ingestCacheKey(binding, meta.IdempotencyKey)] = cachedIngestResult{fingerprint: fingerprint, result: out}
 		a.mu.Unlock()
 	}
 	return out, err
@@ -187,6 +206,8 @@ func (a *Adapter) CreateTurn(ctx context.Context, binding RuntimeBinding, meta O
 	input.Scope = binding.Scope
 	if input.SessionID == "" {
 		input.SessionID = binding.SessionID
+	} else if input.SessionID != binding.SessionID {
+		return memory.MemorySessionTurn{}, fmt.Errorf("session does not match runtime binding")
 	}
 	if input.IdempotencyKey == "" {
 		input.IdempotencyKey = meta.IdempotencyKey
@@ -204,11 +225,17 @@ func (a *Adapter) RecordTurnOutcome(ctx context.Context, binding RuntimeBinding,
 	input.Scope = binding.Scope
 	if input.SessionID == "" {
 		input.SessionID = binding.SessionID
+	} else if input.SessionID != binding.SessionID {
+		return memory.MemorySessionTurn{}, fmt.Errorf("session does not match runtime binding")
 	}
 	if input.IdempotencyKey == "" {
 		input.IdempotencyKey = meta.IdempotencyKey
 	}
 	return a.deps.Session.RecordTurnOutcome(ctx, input)
+}
+
+func ingestCacheKey(binding RuntimeBinding, idempotency string) string {
+	return binding.BindingID + ":" + binding.PrincipalID + ":" + binding.Scope.Tenant + ":" + binding.Scope.Project + ":" + binding.Scope.Namespace + ":" + binding.SessionID + ":" + idempotency
 }
 func (a *Adapter) Search(ctx context.Context, binding RuntimeBinding, meta OperationMetadata, input retrieval.SearchInput) (retrieval.SearchResult, OperationMetadata, error) {
 	if err := a.validate(binding, &meta); err != nil {
@@ -238,6 +265,9 @@ func (a *Adapter) ApplyLifecycle(ctx context.Context, binding RuntimeBinding, me
 	}
 	if a.deps.Lifecycle == nil {
 		return OperationOutcome{Metadata: meta}, fmt.Errorf("provider lifecycle service is not configured")
+	}
+	if a.deps.AllowLifecycle == nil || !a.deps.AllowLifecycle(ctx, binding) {
+		return OperationOutcome{Metadata: meta}, fmt.Errorf("provider lifecycle operation requires privileged authorization")
 	}
 	err := a.deps.Lifecycle.Apply(ctx, memory.LifecycleActionInput{Scope: binding.Scope, MemoryID: strings.TrimSpace(memoryID), Action: action, Reason: strings.TrimSpace(reason), Actor: strings.TrimSpace(actor), RequestID: meta.RequestID})
 	if err != nil {

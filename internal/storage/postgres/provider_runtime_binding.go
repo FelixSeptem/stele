@@ -4,6 +4,7 @@ import (
 	"context"
 	"database/sql"
 	"fmt"
+	"time"
 
 	"github.com/FelixSeptem/stele/internal/provider"
 )
@@ -15,7 +16,7 @@ func (r *Repository) Create(ctx context.Context, binding provider.RuntimeBinding
 	if r == nil || r.db == nil {
 		return fmt.Errorf("repository is not configured")
 	}
-	if err := binding.Validate(binding.CreatedAt); err != nil {
+	if err := binding.Validate(time.Now().UTC()); err != nil {
 		return err
 	}
 	_, err := r.db.Exec(ctx, `INSERT INTO provider_runtime_bindings (binding_id, principal_id, tenant, project, namespace, agent_id, session_id, conversation_id, provider_instance_id, created_at, expires_at) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11)`, binding.BindingID, binding.PrincipalID, binding.Scope.Tenant, binding.Scope.Project, binding.Scope.Namespace, binding.AgentID, binding.SessionID, binding.ConversationID, binding.ProviderInstanceID, binding.CreatedAt, binding.ExpiresAt)

@@ -118,7 +118,7 @@ type ProviderError struct {
 }
 
 func (e ProviderError) Validate() error {
-	if e.Category == "" || !boundedToken(string(e.Category), 32) || !boundedToken(e.Code, MaxErrorCodeBytes) || e.Message == "" || len(e.Message) > MaxErrorMessageBytes {
+	if !validErrorCategory(e.Category) || !boundedToken(e.Code, MaxErrorCodeBytes) || e.Message == "" || len(e.Message) > MaxErrorMessageBytes {
 		return fmt.Errorf("provider error is invalid")
 	}
 	if len(e.SupportedVersions) > 16 {
@@ -130,6 +130,16 @@ func (e ProviderError) Validate() error {
 		}
 	}
 	return nil
+}
+
+func validErrorCategory(c ErrorCategory) bool {
+	switch c {
+	case ErrorCategoryAuthentication, ErrorCategoryScope, ErrorCategoryCompatibility, ErrorCategoryValidation,
+		ErrorCategoryConflict, ErrorCategoryLifecycle, ErrorCategoryStale, ErrorCategoryDependency, ErrorCategoryRetryable:
+		return true
+	default:
+		return false
+	}
 }
 
 type ProviderLimits struct {
@@ -160,7 +170,7 @@ type CapabilityDocument struct {
 }
 
 func (d CapabilityDocument) Validate() error {
-	if !boundedToken(d.ProviderVersion, MaxProviderVersionBytes) || !boundedToken(d.SchemaVersion, MaxSchemaVersionBytes) || !boundedToken(d.SchemaDigest, MaxSchemaDigestBytes) {
+	if !boundedToken(d.ProviderVersion, MaxProviderVersionBytes) || !boundedToken(d.SchemaVersion, MaxSchemaVersionBytes) || !boundedToken(d.SchemaDigest, MaxSchemaDigestBytes) || (d.ServiceVersion != "" && !boundedToken(d.ServiceVersion, MaxProviderVersionBytes)) || (d.BuildID != "" && !boundedToken(d.BuildID, MaxProviderVersionBytes)) {
 		return fmt.Errorf("provider capability version fields are invalid")
 	}
 	if len(d.Operations) == 0 || len(d.Operations) > MaxOperations {

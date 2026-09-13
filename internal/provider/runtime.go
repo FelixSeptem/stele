@@ -27,11 +27,11 @@ const (
 // a provider runtime. Scope is checked against the authenticated principal's
 // exact grant and never widened by the provider layer.
 type RuntimeInitialization struct {
-	Scope              memory.Scope
-	AgentID            string
-	SessionID          string
-	ConversationID     string
-	ProviderInstanceID string
+	Scope              memory.Scope `json:"scope"`
+	AgentID            string       `json:"agent_id"`
+	SessionID          string       `json:"session_id"`
+	ConversationID     string       `json:"conversation_id,omitempty"`
+	ProviderInstanceID string       `json:"provider_instance_id,omitempty"`
 }
 
 func (i RuntimeInitialization) Validate() error {
@@ -74,7 +74,7 @@ func (b RuntimeBinding) Validate(now time.Time) error {
 	if err := b.Scope.Validate(); err != nil {
 		return err
 	}
-	if strings.TrimSpace(b.AgentID) == "" || strings.TrimSpace(b.SessionID) == "" {
+	if !runtimeIdentityValid(b.AgentID, true) || !runtimeIdentityValid(b.SessionID, true) || !runtimeIdentityValid(b.ConversationID, false) || !runtimeIdentityValid(b.ProviderInstanceID, true) {
 		return fmt.Errorf("runtime identity is invalid")
 	}
 	if b.CreatedAt.IsZero() || b.ExpiresAt.IsZero() {
@@ -84,6 +84,14 @@ func (b RuntimeBinding) Validate(now time.Time) error {
 		return fmt.Errorf("runtime binding is expired or revoked")
 	}
 	return nil
+}
+
+func runtimeIdentityValid(value string, required bool) bool {
+	value = strings.TrimSpace(value)
+	if value == "" {
+		return !required
+	}
+	return len(value) <= maxRuntimeIdentityLength && boundedToken(value, maxRuntimeIdentityLength)
 }
 
 // RuntimeBindingStore allows deployments to persist bindings in their
@@ -200,10 +208,7 @@ func (i *RuntimeInitializer) Initialize(ctx context.Context, principal auth.Prin
 		return RuntimeBinding{}, fmt.Errorf("forbidden")
 	}
 	now := i.now().UTC()
-	instance := strings.TrimSpace(input.ProviderInstanceID)
-	if instance == "" {
-		instance = opaqueID("pi_")
-	}
+	instance := opaqueID("pi_")
 	binding := RuntimeBinding{BindingID: opaqueID("rb_"), PrincipalID: principal.ID, Scope: scope, AgentID: strings.TrimSpace(input.AgentID), SessionID: strings.TrimSpace(input.SessionID), ConversationID: strings.TrimSpace(input.ConversationID), ProviderInstanceID: instance, CreatedAt: now, ExpiresAt: now.Add(i.ttl)}
 	if err := i.bindings.Create(ctx, binding); err != nil {
 		return RuntimeBinding{}, fmt.Errorf("persist runtime binding: %w", err)

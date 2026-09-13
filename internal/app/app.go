@@ -19,6 +19,7 @@ import (
 	"github.com/FelixSeptem/stele/internal/jobs"
 	"github.com/FelixSeptem/stele/internal/memory"
 	"github.com/FelixSeptem/stele/internal/policy"
+	"github.com/FelixSeptem/stele/internal/provider"
 	"github.com/FelixSeptem/stele/internal/retrieval"
 	"github.com/FelixSeptem/stele/internal/storage/postgres"
 	"github.com/FelixSeptem/stele/internal/telemetry"
@@ -552,6 +553,15 @@ func buildAPIRuntime(ctx context.Context, cfg config.Config, deps apiRuntimeDepe
 		httpDeps.PrincipalAuthorizer = auth.NewPrincipalResolver(durableAuthorizer, bootstrapAuthorizer)
 	} else if len(cfg.Auth.APIKeys) == 0 && len(cfg.Auth.AdminAPIKeys) == 0 {
 		httpDeps.PrincipalAuthorizer = durableAuthorizer
+	}
+	httpDeps.ProviderEnabled = cfg.Provider.Enabled
+	httpDeps.ProviderSchemaVersions = cfg.Provider.SchemaVersions
+	if cfg.Provider.Enabled && httpDeps.PrincipalAuthorizer != nil {
+		httpDeps.ProviderCapabilities = provider.Discover(provider.CapabilityInput{ProviderVersion: "provider-v1", SchemaVersion: cfg.Provider.SchemaVersions[0], ServiceVersion: BuildVersion, BuildID: BuildID})
+		httpDeps.ProviderBindings = repo
+		httpDeps.ProviderInitializer = provider.NewRuntimeInitializer(provider.RuntimeInitializerOptions{Authorizer: httpDeps.PrincipalAuthorizer, Bindings: repo, BindingTTL: cfg.Provider.BindingLifetime, Now: time.Now})
+		intentService := memory.MemoryIntentService{Processor: repo, Now: time.Now}
+		httpDeps.ProviderAdapter = provider.NewAdapter(provider.AdapterDependencies{Ingestor: ingestor, IdempotentIngestor: ingestor, Intent: intentService, Searcher: retrievalService, Assembler: retrievalService, Lifecycle: lifecycleService})
 	}
 	readiness := &readinessGate{checker: runtimeReadinessChecker(config.ModeAPI, pool, embeddingRuntime, false, deps.observer)}
 	httpDeps.Readiness = readiness

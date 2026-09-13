@@ -131,6 +131,11 @@ build/schema compatibility metadata at `GET /version`. Both endpoints are
 unauthenticated discovery surfaces and intentionally exclude DSNs, credentials,
 scope values, migration SQL, and operational backlog details.
 
+The optional agent-runtime memory-provider surface is disabled by default. Its
+scope handshake, bounded metadata/citation contract, configuration, conformance,
+and rollback procedure are documented in
+[`docs/agent-runtime-memory-provider.md`](agent-runtime-memory-provider.md).
+
 ## Principal Bootstrap And Scoped Access
 
 Protected requests are authenticated against PostgreSQL-backed principals. Every

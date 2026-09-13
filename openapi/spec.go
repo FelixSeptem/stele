@@ -28,6 +28,68 @@ paths:
             application/json:
               schema:
                 type: object
+  /v1/provider/capabilities:
+    get:
+      operationId: getProviderCapabilities
+      summary: Discover the enabled memory provider contract
+      responses:
+        '200':
+          description: Bounded provider capabilities, limits, and scope dimensions
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ProviderCapabilityDocument'
+        '404':
+          description: Provider surface disabled
+  /v1/provider/runtime:
+    post:
+      operationId: initializeProviderRuntime
+      security:
+        - PublicAPIKey: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/ProviderRuntimeInitialization'
+      responses:
+        '201':
+          description: Server-owned runtime binding
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ProviderRuntimeBinding'
+        '400':
+          description: Validation or compatibility error
+        '401':
+          description: Authentication failed
+        '403':
+          description: Exact scope grant denied
+  /v1/provider/events:
+    post:
+      operationId: providerIngestEvent
+      security:
+        - PublicAPIKey: []
+      parameters:
+        - $ref: '#/components/parameters/RuntimeBindingHeader'
+        - $ref: '#/components/parameters/RuntimeSessionHeader'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/ProviderEventRequest'
+      responses:
+        '201':
+          description: Governed event result
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ProviderEventResponse'
+        '400':
+          description: Bounded provider error
+        '403':
+          description: Runtime binding or scope denied
   /health:
     get:
       operationId: getHealth
@@ -3735,6 +3797,16 @@ components:
       schema:
         type: string
         maxLength: 256
+    RuntimeBindingHeader:
+      in: header
+      name: X-Stele-Runtime-Binding
+      required: true
+      schema: {type: string}
+    RuntimeSessionHeader:
+      in: header
+      name: X-Stele-Runtime-Session
+      required: true
+      schema: {type: string}
     ActorHeader:
       in: header
       name: X-Stele-Actor
@@ -3808,6 +3880,74 @@ components:
       schema:
         type: string
   schemas:
+    ProviderOperationMetadata:
+      type: object
+      additionalProperties: false
+      required: [request_id, operation_id, schema_version]
+      properties:
+        request_id: {type: string, maxLength: 256}
+        operation_id: {type: string, maxLength: 256}
+        idempotency_key: {type: string, maxLength: 256}
+        event_seq: {type: integer, minimum: 0}
+        schema_version: {type: string, maxLength: 64}
+    ProviderCapabilityDocument:
+      type: object
+      additionalProperties: false
+      required: [provider_version, schema_version, operations, scope_dimensions, limits, schema_digest]
+      properties:
+        provider_version: {type: string}
+        schema_version: {type: string}
+        service_version: {type: string}
+        build_id: {type: string}
+        operations: {type: array, maxItems: 32, items: {type: string}}
+        scope_dimensions: {type: array, maxItems: 16, items: {type: string}}
+        limits: {type: object, additionalProperties: {type: integer}}
+        schema_digest: {type: string}
+    ProviderRuntimeInitialization:
+      type: object
+      additionalProperties: false
+      required: [scope, agent_id, session_id]
+      properties:
+        scope: {$ref: '#/components/schemas/Scope'}
+        agent_id: {type: string, maxLength: 256}
+        session_id: {type: string, maxLength: 256}
+        conversation_id: {type: string, maxLength: 256}
+        provider_instance_id: {type: string, maxLength: 256}
+    ProviderRuntimeBinding:
+      type: object
+      required: [binding_id, scope, agent_id, session_id, provider_instance_id, expires_at]
+      properties:
+        binding_id: {type: string}
+        scope: {$ref: '#/components/schemas/Scope'}
+        agent_id: {type: string}
+        session_id: {type: string}
+        conversation_id: {type: string}
+        provider_instance_id: {type: string}
+        expires_at: {type: string, format: date-time}
+    ProviderEventRequest:
+      type: object
+      additionalProperties: false
+      required: [metadata, event_type, content]
+      properties:
+        metadata: {$ref: '#/components/schemas/ProviderOperationMetadata'}
+        event_type: {type: string}
+        content: {type: string}
+        metadata_map: {type: object}
+    ProviderEventResponse:
+      type: object
+      required: [event_id, replayed, metadata]
+      properties:
+        event_id: {type: string}
+        replayed: {type: boolean}
+        metadata: {$ref: '#/components/schemas/ProviderOperationMetadata'}
+    ProviderError:
+      type: object
+      required: [category, code, message, retryable]
+      properties:
+        category: {type: string, enum: [authentication, scope, compatibility, validation, conflict, lifecycle, stale, dependency, retryable]}
+        code: {type: string, maxLength: 64}
+        message: {type: string, maxLength: 256}
+        retryable: {type: boolean}
     Principal:
       type: object
       required: [id, role, status, label, created_at]

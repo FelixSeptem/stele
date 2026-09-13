@@ -86,21 +86,23 @@ func (s WorkflowHealthSnapshot) Validate() error {
 }
 
 type ServiceOptions struct {
-	Store    AssuranceStore
-	Workflow WorkflowHealthReader
-	Now      func() time.Time
-	NewID    func(prefix string) string
-	Observer telemetry.Observer
-	Logger   *log.Logger
+	Store               AssuranceStore
+	Workflow            WorkflowHealthReader
+	Now                 func() time.Time
+	NewID               func(prefix string) string
+	Observer            telemetry.Observer
+	Logger              *log.Logger
+	ProviderConformance ProviderFixtureExecutor
 }
 
 type Service struct {
-	store    AssuranceStore
-	workflow WorkflowHealthReader
-	now      func() time.Time
-	newID    func(prefix string) string
-	observer telemetry.Observer
-	logger   *log.Logger
+	store               AssuranceStore
+	workflow            WorkflowHealthReader
+	now                 func() time.Time
+	newID               func(prefix string) string
+	observer            telemetry.Observer
+	logger              *log.Logger
+	providerConformance ProviderFixtureExecutor
 }
 
 type HealthObservation struct {
@@ -423,7 +425,7 @@ func NewService(options ServiceOptions) *Service {
 			return fmt.Sprintf("%s_%d", strings.TrimSpace(prefix), now().UnixNano())
 		}
 	}
-	return &Service{store: options.Store, workflow: options.Workflow, now: now, newID: newID, observer: options.Observer, logger: options.Logger}
+	return &Service{store: options.Store, workflow: options.Workflow, now: now, newID: newID, observer: options.Observer, logger: options.Logger, providerConformance: options.ProviderConformance}
 }
 
 func (s *Service) CreateHealthEvaluation(ctx context.Context, input HealthEvaluationInput) (HealthEvaluation, error) {
