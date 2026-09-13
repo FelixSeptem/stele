@@ -1,6 +1,6 @@
 # Archive Index
 
-Updated: 2026-09-12 15:23:35
+Updated: 2026-09-13 09:46:59
 
 - 001 -> bootstrap-foundation-and-event-ingestion
 - 002 -> governance-pipeline-and-memory-consolidation
@@ -36,3 +36,5 @@ Updated: 2026-09-12 15:23:35
 - 032 -> evidence-deduplication-and-diversity-aware-context-packing
 - 033 -> stable-hybrid-candidate-fusion
 - 034 -> bounded-query-understanding-and-multi-signal-retrieval
+- 035 -> retrieval-release-gate-and-progressive-context-evaluation
+- 036 -> quality-aware-signals-and-controlled-reranking
