@@ -61,6 +61,39 @@ func TestShapeCitationsOmitsScoresAndHiddenItems(t *testing.T) {
 	}
 }
 
+func TestProviderAdapterEnforcesConfiguredLimits(t *testing.T) {
+	searcher := &adapterSearcher{}
+	assembler := &adapterAssembler{}
+	a := NewAdapter(AdapterDependencies{
+		Searcher: searcher, Assembler: assembler,
+		Limits: ProviderLimits{MaxEventBytes: 128, MaxIntentBytes: 128, MaxRetrievalResults: 2, MaxContextBytes: 32, MaxCitations: 1, MaxMetadataBytes: 64},
+	})
+	b := RuntimeBinding{BindingID: "b", PrincipalID: "p", Scope: memory.Scope{Tenant: "t", Project: "p", Namespace: "n"}, AgentID: "a", SessionID: "s", ProviderInstanceID: "pi"}
+	meta := OperationMetadata{RequestID: "r", OperationID: "o", SchemaVersion: "schema-v1"}
+	if _, _, err := a.Search(context.Background(), b, meta, retrieval.SearchInput{Query: "q", TopK: 99}); err != nil {
+		t.Fatal(err)
+	}
+	if searcher.got.TopK != 2 {
+		t.Fatalf("top_k=%d want 2", searcher.got.TopK)
+	}
+	if _, _, err := a.AssembleContext(context.Background(), b, meta, retrieval.AssembleContextInput{Query: "q", Budget: 99, CharacterBudget: 99}); err != nil {
+		t.Fatal(err)
+	}
+	if assembler.got.Budget > 32 || assembler.got.CharacterBudget > 32 {
+		t.Fatalf("context limits not enforced: %+v", assembler.got)
+	}
+}
+
+func TestShapeSearchCitationsWithLimit(t *testing.T) {
+	s := retrieval.SearchResult{Hits: []retrieval.SearchHit{
+		{Memory: memory.CanonicalMemory{ID: "m1", State: memory.MemoryStateActive}, Citations: []retrieval.Citation{{MemoryID: "m1"}}},
+		{Memory: memory.CanonicalMemory{ID: "m2", State: memory.MemoryStateActive}, Citations: []retrieval.Citation{{MemoryID: "m2"}}},
+	}}
+	if got := ShapeSearchCitationsWithLimit(s, 1); len(got) != 1 {
+		t.Fatalf("citations=%+v", got)
+	}
+}
+
 type adapterIngestor struct {
 	got   memory.IngestEventInput
 	event memory.RawEvent
@@ -79,6 +112,22 @@ func (s *adapterIngestor) Ingest(_ context.Context, in memory.IngestEventInput) 
 }
 
 type adapterIntentService struct{ got memory.MemoryIntentInput }
+
+type adapterSearcher struct{ got retrieval.SearchInput }
+
+func (s *adapterSearcher) Search(_ context.Context, in retrieval.SearchInput) (retrieval.SearchResult, error) {
+	s.got = in
+	return retrieval.SearchResult{}, nil
+}
+
+type adapterAssembler struct {
+	got retrieval.AssembleContextInput
+}
+
+func (s *adapterAssembler) AssembleContext(_ context.Context, in retrieval.AssembleContextInput) (retrieval.AssembledContext, error) {
+	s.got = in
+	return retrieval.AssembledContext{}, nil
+}
 
 func (s *adapterIntentService) Submit(_ context.Context, in memory.MemoryIntentInput) (memory.MemoryIntentRecord, error) {
 	s.got = in

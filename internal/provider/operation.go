@@ -94,6 +94,7 @@ type AdapterDependencies struct {
 	Lifecycle          LifecycleApplier
 	AllowLifecycle     func(context.Context, RuntimeBinding) bool
 	Session            SessionAdapter
+	Limits             ProviderLimits
 }
 type MemoryIntentSubmitter interface {
 	Submit(context.Context, memory.MemoryIntentInput) (memory.MemoryIntentRecord, error)
@@ -107,13 +108,18 @@ type SessionAdapter interface {
 }
 type Adapter struct {
 	deps          AdapterDependencies
+	limits        ProviderLimits
 	seq           *SequenceTracker
 	mu            sync.Mutex
 	ingestResults map[string]cachedIngestResult
 }
 
 func NewAdapter(deps AdapterDependencies) *Adapter {
-	return &Adapter{deps: deps, seq: NewSequenceTracker(), ingestResults: make(map[string]cachedIngestResult)}
+	limits := deps.Limits
+	if limits.Validate() != nil {
+		limits = Discover(CapabilityInput{}).Limits
+	}
+	return &Adapter{deps: deps, limits: limits, seq: NewSequenceTracker(), ingestResults: make(map[string]cachedIngestResult)}
 }
 
 type cachedIngestResult struct {
@@ -134,6 +140,10 @@ func (a *Adapter) Ingest(ctx context.Context, binding RuntimeBinding, meta Opera
 	}
 	input.Scope = binding.Scope
 	fingerprintBytes, _ := json.Marshal(input)
+	metadataBytes, _ := json.Marshal(input.Metadata)
+	if len(fingerprintBytes) > a.limits.MaxEventBytes || len(metadataBytes) > a.limits.MaxMetadataBytes {
+		return IngestResult{Metadata: meta}, fmt.Errorf("event exceeds provider limit")
+	}
 	fingerprint := sha256.Sum256(fingerprintBytes)
 	if err := input.Validate(); err != nil {
 		return IngestResult{}, err
@@ -190,6 +200,12 @@ func (a *Adapter) SubmitIntent(ctx context.Context, binding RuntimeBinding, meta
 	input.RequestID = meta.RequestID
 	input.OperationID = meta.OperationID
 	input.IdempotencyKey = meta.IdempotencyKey
+	if payload, _ := json.Marshal(input); len(payload) > a.limits.MaxIntentBytes {
+		return memory.MemoryIntentRecord{}, fmt.Errorf("intent exceeds provider limit")
+	}
+	if provenanceBytes, _ := json.Marshal(input.Provenance); len(provenanceBytes) > a.limits.MaxMetadataBytes {
+		return memory.MemoryIntentRecord{}, fmt.Errorf("intent metadata exceeds provider limit")
+	}
 	if a.deps.Intent == nil {
 		return memory.MemoryIntentRecord{}, fmt.Errorf("provider intent service is not configured")
 	}
@@ -242,6 +258,9 @@ func (a *Adapter) Search(ctx context.Context, binding RuntimeBinding, meta Opera
 		return retrieval.SearchResult{}, meta, err
 	}
 	input.Scope = binding.Scope
+	if input.TopK > a.limits.MaxRetrievalResults {
+		input.TopK = a.limits.MaxRetrievalResults
+	}
 	if a.deps.Searcher == nil {
 		return retrieval.SearchResult{}, meta, fmt.Errorf("provider search service is not configured")
 	}
@@ -253,6 +272,12 @@ func (a *Adapter) AssembleContext(ctx context.Context, binding RuntimeBinding, m
 		return retrieval.AssembledContext{}, meta, err
 	}
 	input.Scope = binding.Scope
+	if input.Budget > a.limits.MaxContextBytes {
+		input.Budget = a.limits.MaxContextBytes
+	}
+	if input.CharacterBudget > a.limits.MaxContextBytes {
+		input.CharacterBudget = a.limits.MaxContextBytes
+	}
 	if a.deps.Assembler == nil {
 		return retrieval.AssembledContext{}, meta, fmt.Errorf("provider context service is not configured")
 	}
@@ -286,6 +311,15 @@ func (a *Adapter) validate(binding RuntimeBinding, meta *OperationMetadata) erro
 }
 
 func ShapeSearchCitations(result retrieval.SearchResult) []Citation {
+	return ShapeSearchCitationsWithLimit(result, 100)
+}
+
+// ShapeSearchCitationsWithLimit projects visible memory references up to limit.
+// A non-positive limit returns no citations.
+func ShapeSearchCitationsWithLimit(result retrieval.SearchResult, limit int) []Citation {
+	if limit <= 0 {
+		return nil
+	}
 	out := make([]Citation, 0)
 	seen := make(map[string]struct{})
 	for _, h := range result.Hits {
@@ -303,7 +337,7 @@ func ShapeSearchCitations(result retrieval.SearchResult) []Citation {
 			}
 			seen[key] = struct{}{}
 			out = append(out, Citation{SourceKind: "memory", Reference: ref, Availability: "available"})
-			if len(out) >= 100 {
+			if len(out) >= limit {
 				return out
 			}
 		}
