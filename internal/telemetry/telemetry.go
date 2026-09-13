@@ -40,10 +40,12 @@ type RetrievalEvaluationEvent struct {
 	Decision        string
 	CaseCount       int
 	Duration        time.Duration
-	Tenant          string
-	Query           string
-	MemoryID        string
-	Error           string
+	// Deprecated compatibility fields are never exported or used by metrics.
+	// New callers must leave them empty.
+	Tenant   string
+	Query    string
+	MemoryID string
+	Error    string
 }
 
 type Observer interface {

@@ -2,6 +2,27 @@ package retrieval
 
 import "fmt"
 
+type CompatibilityCode string
+
+const (
+	CompatibilityCodeFixtureVersion        CompatibilityCode = "incompatible_fixture_version"
+	CompatibilityCodeRepresentationVersion CompatibilityCode = "incompatible_representation_version"
+	CompatibilityCodeFusionStrategy        CompatibilityCode = "incompatible_fusion_strategy"
+	CompatibilityCodeRankingVersion        CompatibilityCode = "incompatible_ranking_version"
+	CompatibilityCodeEmbeddingRevision     CompatibilityCode = "incompatible_embedding_revision"
+	CompatibilityCodeEmbeddingProvider     CompatibilityCode = "incompatible_embedding_provider"
+	CompatibilityCodeAnalysisVersion       CompatibilityCode = "incompatible_analysis_version"
+	CompatibilityCodePolicyVersion         CompatibilityCode = "incompatible_release_policy_version"
+)
+
+type evaluationCompatibilityError struct {
+	code    CompatibilityCode
+	message string
+}
+
+func (e evaluationCompatibilityError) Error() string                        { return e.message }
+func (e evaluationCompatibilityError) CompatibilityCode() CompatibilityCode { return e.code }
+
 type EvaluationMetricDelta struct {
 	Metric    string  `json:"metric"`
 	Baseline  float64 `json:"baseline"`
@@ -43,25 +64,28 @@ func CompareEvaluationReports(baseline, candidate EvaluationReport, protectedCat
 		return EvaluationComparison{}, NewEvaluationFailure(EvaluationSafetyFailureUnsafeDiagnostics, err.Error())
 	}
 	if baseline.Metadata.FixtureVersion != candidate.Metadata.FixtureVersion {
-		return EvaluationComparison{}, fmt.Errorf("incompatible fixture version")
+		return EvaluationComparison{}, evaluationCompatibilityError{CompatibilityCodeFixtureVersion, "incompatible fixture version"}
 	}
 	if baseline.Metadata.RepresentationVersion != candidate.Metadata.RepresentationVersion {
-		return EvaluationComparison{}, fmt.Errorf("incompatible representation version")
+		return EvaluationComparison{}, evaluationCompatibilityError{CompatibilityCodeRepresentationVersion, "incompatible representation version"}
 	}
 	if baseline.Metadata.CompatibleEmbeddingRevision != candidate.Metadata.CompatibleEmbeddingRevision {
-		return EvaluationComparison{}, fmt.Errorf("incompatible embedding revision")
+		return EvaluationComparison{}, evaluationCompatibilityError{CompatibilityCodeEmbeddingRevision, "incompatible embedding revision"}
+	}
+	if baseline.Metadata.EmbeddingProvider != candidate.Metadata.EmbeddingProvider {
+		return EvaluationComparison{}, evaluationCompatibilityError{CompatibilityCodeEmbeddingProvider, "incompatible embedding provider"}
 	}
 	if baseline.Metadata.FusionStrategy != candidate.Metadata.FusionStrategy {
-		return EvaluationComparison{}, fmt.Errorf("incompatible fusion strategy")
+		return EvaluationComparison{}, evaluationCompatibilityError{CompatibilityCodeFusionStrategy, "incompatible fusion strategy"}
 	}
 	if evaluationIsAnalysisComparison(baseline, candidate) && baseline.Metadata.RankingVersion != candidate.Metadata.RankingVersion {
-		return EvaluationComparison{}, fmt.Errorf("incompatible ranking version")
+		return EvaluationComparison{}, evaluationCompatibilityError{CompatibilityCodeRankingVersion, "incompatible ranking version"}
 	}
 	if baseline.Metadata.PolicyVersion != candidate.Metadata.PolicyVersion {
-		return EvaluationComparison{}, fmt.Errorf("incompatible release policy version")
+		return EvaluationComparison{}, evaluationCompatibilityError{CompatibilityCodePolicyVersion, "incompatible release policy version"}
 	}
 	if baseline.Metadata.AnalysisVersion != candidate.Metadata.AnalysisVersion || baseline.Metadata.AnalysisLimitsVersion != candidate.Metadata.AnalysisLimitsVersion {
-		return EvaluationComparison{}, fmt.Errorf("incompatible analysis version")
+		return EvaluationComparison{}, evaluationCompatibilityError{CompatibilityCodeAnalysisVersion, "incompatible analysis version"}
 	}
 	if evaluationIsAnalysisComparison(baseline, candidate) && baseline.Metadata.RolloutDisposition != "original_only" {
 		return EvaluationComparison{}, fmt.Errorf("immutable original-query baseline must use original_only disposition")

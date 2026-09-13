@@ -43,6 +43,12 @@ type Config struct {
 	Jobs                                JobConfig
 	Assurance                           AssuranceConfig
 	QueryAnalysis                       QueryAnalysisConfig
+	Evaluation                          EvaluationConfig
+}
+
+type EvaluationConfig struct {
+	OwnedDSN        string
+	ProviderProfile string
 }
 
 type QueryAnalysisConfig struct {
@@ -162,6 +168,10 @@ func LoadFromEnv() (Config, error) {
 	}
 	contextProjectionConsumptionEnabled := loadBoolEnv("STELE_CONTEXT_PROJECTION_CONSUMPTION_ENABLED")
 	queryAnalysis, err := loadQueryAnalysisConfig()
+	if err != nil {
+		return Config{}, err
+	}
+	evaluationConfig, err := loadEvaluationConfig(postgresDSN)
 	if err != nil {
 		return Config{}, err
 	}
@@ -440,6 +450,7 @@ func LoadFromEnv() (Config, error) {
 		Migrations:                          MigrationConfig{Policy: migrationPolicy},
 		ContextProjectionConsumptionEnabled: contextProjectionConsumptionEnabled,
 		QueryAnalysis:                       queryAnalysis,
+		Evaluation:                          evaluationConfig,
 		Auth: AuthConfig{
 			BootstrapAdminKey: bootstrapAdminKey,
 			DefaultTenant:     defaultTenant,
@@ -547,6 +558,30 @@ func getEnvOrDefault(key string, fallback string) string {
 	}
 
 	return fallback
+}
+
+func loadEvaluationConfig(runtimeDSN string) (EvaluationConfig, error) {
+	owned := strings.TrimSpace(os.Getenv("STELE_TEST_RETRIEVAL_EVALUATION_DSN"))
+	profile := strings.TrimSpace(os.Getenv("STELE_RETRIEVAL_EVALUATION_PROVIDER_PROFILE"))
+	if owned != "" && owned == strings.TrimSpace(runtimeDSN) {
+		return EvaluationConfig{}, fmt.Errorf("STELE_TEST_RETRIEVAL_EVALUATION_DSN must not reuse STELE_POSTGRES_DSN")
+	}
+	if profile != "" && !safeEvaluationProfile(profile) {
+		return EvaluationConfig{}, fmt.Errorf("STELE_RETRIEVAL_EVALUATION_PROVIDER_PROFILE is invalid")
+	}
+	return EvaluationConfig{OwnedDSN: owned, ProviderProfile: profile}, nil
+}
+func safeEvaluationProfile(value string) bool {
+	if len(value) > 128 || value == "" {
+		return false
+	}
+	for _, r := range value {
+		if (r >= 'a' && r <= 'z') || (r >= 'A' && r <= 'Z') || (r >= '0' && r <= '9') || r == '-' || r == '_' || r == '.' || r == ':' {
+			continue
+		}
+		return false
+	}
+	return true
 }
 
 func splitCSVEnv(key string) []string {

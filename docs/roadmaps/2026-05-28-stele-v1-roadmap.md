@@ -1579,11 +1579,12 @@ Before moving between phases, verify:
 
 The P0–P3 foundation and the benchmark infrastructure are represented by
 archived OpenSpec changes; the diversity change was archived on 2026-09-13 after
-strict validation and main-spec synchronization. The next product action is the
-P5 Task 6.7 retrieval release gate: reproduce the real-provider
-`canonical-v1` / `baseline-v1` evidence, evaluate
-progressive context and parent-first retrieval in offline/shadow mode, and add
-the redacted trajectory and memory-integrity reports. Do not promote those
-experiments to default behavior until quality, zero-leakage, latency, freshness,
-and rollback gates are green. The provider adapter must consume the stable
-contracts produced by P0–P6.
+strict validation and main-spec synchronization. P5 Task 6.7 release-gate
+contracts, progressive-context and parent-first offline/shadow evaluators,
+redacted trajectories, memory-integrity reports, retention, runbooks, CI smoke
+coverage, and provider-profile configuration are now implemented on the proposal
+branch. The remaining release prerequisite is an explicitly owned PostgreSQL 18
++ pgvector run reproducing `canonical-v1` / `baseline-v1` evidence. Until that
+evidence is fresh and all quality, zero-leakage, latency, freshness, and rollback
+gates are green, experiments remain out of default retrieval. The provider
+adapter must consume the stable contracts produced by P0–P6.

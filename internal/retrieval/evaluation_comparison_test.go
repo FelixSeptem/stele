@@ -31,6 +31,38 @@ func TestCompareEvaluationReportsRejectsIncompatibleStrategyAndPolicyMetadata(t 
 	}
 }
 
+func TestCompareEvaluationReportsReturnsStableCompatibilityCodes(t *testing.T) {
+	tests := []struct {
+		name   string
+		mutate func(*EvaluationReport)
+		want   CompatibilityCode
+	}{
+		{"fixture", func(r *EvaluationReport) { r.Metadata.FixtureVersion = "fixture-v2" }, CompatibilityCodeFixtureVersion},
+		{"representation", func(r *EvaluationReport) { r.Metadata.RepresentationVersion = "representation-v2" }, CompatibilityCodeRepresentationVersion},
+		{"fusion", func(r *EvaluationReport) { r.Metadata.FusionStrategy = "rrf:v2" }, CompatibilityCodeFusionStrategy},
+		{"ranking", func(r *EvaluationReport) { r.Metadata.RankingVersion = "ranking-v2" }, CompatibilityCodeRankingVersion},
+		{"embedding", func(r *EvaluationReport) { r.Metadata.CompatibleEmbeddingRevision = "embedding-v2" }, CompatibilityCodeEmbeddingRevision},
+		{"provider", func(r *EvaluationReport) { r.Metadata.EmbeddingProvider = "provider-v2" }, CompatibilityCodeEmbeddingProvider},
+		{"analysis", func(r *EvaluationReport) { r.Metadata.AnalysisVersion = "analysis-v2" }, CompatibilityCodeAnalysisVersion},
+		{"policy", func(r *EvaluationReport) { r.Metadata.PolicyVersion = "release-policy-v2" }, CompatibilityCodePolicyVersion},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			baseline := compatibleAnalysisComparisonReport("original_only")
+			candidate := compatibleAnalysisComparisonReport("active_for_scope")
+			tt.mutate(&candidate)
+			_, err := CompareEvaluationReports(baseline, candidate, nil)
+			if err == nil {
+				t.Fatal("CompareEvaluationReports() error = nil")
+			}
+			coded, ok := err.(interface{ CompatibilityCode() CompatibilityCode })
+			if !ok || coded.CompatibilityCode() != tt.want {
+				t.Fatalf("error=%T %v, code=%v want %v", err, err, coded, tt.want)
+			}
+		})
+	}
+}
+
 func TestCompareEvaluationReportsRequiresImmutableOriginalQueryBaseline(t *testing.T) {
 	baseline := compatibleAnalysisComparisonReport("shadow")
 	candidate := compatibleAnalysisComparisonReport("active_for_scope")

@@ -75,6 +75,8 @@ type EvaluationRankingMetadata struct {
 	RankingVersion              string           `json:"ranking_version"`
 	FusionStrategy              string           `json:"fusion_strategy,omitempty"`
 	CompatibleEmbeddingRevision string           `json:"compatible_embedding_revision"`
+	EmbeddingProvider           string           `json:"embedding_provider,omitempty"`
+	EmbeddingVersion            string           `json:"embedding_version,omitempty"`
 	LexicalMatchMode            LexicalMatchMode `json:"lexical_match_mode,omitempty"`
 	PolicyVersion               string           `json:"policy_version"`
 	AnalysisVersion             string           `json:"analysis_version,omitempty"`
@@ -204,15 +206,38 @@ type EvaluationSeededAlias struct {
 
 // EvaluationReleasePolicy defines release decisions separately from measured reports.
 type EvaluationReleasePolicy struct {
-	Version                       string   `json:"version"`
-	ProtectedCutoffs              []int    `json:"protected_cutoffs"`
-	ProtectedCategories           []string `json:"protected_categories,omitempty"`
-	MaxRecallRegression           float64  `json:"max_recall_regression"`
-	MaxMultiHopCoverageRegression float64  `json:"max_multi_hop_coverage_regression"`
-	MaxEvidenceCoverageRegression float64  `json:"max_evidence_coverage_regression,omitempty"`
-	MaxBudgetOmissionIncrease     float64  `json:"max_budget_omission_increase,omitempty"`
-	MaxP95LatencyMS               int      `json:"max_p95_latency_ms"`
-	MaxP95LatencyRegressionMS     int      `json:"max_p95_latency_regression_ms,omitempty"`
+	Version                       string                      `json:"version"`
+	ProtectedCutoffs              []int                       `json:"protected_cutoffs"`
+	ProtectedCategories           []string                    `json:"protected_categories,omitempty"`
+	MaxRecallRegression           float64                     `json:"max_recall_regression"`
+	MaxMultiHopCoverageRegression float64                     `json:"max_multi_hop_coverage_regression"`
+	MaxEvidenceCoverageRegression float64                     `json:"max_evidence_coverage_regression,omitempty"`
+	MaxBudgetOmissionIncrease     float64                     `json:"max_budget_omission_increase,omitempty"`
+	MaxP95LatencyMS               int                         `json:"max_p95_latency_ms"`
+	MaxP95LatencyRegressionMS     int                         `json:"max_p95_latency_regression_ms,omitempty"`
+	ResourceBudget                EvaluationResourceBudget    `json:"resource_budget,omitempty"`
+	Prerequisites                 EvaluationPrerequisites     `json:"prerequisites,omitempty"`
+	Rollback                      EvaluationRollbackContract  `json:"rollback,omitempty"`
+	Retention                     EvaluationRetentionContract `json:"retention,omitempty"`
+}
+
+// EvaluationResourceBudget bounds work consumed by a release evaluation.
+type EvaluationResourceBudget struct {
+	MaxCases      int `json:"max_cases,omitempty"`
+	MaxCandidates int `json:"max_candidates,omitempty"`
+	MaxElapsedMS  int `json:"max_elapsed_ms,omitempty"`
+}
+type EvaluationPrerequisites struct {
+	RequireRealStack bool `json:"require_real_stack,omitempty"`
+	RequireOwnedDSN  bool `json:"require_owned_dsn,omitempty"`
+}
+type EvaluationRollbackContract struct {
+	Enabled  bool   `json:"enabled,omitempty"`
+	Strategy string `json:"strategy,omitempty"`
+}
+type EvaluationRetentionContract struct {
+	WindowHours int    `json:"window_hours,omitempty"`
+	Owner       string `json:"owner,omitempty"`
 }
 
 // EvaluationReleaseDecision is the bounded policy result for a candidate report.
@@ -275,6 +300,11 @@ func (m EvaluationRankingMetadata) Validate() error {
 			return fmt.Errorf("%s identity is invalid", name)
 		}
 	}
+	for name, value := range map[string]string{"embedding provider": m.EmbeddingProvider, "embedding version": m.EmbeddingVersion} {
+		if !evaluationSafeIdentity(value) {
+			return fmt.Errorf("%s identity is invalid", name)
+		}
+	}
 	if m.RerankerMode != "" && m.RerankerMode != "disabled" && m.RerankerMode != "diagnostics_only" && m.RerankerMode != "shadow" && m.RerankerMode != "active_for_scope" {
 		return fmt.Errorf("reranker mode is invalid")
 	}
@@ -295,6 +325,11 @@ func (report EvaluationReport) validateSafeOutput() error {
 		return err
 	}
 	for name, value := range map[string]string{"quality feature version": report.Metadata.QualityFeatureVersion, "reranker provider": report.Metadata.RerankerProvider, "reranker version": report.Metadata.RerankerVersion, "reranker mode": report.Metadata.RerankerMode} {
+		if !evaluationSafeIdentity(value) {
+			return fmt.Errorf("%s identity is invalid", name)
+		}
+	}
+	for name, value := range map[string]string{"embedding provider": report.Metadata.EmbeddingProvider, "embedding version": report.Metadata.EmbeddingVersion} {
 		if !evaluationSafeIdentity(value) {
 			return fmt.Errorf("%s identity is invalid", name)
 		}
@@ -594,6 +629,21 @@ func (p EvaluationReleasePolicy) Validate() error {
 	}
 	if p.MaxRecallRegression < 0 || p.MaxMultiHopCoverageRegression < 0 || p.MaxEvidenceCoverageRegression < 0 || p.MaxBudgetOmissionIncrease < 0 || p.MaxP95LatencyRegressionMS < 0 {
 		return fmt.Errorf("quality regression tolerances must be greater than or equal to zero")
+	}
+	if p.ResourceBudget.MaxCases < 0 || p.ResourceBudget.MaxCandidates < 0 || p.ResourceBudget.MaxElapsedMS < 0 {
+		return fmt.Errorf("resource budget values must be non-negative")
+	}
+	if p.ResourceBudget.MaxElapsedMS > 0 && p.ResourceBudget.MaxElapsedMS > 24*60*60*1000 {
+		return fmt.Errorf("resource budget elapsed bound is excessive")
+	}
+	if p.Rollback.Strategy != "" && !evaluationSafeIdentity(p.Rollback.Strategy) {
+		return fmt.Errorf("rollback strategy is invalid")
+	}
+	if p.Retention.WindowHours < 0 || p.Retention.WindowHours > 24*365*10 {
+		return fmt.Errorf("retention window is invalid")
+	}
+	if p.Retention.Owner != "" && !evaluationSafeIdentity(p.Retention.Owner) {
+		return fmt.Errorf("retention owner is invalid")
 	}
 	seenCategories := make(map[string]struct{}, len(p.ProtectedCategories))
 	for _, category := range p.ProtectedCategories {

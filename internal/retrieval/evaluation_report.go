@@ -36,6 +36,12 @@ func RenderEvaluationReport(report EvaluationReport) (string, error) {
 	if strings.TrimSpace(report.Metadata.RerankerMode) != "" {
 		fmt.Fprintf(&builder, "reranker_mode=%s\n", report.Metadata.RerankerMode)
 	}
+	if strings.TrimSpace(report.Metadata.EmbeddingProvider) != "" {
+		fmt.Fprintf(&builder, "embedding_provider=%s\n", report.Metadata.EmbeddingProvider)
+	}
+	if strings.TrimSpace(report.Metadata.EmbeddingVersion) != "" {
+		fmt.Fprintf(&builder, "embedding_version=%s\n", report.Metadata.EmbeddingVersion)
+	}
 	fmt.Fprintf(&builder, "compatible_embedding_revision=%s\n", report.Metadata.CompatibleEmbeddingRevision)
 	fmt.Fprintf(&builder, "policy_version=%s\n", report.Metadata.PolicyVersion)
 	if report.Metadata.AnalysisVersion != "" {

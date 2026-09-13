@@ -248,6 +248,39 @@ func TestReleasePolicyValidateRejectsUnsafeThresholds(t *testing.T) {
 	}
 }
 
+func TestReleasePolicyValidateAcceptsBoundedVersionedContracts(t *testing.T) {
+	p := EvaluationReleasePolicy{Version: "release-policy-v1", ProtectedCutoffs: []int{1, 5, 10}, MaxP95LatencyMS: 500,
+		ResourceBudget: EvaluationResourceBudget{MaxCases: 100, MaxCandidates: 200, MaxElapsedMS: 60000},
+		Prerequisites:  EvaluationPrerequisites{RequireRealStack: true, RequireOwnedDSN: true},
+		Rollback:       EvaluationRollbackContract{Enabled: true, Strategy: "flat-fusion-v1"},
+		Retention:      EvaluationRetentionContract{WindowHours: 168, Owner: "retrieval-team"}}
+	if err := p.Validate(); err != nil {
+		t.Fatalf("Validate() error=%v", err)
+	}
+}
+
+func TestReleasePolicyValidateRejectsUnknownOrUnboundedContracts(t *testing.T) {
+	base := EvaluationReleasePolicy{Version: "release-policy-v1", ProtectedCutoffs: []int{1}, MaxP95LatencyMS: 500}
+	tests := []struct {
+		name   string
+		mutate func(*EvaluationReleasePolicy)
+	}{
+		{"negative budget", func(p *EvaluationReleasePolicy) { p.ResourceBudget.MaxCases = -1 }},
+		{"unbounded elapsed", func(p *EvaluationReleasePolicy) { p.ResourceBudget.MaxElapsedMS = 24*60*60*1000 + 1 }},
+		{"unsafe rollback", func(p *EvaluationReleasePolicy) { p.Rollback.Strategy = "https://secret endpoint" }},
+		{"unbounded retention", func(p *EvaluationReleasePolicy) { p.Retention.WindowHours = 24*365*10 + 1 }},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			p := base
+			tt.mutate(&p)
+			if err := p.Validate(); err == nil {
+				t.Fatal("Validate() error=nil")
+			}
+		})
+	}
+}
+
 func TestNewEvaluationFailureRedactsSensitiveCause(t *testing.T) {
 	err := NewEvaluationFailure(EvaluationSafetyFailureUnsafeDiagnostics, "postgres://operator:secret@db.internal/evaluation hidden-memory-id foreign-tenant")
 	message := err.Error()
