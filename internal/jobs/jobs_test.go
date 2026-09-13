@@ -17,6 +17,64 @@ import (
 	"github.com/jackc/pgx/v5"
 )
 
+func TestMaintenanceIdentityIsStableAndScopeBound(t *testing.T) {
+	identity, err := NewMaintenanceIdentity("projection_refresh", memory.Scope{Tenant: "t1", Project: "p1", Namespace: "n1"}, time.Unix(1700000000, 0), time.Hour)
+	if err != nil {
+		t.Fatalf("NewMaintenanceIdentity() error = %v", err)
+	}
+	repeat, err := NewMaintenanceIdentity("projection_refresh", memory.Scope{Tenant: " t1 ", Project: "p1", Namespace: "n1"}, time.Unix(1700000000, 0), time.Hour)
+	if err != nil {
+		t.Fatalf("repeat identity error = %v", err)
+	}
+	if identity.Key() == "" || identity.Key() != repeat.Key() {
+		t.Fatalf("identity keys = %q and %q, want stable normalized key", identity.Key(), repeat.Key())
+	}
+	other, err := NewMaintenanceIdentity("projection_refresh", memory.Scope{Tenant: "t1", Project: "p1", Namespace: "n2"}, time.Unix(1700000000, 0), time.Hour)
+	if err != nil {
+		t.Fatalf("other identity error = %v", err)
+	}
+	if identity.Key() == other.Key() {
+		t.Fatal("different namespace must produce a different identity")
+	}
+}
+
+func TestMaintenanceIdentityRejectsInvalidInput(t *testing.T) {
+	cases := []struct {
+		name  string
+		job   string
+		scope memory.Scope
+		at    time.Time
+		win   time.Duration
+	}{
+		{"missing job", "", memory.Scope{Tenant: "t", Project: "p", Namespace: "n"}, time.Unix(1, 0), time.Hour},
+		{"missing scope", "job", memory.Scope{}, time.Unix(1, 0), time.Hour},
+		{"missing time", "job", memory.Scope{Tenant: "t", Project: "p", Namespace: "n"}, time.Time{}, time.Hour},
+		{"invalid window", "job", memory.Scope{Tenant: "t", Project: "p", Namespace: "n"}, time.Unix(1, 0), 0},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			if _, err := NewMaintenanceIdentity(tc.job, tc.scope, tc.at, tc.win); err == nil {
+				t.Fatal("NewMaintenanceIdentity() error = nil, want validation error")
+			}
+		})
+	}
+}
+
+func TestMaintenanceExecutionStateValidatesBoundedState(t *testing.T) {
+	identity, err := NewMaintenanceIdentity("projection_refresh", memory.Scope{Tenant: "t", Project: "p", Namespace: "n"}, time.Unix(1, 0), time.Hour)
+	if err != nil {
+		t.Fatalf("identity error = %v", err)
+	}
+	state := MaintenanceExecutionState{Identity: identity, WorkerID: "worker-1", Attempt: 1, LeaseUntil: time.Unix(2, 0), Disposition: MaintenanceDispositionCompleted}
+	if err := state.Validate(); err != nil {
+		t.Fatalf("Validate() error = %v", err)
+	}
+	state.Disposition = "raw-error"
+	if err := state.Validate(); err == nil {
+		t.Fatal("Validate() error = nil, want invalid disposition error")
+	}
+}
+
 func TestNoopWorkerStart(t *testing.T) {
 	var worker NoopWorker
 	if err := worker.Start(); err != nil {

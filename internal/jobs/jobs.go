@@ -2,6 +2,8 @@ package jobs
 
 import (
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"errors"
 	"fmt"
 	"log"
@@ -1168,6 +1170,103 @@ const (
 	JobExecutionStatusCompleted JobExecutionStatus = "completed"
 	JobExecutionStatusFailed    JobExecutionStatus = "failed"
 )
+
+// MaintenanceIdentity is the stable, scope-bound identity of one scheduled
+// maintenance window. Its key is safe to persist and compare, while the
+// underlying scope remains available for exact query predicates.
+type MaintenanceIdentity struct {
+	JobClass    string
+	Scope       memory.Scope
+	WindowStart time.Time
+	Window      time.Duration
+}
+
+type MaintenanceExecutionDisposition string
+
+const (
+	MaintenanceDispositionCompleted     MaintenanceExecutionDisposition = "completed"
+	MaintenanceDispositionFailed        MaintenanceExecutionDisposition = "failed"
+	MaintenanceDispositionDuplicate     MaintenanceExecutionDisposition = "duplicate"
+	MaintenanceDispositionLeaseConflict MaintenanceExecutionDisposition = "lease_conflict"
+	MaintenanceDispositionStale         MaintenanceExecutionDisposition = "stale"
+	MaintenanceDispositionExhausted     MaintenanceExecutionDisposition = "exhausted"
+)
+
+func (d MaintenanceExecutionDisposition) Valid() bool {
+	switch d {
+	case MaintenanceDispositionCompleted, MaintenanceDispositionFailed,
+		MaintenanceDispositionDuplicate, MaintenanceDispositionLeaseConflict,
+		MaintenanceDispositionStale, MaintenanceDispositionExhausted:
+		return true
+	default:
+		return false
+	}
+}
+
+type MaintenanceExecutionState struct {
+	Identity        MaintenanceIdentity
+	WorkerID        string
+	Attempt         int
+	LeaseUntil      time.Time
+	NextAttemptAt   time.Time
+	Checkpoint      string
+	SourceWatermark string
+	Disposition     MaintenanceExecutionDisposition
+	ProcessedCount  int
+	ErrorCategory   string
+	StartedAt       time.Time
+	FinishedAt      time.Time
+}
+
+func (s MaintenanceExecutionState) Validate() error {
+	if s.Identity.JobClass == "" || s.Identity.Key() == "" {
+		return fmt.Errorf("maintenance identity is required")
+	}
+	if strings.TrimSpace(s.WorkerID) == "" {
+		return fmt.Errorf("maintenance worker id is required")
+	}
+	if s.Attempt < 1 {
+		return fmt.Errorf("maintenance attempt must be positive")
+	}
+	if s.LeaseUntil.IsZero() {
+		return fmt.Errorf("maintenance lease until is required")
+	}
+	if s.Disposition != "" && !s.Disposition.Valid() {
+		return fmt.Errorf("maintenance disposition %q is invalid", s.Disposition)
+	}
+	if s.ProcessedCount < 0 {
+		return fmt.Errorf("maintenance processed count cannot be negative")
+	}
+	return nil
+}
+
+func NewMaintenanceIdentity(jobClass string, scope memory.Scope, windowStart time.Time, window time.Duration) (MaintenanceIdentity, error) {
+	identity := MaintenanceIdentity{
+		JobClass:    strings.TrimSpace(jobClass),
+		Scope:       scope.Normalized(),
+		WindowStart: windowStart.UTC(),
+		Window:      window,
+	}
+	if identity.JobClass == "" {
+		return MaintenanceIdentity{}, fmt.Errorf("maintenance job class is required")
+	}
+	if err := identity.Scope.Validate(); err != nil {
+		return MaintenanceIdentity{}, fmt.Errorf("maintenance scope: %w", err)
+	}
+	if windowStart.IsZero() {
+		return MaintenanceIdentity{}, fmt.Errorf("maintenance window start is required")
+	}
+	if window <= 0 {
+		return MaintenanceIdentity{}, fmt.Errorf("maintenance window must be greater than zero")
+	}
+	return identity, nil
+}
+
+func (i MaintenanceIdentity) Key() string {
+	payload := fmt.Sprintf("%s\x00%s\x00%s\x00%s\x00%d\x00%d", i.JobClass, i.Scope.Tenant, i.Scope.Project, i.Scope.Namespace, i.WindowStart.UnixNano(), i.Window.Nanoseconds())
+	digest := sha256.Sum256([]byte(payload))
+	return "maintenance:" + hex.EncodeToString(digest[:])
+}
 
 type JobExecution struct {
 	JobName        string

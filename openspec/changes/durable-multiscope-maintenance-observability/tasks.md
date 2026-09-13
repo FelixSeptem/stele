@@ -1,7 +1,7 @@
 ## 1. Durable execution model
 
-- [ ] 1.1 Add failing unit tests for stable maintenance identity, exact-scope validation, cadence-window idempotency, and duplicate-fire dispositions; verify tests fail before implementation.
-- [ ] 1.2 Extend maintenance execution domain types with stable identity, attempt/retry, lease, checkpoint/watermark, terminal disposition, and bounded category validation; verify focused jobs tests pass.
+- [x] 1.1 Add failing unit tests for stable maintenance identity, exact-scope validation, cadence-window idempotency, and duplicate-fire dispositions; verify tests fail before implementation.
+- [x] 1.2 Extend maintenance execution domain types with stable identity, attempt/retry, lease, checkpoint/watermark, terminal disposition, and bounded category validation; verify focused jobs tests pass.
 - [ ] 1.3 Add failing repository tests for conditional lease acquire, renew, complete, stale reclaim, retry scheduling, and cursor-paginated run history; verify SQL expectations include exact scope and owner predicates.
 - [ ] 1.4 Implement idempotent PostgreSQL migration fields, constraints, and indexes on existing job execution records; verify migration manifest, up/down tests, and repeat application pass.
 - [ ] 1.5 Implement repository compare-and-set transitions and bounded history pagination; verify concurrent claim, owner conflict, stale reclaim, and duplicate identity tests pass.

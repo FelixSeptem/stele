@@ -4607,6 +4607,34 @@ func TestRepositorySearchLexicalPassesTimeWindowFilters(t *testing.T) {
 	}
 }
 
+func TestRepositoryAcquireMaintenanceLeaseUsesExactScopeAndOwnerCAS(t *testing.T) {
+	mock, err := pgxmock.NewPool()
+	if err != nil {
+		t.Fatalf("pgxmock.NewPool() error = %v", err)
+	}
+	defer mock.Close()
+	repo := &Repository{db: mock}
+	now := time.Date(2026, 9, 13, 10, 0, 0, 0, time.UTC)
+	identity, err := jobs.NewMaintenanceIdentity("projection_refresh", memory.Scope{Tenant: "t", Project: "p", Namespace: "n"}, now, time.Hour)
+	if err != nil {
+		t.Fatal(err)
+	}
+	input := jobs.MaintenanceLeaseInput{Identity: identity, WorkerID: "worker-1", Now: now, LeaseUntil: now.Add(time.Minute), Attempt: 1}
+	mock.ExpectQuery("INSERT INTO job_executions").
+		WithArgs(identity.JobClass, identity.Scope.Tenant, identity.Scope.Project, identity.Scope.Namespace, identity.Key(), input.Attempt, input.WorkerID, input.LeaseUntil, input.Checkpoint, input.Watermark, identity.WindowStart, input.Now).
+		WillReturnRows(pgxmock.NewRows([]string{"acquired"}).AddRow(true))
+	acquired, err := repo.AcquireMaintenanceLease(context.Background(), input)
+	if err != nil {
+		t.Fatalf("AcquireMaintenanceLease() error = %v", err)
+	}
+	if !acquired {
+		t.Fatal("AcquireMaintenanceLease() = false, want true")
+	}
+	if err := mock.ExpectationsWereMet(); err != nil {
+		t.Fatalf("expectations: %v", err)
+	}
+}
+
 func containsSQL(haystack, needle string) bool {
 	return len(haystack) >= len(needle) && context.Background() != nil && (stringIndex(haystack, needle) >= 0)
 }
