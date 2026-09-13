@@ -6,9 +6,9 @@
 
 ## 2. Runtime Identity And Exact Scope Binding
 
-- [ ] 2.1 Implement authenticated runtime initialization that separates agent identity, session, conversation, and provider instance while resolving one exact tenant/project/namespace grant; verify unauthorized and malformed initialization requests fail before repository access.
-- [ ] 2.2 Add opaque server-owned runtime binding persistence/lookup or reuse an existing durable session binding without creating a second canonical store; verify grant revocation/expiry invalidates subsequent operations.
-- [ ] 2.3 Add middleware that validates binding, session, principal, and requested scope on every provider operation; verify caller-invented, widened, mismatched, and cross-tenant scopes are rejected without existence disclosure.
+- [x] 2.1 Implement authenticated runtime initialization that separates agent identity, session, conversation, and provider instance while resolving one exact tenant/project/namespace grant; verify unauthorized and malformed initialization requests fail before repository access.
+- [x] 2.2 Add opaque server-owned runtime binding persistence/lookup or reuse an existing durable session binding without creating a second canonical store; verify grant revocation/expiry invalidates subsequent operations.
+- [x] 2.3 Add middleware that validates binding, session, principal, and requested scope on every provider operation; verify caller-invented, widened, mismatched, and cross-tenant scopes are rejected without existence disclosure.
 
 ## 3. Operation Metadata And Replay Safety
 
