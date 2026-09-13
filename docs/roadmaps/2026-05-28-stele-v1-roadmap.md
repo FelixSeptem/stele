@@ -12,6 +12,33 @@ Scope remains unchanged:
 - built-in API key plus tenant isolation
 - governance-first memory service
 
+## Proposal Branch Lifecycle
+
+Every new OpenSpec proposal SHALL start from the latest synchronized `main`
+baseline (`git fetch origin` followed by a fast-forward or otherwise verified
+`main` update). The implementation branch and its isolated worktree SHALL be
+named for, and live for, exactly one proposal implementation cycle:
+
+```text
+latest main
+   ↓
+proposal branch + worktree
+   ↓  implement, verify, archive
+merge to main + push
+   ↓
+delete local proposal branch and worktree
+```
+
+Before cleanup, verify that the proposal's commits are reachable from `main`,
+that the worktree has no tracked or untracked implementation changes requiring
+handoff, and that the archived OpenSpec artifacts and synchronized main specs
+are present. Never delete a branch merely because its task checklist is marked
+complete: an unmerged branch is still the recovery point for that proposal.
+Remote branches may be retained for audit or recovery unless their deletion is
+explicitly requested; local branch/worktree cleanup is the default after a
+successful merge and push. Unrelated user or parallel-agent worktrees remain
+outside the proposal cleanup scope.
+
 ## Global Status And Priority (2026-09-13)
 
 The original Phase 1–5 sequence is now the historical foundation path. The
