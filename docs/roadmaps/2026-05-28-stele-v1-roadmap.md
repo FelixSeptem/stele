@@ -12,40 +12,64 @@ Scope remains unchanged:
 - built-in API key plus tenant isolation
 - governance-first memory service
 
-## Global Status And Priority (2026-09-03)
+## Global Status And Priority (2026-09-13)
 
 The original Phase 1–5 sequence is now the historical foundation path. The
 repository has archived changes covering bootstrap and ingestion, governance,
 hybrid retrieval/context assembly, operations, memory history and mutation,
 durable worker maintenance, embedding lifecycle, governed insights, assurance,
-integration evidence, scoped principals, idempotent ingestion, and benchmark
-infrastructure. These capabilities are the current product baseline and should
-not be re-planned as new greenfield work.
+integration evidence, scoped principals, idempotent ingestion, benchmark
+infrastructure, versioned migrations, context projections, governed reflection,
+stable hybrid fusion, and quality-aware reranking. These capabilities are the
+current product baseline and should not be re-planned as new greenfield work.
 
-There are three different kinds of work in the remaining roadmap and they must
+There are four different kinds of work in the remaining roadmap and they must
 not be conflated:
 
 - **Implemented baseline**: capability exists in the archived product changes;
   follow-up work is limited to regression coverage or a narrowly identified gap.
+- **Recently archived baseline**: `evidence-deduplication-and-diversity-aware-context-packing`
+  completed 16/16 tasks, passed strict change validation after preserving the
+  existing reranker fallback scenarios, and was archived on 2026-09-13 with its
+  delta specs synchronized to the main specifications.
 - **Proposed / pending implementation**: OpenSpec artifacts exist, but the task
-  checklist and release evidence are not complete. This is the current state of
-  `product-ready-self-hosting-foundation` and `retrieval-evaluation-baseline`.
+  checklist and release evidence are not complete. This now applies primarily to
+  the P5 retrieval release gate, progressive-context evaluation, and the P6
+  observability/maintenance follow-up; it no longer describes the archived P0–P2
+  foundation work.
 - **Candidate expansion**: useful post-v1 ideas that must wait until the provider
   contract and quality gates are stable. This includes MCP adapters, namespace
   subtree conventions, agent self-model conventions, and autonomous reasoning
   insights.
 
+### OpenSpec ↔ roadmap reconciliation snapshot
+
+The roadmap status is derived from the current OpenSpec archive index, active
+change list, and branch history; an implementation commit alone does not make a
+change an archived baseline.
+
+| Roadmap area | OpenSpec evidence | Reconciled status |
+| --- | --- | --- |
+| P0 self-hosting foundation | Archived changes 023 and 029 | Implemented baseline; follow-up is regression/operations only. |
+| P1 retrieval evaluation | Archived changes 024 and 028 | Implemented baseline; real-provider and release-gate expansion moves to P5. |
+| P2 projections/reflection | Archived changes 030 and 031 | Implemented baseline; freshness/watermark operations remain follow-up. |
+| P3 chunking/fusion | Archived changes 027 and 033 | Implemented and archived. |
+| P3 diversity packing | Archived `2026-09-13-evidence-deduplication-and-diversity-aware-context-packing`, 16/16 tasks | Implemented and archived after strict validation and main-spec synchronization. |
+| P4 quality-aware reranking | Archived change 032; query-understanding commits exist outside the archive index | Reranking baseline archived; query-understanding integration/archive status still requires branch reconciliation. |
+| P5 benchmark expansion | Archived changes 025 and 026 | Implemented benchmark infrastructure; Task 6.7 release gate and progressive-context work remain pending. |
+| P6 maintenance/observability | No corresponding active or archived change | Roadmap follow-up pending; do not infer implementation from baseline maintenance code alone. |
+
 ### Global priority order
 
 | Priority | Workstream | Current state | Why this order |
 | --- | --- | --- | --- |
-| P0 | Product-ready self-hosting foundation | Proposed, pending implementation | Migration ledger, startup admission, resource bounds, backup/restore, and real-stack verification are prerequisites for a dependable long-lived deployment. |
-| P1 | Retrieval evaluation baseline | Proposed, pending implementation | Establishes reproducible quality, latency, and zero-leakage measurements before changing representation or ranking. |
-| P2 | Context hierarchy and governed reflection | New Letta-inspired roadmap work | Adds always-visible/session/retrieval/history projections, memory intents, reflection runs, and compaction evidence without allowing direct canonical-memory mutation. |
-| P3 | Retrieval representation, fusion, and context diversity | Roadmap Phase 6 Tasks 6.2–6.4 | Chunking, hybrid fusion, deduplication, and diversity directly improve provider usefulness while remaining reversible. |
-| P4 | Query understanding and controlled reranking | Roadmap Phase 6 Tasks 6.5–6.6 | Higher-risk quality changes should only use the stable candidate/fusion path and measured evidence from P1/P3. |
-| P5 | Benchmark expansion, local suite, and retrieval release gate | `agent-memory-benchmark-expansion`, `local-agent-memory-benchmark-suite`, and Phase 6 Task 6.7 | Runs LongMemEval/LoCoMo and local regression families only after retrieval behavior is stable, then converts the evidence into CI, rebuild, retention, and rollback policy. |
-| P6 | Durable multi-scope maintenance follow-up | Stage 7; baseline largely implemented | Verify that every newer durable surface participates in maintenance; implement only missing discovery, lease, SLO, or recovery gaps. |
+| P0 | Product-ready self-hosting foundation | Implemented baseline; archived changes 023 and 029 | Migration integrity, startup admission, resource bounds, backup/restore, and real-stack verification are available; retain regression and operator-evidence follow-up only. |
+| P1 | Retrieval evaluation baseline | Implemented baseline; archived changes 024 and 028 | Versioned fixtures, deterministic replay, quality metrics, and zero-leakage assertions are available; the remaining work is release-gate expansion and real-provider evidence in P5. |
+| P2 | Context hierarchy and governed reflection | Implemented baseline; archived changes 030 and 031 | Versioned projections, governed intents, reflection, and compaction evidence are available without canonical-memory mutation; retain regression and freshness follow-up only. |
+| P3 | Retrieval representation, fusion, and context diversity | Implemented baseline; chunking/fusion archived as 027/033 and diversity archived on 2026-09-13 | Chunking, stable fusion, deduplication, and diversity packing are archived; future changes remain subject to the retrieval release gate. |
+| P4 | Query understanding and controlled reranking | Quality-aware reranking archived (032); query-understanding integration requires branch/evidence reconciliation | Higher-risk quality changes remain behind the stable candidate/fusion path and measured evidence; do not infer a fully integrated P4 baseline solely from branch-local history. |
+| P5 | Benchmark expansion, retrieval release gate, and progressive context evaluation | Benchmark expansion archived (025, 026); Task 6.7 pending implementation, informed by the OpenViking comparison | Runs deterministic and task-level retrieval families only after retrieval behavior is stable; evaluates coarse-to-fine context projections and parent-first retrieval as reversible strategies; converts the evidence into CI, rebuild, retention, and rollback policy. |
+| P6 | Durable multi-scope maintenance follow-up and retrieval observability | Follow-up pending in Stage 8; baseline largely implemented | Verify that every newer durable surface participates in maintenance; close discovery, lease, SLO, recovery, projection freshness, and redacted retrieval-trace gaps without introducing a second source of record. |
 | P7 | Agent runtime memory-provider contract and adapter | New Letta-inspired roadmap work | Defines identity/session separation, capability discovery, canonical runtime scope, citations, idempotency, event replay, and compatibility before integration. |
 | P8 | Optional adapters and governed experience insights | Candidate follow-up tracks | MCP, shared-memory conventions, agent self-model, failure-pattern/lesson insights, and reasoning providers remain outside the critical path. |
 
@@ -62,7 +86,7 @@ P3 chunking + hybrid fusion + diversity
         ↓
 P4 query understanding + controlled reranking
         ↓
-P5 benchmark expansion + retrieval release gate
+P5 benchmark expansion + retrieval release gate + progressive context evaluation
         ↓
 P6 durable multi-scope maintenance closure
         ↓
@@ -73,6 +97,43 @@ P6 maintenance follow-up runs in parallel with P1–P5 when it concerns already
 implemented surfaces, but it must be complete before declaring the service
 operationally ready for unattended multi-scope deployments. P7 remains outside
 the critical path.
+
+### OpenViking-informed integration rule
+
+The OpenViking comparison is now folded into P5/P6 rather than tracked as a
+separate product direction. Its useful ideas are treated as bounded retrieval
+and context experiments over Stele's existing PostgreSQL projections:
+
+- **Progressive context loading**: evaluate short retrieval projections,
+  medium-granularity session/context projections, and canonical/chunk evidence
+  as a coarse-to-fine loading path. Projection rows remain derived,
+  versioned, watermark-bound, and rebuildable; they never become canonical
+  memory.
+- **Parent-first or hierarchical retrieval**: compare flat `rrf:rrf-v1` with
+  a parent/projection-first strategy that expands validated child chunks or
+  adjacent evidence only inside the exact scope. The experiment is offline or
+  shadow-only until quality, isolation, latency, and rollback gates pass.
+- **Redacted retrieval trajectory**: expose only bounded logical diagnostics
+  (channel availability, candidate-count buckets, expansion/disposition
+  counts, rerank fallback category, and latency buckets) on authorized
+  evaluation/admin surfaces. Query text, scopes, IDs, hidden candidates,
+  provider payloads, credentials, and raw scores remain excluded.
+- **Session watermark alignment**: use session commit/reflection watermarks to
+  explain which durable events a projection or derived insight covers. Failed
+  work must be resumable and replay-safe.
+- **Task-level evaluation**: use LoCoMo, LongMemEval, RAGAS-style context
+  precision/recall, and answer-quality judges as opt-in evidence. They are
+  complementary to deterministic retrieval gates, not replacements for
+  isolation, lifecycle, provenance, or rollback checks.
+
+The following ideas are explicitly not adopted as Stele architecture:
+
+- `viking://`, AGFS/RAGFS, or a file-system-backed second canonical store;
+- replacing PostgreSQL with a polyglot storage stack;
+- global hotness-based ranking without a versioned quality experiment;
+- treating L0/L1 summaries as authoritative memory;
+- making an LLM judge the sole release gate;
+- copying OpenViking AGPLv3 implementation code into the Apache-2.0 project.
 
 ## Milestone View
 
@@ -734,7 +795,7 @@ Rollback:
 
 - revert to the last approved fusion strategy and disable all quality adjustments
 
-### Task 6.7: Retrieval release gate and long-term maintenance
+### Task 6.7: Retrieval release gate, progressive context evaluation, and long-term maintenance
 
 Purpose: make retrieval quality a maintained product contract rather than a one-time
 tuning exercise.
@@ -743,24 +804,62 @@ tuning exercise.
   regressions within bounded test budgets.
 - Publish a redacted retrieval-quality report with every ranking or representation
   version.
+- Add an opt-in real-provider profile that records logical embedding and reranker
+  identities, dimensions, modes, candidate counts, changed-rank counts, bounded
+  fallback categories, and p50/p95 latency without persisting endpoints, keys,
+  prompts, raw provider payloads, or source text.
+- Evaluate progressive context loading as three derived levels: a short retrieval
+  projection for coarse recall, a medium-granularity session/context overview for
+  planning and reranking, and canonical/chunk evidence for detail. Record token or
+  character cost, evidence/citation coverage, freshness, and rebuildability for
+  every level; never promote a generated summary to canonical memory.
+- Compare the stable flat fusion baseline with an offline or shadow parent-first
+  strategy that positions on validated projections or parent chunks before bounded
+  child/adjacent expansion. Require an explicit strategy identity and the same
+  protected-recall, multi-hop, duplicate, isolation, latency, and rollback gates as
+  every other ranking change.
+- Add authorized redacted retrieval-trajectory evidence covering channel
+  availability, candidate-count buckets, parent/child expansion counts, aggregate
+  candidate dispositions, rerank fallback categories, and latency buckets. Do not
+  retain query text, scope values, memory or event IDs, hidden candidates, raw
+  scores, provider errors, or credentials.
+- Add a memory-organization integrity family that measures action success separately
+  from information integrity, including fact/evidence recall, placement accuracy,
+  duplicate, missing, altered, and unexpected evidence counts. This complements
+  retrieval ranking metrics and protects consolidation, merge, reclassification,
+  reflection, and projection changes from silent information loss.
 - Add migration and re-indexing runbooks for chunk metadata, embedding revisions, and
-  duplicate clusters; never require destructive down migrations.
+  duplicate clusters, progressive projections, and parent-first strategy artifacts;
+  never require destructive down migrations.
 - Define retention and deletion behavior for derived chunks, query diagnostics, and
-  evaluation fixtures.
-- Schedule periodic review of thresholds, stale memories, embedding drift, and query
-  category coverage.
+  evaluation fixtures. Retrieval trajectories and real-provider reports follow the
+  same redaction and bounded-retention rules.
+- Schedule periodic review of thresholds, stale memories, projection freshness,
+  embedding drift, reranker fallback rates, and query category coverage.
+- Keep RAGAS-style context/answer quality, LoCoMo, LongMemEval, and LLM judging in an
+  opt-in task-quality profile. Deterministic qrels, lifecycle, provenance, isolation,
+  latency, and rollback checks remain the required release gate.
 
 Outputs:
 
 - retrieval release checklist
 - re-index/rebuild and rollback runbooks
 - versioned quality report and maintenance ownership
+- progressive-context and parent-first comparison reports
+- redacted retrieval-trajectory schema and retention policy
+- memory-organization integrity report
 
 Done when:
 
 - no retrieval change can ship without quality, isolation, latency, and rollback
   evidence
 - derived representations can be rebuilt from durable source records
+- progressive context levels have explicit source watermarks, freshness categories,
+  token/character budgets, citations, and deterministic rebuild behavior
+- parent-first retrieval remains shadow/off unless it beats or preserves protected
+  quality while satisfying candidate, latency, and zero-leakage limits
+- real embedding/reranker results are represented by reproducible redacted identities
+  and never leak local configuration
 - cleanup removes evaluation and diagnostic artifacts according to documented policy
 
 Dependencies:
@@ -836,7 +935,7 @@ Exit signal:
 - Retried event writes produce one raw event, one provenance chain, and a
   stable response.
 
-### Stage 2: Versioned Migrations And Runtime Hardening (P0 — Next)
+### Stage 2: Versioned Migrations And Runtime Hardening (P0 — Archived Baseline)
 
 Goal: make upgrades and public runtime exposure safe for a long-lived
 self-hosted deployment.
@@ -851,6 +950,10 @@ Scope:
   configuration, and bounded request concurrency or rate limits.
 - Publish backup/restore and upgrade runbooks with readiness checks.
 
+OpenSpec alignment: archived changes 023 and 029 provide the implemented
+foundation. Future work here is regression or narrowly scoped operational
+hardening, not a new P0 implementation.
+
 Exit signal:
 
 - An operator can upgrade an existing database deterministically and verify
@@ -864,12 +967,17 @@ changing memory representation or ranking behavior.
 
 Scope:
 
-- implement the `retrieval-evaluation-baseline` OpenSpec change;
+- retain and extend the archived `retrieval-evaluation-baseline` capability from
+  changes 024 and 028;
 - seed repository-owned fixtures only into harness-owned scopes;
 - replay the real lexical, semantic, and optional relation paths;
 - publish redacted Recall/MRR/nDCG, evidence coverage, duplicate, latency, and
   isolation results;
 - make cross-scope and hidden-lifecycle leakage hard failures.
+
+OpenSpec alignment: P1 is an archived baseline. Real-provider quality evidence,
+broader benchmark families, and release-policy ownership belong to P5 rather
+than reopening P1 as greenfield work.
 
 Exit signal:
 
@@ -883,6 +991,10 @@ Exit signal:
 Goal: provide an agent-centric context contract inspired by Letta's memory
 hierarchy and dreaming workflows while retaining PostgreSQL as the system of
 record and keeping every write governed.
+
+OpenSpec alignment: archived changes 030 and 031 implement this stage. The
+task descriptions below remain the durable contract and regression checklist;
+projection freshness and watermark operations continue under P5/P6.
 
 Tasks:
 
@@ -964,6 +1076,12 @@ Scope:
   shadowed until the Stage 3 quality gate is green;
 - retain deterministic rollback to the prior canonical retrieval path.
 
+OpenSpec alignment: bounded chunking and stable hybrid fusion are archived as
+changes 027 and 033. Evidence deduplication and diversity packing completed
+16/16 tasks and is archived as
+`2026-09-13-evidence-deduplication-and-diversity-aware-context-packing`, with
+its main specifications synchronized. P3 is therefore an implemented baseline.
+
 Exit signal:
 
 - protected recall and multi-hop coverage improve or remain within policy;
@@ -984,22 +1102,42 @@ Scope:
 - keep model rerankers optional, time/cost/privacy bounded, and disabled by
   default until shadow evidence passes release policy.
 
+OpenSpec alignment: quality-aware signals, provider-configured optional
+reranking, fallback diagnostics, and rollout governance are archived in change
+032. Query-understanding work exists in branch history but is not represented
+by the current archive index, so P4 is not declared fully reconciled until its
+integration and archive evidence agree.
+
 Exit signal:
 
 - temporal and multi-hop coverage improves without simple-fact regression;
 - every rollout has a version, owner, evidence minimum, stop condition, and
   tested rollback.
 
-### Stage 7: Benchmark Expansion, Retrieval Release Gate And Long-Term Maintenance (P5)
+### Stage 7: Benchmark Expansion, Retrieval Release Gate And Progressive Context Evaluation (P5)
 
 Goal: make retrieval quality a maintained product contract rather than a one-time
 tuning exercise.
 
 Scope:
 
-- `agent-memory-benchmark-expansion`, `local-agent-memory-benchmark-suite`, and
-  Phase 6 Task 6.7: CI quality gates, redacted reports, rebuild/re-index and
-  rollback runbooks, derived-data retention/deletion, and threshold ownership.
+- archived `agent-memory-benchmark-expansion` and
+  `local-agent-memory-benchmark-suite` changes 025/026, plus pending Phase 6
+  Task 6.7: CI quality gates, redacted reports, real-provider opt-in
+  evidence, progressive context projection comparisons, parent-first retrieval
+  experiments, rebuild/re-index and rollback runbooks, derived-data
+  retention/deletion, and threshold ownership.
+
+OpenViking-informed boundaries:
+
+- L0/L1/L2 is a vocabulary for derived projection cost and context depth, not a
+  new storage model. PostgreSQL remains the only system of record.
+- Parent-first navigation is a strategy experiment over validated
+  projections/chunks, not a replacement for lexical/semantic/relation fusion.
+- Retrieval trajectories are aggregate, redacted diagnostics available only to
+  authorized evaluation or admin callers.
+- LoCoMo, LongMemEval, RAGAS, and LLM judges are task-quality supplements and
+  cannot waive deterministic safety or rollback gates.
 
 Exit signal:
 
@@ -1007,7 +1145,7 @@ Exit signal:
   isolation, latency, and rollback evidence;
 - all derived artifacts can be rebuilt from durable PostgreSQL source records.
 
-### Stage 8: Durable Multi-Scope Maintenance Follow-Up (P6)
+### Stage 8: Durable Multi-Scope Maintenance And Retrieval Observability Follow-Up (P6)
 
 Goal: ensure asynchronous maintenance reaches every active product surface and
 recovers safely across replicas or process restarts.
@@ -1023,6 +1161,12 @@ Scope:
 - Expose worker and scheduler metrics from every runtime mode or through a
   shared telemetry path, then define operational SLOs for ingest lag,
   governance backlog, workflow completion, and cleanup.
+- Include projection freshness, source-watermark lag, retrieval trajectory
+  retention, provider fallback summaries, and benchmark artifact cleanup in the
+  same durable maintenance inventory.
+- Ensure a scope with only derived projections, retrieval diagnostics, or
+  evaluation metadata is discoverable for maintenance without treating those
+  derived rows as canonical source records.
 
 Exit signal:
 
@@ -1126,8 +1270,8 @@ Exit signal:
 5. Phase 6 Tasks 6.2–6.4 (P3)
 6. Phase 6 Tasks 6.5–6.6 (P4)
 7. `agent-memory-benchmark-expansion` + `local-agent-memory-benchmark-suite` (P5a)
-8. Phase 6 Task 6.7 retrieval release gate (P5b)
-9. Stage 8 durable multi-scope maintenance follow-up (P6; parallel where safe)
+8. Phase 6 Task 6.7 retrieval release gate and progressive context evaluation (P5b)
+9. Stage 8 durable multi-scope maintenance and retrieval observability follow-up (P6; parallel where safe)
 10. Stage 9 agent runtime memory-provider contract and adapter (P7)
 11. Stage 10 optional adapters and governed experience insights (P8)
 
@@ -1142,6 +1286,9 @@ Reasoning:
   infrastructure effects.
 - Retrieval release gates must precede the agent-runtime adapter so the provider
   contract is both useful and measurable.
+- OpenViking-informed progressive context and parent-first retrieval experiments
+  remain subordinate to the stable fusion baseline: they may inform P5 evidence,
+  but cannot reorder P0–P4 or become active without the same release gates.
 - Durable maintenance follow-up is parallelizable only when it does not change
   retrieval or migration contracts; its final SLO/recovery gate remains required
   for unattended multi-scope operation.
@@ -1226,6 +1373,15 @@ Patterns explicitly not adopted from Letta Code:
 
 Risks and assumptions to validate before implementation:
 
+- OpenViking's L0/L1/L2 and directory-recursive retrieval are useful reference
+  patterns, but their quality claims must be verified against Stele fixtures;
+  they are not evidence that a file-system model or global rerank is required.
+- Progressive context and parent-first retrieval must be measured against the
+  existing flat fusion baseline for token/character cost, protected recall,
+  multi-hop coverage, citations, freshness, and p95 latency before adoption.
+- Retrieval trajectory data is diagnostic evidence, not a public response
+  contract; raw queries, scopes, identifiers, hidden records, scores, provider
+  payloads, and credentials must remain redacted.
 - Product claims are not Stele requirements. Stash's cognitive stages are useful vocabulary, but each stage needs a Stele-specific data model, provenance rule, lifecycle state, and operator contract before adoption.
 - MCP ergonomics should not drive storage or lifecycle design. Any MCP work must remain an adapter over OpenAPI-backed service behavior.
 - Namespace subtree recall may be useful, but it can also weaken Stele's explicit `tenant/project/namespace` mental model if introduced too early.
@@ -1273,6 +1429,8 @@ Non-goals for the first slice:
 - No autonomous hypothesis, causal, contradiction, or goal inference.
 - No global agent-self namespace that bypasses existing scope isolation.
 - No provider-specific reasoning dependency tied to embedding provider configuration.
+- No `viking://` namespace, AGFS/RAGFS storage, Git-backed canonical memory, or
+  OpenViking-derived multi-language runtime is part of this track.
 
 ### Candidate Follow-up Tracks
 
@@ -1291,6 +1449,17 @@ Non-goals for the first slice:
 5. Reasoning-provider boundary:
    Define a provider-independent interface for optional LLM-assisted derivation before implementing autonomous hypothesis, causal, contradiction, or goal inference.
 
+6. Progressive context and hierarchical retrieval experiments:
+   Compare L0/L1/L2-inspired derived projections and parent-first retrieval
+   against the stable fusion baseline. Keep the experiment offline or shadowed,
+   require exact-scope expansion and deterministic replay, and promote it only
+   through the P5 retrieval release gate.
+
+7. Redacted retrieval trajectory and memory-integrity evaluation:
+   Extend evaluation/admin diagnostics with bounded retrieval-path aggregates,
+   plus separate action-success and information-integrity metrics for
+   consolidation, merge, reclassification, reflection, and projection changes.
+
 ## Execution Order
 
 Recommended build order for the current product baseline:
@@ -1300,8 +1469,8 @@ Recommended build order for the current product baseline:
 3. P2: context hierarchy, projections, memory intents, reflection, and compaction evidence
 4. P3: Phase 6 Tasks 6.2 to 6.4 (chunking, fusion, deduplication, diversity)
 5. P4: Phase 6 Tasks 6.5 to 6.6 (query understanding and controlled reranking)
-6. P5: `agent-memory-benchmark-expansion`, `local-agent-memory-benchmark-suite`, and Phase 6 Task 6.7
-7. P6: durable multi-scope maintenance and assurance closure
+6. P5: `agent-memory-benchmark-expansion`, `local-agent-memory-benchmark-suite`, and Phase 6 Task 6.7, including progressive-context and parent-first retrieval evaluation
+7. P6: durable multi-scope maintenance, retrieval observability, and assurance closure
 8. P7: agent runtime memory-provider contract and adapter
 9. P8: optional MCP, shared-memory conventions, and governed experience insights
 
@@ -1346,6 +1515,15 @@ Before moving between phases, verify:
   optional rerankers are enabled.
 - Phase 6.6 to 6.7: every rollout has a measured gain, no isolation regression, and a
   tested rollback path before becoming a release requirement.
+- P5 progressive-context gate: every L0/L1/L2-inspired projection and parent-first
+  strategy has an explicit source watermark, freshness result, token/character
+  budget, citation/evidence coverage, deterministic rebuild, and comparison with
+  the flat fusion baseline; no stale or hidden projection may influence default
+  retrieval.
+- P5 trajectory gate: retrieval traces are bounded and redacted, available only on
+  authorized evaluation/admin surfaces, and retention cleanup is tested without
+  exposing queries, scopes, identifiers, hidden candidates, raw scores, provider
+  payloads, or credentials.
 - Benchmark gate: LoCoMo/LongMemEval and local suites use isolated owned scopes, compatible
   manifests, and redacted reports; synthetic smoke alone is never a release claim.
 - P5 to P6: benchmark reports and release policy are green before declaring retrieval
@@ -1357,8 +1535,13 @@ Before moving between phases, verify:
 
 ## Immediate Next Step
 
-The P0 foundation is now archived in the current product baseline. Implement
-`retrieval-evaluation-baseline` next (P1) and record the first reproducible
-`canonical-v1` / `baseline-v1` report. Do not change chunking, fusion, or reranking
-until that report and its zero-leakage assertions are green. The provider adapter
-must consume the stable contracts produced by P0–P6.
+The P0–P3 foundation and the benchmark infrastructure are represented by
+archived OpenSpec changes; the diversity change was archived on 2026-09-13 after
+strict validation and main-spec synchronization. The next product action is the
+P5 Task 6.7 retrieval release gate: reproduce the real-provider
+`canonical-v1` / `baseline-v1` evidence, evaluate
+progressive context and parent-first retrieval in offline/shadow mode, and add
+the redacted trajectory and memory-integrity reports. Do not promote those
+experiments to default behavior until quality, zero-leakage, latency, freshness,
+and rollback gates are green. The provider adapter must consume the stable
+contracts produced by P0–P6.
