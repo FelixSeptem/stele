@@ -24,8 +24,8 @@
 
 ## 4. Assurance and conformance closure
 
-- [ ] 4.1 Add failing assurance tests for durable-scope discovery, maintenance coverage, lease recovery, projection freshness/rebuild, retention safety, telemetry redaction, and evidence completeness.
-- [ ] 4.2 Implement the scope-bounded maintenance conformance analyzer with stable failure categories and fail-closed readiness outcome; verify unit tests separate action success from safety/integrity failure.
+- [x] 4.1 Add failing assurance tests for durable-scope discovery, maintenance coverage, lease recovery, projection freshness/rebuild, retention safety, telemetry redaction, and evidence completeness.
+- [x] 4.2 Implement the scope-bounded maintenance conformance analyzer with stable failure categories and fail-closed readiness outcome; verify unit tests separate action success from safety/integrity failure.
 - [ ] 4.3 Persist bounded conformance evidence through existing assurance records and include it in readiness summaries without exposing sensitive scope details; verify repository and serialization tests pass.
 - [ ] 4.4 Add scheduler-driven conformance execution with leases, retries, duplicate-fire suppression, and bounded retention; verify restart, stale reclaim, and cleanup tests pass.
 
