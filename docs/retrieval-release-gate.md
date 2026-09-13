@@ -72,3 +72,10 @@ source records. The memory-organization integrity report separately measures
 action success and fact/evidence recall, placement accuracy, duplicate, missing,
 altered, and unexpected evidence. Hidden or foreign evidence appears only as
 aggregate categories and counts.
+
+Maintenance conformance is an operational prerequisite for using fresh context
+projections in a release run. It checks exact-scope coverage, lease recovery,
+projection freshness/rebuild evidence, retention safety, telemetry redaction,
+and evidence completeness. The durable maintenance path remains disabled until
+that evidence is green; disabling it is the rollback path and does not mutate
+canonical memory.

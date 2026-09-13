@@ -117,6 +117,7 @@ type RerankerConfig struct {
 }
 
 type JobConfig struct {
+	DurableMaintenanceEnabled        bool
 	MaintenanceInterval              time.Duration
 	WorkerPollInterval               time.Duration
 	WorkerErrorBackoff               time.Duration
@@ -494,6 +495,7 @@ func LoadFromEnv() (Config, error) {
 		},
 		Reranker: rerankerConfig,
 		Jobs: JobConfig{
+			DurableMaintenanceEnabled:        loadBoolEnv("STELE_JOBS_DURABLE_MAINTENANCE_ENABLED"),
 			MaintenanceInterval:              maintenanceInterval,
 			WorkerPollInterval:               workerPollInterval,
 			WorkerErrorBackoff:               workerErrorBackoff,

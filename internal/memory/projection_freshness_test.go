@@ -47,3 +47,10 @@ func TestEvaluateProjectionFreshnessFailsClosedForStaleForeignAndHiddenEvidence(
 		})
 	}
 }
+
+func TestProjectionFreshnessEligibilityRejectsOverBudget(t *testing.T) {
+	scope := Scope{Tenant: "t", Project: "p", Namespace: "n"}
+	evidence, err := EvaluateProjectionFreshness(scope, "wm", "wm", "p", "r", time.Second, 5*time.Second, time.Minute, time.Second, true, scope)
+	if err != nil { t.Fatalf("error = %v", err) }
+	if evidence.SLO != ProjectionSLOOverBudget || evidence.Eligible { t.Fatalf("evidence = %+v, want over-budget ineligible", evidence) }
+}

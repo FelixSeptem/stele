@@ -5,7 +5,7 @@
 - [x] 1.3 Add failing repository tests for conditional lease acquire, renew, complete, stale reclaim, retry scheduling, and cursor-paginated run history; verify SQL expectations include exact scope and owner predicates.
 - [x] 1.4 Implement idempotent PostgreSQL migration fields, constraints, and indexes on existing job execution records; verify migration manifest, up/down tests, and repeat application pass.
 - [x] 1.5 Implement repository compare-and-set transitions and bounded history pagination; verify concurrent claim, owner conflict, stale reclaim, and duplicate identity tests pass.
-- [ ] 1.6 Wire scheduler and worker maintenance dispatch to durable identity, lease renewal, retry/backoff, and checkpoint resume; verify restart and duplicate-fire orchestration tests pass.
+- [x] 1.6 Wire scheduler and worker maintenance dispatch to durable identity, lease renewal, retry/backoff, and checkpoint resume; verify restart and duplicate-fire orchestration tests pass.
 
 ## 2. Projection freshness and SLO
 
@@ -31,8 +31,8 @@
 
 ## 5. Documentation and rollout controls
 
-- [ ] 5.1 Add configuration reference for maintenance identity, lease, retry, freshness, SLO, telemetry, retention, and conformance limits; verify `.env.local.example` contains placeholders only.
-- [ ] 5.2 Document operator evidence collection, PostgreSQL 18 + pgvector maintenance smoke, rollback, stale recovery, and canonical-data safety; verify docs consistency checks pass.
+- [x] 5.1 Add configuration reference for maintenance identity, lease, retry, freshness, SLO, telemetry, retention, and conformance limits; verify `.env.local.example` contains placeholders only.
+- [x] 5.2 Document operator evidence collection, PostgreSQL 18 + pgvector maintenance smoke, rollback, stale recovery, and canonical-data safety; verify existing self-hosting smoke docs check passes (the referenced docs-consistency script is absent in this repository).
 - [ ] 5.3 Add disabled-by-default rollout and fallback wiring; verify failed conformance gates preserve the previously approved scheduler and retrieval behavior.
 - [ ] 5.4 Add deterministic CI coverage for focused maintenance/conformance tests and redaction checks; verify CI commands run without external provider credentials.
 

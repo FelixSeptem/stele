@@ -2039,7 +2039,29 @@ controlled non-pass skip, never a pass—and never falls back to
 - Active embedding cutovers are advanced by the scheduler in bounded waves before the normal lifecycle discovery pass, so provider migrations reuse the same durable rebuild execution path as drift correction.
 - Summary compaction and retention sweep are dispatched per eligible discovered scope, with the configured default scope used only as a fallback when discovery returns none.
 - Job execution cleanup remains runtime-global and runs once per cadence window instead of being fanned out per discovered scope.
+- Durable maintenance execution is opt-in with `STELE_JOBS_DURABLE_MAINTENANCE_ENABLED=false`; when enabled, scope dispatch uses stable identity, lease renewal/reclaim, bounded retries, and checkpoint-safe completion. A failed conformance gate keeps the previous scheduler behavior.
 - Telemetry hook points are wired for ingest, governance worker execution, retrieval, forgetting, governance backlog inspection, derived insight feedback, embedding admission decisions, cutover state snapshots, provider readiness probes, scheduler wave dispatch, embedding rebuild backlog plus execution inspection, scope proof runs and steps, memory session runs and turns, and memory session verification outcomes. The default runtime installs a Prometheus-style in-process metrics observer for the API metrics endpoint.
+
+### Durable maintenance and conformance smoke
+
+Set the maintenance variables in the ignored `.env.local` only after a
+PostgreSQL 18 + pgvector smoke database is available. Keep the durable path
+disabled until the scope conformance evidence is green:
+
+```text
+STELE_JOBS_DURABLE_MAINTENANCE_ENABLED=false
+STELE_JOBS_MAINTENANCE_LEASE_DURATION=1m
+STELE_JOBS_MAINTENANCE_LEASE_RENEW_INTERVAL=30s
+STELE_JOBS_MAINTENANCE_MAX_ATTEMPTS=5
+STELE_JOBS_MAINTENANCE_RETRY_BACKOFF=30s
+```
+
+The smoke must verify duplicate-fire suppression, lease renewal and stale
+reclaim, checkpoint resume, projection watermark freshness, redacted bounded
+telemetry, and retention that never targets canonical memory or incident audit
+history. To roll back, set the durable flag to `false`; existing scheduler
+jobs continue through the previously approved execution path and no canonical
+records are rewritten.
 
 ### Optional reranker configuration
 

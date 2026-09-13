@@ -1143,6 +1143,17 @@ func buildSchedulerRuntime(ctx context.Context, cfg config.Config, deps schedule
 			},
 		)
 	}
+	if cfg.Jobs.DurableMaintenanceEnabled {
+		for i, candidate := range scheduler.Jobs {
+			if dispatch, ok := candidate.(jobs.ScopeDispatchJob); ok {
+				dispatch.DurableStore = repo
+				dispatch.WorkerID = "scheduler"
+				dispatch.DurableCadence = schedulerInterval
+				dispatch.Now = now
+				scheduler.Jobs[i] = dispatch
+			}
+		}
+	}
 
 	return schedulerRuntime{
 		bootstrapper: bootstrapperFunc(func(ctx context.Context) error {

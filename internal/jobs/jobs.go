@@ -1408,6 +1408,10 @@ type ScopeDispatchJob struct {
 	ScopeBatchLimit int
 	FallbackScope   memory.Scope
 	Dispatch        func(scope memory.Scope) MaintenanceJob
+	DurableStore    MaintenanceExecutionStore
+	WorkerID        string
+	DurableCadence  time.Duration
+	Now             func() time.Time
 }
 
 func (j ScopeDispatchJob) Name() string {
@@ -1447,6 +1451,9 @@ func (j ScopeDispatchJob) Run(ctx context.Context) (int, error) {
 		job := j.Dispatch(normalized)
 		if job == nil {
 			continue
+		}
+		if j.DurableStore != nil {
+			job = DurableMaintenanceJob{Job: job, Store: j.DurableStore, Scope: normalized, WorkerID: j.WorkerID, Cadence: j.DurableCadence, Now: j.Now}
 		}
 
 		processed, err := job.Run(ctx)
