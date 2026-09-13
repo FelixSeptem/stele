@@ -2,15 +2,15 @@
 
 - [x] 1.1 Add failing unit tests for stable maintenance identity, exact-scope validation, cadence-window idempotency, and duplicate-fire dispositions; verify tests fail before implementation.
 - [x] 1.2 Extend maintenance execution domain types with stable identity, attempt/retry, lease, checkpoint/watermark, terminal disposition, and bounded category validation; verify focused jobs tests pass.
-- [ ] 1.3 Add failing repository tests for conditional lease acquire, renew, complete, stale reclaim, retry scheduling, and cursor-paginated run history; verify SQL expectations include exact scope and owner predicates.
-- [ ] 1.4 Implement idempotent PostgreSQL migration fields, constraints, and indexes on existing job execution records; verify migration manifest, up/down tests, and repeat application pass.
-- [ ] 1.5 Implement repository compare-and-set transitions and bounded history pagination; verify concurrent claim, owner conflict, stale reclaim, and duplicate identity tests pass.
+- [x] 1.3 Add failing repository tests for conditional lease acquire, renew, complete, stale reclaim, retry scheduling, and cursor-paginated run history; verify SQL expectations include exact scope and owner predicates.
+- [x] 1.4 Implement idempotent PostgreSQL migration fields, constraints, and indexes on existing job execution records; verify migration manifest, up/down tests, and repeat application pass.
+- [x] 1.5 Implement repository compare-and-set transitions and bounded history pagination; verify concurrent claim, owner conflict, stale reclaim, and duplicate identity tests pass.
 - [ ] 1.6 Wire scheduler and worker maintenance dispatch to durable identity, lease renewal, retry/backoff, and checkpoint resume; verify restart and duplicate-fire orchestration tests pass.
 
 ## 2. Projection freshness and SLO
 
-- [ ] 2.1 Add failing tests for source/projection watermark matching, freshness windows, policy/renderer identity, lifecycle visibility, exact scope, and SLO bucket classification.
-- [ ] 2.2 Implement projection maintenance evidence calculation and fail-closed eligibility transitions without mutating canonical records; verify focused retrieval/projection tests pass.
+- [x] 2.1 Add failing tests for source/projection watermark matching, freshness windows, policy/renderer identity, lifecycle visibility, exact scope, and SLO bucket classification.
+- [x] 2.2 Implement projection maintenance evidence calculation and fail-closed eligibility transitions without mutating canonical records; verify focused retrieval/projection tests pass.
 - [ ] 2.3 Add repository persistence and retrieval filtering for freshness/rebuild evidence; verify stale, divergent, foreign, and hidden projections are excluded from ordinary retrieval.
 - [ ] 2.4 Add bounded maintenance SLO configuration and validation for age, duration, retry, and rebuild limits; verify invalid and over-limit configuration tests pass.
 - [ ] 2.5 Integrate projection freshness/rebuild checks into scope maintenance dispatch and checkpoint resume; verify exact-scope rebuild and interrupted-run recovery tests pass.

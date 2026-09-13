@@ -4635,6 +4635,97 @@ func TestRepositoryAcquireMaintenanceLeaseUsesExactScopeAndOwnerCAS(t *testing.T
 	}
 }
 
+func TestRepositoryRenewMaintenanceLeaseUsesOwnerAndExpiryCAS(t *testing.T) {
+	mock, _ := pgxmock.NewPool()
+	defer mock.Close()
+	repo := &Repository{db: mock}
+	now := time.Date(2026, 9, 13, 10, 0, 0, 0, time.UTC)
+	identity, _ := jobs.NewMaintenanceIdentity("projection_refresh", memory.Scope{Tenant: "t", Project: "p", Namespace: "n"}, now, time.Hour)
+	input := jobs.MaintenanceLeaseInput{Identity: identity, WorkerID: "worker-1", Now: now, LeaseUntil: now.Add(time.Minute), Attempt: 1, Checkpoint: "cp-1", Watermark: "wm-1"}
+	mock.ExpectExec("UPDATE job_executions SET lease_until").WithArgs(identity.Key(), input.LeaseUntil, input.Checkpoint, input.Watermark, "t", "p", "n", "worker-1", now).WillReturnResult(pgxmock.NewResult("UPDATE", 1))
+	if err := repo.RenewMaintenanceLease(context.Background(), input); err != nil {
+		t.Fatalf("RenewMaintenanceLease() error = %v", err)
+	}
+	if err := mock.ExpectationsWereMet(); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestRepositoryCompleteMaintenanceExecutionUsesOwnerCAS(t *testing.T) {
+	mock, _ := pgxmock.NewPool()
+	defer mock.Close()
+	repo := &Repository{db: mock}
+	now := time.Date(2026, 9, 13, 10, 0, 0, 0, time.UTC)
+	identity, _ := jobs.NewMaintenanceIdentity("projection_refresh", memory.Scope{Tenant: "t", Project: "p", Namespace: "n"}, now, time.Hour)
+	input := jobs.MaintenanceCompletion{Identity: identity, WorkerID: "worker-1", FinishedAt: now.Add(time.Minute), ProcessedCount: 2, Disposition: jobs.MaintenanceDispositionCompleted}
+	mock.ExpectExec("UPDATE job_executions SET status='completed'").WithArgs(identity.Key(), input.Disposition, 2, "", input.FinishedAt, "t", "p", "n", "worker-1").WillReturnResult(pgxmock.NewResult("UPDATE", 1))
+	if err := repo.CompleteMaintenanceExecution(context.Background(), input); err != nil {
+		t.Fatalf("CompleteMaintenanceExecution() error = %v", err)
+	}
+	if err := mock.ExpectationsWereMet(); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestRepositoryFailMaintenanceExecutionPersistsRetryCheckpoint(t *testing.T) {
+	mock, _ := pgxmock.NewPool()
+	defer mock.Close()
+	repo := &Repository{db: mock}
+	now := time.Date(2026, 9, 13, 10, 0, 0, 0, time.UTC)
+	identity, _ := jobs.NewMaintenanceIdentity("projection_refresh", memory.Scope{Tenant: "t", Project: "p", Namespace: "n"}, now, time.Hour)
+	input := jobs.MaintenanceFailure{Identity: identity, WorkerID: "worker-1", FailedAt: now.Add(time.Minute), NextAttemptAt: now.Add(2 * time.Minute), ErrorCategory: "timeout", Checkpoint: "cp-1", Watermark: "wm-1"}
+	mock.ExpectExec("UPDATE job_executions SET status='failed'").WithArgs(identity.Key(), "timeout", input.NextAttemptAt, "cp-1", "wm-1", input.FailedAt, "t", "p", "n", "worker-1").WillReturnResult(pgxmock.NewResult("UPDATE", 1))
+	if err := repo.FailMaintenanceExecution(context.Background(), input); err != nil {
+		t.Fatalf("FailMaintenanceExecution() error = %v", err)
+	}
+	if err := mock.ExpectationsWereMet(); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestRepositoryReclaimsOnlyExpiredMaintenanceLease(t *testing.T) {
+	mock, _ := pgxmock.NewPool()
+	defer mock.Close()
+	repo := &Repository{db: mock}
+	now := time.Date(2026, 9, 13, 10, 0, 0, 0, time.UTC)
+	identity, _ := jobs.NewMaintenanceIdentity("projection_refresh", memory.Scope{Tenant: "t", Project: "p", Namespace: "n"}, now, time.Hour)
+	input := jobs.MaintenanceLeaseInput{Identity: identity, WorkerID: "worker-2", Now: now, LeaseUntil: now.Add(time.Minute), Attempt: 2}
+	mock.ExpectQuery("UPDATE job_executions SET worker_id").WithArgs(identity.Key(), "worker-2", input.LeaseUntil, now, "t", "p", "n", now).WillReturnRows(pgxmock.NewRows([]string{"bool"}).AddRow(true))
+	reclaimed, err := repo.ReclaimMaintenanceLease(context.Background(), input)
+	if err != nil {
+		t.Fatalf("ReclaimMaintenanceLease() error = %v", err)
+	}
+	if !reclaimed {
+		t.Fatal("ReclaimMaintenanceLease() = false, want true")
+	}
+	if err := mock.ExpectationsWereMet(); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestRepositoryListsMaintenanceHistoryWithCursor(t *testing.T) {
+	mock, _ := pgxmock.NewPool()
+	defer mock.Close()
+	repo := &Repository{db: mock}
+	scope := memory.Scope{Tenant: "t", Project: "p", Namespace: "n"}
+	started := time.Date(2026, 9, 13, 10, 0, 0, 0, time.UTC)
+	rows := pgxmock.NewRows([]string{"job_name", "tenant", "project", "namespace", "trigger_source", "idempotency_key", "status", "attempt", "processed_count", "error_message", "started_at", "finished_at"}).AddRow("projection_refresh", "t", "p", "n", "scheduler", "key-1", jobs.JobExecutionStatusCompleted, 1, 2, nil, started, started.Add(time.Minute))
+	mock.ExpectQuery("SELECT job_name, job_name|SELECT job_name").WithArgs("t", "p", "n", nil, nil, 1).WillReturnRows(rows)
+	page, err := repo.ListMaintenanceExecutionHistory(context.Background(), scope, 1, nil)
+	if err != nil {
+		t.Fatalf("ListMaintenanceExecutionHistory() error = %v", err)
+	}
+	if len(page.Records) != 1 || page.NextCursor == nil {
+		t.Fatalf("page = %+v, want one record and cursor", page)
+	}
+	if page.NextCursor.ID != "key-1" {
+		t.Fatalf("cursor id = %q, want key-1", page.NextCursor.ID)
+	}
+	if err := mock.ExpectationsWereMet(); err != nil {
+		t.Fatal(err)
+	}
+}
+
 func containsSQL(haystack, needle string) bool {
 	return len(haystack) >= len(needle) && context.Background() != nil && (stringIndex(haystack, needle) >= 0)
 }

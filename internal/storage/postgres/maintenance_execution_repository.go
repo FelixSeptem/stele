@@ -2,10 +2,12 @@ package postgres
 
 import (
 	"context"
+	"database/sql"
 	"fmt"
 	"strings"
 
 	"github.com/FelixSeptem/stele/internal/jobs"
+	"github.com/FelixSeptem/stele/internal/memory"
 	"github.com/jackc/pgx/v5"
 )
 
@@ -45,6 +47,22 @@ func (r *Repository) RenewMaintenanceLease(ctx context.Context, input jobs.Maint
 	return nil
 }
 
+func (r *Repository) ReclaimMaintenanceLease(ctx context.Context, input jobs.MaintenanceLeaseInput) (bool, error) {
+	if err := validateMaintenanceLeaseInput(input); err != nil {
+		return false, err
+	}
+	const query = `UPDATE job_executions SET worker_id=$2, lease_until=$3, status='running', attempt=attempt+1, started_at=$4 WHERE idempotency_key=$1 AND tenant=$5 AND project=$6 AND namespace=$7 AND status='running' AND lease_until IS NOT NULL AND lease_until <= $8 RETURNING true`
+	var reclaimed bool
+	err := r.db.QueryRow(ctx, query, input.Identity.Key(), input.WorkerID, input.LeaseUntil, input.Now, input.Identity.Scope.Tenant, input.Identity.Scope.Project, input.Identity.Scope.Namespace, input.Now).Scan(&reclaimed)
+	if err == pgx.ErrNoRows {
+		return false, nil
+	}
+	if err != nil {
+		return false, fmt.Errorf("reclaim maintenance lease: %w", err)
+	}
+	return reclaimed, nil
+}
+
 func (r *Repository) CompleteMaintenanceExecution(ctx context.Context, input jobs.MaintenanceCompletion) error {
 	if err := input.Identity.Scope.Validate(); err != nil {
 		return err
@@ -78,6 +96,61 @@ func (r *Repository) FailMaintenanceExecution(ctx context.Context, input jobs.Ma
 		return fmt.Errorf("fail maintenance execution: %w", err)
 	}
 	return nil
+}
+
+func (r *Repository) ListMaintenanceExecutionHistory(ctx context.Context, scope memory.Scope, limit int, cursor *jobs.MaintenanceHistoryCursor) (jobs.MaintenanceHistoryPage, error) {
+	if err := scope.Validate(); err != nil {
+		return jobs.MaintenanceHistoryPage{}, err
+	}
+	if limit <= 0 || limit > 100 {
+		limit = 100
+	}
+	const query = `SELECT job_name, tenant, project, namespace, trigger_source, idempotency_key, status, attempt, processed_count, error_message, started_at, finished_at FROM job_executions WHERE tenant=$1 AND project=$2 AND namespace=$3 AND ($4::timestamptz IS NULL OR (started_at,idempotency_key) < ($4,$5)) ORDER BY started_at DESC, idempotency_key DESC LIMIT $6`
+	rows, err := r.db.Query(ctx, query, scope.Tenant, scope.Project, scope.Namespace, cursorTime(cursor), cursorID(cursor), limit)
+	if err != nil {
+		return jobs.MaintenanceHistoryPage{}, fmt.Errorf("list maintenance execution history: %w", err)
+	}
+	defer rows.Close()
+	page := jobs.MaintenanceHistoryPage{Records: make([]jobs.JobExecutionRecord, 0, limit)}
+	for rows.Next() {
+		var record jobs.JobExecutionRecord
+		var errorMessage sql.NullString
+		var finishedAt sql.NullTime
+		if err := rows.Scan(&record.JobName, &record.Scope.Tenant, &record.Scope.Project, &record.Scope.Namespace, &record.TriggerSource, &record.IdempotencyKey, &record.Status, &record.Attempt, &record.ProcessedCount, &errorMessage, &record.StartedAt, &finishedAt); err != nil {
+			return jobs.MaintenanceHistoryPage{}, fmt.Errorf("scan maintenance execution history: %w", err)
+		}
+		if errorMessage.Valid {
+			record.ErrorMessage = errorMessage.String
+		}
+		if finishedAt.Valid {
+			record.FinishedAt = finishedAt.Time
+		}
+		page.Records = append(page.Records, record)
+		if len(page.Records) == limit {
+			break
+		}
+	}
+	if err := rows.Err(); err != nil {
+		return jobs.MaintenanceHistoryPage{}, err
+	}
+	if len(page.Records) == limit && len(page.Records) > 0 {
+		last := page.Records[len(page.Records)-1]
+		page.NextCursor = &jobs.MaintenanceHistoryCursor{StartedAt: last.StartedAt, ID: last.IdempotencyKey}
+	}
+	return page, nil
+}
+
+func cursorTime(cursor *jobs.MaintenanceHistoryCursor) any {
+	if cursor == nil || cursor.StartedAt.IsZero() {
+		return nil
+	}
+	return cursor.StartedAt
+}
+func cursorID(cursor *jobs.MaintenanceHistoryCursor) any {
+	if cursor == nil {
+		return nil
+	}
+	return cursor.ID
 }
 
 func validateMaintenanceLeaseInput(input jobs.MaintenanceLeaseInput) error {
