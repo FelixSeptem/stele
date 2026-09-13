@@ -138,6 +138,10 @@ type JobConfig struct {
 	WorkflowDiagnosticScanLimit      int
 	WorkflowNextActionRefreshLimit   int
 	WorkflowHistoryRetention         time.Duration
+	MaintenanceLeaseDuration         time.Duration
+	MaintenanceLeaseRenewInterval    time.Duration
+	MaintenanceMaxAttempts           int
+	MaintenanceRetryBackoff          time.Duration
 }
 
 type AssuranceConfig struct {
@@ -282,6 +286,25 @@ func LoadFromEnv() (Config, error) {
 	maintenanceScopeBatchLimit, err := loadIntWithDefault("STELE_JOBS_MAINTENANCE_SCOPE_BATCH_LIMIT", 100)
 	if err != nil {
 		return Config{}, err
+	}
+	maintenanceLeaseDuration, err := loadDurationWithDefault("STELE_JOBS_MAINTENANCE_LEASE_DURATION", time.Minute)
+	if err != nil {
+		return Config{}, err
+	}
+	maintenanceLeaseRenewInterval, err := loadDurationWithDefault("STELE_JOBS_MAINTENANCE_LEASE_RENEW_INTERVAL", 30*time.Second)
+	if err != nil {
+		return Config{}, err
+	}
+	maintenanceMaxAttempts, err := loadIntWithDefault("STELE_JOBS_MAINTENANCE_MAX_ATTEMPTS", 5)
+	if err != nil {
+		return Config{}, err
+	}
+	maintenanceRetryBackoff, err := loadDurationWithDefault("STELE_JOBS_MAINTENANCE_RETRY_BACKOFF", 30*time.Second)
+	if err != nil {
+		return Config{}, err
+	}
+	if maintenanceLeaseDuration < time.Second || maintenanceLeaseRenewInterval <= 0 || maintenanceLeaseRenewInterval >= maintenanceLeaseDuration || maintenanceMaxAttempts < 1 || maintenanceMaxAttempts > 20 || maintenanceRetryBackoff < time.Second {
+		return Config{}, fmt.Errorf("maintenance lease and retry settings are invalid")
 	}
 	workflowDiagnosticCadence, err := loadDurationWithDefault("STELE_WORKFLOW_DIAGNOSTIC_INTERVAL", maintenanceInterval)
 	if err != nil {
@@ -486,6 +509,10 @@ func LoadFromEnv() (Config, error) {
 			GovernanceRetryBackoff:           governanceRetryBackoff,
 			GovernanceLeaseRenewPeriod:       governanceLeaseRenewPeriod,
 			MaintenanceScopeBatchLimit:       maintenanceScopeBatchLimit,
+			MaintenanceLeaseDuration:         maintenanceLeaseDuration,
+			MaintenanceLeaseRenewInterval:    maintenanceLeaseRenewInterval,
+			MaintenanceMaxAttempts:           maintenanceMaxAttempts,
+			MaintenanceRetryBackoff:          maintenanceRetryBackoff,
 			WorkflowMaintenanceEnabled:       loadBoolEnv("STELE_WORKFLOW_MAINTENANCE_ENABLED"),
 			WorkflowDiagnosticCadence:        workflowDiagnosticCadence,
 			WorkflowStaleRunWindow:           workflowStaleRunWindow,

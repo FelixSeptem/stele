@@ -301,3 +301,18 @@ func TestLoadFromEnvRejectsUnsafeQueryAnalysisBounds(t *testing.T) {
 		})
 	}
 }
+
+func TestLoadFromEnvParsesDurableMaintenanceBounds(t *testing.T) {
+	t.Setenv("STELE_MODE", "scheduler")
+	t.Setenv("STELE_POSTGRES_DSN", "postgres://example")
+	t.Setenv("STELE_JOBS_MAINTENANCE_LEASE_DURATION", "2m")
+	t.Setenv("STELE_JOBS_MAINTENANCE_LEASE_RENEW_INTERVAL", "30s")
+	t.Setenv("STELE_JOBS_MAINTENANCE_MAX_ATTEMPTS", "4")
+	cfg, err := LoadFromEnv()
+	if err != nil {
+		t.Fatalf("LoadFromEnv() error = %v", err)
+	}
+	if cfg.Jobs.MaintenanceLeaseDuration != 2*time.Minute || cfg.Jobs.MaintenanceMaxAttempts != 4 {
+		t.Fatalf("maintenance config = %+v", cfg.Jobs)
+	}
+}

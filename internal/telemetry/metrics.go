@@ -114,6 +114,30 @@ func (o *MetricsObserver) RecordRetrievalEvaluation(ctx context.Context, event R
 	}, 1)
 }
 
+func (o *MetricsObserver) RecordMaintenance(ctx context.Context, event MaintenanceEvent) {
+	if o == nil {
+		return
+	}
+	o.addCounter("stele_maintenance_total", map[string]string{
+		"job_class":        maintenanceLabel(event.JobClass, []string{"projection_refresh", "retention", "conformance"}),
+		"outcome":          maintenanceLabel(event.Outcome, []string{"success", "failure", "duplicate", "skipped"}),
+		"lease_outcome":    maintenanceLabel(event.LeaseOutcome, []string{"acquired", "renewed", "reclaimed", "conflict", "none"}),
+		"freshness":        maintenanceLabel(event.Freshness, []string{"fresh", "stale", "missing", "divergent", "foreign_scope", "lifecycle_hidden", "unknown"}),
+		"slo":              maintenanceLabel(event.SLO, []string{"within_budget", "over_budget", "unknown"}),
+		"latency_bucket":   maintenanceLabel(event.LatencyBucket, []string{"lt_1s", "1s_10s", "gt_10s", "unknown"}),
+		"candidate_bucket": maintenanceLabel(event.CandidateBucket, []string{"0_10", "11_50", "gt_50", "unknown"}),
+	}, 1)
+}
+
+func maintenanceLabel(value string, allowed []string) string {
+	for _, candidate := range allowed {
+		if value == candidate {
+			return candidate
+		}
+	}
+	return "unknown"
+}
+
 type DerivedInsightReplayEvent struct {
 	Mode        string
 	Result      string

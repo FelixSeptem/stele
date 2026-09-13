@@ -54,6 +54,26 @@ func TestMetricsObserverExportsOperationsBacklogsAndAdmission(t *testing.T) {
 	}
 }
 
+func TestMetricsObserverExportsBoundedMaintenanceEvent(t *testing.T) {
+	observer := NewMetricsObserver()
+	observer.RecordMaintenance(context.Background(), MaintenanceEvent{JobClass: "projection_refresh", Outcome: "success", LeaseOutcome: "renewed", Freshness: "fresh", SLO: "within_budget", LatencyBucket: "lt_1s", CandidateBucket: "0_10"})
+	metrics := observer.RenderPrometheus()
+	if !strings.Contains(metrics, `stele_maintenance_total{candidate_bucket="0_10",freshness="fresh",job_class="projection_refresh",latency_bucket="lt_1s",lease_outcome="renewed",outcome="success",slo="within_budget"} 1`) {
+		t.Fatalf("maintenance metric missing:\n%s", metrics)
+	}
+}
+
+func TestMetricsObserverMaintenanceTelemetryDoesNotEmitRawSensitiveValues(t *testing.T) {
+	observer := NewMetricsObserver()
+	observer.RecordMaintenance(context.Background(), MaintenanceEvent{JobClass: "query text tenant-a", Outcome: "https://secret.invalid/provider", LeaseOutcome: "memory-id-1", Freshness: "scope-value", SLO: "raw-score-0.99", LatencyBucket: "plan details", CandidateBucket: "postgres://secret"})
+	metrics := observer.RenderPrometheus()
+	for _, forbidden := range []string{"tenant-a", "secret.invalid", "memory-id-1", "scope-value", "raw-score", "plan details", "postgres://"} {
+		if strings.Contains(metrics, forbidden) {
+			t.Fatalf("maintenance telemetry leaked %q:\n%s", forbidden, metrics)
+		}
+	}
+}
+
 func TestRuntimeLifecycleMetricsRemainBoundedAndRedacted(t *testing.T) {
 	observer := NewMetricsObserver()
 	observer.RecordOperation(context.Background(), OperationEvent{

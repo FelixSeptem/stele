@@ -12,13 +12,13 @@
 - [x] 2.1 Add failing tests for source/projection watermark matching, freshness windows, policy/renderer identity, lifecycle visibility, exact scope, and SLO bucket classification.
 - [x] 2.2 Implement projection maintenance evidence calculation and fail-closed eligibility transitions without mutating canonical records; verify focused retrieval/projection tests pass.
 - [ ] 2.3 Add repository persistence and retrieval filtering for freshness/rebuild evidence; verify stale, divergent, foreign, and hidden projections are excluded from ordinary retrieval.
-- [ ] 2.4 Add bounded maintenance SLO configuration and validation for age, duration, retry, and rebuild limits; verify invalid and over-limit configuration tests pass.
+- [x] 2.4 Add bounded maintenance SLO configuration and validation for age, duration, retry, and rebuild limits; verify invalid and over-limit configuration tests pass.
 - [ ] 2.5 Integrate projection freshness/rebuild checks into scope maintenance dispatch and checkpoint resume; verify exact-scope rebuild and interrupted-run recovery tests pass.
 
 ## 3. Internal observability and retention
 
-- [ ] 3.1 Add failing telemetry tests for fixed maintenance job, lease/retry/recovery, freshness, channel, candidate/expansion, latency, and SLO categories plus sensitive-field rejection.
-- [ ] 3.2 Implement typed low-cardinality maintenance and retrieval telemetry constructors and bounded structured logs; verify no query, scope value, identifier, raw score, provider payload, or credential is emitted.
+- [x] 3.1 Add failing telemetry tests for fixed maintenance job, lease/retry/recovery, freshness, channel, candidate/expansion, latency, and SLO categories plus sensitive-field rejection.
+- [x] 3.2 Implement typed low-cardinality maintenance and retrieval telemetry constructors and bounded structured logs; verify no query, scope value, identifier, raw score, provider payload, or credential is emitted.
 - [ ] 3.3 Add bounded derived-artifact retention policy and cleanup for execution diagnostics, freshness evidence, conformance evidence, and redacted trajectories; verify cleanup is idempotent and canonical/incident records survive.
 - [ ] 3.4 Wire scheduler, worker, projection, and retention outcomes to telemetry; verify integration metrics/log tests expose only fixed categories and bucket values.
 

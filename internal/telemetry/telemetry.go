@@ -29,6 +29,16 @@ type BacklogEvent struct {
 	ObservedAt time.Time
 }
 
+type MaintenanceEvent struct {
+	JobClass        string
+	Outcome         string
+	LeaseOutcome    string
+	Freshness       string
+	SLO             string
+	LatencyBucket   string
+	CandidateBucket string
+}
+
 // RetrievalEvaluationEvent is intentionally low-cardinality. It contains no scope,
 // query, memory, source, credential, DSN, or raw error payload.
 type RetrievalEvaluationEvent struct {
