@@ -115,6 +115,7 @@ func TestEvaluationFixtureSeederSeedsOwnedPostgresFixture(t *testing.T) {
 		RankingVersion:              "baseline-v1",
 		CompatibleEmbeddingRevision: "deterministic-v1",
 		PolicyVersion:               "quality-policy-v1",
+		RolloutDisposition:          "original_only",
 	})
 	if err != nil {
 		t.Fatalf("Replay() error = %v", err)

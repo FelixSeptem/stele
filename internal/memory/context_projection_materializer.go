@@ -80,7 +80,7 @@ func RebuildContextProjectionFromStore(ctx context.Context, request ContextProje
 	if request.Limit <= 0 {
 		return ContextProjection{}, fmt.Errorf("projection rebuild limit must be greater than zero")
 	}
-	latest, err := store.ReadLatestContextProjection(ctx, request.Scope, request.Kind)
+	latest, err := readLatestProjectionForMaintenance(ctx, store, request.Scope, request.Kind)
 	version := int64(1)
 	if err == nil && latest.Version >= version {
 		version = latest.Version + 1
@@ -99,7 +99,7 @@ func RebuildContextProjection(ctx context.Context, input MaterializeContextProje
 	if store == nil {
 		return ContextProjection{}, fmt.Errorf("projection rebuild store is not configured")
 	}
-	latest, err := store.ReadLatestContextProjection(ctx, input.Scope, input.Kind)
+	latest, err := readLatestProjectionForMaintenance(ctx, store, input.Scope, input.Kind)
 	if err == nil && latest.Version >= input.Version {
 		input.Version = latest.Version + 1
 	}
@@ -110,9 +110,21 @@ func RebuildContextProjection(ctx context.Context, input MaterializeContextProje
 	return store.CreateContextProjection(ctx, projection)
 }
 
+type maintenanceProjectionReader interface {
+	ReadLatestContextProjectionForMaintenance(context.Context, Scope, ContextProjectionKind) (ContextProjection, error)
+}
+
+func readLatestProjectionForMaintenance(ctx context.Context, store ContextProjectionRebuilder, scope Scope, kind ContextProjectionKind) (ContextProjection, error) {
+	if reader, ok := store.(maintenanceProjectionReader); ok {
+		return reader.ReadLatestContextProjectionForMaintenance(ctx, scope, kind)
+	}
+	return store.ReadLatestContextProjection(ctx, scope, kind)
+}
+
 // MaterializeContextProjection builds a new derived projection from an
 // authorized source snapshot. It never mutates source records.
 func MaterializeContextProjection(ctx context.Context, input MaterializeContextProjectionInput) (ContextProjection, error) {
+	started := time.Now()
 	if err := input.Scope.Validate(); err != nil {
 		return ContextProjection{}, err
 	}
@@ -174,7 +186,9 @@ func MaterializeContextProjection(ctx context.Context, input MaterializeContextP
 	sort.Strings(watermark.CanonicalVersionIDs)
 	sort.Strings(watermark.RawEventIDs)
 	SortContextProjectionItems(items)
-	projection := ContextProjection{ID: projectionID(input), Scope: input.Scope.Normalized(), Kind: input.Kind, Version: input.Version, SchemaVersion: input.SchemaVersion, PolicyVersion: input.Policy.Version, RendererVersion: input.RendererVersion, SourceWatermark: watermark, Status: ContextProjectionStatusActive, Items: items, CreatedAt: time.Now().UTC(), UpdatedAt: time.Now().UTC()}
+	completedAt := time.Now().UTC()
+	projection := ContextProjection{ID: projectionID(input), Scope: input.Scope.Normalized(), Kind: input.Kind, Version: input.Version, SchemaVersion: input.SchemaVersion, PolicyVersion: input.Policy.Version, RendererVersion: input.RendererVersion, SourceWatermark: watermark, Status: ContextProjectionStatusActive, Items: items, CreatedAt: completedAt, UpdatedAt: completedAt,
+		FreshnessCategory: ProjectionFreshnessFresh, FreshnessSLO: ProjectionSLOWithinBudget, FreshnessAge: 0, FreshnessDuration: time.Since(started), FreshnessEligible: true, RebuildCheckpoint: "complete", RebuildRequired: false}
 	if err := projection.Validate(); err != nil {
 		return ContextProjection{}, err
 	}

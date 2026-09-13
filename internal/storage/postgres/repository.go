@@ -1414,6 +1414,24 @@ WHERE finished_at IS NOT NULL
 	return int(tag.RowsAffected()), nil
 }
 
+func (r *Repository) DeleteJobExecutionsBeforeScope(ctx context.Context, scope memory.Scope, cutoff time.Time, limit int) (int, error) {
+	if err := scope.Validate(); err != nil {
+		return 0, err
+	}
+	if cutoff.IsZero() {
+		return 0, fmt.Errorf("cutoff is required")
+	}
+	if limit <= 0 || limit > 1000 {
+		limit = 100
+	}
+	const query = `DELETE FROM job_executions WHERE id IN (SELECT id FROM job_executions WHERE tenant=$1 AND project=$2 AND namespace=$3 AND finished_at IS NOT NULL AND finished_at < $4 ORDER BY finished_at ASC, id ASC LIMIT $5)`
+	tag, err := r.db.Exec(ctx, query, scope.Tenant, scope.Project, scope.Namespace, cutoff, limit)
+	if err != nil {
+		return 0, fmt.Errorf("delete scoped job executions before cutoff: %w", err)
+	}
+	return int(tag.RowsAffected()), nil
+}
+
 func (r *Repository) GetLatestCanonicalByScopeAndClass(ctx context.Context, scope memory.Scope, class memory.MemoryClass) (memory.CanonicalMemory, bool, error) {
 	const query = `
 SELECT

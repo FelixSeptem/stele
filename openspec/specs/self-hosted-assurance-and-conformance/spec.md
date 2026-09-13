@@ -2,7 +2,9 @@
 
 ## Purpose
 TBD - created by archiving change self-hosted-assurance-and-conformance-loop. Update Purpose after archive.
+
 ## Requirements
+
 ### Requirement: Scope health evaluations are durable and scoped
 The service SHALL persist operational health evaluations for one tenant, project, and namespace using bounded status, severity, component, and reason categories.
 
@@ -197,3 +199,20 @@ The service SHALL include recent integration workflow completion and gap diagnos
 #### Scenario: Recovery verification references workflow run
 - **WHEN** recovery verification is requested after a workflow-related incident or conformance failure
 - **THEN** the recovery report can link workflow run, step, evidence, diagnostic, conformance, proof, or session evidence without overwriting prior history
+
+### Requirement: Assurance includes durable maintenance closure
+
+The service SHALL include maintenance scope coverage, lease recovery,
+projection freshness/rebuild, retention safety, and telemetry redaction in
+authorized conformance and readiness evidence. The evidence SHALL remain
+diagnostic, bounded, and scope-safe.
+
+#### Scenario: Readiness includes maintenance evidence
+
+- **WHEN** an authorized conformance run evaluates a durable scope
+- **THEN** its readiness evidence includes bounded maintenance coverage, freshness, recovery, retention, and observability outcomes
+
+#### Scenario: Maintenance evidence is incomplete
+
+- **WHEN** a required scope, recovery result, freshness result, or redaction check is missing
+- **THEN** the conformance result is incomplete or failed and cannot be reported as operationally ready

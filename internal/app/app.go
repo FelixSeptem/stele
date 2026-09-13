@@ -1079,6 +1079,7 @@ func buildSchedulerRuntime(ctx context.Context, cfg config.Config, deps schedule
 						Cadence:        conformanceInterval,
 						Now:            now,
 						Limit:          cfg.Jobs.DerivedInsightBatchSize,
+						Observer:       deps.observer,
 					}
 				},
 			},
@@ -1109,6 +1110,18 @@ func buildSchedulerRuntime(ctx context.Context, cfg config.Config, deps schedule
 				Cleaner:         repo,
 				ExecutionStore:  repo,
 				TriggerSource:   "scheduler",
+			},
+			jobs.ScopeDispatchJob{
+				NameValue: "derived_artifact_retention_dispatch", ScopeSource: repo, ScopeBatchLimit: cfg.Jobs.MaintenanceScopeBatchLimit, FallbackScope: scope,
+				Dispatch: func(scope memory.Scope) jobs.MaintenanceJob {
+					return jobs.DerivedArtifactRetentionJob{Scope: scope, Store: repo, Now: now, RetentionWindow: cfg.Assurance.ConformanceRetention, Limit: 100, Observer: deps.observer}
+				},
+			},
+			jobs.ScopeDispatchJob{
+				NameValue: "context_projection_rebuild_dispatch", ScopeSource: repo, ScopeBatchLimit: cfg.Jobs.MaintenanceScopeBatchLimit, FallbackScope: scope,
+				Dispatch: func(scope memory.Scope) jobs.MaintenanceJob {
+					return jobs.ContextProjectionRebuildJob{Scope: scope, Service: memory.NewContextProjectionMaintenanceService(repo), Kind: memory.ContextProjectionKindAlwaysVisible, Limit: 100, SchemaVersion: "schema-v1", Policy: memory.DefaultContextProjectionPolicy("policy-v1"), RendererVersion: "renderer-v1", Observer: deps.observer}
+				},
 			},
 		},
 		Interval:     schedulerInterval,
@@ -1149,7 +1162,13 @@ func buildSchedulerRuntime(ctx context.Context, cfg config.Config, deps schedule
 				dispatch.DurableStore = repo
 				dispatch.WorkerID = "scheduler"
 				dispatch.DurableCadence = schedulerInterval
+				dispatch.DurableLeaseDuration = cfg.Jobs.MaintenanceLeaseDuration
+				dispatch.DurableLeaseRenewInterval = cfg.Jobs.MaintenanceLeaseRenewInterval
+				dispatch.DurableRetryBackoff = cfg.Jobs.MaintenanceRetryBackoff
+				dispatch.DurableMaxAttempts = cfg.Jobs.MaintenanceMaxAttempts
+				dispatch.Observer = deps.observer
 				dispatch.Now = now
+				dispatch.FallbackOnDurableError = true
 				scheduler.Jobs[i] = dispatch
 			}
 		}

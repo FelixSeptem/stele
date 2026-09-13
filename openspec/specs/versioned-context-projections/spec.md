@@ -2,7 +2,9 @@
 
 ## Purpose
 TBD - created by archiving change versioned-context-projections-and-bounded-assembly. Update Purpose after archive.
+
 ## Requirements
+
 ### Requirement: Context projections are durable and versioned
 The service SHALL persist scoped context projections for the kinds
 `always_visible`, `session`, `retrieval`, and `archival_history`. Every
@@ -75,3 +77,19 @@ closed for the affected item or projection.
 - **THEN** the service returns no projection items and a bounded diagnostic
   rather than foreign or stale content
 
+### Requirement: Maintenance controls projection freshness eligibility
+
+Projection maintenance SHALL persist bounded rebuild/checkpoint state and
+source/projection watermark freshness evidence. A projection with missing,
+stale, divergent, foreign, or lifecycle-hidden evidence MUST remain excluded
+from ordinary retrieval until a successful exact-scope rebuild revalidates it.
+
+#### Scenario: Exact-scope rebuild revalidates a projection
+
+- **WHEN** maintenance rebuilds a projection from PostgreSQL source records with a matching policy and renderer identity
+- **THEN** it records a deterministic completion and the projection becomes eligible only after freshness and lifecycle checks pass
+
+#### Scenario: Rebuild encounters hidden evidence
+
+- **WHEN** a rebuild discovers suppressed, forgotten, deleted, or foreign evidence
+- **THEN** it records a fail-closed lifecycle or isolation category and leaves the affected projection ineligible

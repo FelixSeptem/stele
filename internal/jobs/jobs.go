@@ -1402,16 +1402,71 @@ type MaintenanceScopeSource interface {
 	ListMaintenanceScopes(ctx context.Context, limit int) ([]memory.Scope, error)
 }
 
+type contextProjectionMaintenance interface {
+	RebuildContextProjection(ctx context.Context, request memory.ContextProjectionRebuildRequest) (memory.ContextProjection, error)
+}
+
+// ContextProjectionRebuildJob performs one bounded, exact-scope projection rebuild.
+type ContextProjectionRebuildJob struct {
+	Scope           memory.Scope
+	Service         contextProjectionMaintenance
+	Kind            memory.ContextProjectionKind
+	Limit           int
+	SchemaVersion   string
+	Policy          memory.ContextProjectionPolicy
+	RendererVersion string
+	Observer        telemetry.Observer
+}
+
+func (j ContextProjectionRebuildJob) Name() string { return "context_projection_rebuild" }
+
+func (j ContextProjectionRebuildJob) Run(ctx context.Context) (int, error) {
+	if err := j.Scope.Validate(); err != nil {
+		return 0, err
+	}
+	if j.Service == nil {
+		return 0, fmt.Errorf("context projection maintenance service is required")
+	}
+	if !j.Kind.Valid() {
+		return 0, fmt.Errorf("invalid projection kind %q", j.Kind)
+	}
+	limit := j.Limit
+	if limit <= 0 {
+		limit = 100
+	}
+	_, err := j.Service.RebuildContextProjection(ctx, memory.ContextProjectionRebuildRequest{Scope: j.Scope.Normalized(), Kind: j.Kind, Limit: limit, SchemaVersion: j.SchemaVersion, Policy: j.Policy, RendererVersion: j.RendererVersion})
+	if err != nil {
+		if observer, ok := j.Observer.(interface {
+			RecordMaintenance(context.Context, telemetry.MaintenanceEvent)
+		}); ok {
+			observer.RecordMaintenance(ctx, telemetry.MaintenanceEvent{JobClass: "projection_refresh", Outcome: "failure", LeaseOutcome: "none", Freshness: "unknown", SLO: "unknown", LatencyBucket: "unknown", CandidateBucket: "unknown"})
+		}
+		return 0, err
+	}
+	if observer, ok := j.Observer.(interface {
+		RecordMaintenance(context.Context, telemetry.MaintenanceEvent)
+	}); ok {
+		observer.RecordMaintenance(ctx, telemetry.MaintenanceEvent{JobClass: "projection_refresh", Outcome: "success", LeaseOutcome: "none", Freshness: "fresh", SLO: "within_budget", LatencyBucket: "unknown", CandidateBucket: "unknown"})
+	}
+	return 1, nil
+}
+
 type ScopeDispatchJob struct {
-	NameValue       string
-	ScopeSource     MaintenanceScopeSource
-	ScopeBatchLimit int
-	FallbackScope   memory.Scope
-	Dispatch        func(scope memory.Scope) MaintenanceJob
-	DurableStore    MaintenanceExecutionStore
-	WorkerID        string
-	DurableCadence  time.Duration
-	Now             func() time.Time
+	NameValue                 string
+	ScopeSource               MaintenanceScopeSource
+	ScopeBatchLimit           int
+	FallbackScope             memory.Scope
+	Dispatch                  func(scope memory.Scope) MaintenanceJob
+	DurableStore              MaintenanceExecutionStore
+	WorkerID                  string
+	DurableCadence            time.Duration
+	DurableLeaseDuration      time.Duration
+	DurableLeaseRenewInterval time.Duration
+	DurableRetryBackoff       time.Duration
+	DurableMaxAttempts        int
+	Observer                  telemetry.Observer
+	Now                       func() time.Time
+	FallbackOnDurableError    bool
 }
 
 func (j ScopeDispatchJob) Name() string {
@@ -1453,12 +1508,32 @@ func (j ScopeDispatchJob) Run(ctx context.Context) (int, error) {
 			continue
 		}
 		if j.DurableStore != nil {
-			job = DurableMaintenanceJob{Job: job, Store: j.DurableStore, Scope: normalized, WorkerID: j.WorkerID, Cadence: j.DurableCadence, Now: j.Now}
+			job = DurableMaintenanceJob{Job: job, Store: j.DurableStore, Scope: normalized, WorkerID: j.WorkerID, Cadence: j.DurableCadence, LeaseDuration: j.DurableLeaseDuration, LeaseRenewInterval: j.DurableLeaseRenewInterval, RetryBackoff: j.DurableRetryBackoff, MaxAttempts: j.DurableMaxAttempts, Observer: j.Observer, Now: j.Now}
 		}
 
 		processed, err := job.Run(ctx)
 		if err != nil {
+			if observer, ok := j.Observer.(interface {
+				RecordMaintenance(context.Context, telemetry.MaintenanceEvent)
+			}); ok {
+				observer.RecordMaintenance(ctx, telemetry.MaintenanceEvent{JobClass: j.Name(), Outcome: "error", LeaseOutcome: "unknown", Freshness: "unknown", SLO: "unknown", LatencyBucket: "unknown", CandidateBucket: "unknown"})
+			}
+			if j.FallbackOnDurableError && j.DurableStore != nil {
+				fallbackJob := j.Dispatch(normalized)
+				if fallbackJob != nil {
+					fallbackProcessed, fallbackErr := fallbackJob.Run(ctx)
+					if fallbackErr == nil {
+						total += fallbackProcessed
+						continue
+					}
+				}
+			}
 			return total, err
+		}
+		if observer, ok := j.Observer.(interface {
+			RecordMaintenance(context.Context, telemetry.MaintenanceEvent)
+		}); ok {
+			observer.RecordMaintenance(ctx, telemetry.MaintenanceEvent{JobClass: j.Name(), Outcome: "success", LeaseOutcome: "completed", Freshness: "unknown", SLO: "unknown", LatencyBucket: "unknown", CandidateBucket: "unknown"})
 		}
 		total += processed
 	}
@@ -1559,6 +1634,10 @@ type retentionEvaluator interface {
 
 type jobExecutionCleaner interface {
 	DeleteJobExecutionsBefore(ctx context.Context, cutoff time.Time) (int, error)
+}
+
+type scopedJobExecutionCleaner interface {
+	DeleteJobExecutionsBeforeScope(ctx context.Context, scope memory.Scope, cutoff time.Time, limit int) (int, error)
 }
 
 type assuranceEvaluationService interface {
@@ -1962,7 +2041,13 @@ func (j JobExecutionCleanupJob) Run(ctx context.Context) (int, error) {
 		return 0, nil
 	}
 
-	deleted, err := j.Cleaner.DeleteJobExecutionsBefore(ctx, current.Add(-retentionWindow))
+	cutoff := current.Add(-retentionWindow)
+	var deleted int
+	if scoped, ok := j.Cleaner.(scopedJobExecutionCleaner); ok {
+		deleted, err = scoped.DeleteJobExecutionsBeforeScope(ctx, j.Scope, cutoff, 100)
+	} else {
+		deleted, err = j.Cleaner.DeleteJobExecutionsBefore(ctx, cutoff)
+	}
 	if err != nil {
 		if failErr := failScheduledExecution(ctx, j.ExecutionStore, idempotencyKey, current, err); failErr != nil {
 			return 0, failErr
@@ -2094,6 +2179,7 @@ type ConformanceRunJob struct {
 	Cadence        time.Duration
 	Now            func() time.Time
 	Limit          int
+	Observer       telemetry.Observer
 }
 
 func (j ConformanceRunJob) Name() string {
@@ -2120,6 +2206,11 @@ func (j ConformanceRunJob) Run(ctx context.Context) (int, error) {
 		return 0, err
 	}
 	if !started {
+		if observer, ok := j.Observer.(interface {
+			RecordMaintenance(context.Context, telemetry.MaintenanceEvent)
+		}); ok {
+			observer.RecordMaintenance(ctx, telemetry.MaintenanceEvent{JobClass: "conformance", Outcome: "duplicate", LeaseOutcome: "none", Freshness: "unknown", SLO: "unknown", LatencyBucket: "unknown", CandidateBucket: "unknown"})
+		}
 		return 0, nil
 	}
 
@@ -2155,6 +2246,11 @@ func (j ConformanceRunJob) Run(ctx context.Context) (int, error) {
 
 	if err := completeScheduledExecution(ctx, j.ExecutionStore, idempotencyKey, current, processed); err != nil {
 		return processed, err
+	}
+	if observer, ok := j.Observer.(interface {
+		RecordMaintenance(context.Context, telemetry.MaintenanceEvent)
+	}); ok {
+		observer.RecordMaintenance(ctx, telemetry.MaintenanceEvent{JobClass: "conformance", Outcome: "success", LeaseOutcome: "acquired", Freshness: "unknown", SLO: "unknown", LatencyBucket: "unknown", CandidateBucket: "unknown"})
 	}
 
 	return processed, nil

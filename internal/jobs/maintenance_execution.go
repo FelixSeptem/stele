@@ -34,6 +34,7 @@ type MaintenanceFailure struct {
 	ErrorCategory string
 	Checkpoint    string
 	Watermark     string
+	Disposition   MaintenanceExecutionDisposition
 }
 
 type MaintenanceHistoryCursor struct {

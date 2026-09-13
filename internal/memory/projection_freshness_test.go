@@ -51,6 +51,21 @@ func TestEvaluateProjectionFreshnessFailsClosedForStaleForeignAndHiddenEvidence(
 func TestProjectionFreshnessEligibilityRejectsOverBudget(t *testing.T) {
 	scope := Scope{Tenant: "t", Project: "p", Namespace: "n"}
 	evidence, err := EvaluateProjectionFreshness(scope, "wm", "wm", "p", "r", time.Second, 5*time.Second, time.Minute, time.Second, true, scope)
-	if err != nil { t.Fatalf("error = %v", err) }
-	if evidence.SLO != ProjectionSLOOverBudget || evidence.Eligible { t.Fatalf("evidence = %+v, want over-budget ineligible", evidence) }
+	if err != nil {
+		t.Fatalf("error = %v", err)
+	}
+	if evidence.SLO != ProjectionSLOOverBudget || evidence.Eligible {
+		t.Fatalf("evidence = %+v, want over-budget ineligible", evidence)
+	}
+}
+
+func TestProjectionFreshnessRejectsPolicyOrRendererIdentityMismatch(t *testing.T) {
+	scope := Scope{Tenant: "t", Project: "p", Namespace: "n"}
+	evidence, err := EvaluateProjectionFreshnessWithIdentity(scope, "wm", "wm", "policy-old", "renderer-old", "policy-new", "renderer-new", time.Second, time.Second, time.Minute, time.Second, true, scope)
+	if err != nil {
+		t.Fatalf("error = %v", err)
+	}
+	if evidence.Category != ProjectionFreshnessDivergent || evidence.Eligible || !evidence.RebuildRequired {
+		t.Fatalf("evidence = %+v, want divergent ineligible rebuild-required", evidence)
+	}
 }

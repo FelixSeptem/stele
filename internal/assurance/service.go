@@ -161,10 +161,12 @@ type AlertDeliveryInput struct {
 }
 
 type ConformanceRunInput struct {
-	Scope     memory.Scope
-	ProfileID string
-	RunID     string
-	StartedAt time.Time
+	Scope                      memory.Scope
+	ProfileID                  string
+	RunID                      string
+	StartedAt                  time.Time
+	MaintenanceEvidence        []MaintenanceEvidence
+	MaintenanceActionSucceeded bool
 }
 
 type ReadinessReportInput struct {
@@ -953,8 +955,22 @@ func (s *Service) RunConformance(ctx context.Context, input ConformanceRunInput)
 		runID = s.newID("conformance_run")
 	}
 	evidenceCounts := make(map[string]any, len(profile.ExpectedEvidence))
-	diagnostics := make([]MissingEvidenceDiagnostic, 0)
 	result := ConformanceResultPassed
+	if len(input.MaintenanceEvidence) > 0 || input.MaintenanceActionSucceeded {
+		maintenance, maintenanceErr := EvaluateMaintenanceConformance(MaintenanceConformanceInput{Scope: scope, ObservedAt: input.StartedAt.UTC(), ActionSucceeded: input.MaintenanceActionSucceeded, Evidence: input.MaintenanceEvidence})
+		if maintenanceErr != nil {
+			return ConformanceRun{}, nil, maintenanceErr
+		}
+		failures := make([]string, 0, len(maintenance.Failures))
+		for _, failure := range maintenance.Failures {
+			failures = append(failures, string(failure))
+		}
+		evidenceCounts["maintenance"] = map[string]any{"result": string(maintenance.Result), "action_succeeded": maintenance.ActionSucceeded, "evidence_count": len(input.MaintenanceEvidence), "failure_count": len(maintenance.Failures), "failures": failures}
+		if maintenance.Result != ConformanceResultPassed {
+			result = ConformanceResultDegraded
+		}
+	}
+	diagnostics := make([]MissingEvidenceDiagnostic, 0)
 	for _, expected := range profile.ExpectedEvidence {
 		observation := observedByKind[expected.Kind]
 		observation.Kind = expected.Kind
@@ -1115,6 +1131,7 @@ func (s *Service) CreateReadinessReport(ctx context.Context, input ReadinessRepo
 		ComponentSummary: map[string]any{
 			"health_status":                 string(latestHealth.Status),
 			"conformance_status":            string(latestConformance.Result),
+			"maintenance_conformance":       maintenanceConformanceSummary(latestConformance.EvidenceCounts),
 			"capacity_load_status":          string(capacityProof.Status),
 			"backup_restore_status":         string(backupProof.Status),
 			"active_incidents":              activeIncidentCount,
@@ -1138,6 +1155,35 @@ func (s *Service) CreateReadinessReport(ctx context.Context, input ReadinessRepo
 	}
 	s.recordReadinessReport(ctx, created, latestHealth, latestConformance, activeIncidentCount)
 	return created, nil
+}
+
+func maintenanceConformanceSummary(evidence map[string]any) map[string]any {
+	value, ok := evidence["maintenance"].(map[string]any)
+	if !ok {
+		return map[string]any{"result": "unknown", "evidence_count": 0}
+	}
+	result, _ := value["result"].(string)
+	if result == "" {
+		result = "unknown"
+	}
+	count := 0
+	if raw, ok := value["evidence_count"].(int); ok {
+		count = raw
+	}
+	if raw, ok := value["evidence_count"].(float64); ok {
+		count = int(raw)
+	}
+	return map[string]any{"result": result, "evidence_count": count, "failure_count": boundedMaintenanceFailureCount(value)}
+}
+
+func boundedMaintenanceFailureCount(value map[string]any) int {
+	if raw, ok := value["failure_count"].(int); ok && raw >= 0 {
+		return raw
+	}
+	if raw, ok := value["failure_count"].(float64); ok && raw >= 0 {
+		return int(raw)
+	}
+	return 0
 }
 
 func (s *Service) ListReadinessReports(ctx context.Context, scope memory.Scope) ([]ReadinessReport, error) {

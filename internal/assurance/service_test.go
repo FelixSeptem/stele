@@ -891,6 +891,14 @@ func TestServiceRunsConformanceAgainstDurableEvidence(t *testing.T) {
 		ProfileID: profile.ID,
 		RunID:     "run_1",
 		StartedAt: now,
+		MaintenanceEvidence: []MaintenanceEvidence{
+			{Kind: MaintenanceEvidenceCoverage, Scope: scope, Status: MaintenanceEvidencePassed},
+			{Kind: MaintenanceEvidenceLeaseRecovery, Scope: scope, Status: MaintenanceEvidencePassed},
+			{Kind: MaintenanceEvidenceProjectionFreshness, Scope: scope, Status: MaintenanceEvidencePassed},
+			{Kind: MaintenanceEvidenceRetentionSafety, Scope: scope, Status: MaintenanceEvidencePassed},
+			{Kind: MaintenanceEvidenceTelemetryRedaction, Scope: scope, Status: MaintenanceEvidencePassed},
+		},
+		MaintenanceActionSucceeded: true,
 	})
 	if err != nil {
 		t.Fatalf("RunConformance() error = %v", err)
@@ -906,6 +914,10 @@ func TestServiceRunsConformanceAgainstDurableEvidence(t *testing.T) {
 	}
 	if len(store.createdConformanceRuns) != 1 || len(store.createdMissingEvidenceDiagnostics) != 0 {
 		t.Fatalf("created runs=%d diagnostics=%d, want one run and no diagnostics", len(store.createdConformanceRuns), len(store.createdMissingEvidenceDiagnostics))
+	}
+	maintenance, ok := run.EvidenceCounts["maintenance"].(map[string]any)
+	if !ok || maintenance["result"] != string(ConformanceResultPassed) || maintenance["evidence_count"] != 5 {
+		t.Fatalf("maintenance evidence = %#v, want bounded passed summary", run.EvidenceCounts["maintenance"])
 	}
 }
 

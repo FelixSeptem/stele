@@ -379,6 +379,36 @@ type stubJobExecutionCleaner struct {
 	calls     int
 }
 
+type scopedJobExecutionCleanerStub struct {
+	calls   int
+	scope   memory.Scope
+	cutoff  time.Time
+	limit   int
+	deleted int
+}
+
+func TestJobExecutionCleanupUsesScopedBoundedCleanerWhenAvailable(t *testing.T) {
+	now := time.Date(2026, 9, 13, 12, 0, 0, 0, time.UTC)
+	cleaner := &scopedJobExecutionCleanerStub{deleted: 2}
+	scope := memory.Scope{Tenant: "t", Project: "p", Namespace: "n"}
+	job := JobExecutionCleanupJob{Scope: scope, RetentionWindow: time.Hour, Now: func() time.Time { return now }, Cleaner: cleaner}
+	deleted, err := job.Run(context.Background())
+	if err != nil || deleted != 2 || cleaner.calls != 1 || cleaner.scope != scope || cleaner.limit != 100 || !cleaner.cutoff.Equal(now.Add(-time.Hour)) {
+		t.Fatalf("deleted=%d err=%v cleaner=%+v, want scoped bounded cleanup", deleted, err, cleaner)
+	}
+}
+
+func (s *scopedJobExecutionCleanerStub) DeleteJobExecutionsBeforeScope(_ context.Context, scope memory.Scope, cutoff time.Time, limit int) (int, error) {
+	s.calls++
+	s.scope = scope
+	s.cutoff = cutoff
+	s.limit = limit
+	return s.deleted, nil
+}
+func (s *scopedJobExecutionCleanerStub) DeleteJobExecutionsBefore(context.Context, time.Time) (int, error) {
+	return 0, nil
+}
+
 func (s *stubJobExecutionCleaner) DeleteJobExecutionsBefore(ctx context.Context, cutoff time.Time) (int, error) {
 	s.calls++
 	s.gotCutoff = cutoff
@@ -825,6 +855,28 @@ func TestScopeDispatchJobRunsScopedMaintenanceAcrossEligibleScopes(t *testing.T)
 	}
 }
 
+type projectionMaintenanceStub struct {
+	got memory.ContextProjectionRebuildRequest
+}
+
+func (s *projectionMaintenanceStub) RebuildContextProjection(_ context.Context, input memory.ContextProjectionRebuildRequest) (memory.ContextProjection, error) {
+	s.got = input
+	return memory.ContextProjection{Scope: input.Scope, Kind: input.Kind, Version: 1}, nil
+}
+
+func TestContextProjectionRebuildJobDispatchesExactScopeAndBoundedLimit(t *testing.T) {
+	scope := memory.Scope{Tenant: "t", Project: "p", Namespace: "n"}
+	service := &projectionMaintenanceStub{}
+	job := ContextProjectionRebuildJob{Scope: scope, Service: service, Kind: memory.ContextProjectionKindRetrieval, Limit: 7, SchemaVersion: "schema-v1", Policy: memory.DefaultContextProjectionPolicy("policy-v1"), RendererVersion: "renderer-v1"}
+	processed, err := job.Run(context.Background())
+	if err != nil || processed != 1 {
+		t.Fatalf("processed=%d err=%v", processed, err)
+	}
+	if service.got.Scope != scope || service.got.Limit != 7 || service.got.Kind != memory.ContextProjectionKindRetrieval {
+		t.Fatalf("request=%+v", service.got)
+	}
+}
+
 func TestScopeDispatchJobCanWrapDurableExecutionWhenConfigured(t *testing.T) {
 	scope := memory.Scope{Tenant: "t", Project: "p", Namespace: "n"}
 	store := &durableStoreStub{acquired: true}
@@ -833,6 +885,25 @@ func TestScopeDispatchJobCanWrapDurableExecutionWhenConfigured(t *testing.T) {
 	processed, err := job.Run(context.Background())
 	if err != nil || processed != 3 || inner.runs != 1 || store.completed != 1 {
 		t.Fatalf("processed=%d err=%v runs=%d completed=%d", processed, err, inner.runs, store.completed)
+	}
+}
+
+func TestScopeDispatchJobFallsBackToApprovedJobWhenDurableGateFails(t *testing.T) {
+	scope := memory.Scope{Tenant: "t", Project: "p", Namespace: "n"}
+	store := &durableStoreStub{acquired: true, renewErr: context.Canceled}
+	runs := 0
+	job := ScopeDispatchJob{NameValue: "projection_refresh_dispatch", ScopeSource: &stubMaintenanceScopeSource{scopes: []memory.Scope{scope}}, DurableStore: store, WorkerID: "w", DurableCadence: time.Hour, DurableLeaseDuration: time.Millisecond, DurableLeaseRenewInterval: time.Nanosecond, FallbackOnDurableError: true, Now: func() time.Time { return time.Unix(1700000000, 0) }, Dispatch: func(memory.Scope) MaintenanceJob {
+		return maintenanceJobFunc(func(context.Context) (int, error) {
+			runs++
+			if runs == 1 {
+				time.Sleep(time.Millisecond)
+			}
+			return 1, nil
+		})
+	}}
+	processed, err := job.Run(context.Background())
+	if err != nil || processed != 1 || runs != 2 {
+		t.Fatalf("processed=%d err=%v runs=%d, want approved fallback", processed, err, runs)
 	}
 }
 
@@ -1126,6 +1197,21 @@ func TestConformanceRunJobRunExecutesActiveProfiles(t *testing.T) {
 	}
 	if executions.lastBegin.JobName != "conformance_run" || executions.completeCalls != 1 {
 		t.Fatalf("execution begin/complete = %+v/%d, want durable conformance execution", executions.lastBegin, executions.completeCalls)
+	}
+}
+
+func TestConformanceRunJobEmitsBoundedMaintenanceTelemetry(t *testing.T) {
+	scope := memory.Scope{Tenant: "tenant-a", Project: "project-a", Namespace: "namespace-a"}
+	now := time.Unix(1000, 0).UTC()
+	service := &stubAssuranceSchedulerService{profiles: []assurance.ConformanceProfile{{ID: "profile_1", Scope: scope, Status: assurance.ConformanceProfileStatusActive, CreatedAt: now, UpdatedAt: now}}}
+	executions := &stubExecutionStore{beginStarted: true}
+	observer := &maintenanceObserverStub{}
+	job := ConformanceRunJob{Scope: scope, Service: service, ExecutionStore: executions, Cadence: time.Hour, Now: func() time.Time { return now }, Observer: observer}
+	if _, err := job.Run(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	if observer.events != 1 || observer.last.JobClass != "conformance" || observer.last.Outcome != "success" {
+		t.Fatalf("telemetry=%+v events=%d", observer.last, observer.events)
 	}
 }
 

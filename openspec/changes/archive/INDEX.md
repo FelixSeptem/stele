@@ -1,6 +1,6 @@
 # Archive Index
 
-Updated: 2026-09-13 09:46:59
+Updated: 2026-09-13 15:59:27
 
 - 001 -> bootstrap-foundation-and-event-ingestion
 - 002 -> governance-pipeline-and-memory-consolidation
@@ -38,3 +38,4 @@ Updated: 2026-09-13 09:46:59
 - 034 -> bounded-query-understanding-and-multi-signal-retrieval
 - 035 -> retrieval-release-gate-and-progressive-context-evaluation
 - 036 -> quality-aware-signals-and-controlled-reranking
+- 037 -> durable-multiscope-maintenance-observability

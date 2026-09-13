@@ -18,6 +18,9 @@ jobs:
       - name: Run deterministic retrieval evaluation unit coverage
         shell: pwsh
         run: go test ./internal/retrieval ./internal/telemetry -count=1
+      - name: Run deterministic maintenance closure coverage
+        shell: pwsh
+        run: go test ./internal/jobs ./internal/memory ./internal/assurance ./internal/storage/postgres -count=1
       - name: Run owned PostgreSQL retrieval evaluation replay
         if: ${{ secrets.STELE_TEST_RETRIEVAL_EVALUATION_DSN != '' }}
         shell: pwsh

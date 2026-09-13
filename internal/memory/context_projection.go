@@ -155,19 +155,26 @@ func (i ContextProjectionItem) Validate(parent Scope) error {
 }
 
 type ContextProjection struct {
-	ID              string                     `json:"id"`
-	Scope           Scope                      `json:"scope"`
-	Kind            ContextProjectionKind      `json:"kind"`
-	Version         int64                      `json:"version"`
-	SchemaVersion   string                     `json:"schema_version"`
-	PolicyVersion   string                     `json:"policy_version"`
-	RendererVersion string                     `json:"renderer_version"`
-	SourceWatermark ContextProjectionWatermark `json:"source_watermark"`
-	Status          ContextProjectionStatus    `json:"status"`
-	Items           []ContextProjectionItem    `json:"items"`
-	CreatedAt       time.Time                  `json:"created_at"`
-	UpdatedAt       time.Time                  `json:"updated_at"`
-	SupersededAt    time.Time                  `json:"superseded_at,omitempty"`
+	ID                string                      `json:"id"`
+	Scope             Scope                       `json:"scope"`
+	Kind              ContextProjectionKind       `json:"kind"`
+	Version           int64                       `json:"version"`
+	SchemaVersion     string                      `json:"schema_version"`
+	PolicyVersion     string                      `json:"policy_version"`
+	RendererVersion   string                      `json:"renderer_version"`
+	SourceWatermark   ContextProjectionWatermark  `json:"source_watermark"`
+	Status            ContextProjectionStatus     `json:"status"`
+	Items             []ContextProjectionItem     `json:"items"`
+	CreatedAt         time.Time                   `json:"created_at"`
+	UpdatedAt         time.Time                   `json:"updated_at"`
+	SupersededAt      time.Time                   `json:"superseded_at,omitempty"`
+	FreshnessCategory ProjectionFreshnessCategory `json:"freshness_category,omitempty"`
+	FreshnessSLO      ProjectionSLOBucket         `json:"freshness_slo,omitempty"`
+	FreshnessAge      time.Duration               `json:"freshness_age,omitempty"`
+	FreshnessDuration time.Duration               `json:"freshness_duration,omitempty"`
+	FreshnessEligible bool                        `json:"freshness_eligible"`
+	RebuildCheckpoint string                      `json:"rebuild_checkpoint,omitempty"`
+	RebuildRequired   bool                        `json:"rebuild_required"`
 }
 
 func (p ContextProjection) SourceWatermarkHash() string {

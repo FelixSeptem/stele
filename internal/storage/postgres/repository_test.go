@@ -4667,6 +4667,22 @@ func TestRepositoryCompleteMaintenanceExecutionUsesOwnerCAS(t *testing.T) {
 	}
 }
 
+func TestRepositoryReadsOwnedMaintenanceCheckpointForResume(t *testing.T) {
+	mock, _ := pgxmock.NewPool()
+	defer mock.Close()
+	repo := &Repository{db: mock}
+	now := time.Date(2026, 9, 13, 10, 0, 0, 0, time.UTC)
+	identity, _ := jobs.NewMaintenanceIdentity("projection_refresh", memory.Scope{Tenant: "t", Project: "p", Namespace: "n"}, now, time.Hour)
+	mock.ExpectQuery("SELECT attempt, lease_until").WithArgs(identity.Key(), "t", "p", "n", "worker-1").WillReturnRows(pgxmock.NewRows([]string{"attempt", "lease_until", "next_attempt_at", "checkpoint", "source_watermark", "disposition", "processed_count", "error_category", "started_at", "finished_at"}).AddRow(2, now.Add(time.Minute), now.Add(2*time.Minute), "cp-7", "wm-7", "", 3, "", now, now))
+	state, err := repo.ReadOwnedMaintenanceExecution(context.Background(), identity, "worker-1")
+	if err != nil || state.Attempt != 2 || state.Checkpoint != "cp-7" || state.SourceWatermark != "wm-7" {
+		t.Fatalf("state=%+v err=%v", state, err)
+	}
+	if err := mock.ExpectationsWereMet(); err != nil {
+		t.Fatal(err)
+	}
+}
+
 func TestRepositoryFailMaintenanceExecutionPersistsRetryCheckpoint(t *testing.T) {
 	mock, _ := pgxmock.NewPool()
 	defer mock.Close()

@@ -45,6 +45,10 @@ type ProjectionFreshnessEvidence struct {
 }
 
 func EvaluateProjectionFreshness(scope Scope, sourceWatermark, projectionWatermark, policyVersion, rendererVersion string, age, duration, freshnessWindow, maxDuration time.Duration, lifecycleVisible bool, evidenceScope Scope) (ProjectionFreshnessEvidence, error) {
+	return EvaluateProjectionFreshnessWithIdentity(scope, sourceWatermark, projectionWatermark, policyVersion, rendererVersion, policyVersion, rendererVersion, age, duration, freshnessWindow, maxDuration, lifecycleVisible, evidenceScope)
+}
+
+func EvaluateProjectionFreshnessWithIdentity(scope Scope, sourceWatermark, projectionWatermark, policyVersion, rendererVersion, expectedPolicyVersion, expectedRendererVersion string, age, duration, freshnessWindow, maxDuration time.Duration, lifecycleVisible bool, evidenceScope Scope) (ProjectionFreshnessEvidence, error) {
 	if err := scope.Validate(); err != nil {
 		return ProjectionFreshnessEvidence{}, err
 	}
@@ -55,7 +59,7 @@ func EvaluateProjectionFreshness(scope Scope, sourceWatermark, projectionWaterma
 		e.Category, e.Eligible = ProjectionFreshnessHidden, false
 	} else if sourceWatermark == "" || projectionWatermark == "" {
 		e.Category, e.Eligible, e.RebuildRequired = ProjectionFreshnessMissing, false, true
-	} else if sourceWatermark != projectionWatermark {
+	} else if sourceWatermark != projectionWatermark || policyVersion != expectedPolicyVersion || rendererVersion != expectedRendererVersion {
 		e.Category, e.Eligible, e.RebuildRequired = ProjectionFreshnessDivergent, false, true
 	} else if freshnessWindow <= 0 || age > freshnessWindow {
 		e.Category, e.Eligible, e.RebuildRequired = ProjectionFreshnessStale, false, true

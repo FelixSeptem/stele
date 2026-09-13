@@ -6,8 +6,9 @@ import (
 )
 
 type projectionStoreStub struct {
-	latest  ContextProjection
-	created []ContextProjection
+	latest           ContextProjection
+	created          []ContextProjection
+	maintenanceReads int
 }
 
 func (s *projectionStoreStub) ReadLatestContextProjection(context.Context, Scope, ContextProjectionKind) (ContextProjection, error) {
@@ -25,9 +26,17 @@ func TestRebuildContextProjectionPreservesHistoryWithNewVersion(t *testing.T) {
 	if err != nil {
 		t.Fatalf("RebuildContextProjection() error = %v", err)
 	}
-	if projection.Version != 4 || len(store.created) != 1 {
+	if projection.Version != 4 || len(store.created) != 1 || store.maintenanceReads != 1 {
 		t.Fatalf("projection=%+v created=%d, want version 4 and one append", projection, len(store.created))
 	}
+	if projection.FreshnessCategory != ProjectionFreshnessFresh || !projection.FreshnessEligible || projection.RebuildRequired {
+		t.Fatalf("freshness evidence = %+v, want fresh eligible rebuild-complete", projection)
+	}
+}
+
+func (s *projectionStoreStub) ReadLatestContextProjectionForMaintenance(context.Context, Scope, ContextProjectionKind) (ContextProjection, error) {
+	s.maintenanceReads++
+	return s.latest, nil
 }
 
 type projectionSourceStoreStub struct {

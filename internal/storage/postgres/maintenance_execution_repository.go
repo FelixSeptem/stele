@@ -11,6 +11,30 @@ import (
 	"github.com/jackc/pgx/v5"
 )
 
+func (r *Repository) ReadOwnedMaintenanceExecution(ctx context.Context, identity jobs.MaintenanceIdentity, workerID string) (jobs.MaintenanceExecutionState, error) {
+	if err := identity.Scope.Validate(); err != nil {
+		return jobs.MaintenanceExecutionState{}, err
+	}
+	const query = `SELECT attempt, lease_until, next_attempt_at, COALESCE(checkpoint,''), COALESCE(source_watermark,''), COALESCE(disposition,''), COALESCE(processed_count,0), COALESCE(error_category,''), started_at, finished_at FROM job_executions WHERE idempotency_key=$1 AND tenant=$2 AND project=$3 AND namespace=$4 AND worker_id=$5 ORDER BY started_at DESC LIMIT 1`
+	var state jobs.MaintenanceExecutionState
+	state.Identity, state.WorkerID = identity, workerID
+	var next, finished sql.NullTime
+	err := r.db.QueryRow(ctx, query, identity.Key(), identity.Scope.Tenant, identity.Scope.Project, identity.Scope.Namespace, workerID).Scan(&state.Attempt, &state.LeaseUntil, &next, &state.Checkpoint, &state.SourceWatermark, &state.Disposition, &state.ProcessedCount, &state.ErrorCategory, &state.StartedAt, &finished)
+	if err == pgx.ErrNoRows {
+		return jobs.MaintenanceExecutionState{}, err
+	}
+	if err != nil {
+		return jobs.MaintenanceExecutionState{}, fmt.Errorf("read maintenance execution: %w", err)
+	}
+	if next.Valid {
+		state.NextAttemptAt = next.Time
+	}
+	if finished.Valid {
+		state.FinishedAt = finished.Time
+	}
+	return state, nil
+}
+
 func (r *Repository) AcquireMaintenanceLease(ctx context.Context, input jobs.MaintenanceLeaseInput) (bool, error) {
 	if err := validateMaintenanceLeaseInput(input); err != nil {
 		return false, err
@@ -18,8 +42,8 @@ func (r *Repository) AcquireMaintenanceLease(ctx context.Context, input jobs.Mai
 	const query = `
 INSERT INTO job_executions (job_name, tenant, project, namespace, trigger_source, idempotency_key, status, attempt, worker_id, lease_until, checkpoint, source_watermark, started_at)
 VALUES ($1, $2, $3, $4, 'scheduler', $5, 'running', $6, $7, $8, $9, $10, $11)
-ON CONFLICT (idempotency_key) DO UPDATE SET worker_id = EXCLUDED.worker_id, lease_until = EXCLUDED.lease_until, status = 'running', attempt = EXCLUDED.attempt, checkpoint = EXCLUDED.checkpoint, source_watermark = EXCLUDED.source_watermark, started_at = EXCLUDED.started_at
-WHERE job_executions.status <> 'completed' AND (job_executions.lease_until IS NULL OR job_executions.lease_until <= $12)
+ON CONFLICT (idempotency_key) DO UPDATE SET worker_id = EXCLUDED.worker_id, lease_until = EXCLUDED.lease_until, status = 'running', attempt = GREATEST(job_executions.attempt, EXCLUDED.attempt), checkpoint = COALESCE(NULLIF(EXCLUDED.checkpoint, ''), job_executions.checkpoint), source_watermark = COALESCE(NULLIF(EXCLUDED.source_watermark, ''), job_executions.source_watermark), started_at = EXCLUDED.started_at
+ WHERE job_executions.status <> 'completed' AND (job_executions.lease_until IS NULL OR job_executions.lease_until <= $12) AND (job_executions.next_attempt_at IS NULL OR job_executions.next_attempt_at <= $12)
 RETURNING true`
 	var acquired bool
 	err := r.db.QueryRow(ctx, query, input.Identity.JobClass, input.Identity.Scope.Tenant, input.Identity.Scope.Project, input.Identity.Scope.Namespace, input.Identity.Key(), input.Attempt, strings.TrimSpace(input.WorkerID), input.LeaseUntil, input.Checkpoint, input.Watermark, input.Identity.WindowStart, input.Now).Scan(&acquired)
@@ -91,8 +115,19 @@ func (r *Repository) FailMaintenanceExecution(ctx context.Context, input jobs.Ma
 	if strings.TrimSpace(input.WorkerID) == "" || input.FailedAt.IsZero() {
 		return fmt.Errorf("maintenance failure worker and time are required")
 	}
-	const query = `UPDATE job_executions SET status='failed', disposition='failed', error_category=$2, next_attempt_at=$3, checkpoint=$4, source_watermark=$5, finished_at=$6, lease_until=NULL WHERE idempotency_key=$1 AND tenant=$7 AND project=$8 AND namespace=$9 AND worker_id=$10 AND status='running'`
-	if _, err := r.db.Exec(ctx, query, input.Identity.Key(), input.ErrorCategory, input.NextAttemptAt, input.Checkpoint, input.Watermark, input.FailedAt, input.Identity.Scope.Tenant, input.Identity.Scope.Project, input.Identity.Scope.Namespace, input.WorkerID); err != nil {
+	disposition := input.Disposition
+	if disposition == "" {
+		const query = `UPDATE job_executions SET status='failed', disposition='failed', error_category=$2, next_attempt_at=$3, checkpoint=$4, source_watermark=$5, finished_at=$6, lease_until=NULL WHERE idempotency_key=$1 AND tenant=$7 AND project=$8 AND namespace=$9 AND worker_id=$10 AND status='running'`
+		if _, err := r.db.Exec(ctx, query, input.Identity.Key(), input.ErrorCategory, nullableTime(input.NextAttemptAt), input.Checkpoint, input.Watermark, input.FailedAt, input.Identity.Scope.Tenant, input.Identity.Scope.Project, input.Identity.Scope.Namespace, input.WorkerID); err != nil {
+			return fmt.Errorf("fail maintenance execution: %w", err)
+		}
+		return nil
+	}
+	if !disposition.Valid() {
+		return fmt.Errorf("maintenance failure disposition %q is invalid", disposition)
+	}
+	const query = `UPDATE job_executions SET status='failed', disposition=$2, error_category=$3, next_attempt_at=$4, checkpoint=$5, source_watermark=$6, finished_at=$7, lease_until=NULL WHERE idempotency_key=$1 AND tenant=$8 AND project=$9 AND namespace=$10 AND worker_id=$11 AND status='running'`
+	if _, err := r.db.Exec(ctx, query, input.Identity.Key(), disposition, input.ErrorCategory, nullableTime(input.NextAttemptAt), input.Checkpoint, input.Watermark, input.FailedAt, input.Identity.Scope.Tenant, input.Identity.Scope.Project, input.Identity.Scope.Namespace, input.WorkerID); err != nil {
 		return fmt.Errorf("fail maintenance execution: %w", err)
 	}
 	return nil

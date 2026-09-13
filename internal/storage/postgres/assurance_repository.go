@@ -765,6 +765,26 @@ RETURNING id, profile_id, tenant, project, namespace, result, evidence_counts, s
 	))
 }
 
+// DeleteConformanceEvidenceBefore removes bounded conformance evidence for an
+// exact scope while preserving profiles, incidents, and canonical memory.
+func (r *Repository) DeleteConformanceEvidenceBefore(ctx context.Context, scope memory.Scope, cutoff time.Time, limit int) (int, error) {
+	if err := scope.Validate(); err != nil {
+		return 0, err
+	}
+	if cutoff.IsZero() {
+		return 0, fmt.Errorf("cutoff is required")
+	}
+	if limit <= 0 || limit > 1000 {
+		limit = 100
+	}
+	const query = `DELETE FROM assurance_conformance_runs WHERE id IN (SELECT id FROM assurance_conformance_runs WHERE tenant=$1 AND project=$2 AND namespace=$3 AND created_at < $4 ORDER BY created_at ASC, id ASC LIMIT $5)`
+	tag, err := r.db.Exec(ctx, query, scope.Tenant, scope.Project, scope.Namespace, cutoff, limit)
+	if err != nil {
+		return 0, fmt.Errorf("delete conformance evidence: %w", err)
+	}
+	return int(tag.RowsAffected()), nil
+}
+
 func (r *Repository) ReadConformanceRun(ctx context.Context, input assurance.ReadConformanceRunInput) (assurance.ConformanceRun, error) {
 	if err := input.Validate(); err != nil {
 		return assurance.ConformanceRun{}, err

@@ -123,6 +123,9 @@ func (r *Repository) CreateContextProjection(ctx context.Context, projection mem
 	if err != nil {
 		return memory.ContextProjection{}, fmt.Errorf("marshal projection watermark: %w", err)
 	}
+	if !projection.FreshnessCategory.Valid() || projection.FreshnessSLO == "" {
+		return memory.ContextProjection{}, fmt.Errorf("projection freshness evidence is required")
+	}
 	tx, err := r.tx.BeginTx(ctx, pgx.TxOptions{})
 	if err != nil {
 		return memory.ContextProjection{}, fmt.Errorf("begin create context projection: %w", err)
@@ -141,12 +144,13 @@ func (r *Repository) CreateContextProjection(ctx context.Context, projection mem
 	}
 	command, err := tx.Exec(ctx, `
 INSERT INTO context_projections
- (id, tenant, project, namespace, kind, version, schema_version, policy_version, renderer_version, source_watermark, source_watermark_hash, status, created_at, updated_at, superseded_at)
-VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,COALESCE(NULLIF($13::timestamptz,'0001-01-01T00:00:00Z'::timestamptz), now()),COALESCE(NULLIF($14::timestamptz,'0001-01-01T00:00:00Z'::timestamptz), now()),NULLIF($15::timestamptz,'0001-01-01T00:00:00Z'::timestamptz))
+ (id, tenant, project, namespace, kind, version, schema_version, policy_version, renderer_version, source_watermark, source_watermark_hash, status, created_at, updated_at, superseded_at, freshness_category, freshness_slo, freshness_age_ms, freshness_duration_ms, freshness_eligible, rebuild_checkpoint, rebuild_required)
+VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,COALESCE(NULLIF($13::timestamptz,'0001-01-01T00:00:00Z'::timestamptz), now()),COALESCE(NULLIF($14::timestamptz,'0001-01-01T00:00:00Z'::timestamptz), now()),NULLIF($15::timestamptz,'0001-01-01T00:00:00Z'::timestamptz),$16,$17,$18,$19,$20,$21,$22)
 ON CONFLICT (tenant, project, namespace, kind, policy_version, renderer_version, source_watermark_hash)
 DO NOTHING`, projectionID, projection.Scope.Tenant, projection.Scope.Project, projection.Scope.Namespace,
 		string(projection.Kind), projection.Version, projection.SchemaVersion, projection.PolicyVersion, projection.RendererVersion,
-		watermark, projection.SourceWatermarkHash(), string(projection.Status), projection.CreatedAt, projection.UpdatedAt, projection.SupersededAt)
+		watermark, projection.SourceWatermarkHash(), string(projection.Status), projection.CreatedAt, projection.UpdatedAt, projection.SupersededAt,
+		string(projection.FreshnessCategory), string(projection.FreshnessSLO), projection.FreshnessAge.Milliseconds(), projection.FreshnessDuration.Milliseconds(), projection.FreshnessEligible, projection.RebuildCheckpoint, projection.RebuildRequired)
 	if err != nil {
 		return memory.ContextProjection{}, fmt.Errorf("insert context projection: %w", err)
 	}
@@ -201,11 +205,48 @@ VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14)`, uuidOrNew(item.ID), pr
 	return projection, nil
 }
 
+// DeleteContextProjectionEvidenceBefore removes only superseded derived projection
+// records within an exact scope. Canonical source tables are never targeted.
+func (r *Repository) DeleteContextProjectionEvidenceBefore(ctx context.Context, scope memory.Scope, cutoff time.Time, limit int) (int, error) {
+	if err := scope.Validate(); err != nil {
+		return 0, err
+	}
+	if cutoff.IsZero() {
+		return 0, fmt.Errorf("cutoff is required")
+	}
+	if limit <= 0 || limit > 1000 {
+		limit = 100
+	}
+	const query = `DELETE FROM context_projections WHERE id IN (SELECT id FROM context_projections WHERE tenant=$1 AND project=$2 AND namespace=$3 AND status='superseded' AND updated_at < $4 ORDER BY updated_at ASC, id ASC LIMIT $5)`
+	tag, err := r.db.Exec(ctx, query, scope.Tenant, scope.Project, scope.Namespace, cutoff, limit)
+	if err != nil {
+		return 0, fmt.Errorf("delete context projection evidence: %w", err)
+	}
+	return int(tag.RowsAffected()), nil
+}
+
 func (r *Repository) ReadLatestContextProjection(ctx context.Context, scope memory.Scope, kind memory.ContextProjectionKind) (memory.ContextProjection, error) {
 	if err := scope.Validate(); err != nil {
 		return memory.ContextProjection{}, err
 	}
-	row := r.db.QueryRow(ctx, `SELECT id, tenant, project, namespace, kind, version, schema_version, policy_version, renderer_version, source_watermark, status, created_at, updated_at, superseded_at FROM context_projections WHERE tenant=$1 AND project=$2 AND namespace=$3 AND kind=$4 AND status='active' ORDER BY version DESC LIMIT 1`, scope.Tenant, scope.Project, scope.Namespace, string(kind))
+	row := r.db.QueryRow(ctx, `SELECT id, tenant, project, namespace, kind, version, schema_version, policy_version, renderer_version, source_watermark, status, created_at, updated_at, superseded_at, freshness_category, freshness_slo, freshness_age_ms, freshness_duration_ms, freshness_eligible, rebuild_checkpoint, rebuild_required FROM context_projections WHERE tenant=$1 AND project=$2 AND namespace=$3 AND kind=$4 AND status='active' AND freshness_eligible = TRUE ORDER BY version DESC LIMIT 1`, scope.Tenant, scope.Project, scope.Namespace, string(kind))
+	projection, err := scanContextProjection(row)
+	if err != nil {
+		return memory.ContextProjection{}, err
+	}
+	items, err := r.readContextProjectionItems(ctx, projection)
+	if err != nil {
+		return memory.ContextProjection{}, err
+	}
+	projection.Items = items
+	return projection, nil
+}
+
+func (r *Repository) ReadLatestContextProjectionForMaintenance(ctx context.Context, scope memory.Scope, kind memory.ContextProjectionKind) (memory.ContextProjection, error) {
+	if err := scope.Validate(); err != nil {
+		return memory.ContextProjection{}, err
+	}
+	row := r.db.QueryRow(ctx, `SELECT id, tenant, project, namespace, kind, version, schema_version, policy_version, renderer_version, source_watermark, status, created_at, updated_at, superseded_at, freshness_category, freshness_slo, freshness_age_ms, freshness_duration_ms, freshness_eligible, rebuild_checkpoint, rebuild_required FROM context_projections WHERE tenant=$1 AND project=$2 AND namespace=$3 AND kind=$4 ORDER BY version DESC LIMIT 1`, scope.Tenant, scope.Project, scope.Namespace, string(kind))
 	projection, err := scanContextProjection(row)
 	if err != nil {
 		return memory.ContextProjection{}, err
@@ -226,7 +267,7 @@ func (r *Repository) ReadContextProjection(ctx context.Context, scope memory.Sco
 	if err != nil {
 		return memory.ContextProjection{}, fmt.Errorf("projection id must be a UUID: %w", err)
 	}
-	row := r.db.QueryRow(ctx, `SELECT id, tenant, project, namespace, kind, version, schema_version, policy_version, renderer_version, source_watermark, status, created_at, updated_at, superseded_at FROM context_projections WHERE id=$1 AND tenant=$2 AND project=$3 AND namespace=$4`, id, scope.Tenant, scope.Project, scope.Namespace)
+	row := r.db.QueryRow(ctx, `SELECT id, tenant, project, namespace, kind, version, schema_version, policy_version, renderer_version, source_watermark, status, created_at, updated_at, superseded_at, freshness_category, freshness_slo, freshness_age_ms, freshness_duration_ms, freshness_eligible, rebuild_checkpoint, rebuild_required FROM context_projections WHERE id=$1 AND tenant=$2 AND project=$3 AND namespace=$4 AND freshness_eligible = TRUE`, id, scope.Tenant, scope.Project, scope.Namespace)
 	projection, err := scanContextProjection(row)
 	if err != nil {
 		return memory.ContextProjection{}, err
@@ -278,15 +319,17 @@ func (r *Repository) readContextProjectionItems(ctx context.Context, projection 
 type contextProjectionScanner interface{ Scan(...any) error }
 
 func scanContextProjection(row contextProjectionScanner) (memory.ContextProjection, error) {
-	var id, tenant, project, namespace, kind, schemaVersion, policyVersion, rendererVersion, status string
+	var id, tenant, project, namespace, kind, schemaVersion, policyVersion, rendererVersion, status, freshnessCategory, freshnessSLO, checkpoint string
 	var version int64
+	var freshnessAgeMS, freshnessDurationMS int64
+	var freshnessEligible, rebuildRequired bool
 	var watermarkBytes []byte
 	var createdAt, updatedAt time.Time
 	var supersededAt *time.Time
-	if err := row.Scan(&id, &tenant, &project, &namespace, &kind, &version, &schemaVersion, &policyVersion, &rendererVersion, &watermarkBytes, &status, &createdAt, &updatedAt, &supersededAt); err != nil {
+	if err := row.Scan(&id, &tenant, &project, &namespace, &kind, &version, &schemaVersion, &policyVersion, &rendererVersion, &watermarkBytes, &status, &createdAt, &updatedAt, &supersededAt, &freshnessCategory, &freshnessSLO, &freshnessAgeMS, &freshnessDurationMS, &freshnessEligible, &checkpoint, &rebuildRequired); err != nil {
 		return memory.ContextProjection{}, fmt.Errorf("scan context projection: %w", err)
 	}
-	projection := memory.ContextProjection{ID: id, Scope: memory.Scope{Tenant: tenant, Project: project, Namespace: namespace}, Kind: memory.ContextProjectionKind(kind), Version: version, SchemaVersion: schemaVersion, PolicyVersion: policyVersion, RendererVersion: rendererVersion, Status: memory.ContextProjectionStatus(status)}
+	projection := memory.ContextProjection{ID: id, Scope: memory.Scope{Tenant: tenant, Project: project, Namespace: namespace}, Kind: memory.ContextProjectionKind(kind), Version: version, SchemaVersion: schemaVersion, PolicyVersion: policyVersion, RendererVersion: rendererVersion, Status: memory.ContextProjectionStatus(status), FreshnessCategory: memory.ProjectionFreshnessCategory(freshnessCategory), FreshnessSLO: memory.ProjectionSLOBucket(freshnessSLO), FreshnessAge: time.Duration(freshnessAgeMS) * time.Millisecond, FreshnessDuration: time.Duration(freshnessDurationMS) * time.Millisecond, FreshnessEligible: freshnessEligible, RebuildCheckpoint: checkpoint, RebuildRequired: rebuildRequired}
 	if len(watermarkBytes) > 0 {
 		if err := json.Unmarshal(watermarkBytes, &projection.SourceWatermark); err != nil {
 			return memory.ContextProjection{}, fmt.Errorf("decode context projection watermark: %w", err)
