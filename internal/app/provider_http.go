@@ -139,6 +139,50 @@ func registerProviderOperationRoutes(mux *http.ServeMux, deps HTTPDependencies) 
 		}
 		writeJSON(w, http.StatusOK, map[string]any{"metadata": meta, "result": out, "citations": provider.ShapeContextCitationsWithLimit(out, providerCitationLimit(deps.ProviderLimits))})
 	})))
+	mux.Handle("POST /v1/provider/turns", wrap(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		b, _ := provider.RuntimeBindingFromContext(r.Context())
+		var req struct {
+			Metadata provider.OperationMetadata          `json:"metadata"`
+			Input    memory.CreateMemorySessionTurnInput `json:"input"`
+		}
+		if err := provider.DecodeStrict(readBody(r), &req); err != nil {
+			writeProviderError(w, http.StatusBadRequest, provider.ErrorCategoryValidation, "invalid_request", "invalid request", false)
+			return
+		}
+		if !supportsProviderSchema(deps.ProviderSchemaVersions, req.Metadata.SchemaVersion) {
+			writeProviderCompatibilityError(w, deps.ProviderSchemaVersions)
+			return
+		}
+		out, err := deps.ProviderAdapter.CreateTurn(r.Context(), b, req.Metadata, req.Input)
+		if err != nil {
+			cat := providerErrorCategory(err)
+			writeProviderError(w, http.StatusBadRequest, cat, "operation_failed", boundedProviderMessage(err), cat == provider.ErrorCategoryRetryable)
+			return
+		}
+		writeJSON(w, http.StatusCreated, map[string]any{"metadata": req.Metadata, "result": out})
+	})))
+	mux.Handle("POST /v1/provider/turn-outcomes", wrap(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		b, _ := provider.RuntimeBindingFromContext(r.Context())
+		var req struct {
+			Metadata provider.OperationMetadata                 `json:"metadata"`
+			Input    memory.RecordMemorySessionTurnOutcomeInput `json:"input"`
+		}
+		if err := provider.DecodeStrict(readBody(r), &req); err != nil {
+			writeProviderError(w, http.StatusBadRequest, provider.ErrorCategoryValidation, "invalid_request", "invalid request", false)
+			return
+		}
+		if !supportsProviderSchema(deps.ProviderSchemaVersions, req.Metadata.SchemaVersion) {
+			writeProviderCompatibilityError(w, deps.ProviderSchemaVersions)
+			return
+		}
+		out, err := deps.ProviderAdapter.RecordTurnOutcome(r.Context(), b, req.Metadata, req.Input)
+		if err != nil {
+			cat := providerErrorCategory(err)
+			writeProviderError(w, http.StatusBadRequest, cat, "operation_failed", boundedProviderMessage(err), cat == provider.ErrorCategoryRetryable)
+			return
+		}
+		writeJSON(w, http.StatusOK, map[string]any{"metadata": req.Metadata, "result": out})
+	})))
 	mux.Handle("POST /v1/provider/lifecycle", wrap(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		binding, ok := provider.RuntimeBindingFromContext(r.Context())
 		if !ok {
@@ -170,7 +214,12 @@ func registerProviderOperationRoutes(mux *http.ServeMux, deps HTTPDependencies) 
 		}
 		out, err := deps.ProviderAdapter.ApplyLifecycle(r.Context(), binding, req.Metadata, req.MemoryID, req.Action, req.Reason, principal.ID)
 		if err != nil {
-			writeProviderError(w, http.StatusForbidden, provider.ErrorCategoryLifecycle, "lifecycle_denied", boundedProviderMessage(err), false)
+			category := providerErrorCategory(err)
+			status := http.StatusBadRequest
+			if category == provider.ErrorCategoryScope || category == provider.ErrorCategoryLifecycle {
+				status = http.StatusForbidden
+			}
+			writeProviderError(w, status, category, "operation_failed", boundedProviderMessage(err), category == provider.ErrorCategoryRetryable)
 			return
 		}
 		writeJSON(w, http.StatusOK, out)
@@ -235,12 +284,12 @@ func providerErrorCategory(err error) provider.ErrorCategory {
 		return provider.ErrorCategoryStale
 	case strings.Contains(s, "idempotency conflict") || errors.Is(err, memory.ErrIdempotencyConflict):
 		return provider.ErrorCategoryConflict
+	case strings.Contains(s, "retry") || strings.Contains(s, "in progress") || errors.Is(err, memory.ErrIdempotencyInProgress):
+		return provider.ErrorCategoryRetryable
 	case strings.Contains(s, "not configured") || strings.Contains(s, "unavailable"):
 		return provider.ErrorCategoryDependency
 	case strings.Contains(s, "lifecycle") || strings.Contains(s, "privileged"):
 		return provider.ErrorCategoryLifecycle
-	case strings.Contains(s, "retry") || errors.Is(err, memory.ErrIdempotencyInProgress):
-		return provider.ErrorCategoryRetryable
 	default:
 		return provider.ErrorCategoryValidation
 	}

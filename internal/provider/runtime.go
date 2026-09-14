@@ -208,20 +208,27 @@ func (i *RuntimeInitializer) Initialize(ctx context.Context, principal auth.Prin
 		return RuntimeBinding{}, fmt.Errorf("forbidden")
 	}
 	now := i.now().UTC()
-	instance := opaqueID("pi_")
-	binding := RuntimeBinding{BindingID: opaqueID("rb_"), PrincipalID: principal.ID, Scope: scope, AgentID: strings.TrimSpace(input.AgentID), SessionID: strings.TrimSpace(input.SessionID), ConversationID: strings.TrimSpace(input.ConversationID), ProviderInstanceID: instance, CreatedAt: now, ExpiresAt: now.Add(i.ttl)}
+	instance, err := opaqueID("pi_")
+	if err != nil {
+		return RuntimeBinding{}, fmt.Errorf("generate runtime identity: %w", err)
+	}
+	bindingID, err := opaqueID("rb_")
+	if err != nil {
+		return RuntimeBinding{}, fmt.Errorf("generate runtime binding: %w", err)
+	}
+	binding := RuntimeBinding{BindingID: bindingID, PrincipalID: principal.ID, Scope: scope, AgentID: strings.TrimSpace(input.AgentID), SessionID: strings.TrimSpace(input.SessionID), ConversationID: strings.TrimSpace(input.ConversationID), ProviderInstanceID: instance, CreatedAt: now, ExpiresAt: now.Add(i.ttl)}
 	if err := i.bindings.Create(ctx, binding); err != nil {
 		return RuntimeBinding{}, fmt.Errorf("persist runtime binding: %w", err)
 	}
 	return binding, nil
 }
 
-func opaqueID(prefix string) string {
+func opaqueID(prefix string) (string, error) {
 	raw := make([]byte, 24)
 	if _, err := rand.Read(raw); err != nil {
-		return prefix + fmt.Sprintf("%d", time.Now().UnixNano())
+		return "", fmt.Errorf("secure random source unavailable: %w", err)
 	}
-	return prefix + base64.RawURLEncoding.EncodeToString(raw)
+	return prefix + base64.RawURLEncoding.EncodeToString(raw), nil
 }
 
 type runtimeBindingContextKey struct{}

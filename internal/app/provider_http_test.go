@@ -3,6 +3,7 @@ package app
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"strings"
 	"testing"
 	"time"
@@ -13,6 +14,27 @@ import (
 	"net/http"
 	"net/http/httptest"
 )
+
+func TestProviderErrorCategoryMapsBoundedContractErrors(t *testing.T) {
+	tests := []struct {
+		name string
+		err  error
+		want provider.ErrorCategory
+	}{
+		{name: "conflict", err: memory.ErrIdempotencyConflict, want: provider.ErrorCategoryConflict},
+		{name: "retryable", err: errors.New("lifecycle operation in progress"), want: provider.ErrorCategoryRetryable},
+		{name: "dependency", err: errors.New("provider search service is not configured"), want: provider.ErrorCategoryDependency},
+		{name: "stale", err: errors.New("stale event sequence"), want: provider.ErrorCategoryStale},
+		{name: "lifecycle", err: errors.New("provider lifecycle operation requires privileged authorization"), want: provider.ErrorCategoryLifecycle},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			if got := providerErrorCategory(tc.err); got != tc.want {
+				t.Fatalf("providerErrorCategory(%q)=%q, want %q", tc.err, got, tc.want)
+			}
+		})
+	}
+}
 
 func TestProviderRoutesDisabledByDefault(t *testing.T) {
 	h := NewHTTPHandler(HTTPDependencies{HTTP: HTTPRuntimeLimits{MaxRequestBodyBytes: 1 << 20}})
@@ -107,7 +129,7 @@ func TestProviderLifecycleRouteRequiresAdminBeforeMutation(t *testing.T) {
 		t.Fatal(err)
 	}
 	t.Run("admin applies governed action", func(t *testing.T) {
-		req := httptest.NewRequest(http.MethodPost, "/v1/provider/lifecycle", strings.NewReader(`{"metadata":{"request_id":"r2","operation_id":"o2","schema_version":"schema-v1"},"memory_id":"mem-1","action":"suppress","reason":"privacy"}`))
+		req := httptest.NewRequest(http.MethodPost, "/v1/provider/lifecycle", strings.NewReader(`{"metadata":{"request_id":"r2","operation_id":"o2","idempotency_key":"life-2","schema_version":"schema-v1"},"memory_id":"mem-1","action":"suppress","reason":"privacy"}`))
 		req.Header.Set("X-API-Key", "admin-key")
 		req.Header.Set(provider.HeaderRuntimeBinding, adminBinding.BindingID)
 		req.Header.Set(provider.HeaderRuntimeSession, adminBinding.SessionID)
@@ -168,7 +190,7 @@ func TestOpenAPIDocumentsProviderLifecycleAndStatusRoutes(t *testing.T) {
 	if resp.Code != http.StatusOK {
 		t.Fatalf("status=%d, want 200", resp.Code)
 	}
-	for _, route := range []string{"/v1/provider/lifecycle:", "/v1/provider/status:"} {
+	for _, route := range []string{"/v1/provider/lifecycle:", "/v1/provider/status:", "/v1/provider/turns:", "/v1/provider/turn-outcomes:"} {
 		if !strings.Contains(resp.Body.String(), route) {
 			t.Fatalf("OpenAPI missing %s", route)
 		}

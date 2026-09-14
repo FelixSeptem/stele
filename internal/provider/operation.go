@@ -110,6 +110,7 @@ type AdapterDependencies struct {
 	Assembler          retrieval.ContextAssembler
 	Lifecycle          LifecycleApplier
 	AllowLifecycle     func(context.Context, RuntimeBinding) bool
+	LifecycleStore     LifecycleIdempotencyStore
 	Session            SessionAdapter
 	Limits             ProviderLimits
 }
@@ -119,6 +120,26 @@ type MemoryIntentSubmitter interface {
 }
 type LifecycleApplier interface {
 	Apply(context.Context, memory.LifecycleActionInput) error
+}
+type LifecycleClaim struct {
+	Scope                                           memory.Scope
+	PrincipalID, IdempotencyKey, RequestFingerprint string
+}
+type LifecycleClaimDisposition string
+
+const (
+	LifecycleClaimed    LifecycleClaimDisposition = "claimed"
+	LifecycleReplayed   LifecycleClaimDisposition = "replayed"
+	LifecycleInProgress LifecycleClaimDisposition = "in_progress"
+)
+
+type LifecycleClaimResult struct {
+	Disposition LifecycleClaimDisposition
+	Outcome     OperationOutcome
+}
+type LifecycleIdempotencyStore interface {
+	ClaimLifecycle(context.Context, LifecycleClaim) (LifecycleClaimResult, error)
+	CompleteLifecycle(context.Context, LifecycleClaim, OperationOutcome) error
 }
 type SessionAdapter interface {
 	CreateTurn(context.Context, memory.CreateMemorySessionTurnInput) (memory.MemorySessionTurn, error)
@@ -318,11 +339,40 @@ func (a *Adapter) ApplyLifecycle(ctx context.Context, binding RuntimeBinding, me
 	if a.deps.AllowLifecycle == nil || !a.deps.AllowLifecycle(ctx, binding) {
 		return OperationOutcome{Metadata: meta}, fmt.Errorf("provider lifecycle operation requires privileged authorization")
 	}
+	if strings.TrimSpace(meta.IdempotencyKey) == "" {
+		return OperationOutcome{Metadata: meta}, fmt.Errorf("lifecycle idempotency key is required")
+	}
+	payload, _ := json.Marshal(struct {
+		Scope                                   memory.Scope
+		Principal, Key, MemoryID, Reason, Actor string
+		Action                                  policy.ForgettingAction
+	}{binding.Scope, binding.PrincipalID, meta.IdempotencyKey, memoryID, reason, actor, action})
+	claim := LifecycleClaim{Scope: binding.Scope, PrincipalID: binding.PrincipalID, IdempotencyKey: meta.IdempotencyKey, RequestFingerprint: fmt.Sprintf("%x", sha256.Sum256(payload))}
+	if a.deps.LifecycleStore != nil {
+		cr, err := a.deps.LifecycleStore.ClaimLifecycle(ctx, claim)
+		if err != nil {
+			return OperationOutcome{Metadata: meta}, err
+		}
+		if cr.Disposition == LifecycleReplayed {
+			cr.Outcome.Replayed = true
+			cr.Outcome.Metadata = meta
+			return cr.Outcome, nil
+		}
+		if cr.Disposition == LifecycleInProgress {
+			return OperationOutcome{Metadata: meta}, fmt.Errorf("lifecycle operation in progress")
+		}
+	}
 	err := a.deps.Lifecycle.Apply(ctx, memory.LifecycleActionInput{Scope: binding.Scope, MemoryID: strings.TrimSpace(memoryID), Action: action, Reason: strings.TrimSpace(reason), Actor: strings.TrimSpace(actor), RequestID: meta.RequestID})
 	if err != nil {
 		return OperationOutcome{Metadata: meta}, err
 	}
-	return OperationOutcome{Metadata: meta, Citations: []Citation{{SourceKind: "lifecycle", Reference: strings.TrimSpace(memoryID), Availability: "available"}}}, nil
+	out := OperationOutcome{Metadata: meta, Citations: []Citation{{SourceKind: "lifecycle", Reference: strings.TrimSpace(memoryID), Availability: "available"}}}
+	if a.deps.LifecycleStore != nil {
+		if err := a.deps.LifecycleStore.CompleteLifecycle(ctx, claim, out); err != nil {
+			return OperationOutcome{Metadata: meta}, fmt.Errorf("lifecycle completion retryable: %w", err)
+		}
+	}
+	return out, nil
 }
 func (a *Adapter) validate(binding RuntimeBinding, meta *OperationMetadata) error {
 	if err := binding.Scope.Validate(); err != nil {
@@ -389,6 +439,7 @@ func ShapeContextCitationsWithLimit(ctx retrieval.AssembledContext, limit int) [
 type OperationOutcome struct {
 	Metadata  OperationMetadata `json:"metadata"`
 	Citations []Citation        `json:"citations,omitempty"`
+	Replayed  bool              `json:"replayed,omitempty"`
 }
 
 func ShapeIntentCitation(record memory.MemoryIntentRecord) []Citation {

@@ -6,6 +6,7 @@ import (
 	"testing"
 
 	"github.com/FelixSeptem/stele/internal/memory"
+	"github.com/FelixSeptem/stele/internal/policy"
 	"github.com/FelixSeptem/stele/internal/retrieval"
 )
 
@@ -92,6 +93,28 @@ func TestProviderAdapterEnforcesConfiguredLimits(t *testing.T) {
 	}
 }
 
+func TestProviderAdapterLifecycleClaimsReplayAndAvoidsDuplicateMutation(t *testing.T) {
+	lifecycle := &adapterLifecycleStub{}
+	store := &adapterLifecycleStore{replay: OperationOutcome{Citations: []Citation{{SourceKind: "lifecycle", Reference: "mem-1", Availability: "available"}}}}
+	a := NewAdapter(AdapterDependencies{Lifecycle: lifecycle, LifecycleStore: store, AllowLifecycle: func(context.Context, RuntimeBinding) bool { return true }})
+	b := RuntimeBinding{BindingID: "b", PrincipalID: "principal", Scope: memory.Scope{Tenant: "t", Project: "p", Namespace: "n"}, AgentID: "a", SessionID: "s", ProviderInstanceID: "pi"}
+	meta := OperationMetadata{RequestID: "r", OperationID: "o", IdempotencyKey: "k", SchemaVersion: "schema-v1"}
+	if _, err := a.ApplyLifecycle(context.Background(), b, meta, "mem-1", policy.ForgettingActionSuppress, "privacy", "principal"); err != nil {
+		t.Fatal(err)
+	}
+	if lifecycle.calls != 1 || store.claims != 1 || store.completes != 1 {
+		t.Fatalf("first lifecycle calls=%d claims=%d completes=%d", lifecycle.calls, store.claims, store.completes)
+	}
+	store.replayed = true
+	out, err := a.ApplyLifecycle(context.Background(), b, meta, "mem-1", policy.ForgettingActionSuppress, "privacy", "principal")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !out.Replayed || lifecycle.calls != 1 {
+		t.Fatalf("replay outcome=%+v lifecycle calls=%d", out, lifecycle.calls)
+	}
+}
+
 func TestShapeSearchCitationsWithLimit(t *testing.T) {
 	s := retrieval.SearchResult{Hits: []retrieval.SearchHit{
 		{Memory: memory.CanonicalMemory{ID: "m1", State: memory.MemoryStateActive}, Citations: []retrieval.Citation{{MemoryID: "m1"}}},
@@ -120,6 +143,32 @@ func (s *adapterIngestor) Ingest(_ context.Context, in memory.IngestEventInput) 
 }
 
 type adapterIntentService struct{ got memory.MemoryIntentInput }
+
+type adapterLifecycleStub struct{ calls int }
+
+func (s *adapterLifecycleStub) Apply(context.Context, memory.LifecycleActionInput) error {
+	s.calls++
+	return nil
+}
+
+type adapterLifecycleStore struct {
+	claims, completes int
+	replayed          bool
+	replay            OperationOutcome
+}
+
+func (s *adapterLifecycleStore) ClaimLifecycle(context.Context, LifecycleClaim) (LifecycleClaimResult, error) {
+	s.claims++
+	if s.replayed {
+		return LifecycleClaimResult{Disposition: LifecycleReplayed, Outcome: s.replay}, nil
+	}
+	return LifecycleClaimResult{Disposition: LifecycleClaimed}, nil
+}
+
+func (s *adapterLifecycleStore) CompleteLifecycle(context.Context, LifecycleClaim, OperationOutcome) error {
+	s.completes++
+	return nil
+}
 
 type adapterSearcher struct{ got retrieval.SearchInput }
 

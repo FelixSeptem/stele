@@ -156,6 +156,42 @@ paths:
               schema: {$ref: '#/components/schemas/ProviderOperationResponse'}
         '400': {description: 'Bounded provider error'}
         '403': {description: 'Runtime binding or scope denied'}
+  /v1/provider/turns:
+    post:
+      operationId: providerCreateTurn
+      security:
+        - PublicAPIKey: []
+      parameters:
+        - $ref: '#/components/parameters/RuntimeBindingHeader'
+        - $ref: '#/components/parameters/RuntimeSessionHeader'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/ProviderTurnRequest'
+      responses:
+        '201': {description: 'Memory session turn with assembled context'}
+        '400': {description: 'Bounded provider error'}
+        '403': {description: 'Runtime binding or scope denied'}
+  /v1/provider/turn-outcomes:
+    post:
+      operationId: providerRecordTurnOutcome
+      security:
+        - PublicAPIKey: []
+      parameters:
+        - $ref: '#/components/parameters/RuntimeBindingHeader'
+        - $ref: '#/components/parameters/RuntimeSessionHeader'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/ProviderTurnOutcomeRequest'
+      responses:
+        '200': {description: 'Recorded memory session turn outcome'}
+        '400': {description: 'Bounded provider error'}
+        '403': {description: 'Runtime binding or scope denied'}
   /v1/provider/lifecycle:
     post:
       operationId: providerApplyLifecycle
@@ -4054,21 +4090,21 @@ components:
       required: [metadata, intent]
       properties:
         metadata: {$ref: '#/components/schemas/ProviderOperationMetadata'}
-        intent: {type: object}
+        intent: {$ref: '#/components/schemas/MemoryIntentRequest'}
     ProviderRetrieveRequest:
       type: object
       additionalProperties: false
       required: [metadata, input]
       properties:
         metadata: {$ref: '#/components/schemas/ProviderOperationMetadata'}
-        input: {type: object}
+        input: {$ref: '#/components/schemas/MemorySearchRequest'}
     ProviderContextRequest:
       type: object
       additionalProperties: false
       required: [metadata, input]
       properties:
         metadata: {$ref: '#/components/schemas/ProviderOperationMetadata'}
-        input: {type: object}
+        input: {$ref: '#/components/schemas/ContextAssembleRequest'}
     ProviderIntentResponse:
       type: object
       required: [metadata, result]
@@ -4083,6 +4119,20 @@ components:
         metadata: {$ref: '#/components/schemas/ProviderOperationMetadata'}
         result: {type: object}
         citations: {type: array, items: {$ref: '#/components/schemas/ProviderCitation'}}
+    ProviderTurnRequest:
+      type: object
+      additionalProperties: false
+      required: [metadata, input]
+      properties:
+        metadata: {$ref: '#/components/schemas/ProviderOperationMetadata'}
+        input: {type: object}
+    ProviderTurnOutcomeRequest:
+      type: object
+      additionalProperties: false
+      required: [metadata, input]
+      properties:
+        metadata: {$ref: '#/components/schemas/ProviderOperationMetadata'}
+        input: {type: object}
     ProviderCitation:
       type: object
       required: [source_kind, reference, availability]

@@ -557,6 +557,14 @@ func buildAPIRuntime(ctx context.Context, cfg config.Config, deps apiRuntimeDepe
 	httpDeps.ProviderEnabled = cfg.Provider.Enabled
 	httpDeps.ProviderSchemaVersions = cfg.Provider.SchemaVersions
 	httpDeps.ProviderLimits = cfg.Provider.Limits
+	httpDeps.MemorySession = memory.NewMemorySessionService(memory.MemorySessionServiceOptions{
+		Store:                repo,
+		ContextAssembler:     memorySessionContextAdapter{assembler: retrievalService},
+		EventIngestor:        ingestor,
+		UsefulnessSummarizer: repo,
+		Now:                  time.Now,
+		NewID:                newQualityID,
+	})
 	if cfg.Provider.Enabled && httpDeps.PrincipalAuthorizer != nil {
 		httpDeps.ProviderCapabilities = provider.Discover(provider.CapabilityInput{ProviderVersion: "provider-v1", SchemaVersion: cfg.Provider.SchemaVersions[0], ServiceVersion: BuildVersion, BuildID: BuildID})
 		httpDeps.ProviderCapabilities.Limits = cfg.Provider.Limits
@@ -566,11 +574,13 @@ func buildAPIRuntime(ctx context.Context, cfg config.Config, deps apiRuntimeDepe
 		httpDeps.ProviderAdapter = provider.NewAdapter(provider.AdapterDependencies{
 			Ingestor: ingestor, IdempotentIngestor: ingestor, Intent: intentService,
 			Searcher: retrievalService, Assembler: retrievalService, Lifecycle: lifecycleService,
-			Limits: cfg.Provider.Limits,
+			Session: httpDeps.MemorySession,
+			Limits:  cfg.Provider.Limits,
 			AllowLifecycle: func(ctx context.Context, binding provider.RuntimeBinding) bool {
 				principal, ok := auth.PrincipalFromContext(ctx)
 				return ok && principal.Role == auth.PrincipalRoleAdmin && principal.ID == binding.PrincipalID
 			},
+			LifecycleStore: repo,
 		})
 	}
 	readiness := &readinessGate{checker: runtimeReadinessChecker(config.ModeAPI, pool, embeddingRuntime, false, deps.observer)}
@@ -637,14 +647,6 @@ func buildAPIRuntime(ctx context.Context, cfg config.Config, deps apiRuntimeDepe
 		Store: repo,
 		Now:   time.Now,
 		NewID: newQualityID,
-	})
-	httpDeps.MemorySession = memory.NewMemorySessionService(memory.MemorySessionServiceOptions{
-		Store:                repo,
-		ContextAssembler:     memorySessionContextAdapter{assembler: retrievalService},
-		EventIngestor:        ingestor,
-		UsefulnessSummarizer: repo,
-		Now:                  time.Now,
-		NewID:                newQualityID,
 	})
 	httpDeps.TaskEvaluations = repo
 	httpDeps.Workflow = workflow.NewService(workflow.ServiceOptions{
