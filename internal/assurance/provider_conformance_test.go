@@ -160,3 +160,18 @@ func TestServiceProviderConformanceRerunLinksPriorHistory(t *testing.T) {
 		t.Fatalf("previous_run_id=%v", providerEvidence["previous_run_id"])
 	}
 }
+
+func TestProviderHandlerExecutorUsesBoundedAdapterBoundary(t *testing.T) {
+	scope := memory.Scope{Tenant: "tenant-a", Project: "project-a", Namespace: "namespace-a"}
+	executor := ProviderHandlerExecutor{
+		Adapter:      provider.NewAdapter(provider.AdapterDependencies{}),
+		Capabilities: provider.Discover(provider.CapabilityInput{ProviderVersion: "provider-v1", SchemaVersion: "schema-v1"}),
+	}
+	out, err := executor.ExecuteProviderFixture(context.Background(), provider.RuntimeBinding{BindingID: "rb", PrincipalID: "p", Scope: scope, AgentID: "a", SessionID: "s", ProviderInstanceID: "pi"}, ProviderFixture{ID: "capability", Kind: ProviderFixtureCapability, Operation: "capability", Scope: scope, RequiredEvidence: []ProviderEvidenceKind{ProviderEvidenceCompatibility}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !out.Passed || len(out.Evidence) != 1 || out.Evidence[0] != ProviderEvidenceCompatibility {
+		t.Fatalf("outcome=%+v", out)
+	}
+}

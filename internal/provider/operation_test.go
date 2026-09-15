@@ -2,6 +2,7 @@ package provider
 
 import (
 	"context"
+	"errors"
 	"strings"
 	"testing"
 
@@ -115,6 +116,20 @@ func TestProviderAdapterLifecycleClaimsReplayAndAvoidsDuplicateMutation(t *testi
 	}
 }
 
+func TestProviderAdapterLifecycleCompletionFailureIsRetryableWithoutReapplying(t *testing.T) {
+	lifecycle := &adapterLifecycleStub{}
+	store := &adapterLifecycleStore{completeErr: errors.New("database interrupted")}
+	a := NewAdapter(AdapterDependencies{Lifecycle: lifecycle, LifecycleStore: store, AllowLifecycle: func(context.Context, RuntimeBinding) bool { return true }})
+	b := RuntimeBinding{BindingID: "b", PrincipalID: "principal", Scope: memory.Scope{Tenant: "t", Project: "p", Namespace: "n"}, AgentID: "a", SessionID: "s", ProviderInstanceID: "pi"}
+	meta := OperationMetadata{RequestID: "r", OperationID: "o", IdempotencyKey: "k", SchemaVersion: "schema-v1"}
+	if _, err := a.ApplyLifecycle(context.Background(), b, meta, "mem-1", policy.ForgettingActionSuppress, "privacy", "principal"); err == nil || !strings.Contains(err.Error(), "completion retryable") {
+		t.Fatalf("completion error=%v", err)
+	}
+	if lifecycle.calls != 1 {
+		t.Fatalf("lifecycle calls=%d, want one mutation", lifecycle.calls)
+	}
+}
+
 func TestShapeSearchCitationsWithLimit(t *testing.T) {
 	s := retrieval.SearchResult{Hits: []retrieval.SearchHit{
 		{Memory: memory.CanonicalMemory{ID: "m1", State: memory.MemoryStateActive}, Citations: []retrieval.Citation{{MemoryID: "m1"}}},
@@ -155,6 +170,7 @@ type adapterLifecycleStore struct {
 	claims, completes int
 	replayed          bool
 	replay            OperationOutcome
+	completeErr       error
 }
 
 func (s *adapterLifecycleStore) ClaimLifecycle(context.Context, LifecycleClaim) (LifecycleClaimResult, error) {
@@ -167,7 +183,7 @@ func (s *adapterLifecycleStore) ClaimLifecycle(context.Context, LifecycleClaim) 
 
 func (s *adapterLifecycleStore) CompleteLifecycle(context.Context, LifecycleClaim, OperationOutcome) error {
 	s.completes++
-	return nil
+	return s.completeErr
 }
 
 type adapterSearcher struct{ got retrieval.SearchInput }

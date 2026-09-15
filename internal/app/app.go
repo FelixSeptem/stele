@@ -626,13 +626,18 @@ func buildAPIRuntime(ctx context.Context, cfg config.Config, deps apiRuntimeDepe
 		replayService.Observer = observer
 	}
 	httpDeps.DerivedInsightReplayAdmin = replayService
+	var providerConformance assurance.ProviderFixtureExecutor
+	if httpDeps.ProviderAdapter != nil {
+		providerConformance = assurance.ProviderHandlerExecutor{Adapter: httpDeps.ProviderAdapter, Capabilities: httpDeps.ProviderCapabilities}
+	}
 	httpDeps.AssuranceAdmin = assurance.NewService(assurance.ServiceOptions{
-		Store:    repo,
-		Workflow: repo,
-		Now:      time.Now,
-		NewID:    newQualityID,
-		Observer: deps.observer,
-		Logger:   httpDeps.Logger,
+		Store:               repo,
+		Workflow:            repo,
+		Now:                 time.Now,
+		NewID:               newQualityID,
+		Observer:            deps.observer,
+		Logger:              httpDeps.Logger,
+		ProviderConformance: providerConformance,
 	})
 	qualityService := memory.NewQualityService(memory.QualityServiceOptions{
 		Store:              repo,

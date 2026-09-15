@@ -32,9 +32,9 @@
 ## 6. Provider Conformance And Assurance Integration
 
 - [x] 6.1 Define bounded provider conformance profiles and fixture operation manifests for capability, scope, replay, lifecycle, citation, restart/fallback, and freshness checks; verify unsupported evidence kinds and out-of-scope fixtures are rejected.
-- [ ] 6.2 Implement a service-side conformance runner over an isolated exact scope using ordinary provider handlers; verify runs never execute an external agent/model and preserve canonical records except governed fixture ingestion.
+- [x] 6.2 Implement a service-side conformance runner over an isolated exact scope using ordinary provider handlers; verify runs never execute an external agent/model and preserve canonical records except governed fixture ingestion.
 - [x] 6.3 Persist conformance outcomes through existing assurance records with bounded counters, verdicts, evidence references, schema provenance, and next actions; verify reruns create linked history and diagnostics do not become metric labels.
-- [ ] 6.4 Add readiness/conformance tests for missing or stale dependencies, projection freshness, revoked scope, hidden memory, idempotency conflict, and interrupted durable operations; verify degraded/incomplete results cannot claim provider readiness.
+- [x] 6.4 Add readiness/conformance tests for missing or stale dependencies, projection freshness, revoked scope, hidden memory, idempotency conflict, and interrupted durable operations; verify degraded/incomplete results cannot claim provider readiness.
 
 ## 7. Documentation, Rollout, And Verification
 

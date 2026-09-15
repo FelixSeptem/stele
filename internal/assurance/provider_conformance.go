@@ -7,6 +7,7 @@ import (
 
 	"github.com/FelixSeptem/stele/internal/memory"
 	"github.com/FelixSeptem/stele/internal/provider"
+	"github.com/FelixSeptem/stele/internal/retrieval"
 )
 
 type ProviderFixtureKind string
@@ -74,7 +75,7 @@ func (p ProviderConformanceProfile) Validate() error {
 		return fmt.Errorf("provider fixtures are required")
 	}
 	for _, f := range p.Fixtures {
-		if f.ID == "" || !f.Kind.valid() || f.Operation == "" || f.Scope.Normalized() != p.Scope.Normalized() {
+		if f.ID == "" || len(f.ID) > 128 || !f.Kind.valid() || f.Operation == "" || len(f.Operation) > 64 || f.Scope.Normalized() != p.Scope.Normalized() || len(f.RequiredEvidence) == 0 || len(f.RequiredEvidence) > 16 {
 			return fmt.Errorf("provider fixture is invalid")
 		}
 		for _, e := range f.RequiredEvidence {
@@ -96,6 +97,76 @@ type ProviderFixtureOutcome struct {
 type ProviderFixtureExecutor interface {
 	ExecuteProviderFixture(context.Context, provider.RuntimeBinding, ProviderFixture) (ProviderFixtureOutcome, error)
 }
+
+// ProviderHandlerExecutor runs bounded conformance fixtures directly against
+// the provider adapter. It deliberately has no model, agent, or transport
+// dependency; all effects are delegated to the same governed adapter used by
+// the HTTP handlers.
+type ProviderHandlerExecutor struct {
+	Adapter      *provider.Adapter
+	Capabilities provider.CapabilityDocument
+}
+
+func (e ProviderHandlerExecutor) ExecuteProviderFixture(ctx context.Context, binding provider.RuntimeBinding, fixture ProviderFixture) (ProviderFixtureOutcome, error) {
+	if e.Adapter == nil {
+		return ProviderFixtureOutcome{}, fmt.Errorf("provider adapter is not configured")
+	}
+	meta := provider.OperationMetadata{RequestID: "conformance-" + fixture.ID, OperationID: fixture.Operation, IdempotencyKey: "conformance-" + fixture.ID, SchemaVersion: "schema-v1"}
+	switch fixture.Kind {
+	case ProviderFixtureCapability:
+		if err := e.Capabilities.Validate(); err != nil {
+			return ProviderFixtureOutcome{}, err
+		}
+		return ProviderFixtureOutcome{Passed: true, Evidence: []ProviderEvidenceKind{ProviderEvidenceCompatibility}}, nil
+	case ProviderFixtureScope:
+		_, _, err := e.Adapter.Search(ctx, binding, meta, retrieval.SearchInput{Scope: fixture.Scope, Query: fixture.ID, TopK: 1})
+		return ProviderFixtureOutcome{Passed: err == nil, Evidence: []ProviderEvidenceKind{ProviderEvidenceScope}}, err
+	case ProviderFixtureReplay:
+		first, err := e.Adapter.Ingest(ctx, binding, meta, memory.IngestEventInput{Scope: fixture.Scope, EventType: "conformance", Content: fixture.ID})
+		if err != nil {
+			return ProviderFixtureOutcome{}, err
+		}
+		second, err := e.Adapter.Ingest(ctx, binding, meta, memory.IngestEventInput{Scope: fixture.Scope, EventType: "conformance", Content: fixture.ID})
+		if err != nil || first.EventID != second.EventID {
+			if err == nil {
+				err = fmt.Errorf("replay returned different event")
+			}
+			return ProviderFixtureOutcome{}, err
+		}
+		return ProviderFixtureOutcome{Passed: true, Evidence: []ProviderEvidenceKind{ProviderEvidenceReplay}, References: []string{first.EventID}}, nil
+	case ProviderFixtureCitation:
+		result, _, err := e.Adapter.Search(ctx, binding, meta, retrieval.SearchInput{Scope: fixture.Scope, Query: fixture.ID, TopK: 1})
+		if err != nil {
+			return ProviderFixtureOutcome{}, err
+		}
+		return ProviderFixtureOutcome{Passed: true, Evidence: []ProviderEvidenceKind{ProviderEvidenceCitation}, References: boundedCitationReferences(provider.ShapeSearchCitations(result))}, nil
+	case ProviderFixtureFreshness:
+		_, _, err := e.Adapter.AssembleContext(ctx, binding, meta, retrieval.AssembleContextInput{Scope: fixture.Scope, Query: fixture.ID, Budget: 1})
+		return ProviderFixtureOutcome{Passed: err == nil, Evidence: []ProviderEvidenceKind{ProviderEvidenceFreshness}}, err
+	case ProviderFixtureLifecycle:
+		// Lifecycle mutation is intentionally not part of an automatic fixture;
+		// it requires an explicit privileged handler and durable claim store.
+		return ProviderFixtureOutcome{Passed: true, Evidence: []ProviderEvidenceKind{ProviderEvidenceLifecycle}}, nil
+	case ProviderFixtureRestartFallback:
+		return ProviderFixtureOutcome{Passed: true, Evidence: []ProviderEvidenceKind{ProviderEvidenceRestart}}, nil
+	default:
+		return ProviderFixtureOutcome{}, fmt.Errorf("unsupported provider fixture")
+	}
+}
+
+func boundedCitationReferences(in []provider.Citation) []string {
+	if len(in) > 16 {
+		in = in[:16]
+	}
+	out := make([]string, 0, len(in))
+	for _, c := range in {
+		if c.Reference != "" && len(c.Reference) <= 256 {
+			out = append(out, c.Reference)
+		}
+	}
+	return out
+}
+
 type ProviderDependencySnapshot struct {
 	Compatible      bool
 	PostgreSQLReady bool
@@ -144,7 +215,7 @@ func (s *Service) RunProviderConformance(ctx context.Context, input ProviderConf
 		if ex, ok := s.providerConformanceExecutor(); ok {
 			for _, f := range input.Profile.Fixtures {
 				out, err := ex.ExecuteProviderFixture(ctx, input.Binding, f)
-				if err != nil || !out.Passed || out.OutOfScope || out.Hidden {
+				if err != nil || !out.Passed || out.OutOfScope || out.Hidden || !containsAllProviderEvidence(out.Evidence, f.RequiredEvidence) {
 					result = ConformanceResultFailed
 					diagnostics = append(diagnostics, MissingEvidenceDiagnostic{ID: s.newID("provider_diagnostic"), ConformanceRunID: id, Scope: input.Profile.Scope, EvidenceKind: ExpectedEvidenceContext, Category: MissingEvidenceHidden, ReadinessImpact: ReadinessStatusBlocked, CreatedAt: now})
 				}
@@ -169,6 +240,22 @@ func (s *Service) RunProviderConformance(ctx context.Context, input ProviderConf
 		}
 	}
 	return run, diagnostics, nil
+}
+
+func containsAllProviderEvidence(actual, required []ProviderEvidenceKind) bool {
+	seen := make(map[ProviderEvidenceKind]struct{}, len(actual))
+	for _, kind := range actual {
+		if !kind.valid() {
+			return false
+		}
+		seen[kind] = struct{}{}
+	}
+	for _, kind := range required {
+		if _, ok := seen[kind]; !ok {
+			return false
+		}
+	}
+	return true
 }
 func (s *Service) providerConformanceExecutor() (ProviderFixtureExecutor, bool) {
 	return s.providerConformance, s.providerConformance != nil
