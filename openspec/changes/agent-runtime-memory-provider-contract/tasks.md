@@ -40,4 +40,4 @@
 
 - [x] 7.1 Document provider initialization, server-resolved scope, operation metadata, citations, supported errors, enablement, and rollback in OpenAPI/operator docs; verify docs consistency checks pass and no secrets/placeholders are introduced.
 - [x] 7.2 Add deterministic CI coverage for provider models, handlers, OpenAPI contract, isolation/redaction, idempotent replay, and conformance without provider credentials or ambient production DSNs; verify focused and full Go tests pass.
-- [ ] 7.3 Run `openspec validate agent-runtime-memory-provider-contract --strict`, `openspec status --change agent-runtime-memory-provider-contract --json`, and `git diff --check`; verify all required artifacts are complete and the change is ready for `/opsx:apply`.
+- [x] 7.3 Run `openspec validate agent-runtime-memory-provider-contract --strict`, `openspec status --change agent-runtime-memory-provider-contract --json`, and `git diff --check`; verify all required artifacts are complete and the change is ready for `/opsx:apply`.
