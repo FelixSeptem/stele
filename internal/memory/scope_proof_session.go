@@ -626,6 +626,8 @@ type RecordMemorySessionTurnOutcomeInput struct {
 	Scope                Scope
 	SessionID            string
 	TurnID               string
+	RequestID            string
+	OperationID          string
 	IdempotencyKey       string
 	OutcomeEventIDs      []string
 	OutcomeEventPayloads []MemorySessionOutcomeEventPayload
@@ -641,6 +643,9 @@ func (i RecordMemorySessionTurnOutcomeInput) Validate() error {
 	}
 	if strings.TrimSpace(i.TurnID) == "" {
 		return fmt.Errorf("turn id is required")
+	}
+	if len(i.RequestID) > 128 || len(i.OperationID) > 128 {
+		return fmt.Errorf("outcome operation metadata exceeds 128 bytes")
 	}
 	if len(i.OutcomeEventPayloads) > 20 {
 		return fmt.Errorf("outcome event payload count must be less than or equal to 20")

@@ -1,5 +1,41 @@
 # Stele Self-Hosting
 
+## Agent runtime memory provider
+
+The optional runtime provider is disabled by default. Set
+`STELE_PROVIDER_ENABLED=true` to publish its handlers. Disabling it removes the
+provider routes without changing existing `/v1` memory APIs or canonical
+records, which is also the rollback procedure.
+
+An authenticated runtime starts with `POST /v1/provider/runtimes`, supplying
+the exact `X-Stele-Tenant`, `X-Stele-Project`, and `X-Stele-Namespace` headers
+plus distinct `agent_id`, `session_id`, optional `conversation_id`, and
+optional `provider_instance_id` values. The service checks the principal grant
+and returns an opaque binding. The binding is server-owned, expires after
+`STELE_PROVIDER_BINDING_LIFETIME` (15 minutes by default), and is revalidated
+with the principal grant on every operation.
+
+Provider operations use `POST /v1/provider/operations/{operation}` with
+`X-Stele-Runtime-Binding`, `X-Stele-Runtime-Session`, and exact scope headers.
+The metadata envelope contains bounded `request_id`, `operation_id`,
+`idempotency_key`, monotonic per-session `event_seq`, and `schema_version`.
+The supported schema is `provider-v1`. Equivalent write retries reuse existing
+durable idempotency behavior; conflicting keys and stale sequences never
+replay a side effect.
+
+Discovery at `GET /v1/provider/capabilities` reports supported operations,
+schema digest, exact scope dimensions, and configured limits. Capability and
+error responses never expose credentials, DSNs, raw queries, stack traces,
+provider payloads, hidden record identifiers, or SQL. Retrieval and context
+results include bounded citations; hidden, stale, and foreign records remain
+excluded. Citation budget exhaustion fails closed.
+
+Stable error categories are `authentication`, `scope_mismatch`,
+`compatibility`, `validation`, `conflict`, `lifecycle`, `stale`, `dependency`,
+and `retryable`. Unsupported schemas fail before dispatch. Lifecycle requests
+continue through governed services; the provider has no direct canonical-memory
+mutation operation.
+
 ## Overview
 
 `Stele` runs as three process modes against one PostgreSQL instance:

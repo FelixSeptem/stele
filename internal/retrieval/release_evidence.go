@@ -2,218 +2,243 @@ package retrieval
 
 import (
 	"context"
+	"crypto/sha256"
 	"encoding/json"
 	"fmt"
-	"sort"
+	"net/url"
 	"strings"
 	"time"
+
+	"github.com/FelixSeptem/stele/internal/memory"
 )
 
-const retrievalTrajectorySchemaVersion = "retrieval-trajectory-v1"
+const (
+	ReleaseEvidenceSkipDSN            = RetrievalEvaluationDSNSkip
+	ReleaseEvidenceSkipPrerequisite   = "RETRIEVAL_RELEASE_EVIDENCE_PREREQUISITE_REQUIRED"
+	ReleaseEvidenceIncompatible       = "RETRIEVAL_RELEASE_EVIDENCE_INCOMPATIBLE"
+	ReleaseEvidenceSafetyFailure      = "RETRIEVAL_RELEASE_EVIDENCE_SAFETY_FAILURE"
+	ReleaseEvidenceProgressiveFailure = "RETRIEVAL_RELEASE_EVIDENCE_PROGRESSIVE_FAILURE"
+	ReleaseEvidenceParentFirstFailure = "RETRIEVAL_RELEASE_EVIDENCE_PARENT_FIRST_FAILURE"
+	ReleaseEvidenceRollbackFailure    = "RETRIEVAL_RELEASE_EVIDENCE_ROLLBACK_FAILURE"
+	ReleaseEvidenceQualityFailure     = "RETRIEVAL_RELEASE_EVIDENCE_QUALITY_FAILURE"
+)
 
-type TrajectoryChannelAggregate struct {
-	Channel              string `json:"channel"`
-	Availability         string `json:"availability"`
-	CandidateCountBucket string `json:"candidate_count_bucket"`
+type ReleaseEvidenceVerdict string
+
+const (
+	ReleaseEvidencePassed   ReleaseEvidenceVerdict = "passed"
+	ReleaseEvidenceSkipped  ReleaseEvidenceVerdict = "skipped"
+	ReleaseEvidenceDegraded ReleaseEvidenceVerdict = "degraded"
+	ReleaseEvidenceRejected ReleaseEvidenceVerdict = "rejected"
+)
+
+type ReleaseEvidencePrerequisites struct {
+	EvaluationDSN     string
+	RuntimeDSN        string
+	PostgreSQLReady   bool
+	PGVectorReady     bool
+	FixtureCompatible bool
+	ProjectionFresh   bool
+	RollbackTested    bool
 }
 
-type TrajectoryCategoryCount struct {
-	Category string `json:"category"`
-	Count    int    `json:"count"`
-}
-
-type RetrievalTrajectory struct {
-	SchemaVersion         string                       `json:"schema_version"`
-	ReportVersion         string                       `json:"report_version"`
-	PolicyVersion         string                       `json:"policy_version"`
-	Channels              []TrajectoryChannelAggregate `json:"channels,omitempty"`
-	ParentExpansionBucket string                       `json:"parent_expansion_bucket,omitempty"`
-	ChildExpansionBucket  string                       `json:"child_expansion_bucket,omitempty"`
-	Dispositions          []TrajectoryCategoryCount    `json:"dispositions,omitempty"`
-	Fallbacks             []TrajectoryCategoryCount    `json:"fallbacks,omitempty"`
-	LatencyBucket         string                       `json:"latency_bucket"`
-}
-
-func (t RetrievalTrajectory) Validate() error {
-	if t.SchemaVersion != retrievalTrajectorySchemaVersion || strings.TrimSpace(t.ReportVersion) == "" || strings.TrimSpace(t.PolicyVersion) == "" {
-		return fmt.Errorf("trajectory schema, report, and policy versions are required")
+func (p ReleaseEvidencePrerequisites) Validate() error {
+	dsn := strings.TrimSpace(p.EvaluationDSN)
+	if dsn == "" {
+		return fmt.Errorf("%s", ReleaseEvidenceSkipDSN)
 	}
-	if strings.TrimSpace(t.LatencyBucket) == "" {
-		return fmt.Errorf("trajectory latency bucket is required")
+	if strings.TrimSpace(p.RuntimeDSN) != "" && dsn == strings.TrimSpace(p.RuntimeDSN) {
+		return fmt.Errorf("evaluation DSN must not reuse runtime DSN")
 	}
-	for _, c := range t.Channels {
-		if strings.TrimSpace(c.Channel) == "" || strings.TrimSpace(c.Availability) == "" || strings.TrimSpace(c.CandidateCountBucket) == "" {
-			return fmt.Errorf("trajectory channel aggregate is incomplete")
-		}
+	u, err := url.Parse(dsn)
+	if err != nil || (u.Scheme != "postgres" && u.Scheme != "postgresql") || u.Host == "" {
+		return fmt.Errorf("invalid evaluation DSN")
 	}
-	for _, group := range [][]TrajectoryCategoryCount{t.Dispositions, t.Fallbacks} {
-		for _, item := range group {
-			if strings.TrimSpace(item.Category) == "" || item.Count < 0 || item.Count > 1_000_000 {
-				return fmt.Errorf("trajectory category is invalid")
-			}
-			lower := strings.ToLower(item.Category)
-			for _, forbidden := range []string{"postgres://", "query", "tenant", "project", "namespace", "memory", "event", "score", "credential", "provider_error"} {
-				if strings.Contains(lower, forbidden) {
-					return fmt.Errorf("trajectory category contains forbidden material")
-				}
-			}
-		}
+	if !p.PostgreSQLReady || !p.PGVectorReady || !p.FixtureCompatible || !p.ProjectionFresh || !p.RollbackTested {
+		return fmt.Errorf("%s", ReleaseEvidenceSkipPrerequisite)
 	}
 	return nil
 }
 
-func MarshalRetrievalTrajectory(t RetrievalTrajectory) ([]byte, error) {
-	if t.SchemaVersion == "" {
-		t.SchemaVersion = retrievalTrajectorySchemaVersion
-	}
-	if err := t.Validate(); err != nil {
-		return nil, err
-	}
-	return json.Marshal(t)
+type ReleaseEvidenceInput struct {
+	Scope           memory.Scope
+	ProviderProfile string
+	Policy          EvaluationReleasePolicy
+	Baseline        EvaluationReport
+	Candidate       EvaluationReport
+	Progressive     ProgressiveContextEvaluationReport
+	ParentFirst     ParentFirstEvaluationReport
+	Prerequisites   ReleaseEvidencePrerequisites
+	EvaluatedAt     time.Time
 }
 
-type DerivedEvaluationArtifactKind string
-
-const (
-	DerivedEvaluationArtifactTrajectory DerivedEvaluationArtifactKind = "trajectory"
-	DerivedEvaluationArtifactDiagnostic DerivedEvaluationArtifactKind = "diagnostic"
-	DerivedEvaluationArtifactReport     DerivedEvaluationArtifactKind = "report"
-	DerivedEvaluationArtifactFixture    DerivedEvaluationArtifactKind = "fixture"
-)
-
-type DerivedEvaluationArtifactRepository interface {
-	DeleteExpiredEvaluationArtifacts(context.Context, time.Time, []DerivedEvaluationArtifactKind) (map[DerivedEvaluationArtifactKind]int, error)
+// ReleaseEvidenceRunRequest is the explicit, bounded input accepted by the
+// release-evidence runner. DSNs are consumed for validation only and are never
+// copied into the resulting report.
+type ReleaseEvidenceRunRequest struct {
+	Scope             memory.Scope
+	EvaluationDSN     string
+	RuntimeDSN        string
+	ProviderProfile   string
+	Policy            EvaluationReleasePolicy
+	Baseline          EvaluationReport
+	Candidate         EvaluationReport
+	Progressive       ProgressiveContextEvaluationReport
+	ParentFirst       ParentFirstEvaluationReport
+	PostgreSQLReady   bool
+	PGVectorReady     bool
+	FixtureCompatible bool
+	ProjectionFresh   bool
+	RollbackTested    bool
+	EvaluatedAt       time.Time
 }
 
-type EvaluationArtifactRetention struct {
-	Repository DerivedEvaluationArtifactRepository
-	Window     time.Duration
-	Now        func() time.Time
+// RunOwnedReleaseEvidence evaluates one exact scope using explicitly owned
+// evidence. The context is reserved for future real-stack adapters; this
+// function performs no canonical writes and never falls back to RuntimeDSN.
+func RunOwnedReleaseEvidence(_ context.Context, req ReleaseEvidenceRunRequest) (ReleaseEvidenceReport, error) {
+	return EvaluateReleaseEvidence(ReleaseEvidenceInput{
+		Scope: req.Scope, ProviderProfile: req.ProviderProfile, Policy: req.Policy,
+		Baseline: req.Baseline, Candidate: req.Candidate, Progressive: req.Progressive,
+		ParentFirst: req.ParentFirst, EvaluatedAt: req.EvaluatedAt,
+		Prerequisites: ReleaseEvidencePrerequisites{EvaluationDSN: req.EvaluationDSN, RuntimeDSN: req.RuntimeDSN,
+			PostgreSQLReady: req.PostgreSQLReady, PGVectorReady: req.PGVectorReady,
+			FixtureCompatible: req.FixtureCompatible, ProjectionFresh: req.ProjectionFresh,
+			RollbackTested: req.RollbackTested},
+	})
 }
 
-type EvaluationArtifactRetentionResult struct {
-	Category     string                                `json:"category"`
-	Before       time.Time                             `json:"before"`
-	Deleted      map[DerivedEvaluationArtifactKind]int `json:"deleted"`
-	TotalDeleted int                                   `json:"total_deleted"`
+type ReleaseEvidenceReport struct {
+	ProviderProfile     string                 `json:"provider_profile"`
+	PolicyVersion       string                 `json:"policy_version"`
+	ScopeHash           string                 `json:"scope_hash"`
+	Verdict             ReleaseEvidenceVerdict `json:"verdict"`
+	ReleaseEligible     bool                   `json:"release_eligible"`
+	RealStack           bool                   `json:"real_stack"`
+	FailureCategories   []string               `json:"failure_categories,omitempty"`
+	ProgressiveLevels   int                    `json:"progressive_levels"`
+	ProgressiveEligible int                    `json:"progressive_eligible"`
+	ParentFirstEligible bool                   `json:"parent_first_eligible"`
+	QualityEligible     bool                   `json:"quality_eligible"`
+	ProgressiveFailures []string               `json:"progressive_failures,omitempty"`
+	ParentFirstFailures []string               `json:"parent_first_failures,omitempty"`
+	GeneratedAt         time.Time              `json:"generated_at"`
 }
 
-func (r EvaluationArtifactRetention) Run(ctx context.Context) (EvaluationArtifactRetentionResult, error) {
-	if r.Repository == nil {
-		return EvaluationArtifactRetentionResult{}, fmt.Errorf("retention repository is required")
+// MarshalReleaseEvidenceReport is the redacted report boundary. The report
+// schema intentionally contains hashes, identities, categories and aggregates
+// only; DSNs, scope values, queries, content and provider payloads cannot be
+// represented.
+func MarshalReleaseEvidenceReport(report ReleaseEvidenceReport) ([]byte, error) {
+	if strings.TrimSpace(report.ProviderProfile) == "" || !evaluationSafeIdentity(report.ProviderProfile) {
+		return nil, fmt.Errorf("provider profile is invalid")
 	}
-	if r.Window <= 0 {
-		return EvaluationArtifactRetentionResult{}, fmt.Errorf("retention window must be positive")
+	if report.ScopeHash != "" && (!strings.HasPrefix(report.ScopeHash, "scope:") || len(report.ScopeHash) != len("scope:")+64) {
+		return nil, fmt.Errorf("scope hash is invalid")
 	}
-	now := time.Now
-	if r.Now != nil {
-		now = r.Now
+	if report.ProgressiveLevels < 0 || report.ProgressiveEligible < 0 || report.ProgressiveEligible > report.ProgressiveLevels {
+		return nil, fmt.Errorf("progressive counts are invalid")
 	}
-	before := now().UTC().Add(-r.Window)
-	kinds := []DerivedEvaluationArtifactKind{DerivedEvaluationArtifactTrajectory, DerivedEvaluationArtifactDiagnostic, DerivedEvaluationArtifactReport, DerivedEvaluationArtifactFixture}
-	deleted, err := r.Repository.DeleteExpiredEvaluationArtifacts(ctx, before, kinds)
+	return json.Marshal(report)
+}
+
+// RenderReleaseEvidenceSummary returns a bounded human-readable rendering
+// suitable for operator logs and CI annotations.
+func RenderReleaseEvidenceSummary(report ReleaseEvidenceReport) string {
+	status := "not eligible"
+	if report.ReleaseEligible {
+		status = "release eligible"
+	}
+	return fmt.Sprintf("retrieval release evidence: %s (verdict=%s, progressive=%d/%d, parent_first=%t, real_stack=%t)", status, report.Verdict, report.ProgressiveEligible, report.ProgressiveLevels, report.ParentFirstEligible, report.RealStack)
+}
+
+func EvaluateReleaseEvidence(in ReleaseEvidenceInput) (ReleaseEvidenceReport, error) {
+	if err := in.Scope.Validate(); err != nil {
+		return ReleaseEvidenceReport{}, err
+	}
+	if strings.TrimSpace(in.ProviderProfile) == "" || len(in.ProviderProfile) > 128 {
+		return ReleaseEvidenceReport{}, fmt.Errorf("provider profile is invalid")
+	}
+	if err := in.Policy.Validate(); err != nil {
+		return ReleaseEvidenceReport{}, err
+	}
+	if strings.TrimSpace(in.Progressive.BaselineIdentity) == "" {
+		return ReleaseEvidenceReport{}, fmt.Errorf("progressive baseline identity is required")
+	}
+	if in.ParentFirst.Mode != ParentFirstModeShadow {
+		return ReleaseEvidenceReport{}, fmt.Errorf("parent-first release evidence must be shadow mode")
+	}
+	if strings.TrimSpace(in.ParentFirst.StrategyIdentity) == "" || !evaluationSafeIdentity(in.ParentFirst.StrategyIdentity) {
+		return ReleaseEvidenceReport{}, fmt.Errorf("parent-first strategy identity is invalid")
+	}
+	now := in.EvaluatedAt.UTC()
+	if now.IsZero() {
+		now = time.Now().UTC()
+	}
+	r := ReleaseEvidenceReport{ProviderProfile: in.ProviderProfile, PolicyVersion: in.Policy.Version, Verdict: ReleaseEvidencePassed, RealStack: true, GeneratedAt: now, ProgressiveLevels: len(in.Progressive.Levels), ParentFirstEligible: in.ParentFirst.Eligible}
+	if err := in.Prerequisites.Validate(); err != nil {
+		r.ReleaseEligible = false
+		r.Verdict = ReleaseEvidenceSkipped
+		r.RealStack = false
+		if err.Error() == ReleaseEvidenceSkipDSN || err.Error() == ReleaseEvidenceSkipPrerequisite {
+			r.FailureCategories = []string{err.Error()}
+		} else {
+			r.FailureCategories = []string{ReleaseEvidenceIncompatible}
+		}
+		return r, nil
+	}
+	r.ScopeHash = scopeHash(in.Scope)
+	decision, err := EvaluateReleasePolicy(in.Policy, in.Baseline, in.Candidate)
 	if err != nil {
-		return EvaluationArtifactRetentionResult{}, err
+		r.Verdict = ReleaseEvidenceRejected
+		r.FailureCategories = []string{ReleaseEvidenceIncompatible}
+		return r, nil
 	}
-	result := EvaluationArtifactRetentionResult{Category: "deleted", Before: before, Deleted: deleted}
-	for _, count := range deleted {
-		if count > 0 {
-			result.TotalDeleted += count
+	r.QualityEligible = decision.Eligible
+	if !decision.Eligible {
+		r.Verdict = ReleaseEvidenceRejected
+		r.FailureCategories = append(r.FailureCategories, decision.HardFailures...)
+	}
+	for _, level := range in.Progressive.Levels {
+		if !evaluationSafeIdentity(level.Identity) {
+			return ReleaseEvidenceReport{}, fmt.Errorf("progressive level identity is invalid")
+		}
+		if level.Eligible {
+			r.ProgressiveEligible++
+		} else {
+			r.FailureCategories = appendUniqueCategory(r.FailureCategories, ReleaseEvidenceProgressiveFailure)
+			r.ProgressiveFailures = append(r.ProgressiveFailures, string(level.Identity))
 		}
 	}
-	return result, nil
+	if len(in.Progressive.Levels) == 0 || r.ProgressiveEligible != len(in.Progressive.Levels) {
+		r.Verdict = ReleaseEvidenceRejected
+		r.ReleaseEligible = false
+	}
+	if !in.ParentFirst.Eligible {
+		r.Verdict = ReleaseEvidenceRejected
+		r.ReleaseEligible = false
+		r.FailureCategories = appendUniqueCategory(r.FailureCategories, ReleaseEvidenceParentFirstFailure)
+		r.ParentFirstFailures = append(r.ParentFirstFailures, in.ParentFirst.StrategyIdentity)
+	}
+	if r.Verdict == ReleaseEvidencePassed {
+		r.ReleaseEligible = true
+	}
+	return r, nil
 }
 
-type IntegrityEvidence struct {
-	Alias     string `json:"alias"`
-	Placement string `json:"placement"`
-	Digest    string `json:"digest"`
+func appendUniqueCategory(categories []string, category string) []string {
+	for _, existing := range categories {
+		if existing == category {
+			return categories
+		}
+	}
+	return append(categories, category)
 }
 
-type MemoryOrganizationIntegrityInput struct {
-	SchemaVersion  string
-	Operation      string
-	ActionSuccess  bool
-	Expected       []IntegrityEvidence
-	Actual         []IntegrityEvidence
-	SafetyFailures []string
+func scopeHash(scope memory.Scope) string {
+	return fmt.Sprintf("scope:%x", stableHash(scope.Tenant+"\x00"+scope.Project+"\x00"+scope.Namespace))
 }
 
-type MemoryOrganizationIntegrityReport struct {
-	SchemaVersion              string   `json:"schema_version"`
-	Operation                  string   `json:"operation"`
-	ActionSuccess              bool     `json:"action_success"`
-	InformationIntegrityPassed bool     `json:"information_integrity_passed"`
-	FactEvidenceRecall         float64  `json:"fact_evidence_recall"`
-	PlacementAccuracy          float64  `json:"placement_accuracy"`
-	DuplicateCount             int      `json:"duplicate_count"`
-	MissingCount               int      `json:"missing_count"`
-	AlteredCount               int      `json:"altered_count"`
-	MisplacedCount             int      `json:"misplaced_count"`
-	UnexpectedCount            int      `json:"unexpected_count"`
-	SafetyFailures             []string `json:"safety_failures,omitempty"`
-}
-
-func BuildMemoryOrganizationIntegrity(in MemoryOrganizationIntegrityInput) (MemoryOrganizationIntegrityReport, error) {
-	if strings.TrimSpace(in.SchemaVersion) == "" || strings.TrimSpace(in.Operation) == "" {
-		return MemoryOrganizationIntegrityReport{}, fmt.Errorf("integrity schema version and operation are required")
-	}
-	report := MemoryOrganizationIntegrityReport{SchemaVersion: in.SchemaVersion, Operation: in.Operation, ActionSuccess: in.ActionSuccess, SafetyFailures: append([]string(nil), in.SafetyFailures...)}
-	expected := make(map[string]IntegrityEvidence, len(in.Expected))
-	for _, e := range in.Expected {
-		if strings.TrimSpace(e.Alias) == "" {
-			return report, fmt.Errorf("expected evidence alias is required")
-		}
-		if _, ok := expected[e.Alias]; ok {
-			return report, fmt.Errorf("duplicate expected evidence alias")
-		}
-		expected[e.Alias] = e
-	}
-	actual := make(map[string][]IntegrityEvidence, len(in.Actual))
-	for _, e := range in.Actual {
-		if strings.TrimSpace(e.Alias) == "" {
-			return report, fmt.Errorf("actual evidence alias is required")
-		}
-		actual[e.Alias] = append(actual[e.Alias], e)
-	}
-	exactPlacement := 0
-	presentEvidence := 0
-	for alias, want := range expected {
-		got, ok := actual[alias]
-		if !ok {
-			report.MissingCount++
-			continue
-		}
-		presentEvidence++
-		if len(got) > 1 {
-			report.DuplicateCount += len(got) - 1
-		}
-		if got[0].Digest != want.Digest {
-			report.AlteredCount++
-		}
-		if got[0].Placement != want.Placement {
-			report.MisplacedCount++
-		} else if got[0].Digest == want.Digest {
-			exactPlacement++
-		}
-	}
-	for alias := range actual {
-		if _, ok := expected[alias]; !ok {
-			report.UnexpectedCount += len(actual[alias])
-		}
-	}
-	if len(in.Expected) > 0 {
-		report.PlacementAccuracy = float64(exactPlacement) / float64(len(in.Expected))
-	}
-	if len(in.Expected) > 0 {
-		report.FactEvidenceRecall = float64(presentEvidence) / float64(len(in.Expected))
-	}
-	report.InformationIntegrityPassed = report.MissingCount == 0 && report.DuplicateCount == 0 && report.AlteredCount == 0 && report.MisplacedCount == 0 && report.UnexpectedCount == 0 && len(report.SafetyFailures) == 0
-	return report, nil
-}
-
-func (r MemoryOrganizationIntegrityReport) StableSafetyCategories() []string {
-	out := append([]string(nil), r.SafetyFailures...)
-	sort.Strings(out)
-	return out
+func stableHash(value string) [32]byte {
+	return sha256.Sum256([]byte(value))
 }

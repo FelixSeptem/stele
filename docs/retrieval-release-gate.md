@@ -37,6 +37,19 @@ Run the owned PostgreSQL + pgvector replay only when the DSN is configured:
 pwsh -File scripts/retrieval-evaluation.ps1
 ```
 
+The release-evidence boundary is `retrieval.RunOwnedReleaseEvidence`. It accepts
+one exact scope, an explicitly owned evaluation DSN, and a provider profile;
+the runtime service DSN is never consulted as a fallback. Missing DSN or any
+PostgreSQL/pgvector, fixture, freshness, or rollback prerequisite yields a
+stable skipped/degraded verdict and must not be treated as release-ready.
+
+For CI and operator review, serialize the bounded machine report with
+`retrieval.MarshalReleaseEvidenceReport` and use
+`retrieval.RenderReleaseEvidenceSummary` for a human-readable annotation. Both
+forms contain only logical identities, scope hashes, aggregate counts, and
+failure categories; they do not contain connection strings, scope values,
+queries, content, raw scores, or provider payloads.
+
 The report records logical fixture, representation, fusion, ranking, embedding,
 reranker, analysis, and release-policy identities; protected recall, temporal
 and multi-hop coverage, duplicate/diversity, candidate budgets, fallback

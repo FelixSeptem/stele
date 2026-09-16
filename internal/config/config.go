@@ -10,6 +10,17 @@ import (
 	"github.com/FelixSeptem/stele/internal/assurance"
 )
 
+type ProviderLimitsConfig struct {
+	EventBytes, IntentBytes, RetrievalItems, ContextItems, CitationItems, MetadataBytes int
+}
+
+type ProviderConfig struct {
+	Enabled                 bool
+	SupportedSchemaVersions []string
+	Limits                  ProviderLimitsConfig
+	BindingLifetime         time.Duration
+}
+
 type Mode string
 
 const (
@@ -44,6 +55,7 @@ type Config struct {
 	Assurance                           AssuranceConfig
 	QueryAnalysis                       QueryAnalysisConfig
 	Evaluation                          EvaluationConfig
+	Provider                            ProviderConfig
 }
 
 type EvaluationConfig struct {
@@ -177,6 +189,10 @@ func LoadFromEnv() (Config, error) {
 		return Config{}, err
 	}
 	evaluationConfig, err := loadEvaluationConfig(postgresDSN)
+	if err != nil {
+		return Config{}, err
+	}
+	providerConfig, err := loadProviderConfig()
 	if err != nil {
 		return Config{}, err
 	}
@@ -475,6 +491,7 @@ func LoadFromEnv() (Config, error) {
 		ContextProjectionConsumptionEnabled: contextProjectionConsumptionEnabled,
 		QueryAnalysis:                       queryAnalysis,
 		Evaluation:                          evaluationConfig,
+		Provider:                            providerConfig,
 		Auth: AuthConfig{
 			BootstrapAdminKey: bootstrapAdminKey,
 			DefaultTenant:     defaultTenant,
@@ -599,6 +616,60 @@ func loadEvaluationConfig(runtimeDSN string) (EvaluationConfig, error) {
 		return EvaluationConfig{}, fmt.Errorf("STELE_RETRIEVAL_EVALUATION_PROVIDER_PROFILE is invalid")
 	}
 	return EvaluationConfig{OwnedDSN: owned, ProviderProfile: profile}, nil
+}
+
+func loadProviderConfig() (ProviderConfig, error) {
+	enabled, err := loadStrictBoolWithDefault("STELE_PROVIDER_ENABLED", false)
+	if err != nil {
+		return ProviderConfig{}, err
+	}
+	c := ProviderConfig{Enabled: enabled, SupportedSchemaVersions: []string{"provider-v1"}, BindingLifetime: 15 * time.Minute,
+		Limits: ProviderLimitsConfig{EventBytes: 1 << 20, IntentBytes: 64 << 10, RetrievalItems: 100, ContextItems: 100, CitationItems: 100, MetadataBytes: 128}}
+	if raw := strings.TrimSpace(os.Getenv("STELE_PROVIDER_SCHEMA_VERSIONS")); raw != "" {
+		parts := splitCSVEnv("STELE_PROVIDER_SCHEMA_VERSIONS")
+		if len(parts) == 0 {
+			return ProviderConfig{}, fmt.Errorf("STELE_PROVIDER_SCHEMA_VERSIONS is invalid")
+		}
+		for _, v := range parts {
+			if v != "provider-v1" {
+				return ProviderConfig{}, fmt.Errorf("unsupported provider schema version %q", v)
+			}
+		}
+		c.SupportedSchemaVersions = parts
+	}
+	if c.BindingLifetime, err = loadDurationWithDefault("STELE_PROVIDER_BINDING_LIFETIME", c.BindingLifetime); err != nil {
+		return ProviderConfig{}, err
+	}
+	if c.BindingLifetime < time.Minute || c.BindingLifetime > 24*time.Hour {
+		return ProviderConfig{}, fmt.Errorf("provider binding lifetime must be between 1m and 24h")
+	}
+	for _, spec := range []struct {
+		key      string
+		dst      *int
+		min, max int
+	}{{"STELE_PROVIDER_MAX_EVENT_BYTES", &c.Limits.EventBytes, 1, 1 << 24}, {"STELE_PROVIDER_MAX_INTENT_BYTES", &c.Limits.IntentBytes, 1, 1 << 24}, {"STELE_PROVIDER_MAX_RETRIEVAL_ITEMS", &c.Limits.RetrievalItems, 1, 1000}, {"STELE_PROVIDER_MAX_CONTEXT_ITEMS", &c.Limits.ContextItems, 1, 1000}, {"STELE_PROVIDER_MAX_CITATION_ITEMS", &c.Limits.CitationItems, 1, 1000}, {"STELE_PROVIDER_MAX_METADATA_BYTES", &c.Limits.MetadataBytes, 1, 4096}} {
+		v, e := loadIntWithDefault(spec.key, *spec.dst)
+		if e != nil {
+			return ProviderConfig{}, e
+		}
+		if v < spec.min || v > spec.max {
+			return ProviderConfig{}, fmt.Errorf("%s is out of range", spec.key)
+		}
+		*spec.dst = v
+	}
+	return c, nil
+}
+
+func loadStrictBoolWithDefault(key string, fallback bool) (bool, error) {
+	raw := strings.TrimSpace(os.Getenv(key))
+	if raw == "" {
+		return fallback, nil
+	}
+	value, err := strconv.ParseBool(raw)
+	if err != nil {
+		return false, fmt.Errorf("%s is invalid: %w", key, err)
+	}
+	return value, nil
 }
 func safeEvaluationProfile(value string) bool {
 	if len(value) > 128 || value == "" {

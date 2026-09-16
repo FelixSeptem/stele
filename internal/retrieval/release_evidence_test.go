@@ -6,138 +6,115 @@ import (
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/FelixSeptem/stele/internal/memory"
 )
 
-func TestMarshalRetrievalTrajectoryAllowsOnlyBoundedAggregates(t *testing.T) {
-	report := RetrievalTrajectory{
-		SchemaVersion: "retrieval-trajectory-v1",
-		ReportVersion: "release-report-v1",
-		PolicyVersion: "release-policy-v1",
-		Channels: []TrajectoryChannelAggregate{{
-			Channel: "semantic", Availability: "available", CandidateCountBucket: "11-25",
-		}},
-		ParentExpansionBucket: "1-5",
-		ChildExpansionBucket:  "6-10",
-		Dispositions:          []TrajectoryCategoryCount{{Category: "selected", Count: 4}},
-		Fallbacks:             []TrajectoryCategoryCount{{Category: "reranker_unavailable", Count: 1}},
-		LatencyBucket:         "50-99ms",
-	}
-
-	encoded, err := MarshalRetrievalTrajectory(report)
+func TestRunOwnedReleaseEvidenceNeverFallsBackToRuntimeDSN(t *testing.T) {
+	in := validReleaseEvidenceInput(t)
+	report, err := RunOwnedReleaseEvidence(context.Background(), ReleaseEvidenceRunRequest{
+		Scope: in.Scope, EvaluationDSN: "", RuntimeDSN: in.Prerequisites.RuntimeDSN,
+		ProviderProfile: in.ProviderProfile, Policy: in.Policy, Baseline: in.Baseline,
+		Candidate: in.Candidate, Progressive: in.Progressive, ParentFirst: in.ParentFirst,
+		PostgreSQLReady: true, PGVectorReady: true, FixtureCompatible: true, ProjectionFresh: true, RollbackTested: true,
+	})
 	if err != nil {
-		t.Fatalf("MarshalRetrievalTrajectory() error = %v", err)
-	}
-	for _, forbidden := range []string{"query", "tenant", "project", "namespace", "memory_id", "event_id", "raw_score", "credential", "provider_error"} {
-		if strings.Contains(strings.ToLower(string(encoded)), forbidden) {
-			t.Fatalf("trajectory contains forbidden field %q: %s", forbidden, encoded)
-		}
-	}
-	var decoded map[string]any
-	if err := json.Unmarshal(encoded, &decoded); err != nil {
 		t.Fatal(err)
 	}
-	if got := decoded["latency_bucket"]; got != "50-99ms" {
-		t.Fatalf("latency_bucket = %v", got)
+	if report.ReleaseEligible || report.Verdict != ReleaseEvidenceSkipped || len(report.FailureCategories) != 1 || report.FailureCategories[0] != ReleaseEvidenceSkipDSN {
+		t.Fatalf("report=%+v", report)
 	}
 }
 
-func TestMarshalRetrievalTrajectoryRejectsUnsafeCategory(t *testing.T) {
-	report := RetrievalTrajectory{
-		SchemaVersion: "retrieval-trajectory-v1",
-		ReportVersion: "release-report-v1",
-		PolicyVersion: "release-policy-v1",
-		Channels:      []TrajectoryChannelAggregate{{Channel: "semantic", Availability: "available", CandidateCountBucket: "1-5"}},
-		Dispositions:  []TrajectoryCategoryCount{{Category: "postgres://operator:secret@db/internal", Count: 1}},
-		LatencyBucket: "0-9ms",
-	}
-	if _, err := MarshalRetrievalTrajectory(report); err == nil {
-		t.Fatal("MarshalRetrievalTrajectory() error = nil, want unsafe category rejected")
-	}
-}
-
-type derivedArtifactRepositoryStub struct {
-	deletedKinds []DerivedEvaluationArtifactKind
-	before       time.Time
-}
-
-func (s *derivedArtifactRepositoryStub) DeleteExpiredEvaluationArtifacts(_ context.Context, before time.Time, kinds []DerivedEvaluationArtifactKind) (map[DerivedEvaluationArtifactKind]int, error) {
-	s.before = before
-	s.deletedKinds = append([]DerivedEvaluationArtifactKind(nil), kinds...)
-	return map[DerivedEvaluationArtifactKind]int{
-		DerivedEvaluationArtifactTrajectory: 2,
-		DerivedEvaluationArtifactReport:     1,
-	}, nil
-}
-
-func TestEvaluationArtifactRetentionDeletesOnlyDerivedKinds(t *testing.T) {
-	now := time.Date(2026, 9, 13, 12, 0, 0, 0, time.UTC)
-	repo := &derivedArtifactRepositoryStub{}
-	result, err := (EvaluationArtifactRetention{
-		Repository: repo,
-		Window:     7 * 24 * time.Hour,
-		Now:        func() time.Time { return now },
-	}).Run(context.Background())
+func TestMarshalReleaseEvidenceReportIsBoundedAndRedacted(t *testing.T) {
+	report := validReleaseEvidenceInput(t)
+	evidence, err := EvaluateReleaseEvidence(report)
 	if err != nil {
-		t.Fatalf("Run() error = %v", err)
+		t.Fatal(err)
 	}
-	if !repo.before.Equal(now.Add(-7 * 24 * time.Hour)) {
-		t.Fatalf("before = %s", repo.before)
+	payload, err := MarshalReleaseEvidenceReport(evidence)
+	if err != nil {
+		t.Fatal(err)
 	}
-	if len(repo.deletedKinds) != 4 {
-		t.Fatalf("deleted kinds = %v, want four derived kinds", repo.deletedKinds)
+	var decoded map[string]any
+	if err := json.Unmarshal(payload, &decoded); err != nil {
+		t.Fatal(err)
 	}
-	for _, kind := range repo.deletedKinds {
-		if kind == DerivedEvaluationArtifactKind("canonical_memory") {
-			t.Fatal("retention attempted to delete canonical memory")
+	encoded := string(payload)
+	for _, forbidden := range []string{"postgres://", "tenant-secret", "raw-query", "provider-payload", "memory_id", "event_id"} {
+		if strings.Contains(encoded, forbidden) {
+			t.Fatalf("payload leaked %q: %s", forbidden, encoded)
 		}
 	}
-	if result.TotalDeleted != 3 || result.Category != "deleted" {
-		t.Fatalf("result = %+v", result)
+	if _, ok := decoded["scope_hash"]; !ok {
+		t.Fatalf("payload=%s", encoded)
+	}
+	if got := RenderReleaseEvidenceSummary(evidence); !strings.Contains(got, "retrieval release evidence") {
+		t.Fatalf("summary=%q", got)
 	}
 }
 
-func TestBuildMemoryOrganizationIntegritySeparatesActionFromInformation(t *testing.T) {
-	report, err := BuildMemoryOrganizationIntegrity(MemoryOrganizationIntegrityInput{
-		SchemaVersion: "memory-integrity-v1",
-		Operation:     "merge",
-		ActionSuccess: true,
-		Expected: []IntegrityEvidence{
-			{Alias: "fact-a", Placement: "profile", Digest: "sha256:a"},
-			{Alias: "fact-b", Placement: "episodic", Digest: "sha256:b"},
-		},
-		Actual: []IntegrityEvidence{
-			{Alias: "fact-a", Placement: "procedural", Digest: "sha256:changed"},
-			{Alias: "fact-a", Placement: "procedural", Digest: "sha256:changed"},
-			{Alias: "unexpected", Placement: "summary", Digest: "sha256:x"},
-		},
-	})
+func TestEvaluateReleaseEvidenceSkipsWithoutOwnedEvaluationDSN(t *testing.T) {
+	in := validReleaseEvidenceInput(t)
+	in.Prerequisites.EvaluationDSN = ""
+	report, err := EvaluateReleaseEvidence(in)
 	if err != nil {
-		t.Fatalf("BuildMemoryOrganizationIntegrity() error = %v", err)
+		t.Fatal(err)
 	}
-	if !report.ActionSuccess || report.InformationIntegrityPassed {
-		t.Fatalf("report = %+v, want action success with integrity failure", report)
-	}
-	if report.MissingCount != 1 || report.AlteredCount != 1 || report.MisplacedCount != 1 || report.DuplicateCount != 1 || report.UnexpectedCount != 1 {
-		t.Fatalf("unexpected integrity counts: %+v", report)
-	}
-	if report.FactEvidenceRecall != 0.5 || report.PlacementAccuracy != 0 {
-		t.Fatalf("recall/placement = %v/%v", report.FactEvidenceRecall, report.PlacementAccuracy)
+	if report.Verdict != ReleaseEvidenceSkipped || report.ReleaseEligible || report.FailureCategories[0] != ReleaseEvidenceSkipDSN {
+		t.Fatalf("report=%+v", report)
 	}
 }
 
-func TestMemoryOrganizationIntegritySafetyFailureOverridesPreservedFacts(t *testing.T) {
-	report, err := BuildMemoryOrganizationIntegrity(MemoryOrganizationIntegrityInput{
-		SchemaVersion:  "memory-integrity-v1",
-		Operation:      "projection",
-		ActionSuccess:  true,
-		Expected:       []IntegrityEvidence{{Alias: "fact-a", Placement: "summary", Digest: "sha256:a"}},
-		Actual:         []IntegrityEvidence{{Alias: "fact-a", Placement: "summary", Digest: "sha256:a"}},
-		SafetyFailures: []string{"isolation_violation"},
-	})
+func TestEvaluateReleaseEvidenceRejectsRuntimeDSNFallbackAndSafetyFailure(t *testing.T) {
+	in := validReleaseEvidenceInput(t)
+	in.Prerequisites.RuntimeDSN = in.Prerequisites.EvaluationDSN
+	report, err := EvaluateReleaseEvidence(in)
 	if err != nil {
-		t.Fatalf("BuildMemoryOrganizationIntegrity() error = %v", err)
+		t.Fatal(err)
 	}
-	if report.InformationIntegrityPassed {
-		t.Fatalf("report = %+v, want hard safety failure", report)
+	if report.ReleaseEligible || report.Verdict != ReleaseEvidenceSkipped || report.FailureCategories[0] != ReleaseEvidenceIncompatible {
+		t.Fatalf("runtime fallback report=%+v", report)
 	}
+	in = validReleaseEvidenceInput(t)
+	in.Candidate.SafetyFailures = []EvaluationSafetyFailure{{Category: EvaluationSafetyFailureCrossScope, Count: 1}}
+	report, err = EvaluateReleaseEvidence(in)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if report.ReleaseEligible || report.Verdict != ReleaseEvidenceRejected {
+		t.Fatalf("safety report=%+v", report)
+	}
+}
+
+func TestEvaluateReleaseEvidenceRequiresProgressiveAndParentFirstEligibility(t *testing.T) {
+	in := validReleaseEvidenceInput(t)
+	in.Progressive.Levels[1].Eligible = false
+	in.ParentFirst.Eligible = false
+	report, err := EvaluateReleaseEvidence(in)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if report.ReleaseEligible || !containsString(report.FailureCategories, ReleaseEvidenceProgressiveFailure) || !containsString(report.FailureCategories, ReleaseEvidenceParentFirstFailure) {
+		t.Fatalf("report=%+v", report)
+	}
+}
+
+func validReleaseEvidenceInput(t *testing.T) ReleaseEvidenceInput {
+	t.Helper()
+	now := time.Date(2026, 9, 15, 12, 0, 0, 0, time.UTC)
+	metadata := EvaluationRankingMetadata{FixtureVersion: "fixture-v1", RepresentationVersion: "representation-v1", RankingVersion: "ranking-v1", FusionStrategy: "rrf:v1", CompatibleEmbeddingRevision: "embedding-v1", PolicyVersion: "policy-v1"}
+	baseline := EvaluationReport{Metadata: metadata, Metrics: EvaluationMetricReport{RecallAt1: 1, MultiHopEvidenceCoverage: 1, EvidenceCoverage: 1, P95LatencyMS: 10}}
+	candidate := baseline
+	policy := EvaluationReleasePolicy{Version: "policy-v1", ProtectedCutoffs: []int{1}, MaxP95LatencyMS: 100, Prerequisites: EvaluationPrerequisites{RequireRealStack: true, RequireOwnedDSN: true}, Rollback: EvaluationRollbackContract{Enabled: true, Strategy: "flat-v1"}}
+	return ReleaseEvidenceInput{Scope: memory.Scope{Tenant: "t", Project: "p", Namespace: "n"}, ProviderProfile: "canonical-v1", Policy: policy, Baseline: baseline, Candidate: candidate, Progressive: ProgressiveContextEvaluationReport{BaselineIdentity: "baseline-v1", Levels: []ProgressiveContextLevelReport{{Identity: "short-v1", Eligible: true}, {Identity: "medium-v1", Eligible: true}, {Identity: "canonical-v1", Eligible: true}}}, ParentFirst: ParentFirstEvaluationReport{StrategyIdentity: "parent-first-v1", Mode: ParentFirstModeShadow, Eligible: true}, Prerequisites: ReleaseEvidencePrerequisites{EvaluationDSN: "postgres://owned/eval", PostgreSQLReady: true, PGVectorReady: true, FixtureCompatible: true, ProjectionFresh: true, RollbackTested: true}, EvaluatedAt: now}
+}
+
+func containsString(values []string, want string) bool {
+	for _, value := range values {
+		if strings.TrimSpace(value) == want {
+			return true
+		}
+	}
+	return false
 }

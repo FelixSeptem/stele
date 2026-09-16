@@ -9,13 +9,15 @@ Stele while keeping experimental strategies out of default production behavior.
 
 ### Requirement: Owned real-provider release evidence
 
-The evaluator SHALL run a real-provider retrieval release gate only when the
-operator supplies an explicitly owned PostgreSQL and pgvector evaluation DSN.
-The report MUST identify compatible fixture, representation, fusion, ranking,
-embedding, reranker, analysis, and release-policy versions using logical
-identities, and MUST exclude endpoints, credentials, DSNs, prompts, source
-text, and raw provider payloads. A skipped or failed prerequisite MUST be a
-stable non-pass result and MUST NOT authorize an active rollout.
+The evaluator SHALL run a real-provider retrieval release gate only through an
+explicitly owned PostgreSQL and pgvector evaluation DSN, provider profile,
+exact scope, and compatible fixture/policy identities. The report MUST identify
+compatible fixture, representation, fusion, ranking, embedding, reranker,
+analysis, and release-policy versions using logical identities, and MUST exclude
+endpoints, credentials, DSNs, prompts, source text, and raw provider payloads.
+A skipped, degraded, or failed prerequisite MUST be a stable non-pass result
+and MUST NOT authorize an active rollout. The evaluator MUST NOT consult or
+fall back to the service DSN.
 
 #### Scenario: Owned evaluation runs
 

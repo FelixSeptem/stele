@@ -206,14 +206,27 @@ func (s *MemorySessionService) RecordTurnOutcome(ctx context.Context, input Reco
 		if s.eventIngestor == nil {
 			return MemorySessionTurn{}, fmt.Errorf("memory session outcome ingestor is not configured")
 		}
-		for _, payload := range input.OutcomeEventPayloads {
-			event, err := s.eventIngestor.Ingest(ctx, IngestEventInput{
+		for index, payload := range input.OutcomeEventPayloads {
+			eventInput := IngestEventInput{
 				Scope:           input.Scope.Normalized(),
 				EventType:       strings.TrimSpace(payload.EventType),
 				Content:         strings.TrimSpace(payload.Content),
 				Metadata:        memorySessionOutcomeMetadata(payload.Metadata, input),
 				SourceTimestamp: payload.SourceTimestamp,
-			})
+			}
+			var event RawEvent
+			var err error
+			if idempotent, ok := s.eventIngestor.(IdempotentEventIngestor); ok && strings.TrimSpace(input.IdempotencyKey) != "" {
+				result, ingestErr := idempotent.IngestIdempotent(
+					ctx,
+					eventInput,
+					"memory-session:"+strings.TrimSpace(input.SessionID),
+					fmt.Sprintf("%s:event:%d", strings.TrimSpace(input.IdempotencyKey), index),
+				)
+				event, err = result.Event, ingestErr
+			} else {
+				event, err = s.eventIngestor.Ingest(ctx, eventInput)
+			}
 			if err != nil {
 				return MemorySessionTurn{}, err
 			}
@@ -240,6 +253,12 @@ func memorySessionOutcomeMetadata(metadata map[string]any, input RecordMemorySes
 	out["memory_session_source"] = "outcome"
 	if key := strings.TrimSpace(input.IdempotencyKey); key != "" {
 		out["outcome_idempotency_key"] = key
+	}
+	if requestID := strings.TrimSpace(input.RequestID); requestID != "" {
+		out["request_id"] = requestID
+	}
+	if operationID := strings.TrimSpace(input.OperationID); operationID != "" {
+		out["operation_id"] = operationID
 	}
 	return out
 }

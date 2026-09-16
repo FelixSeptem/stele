@@ -66,6 +66,76 @@ paths:
             text/plain:
               schema:
                 type: string
+  /v1/provider/capabilities:
+    get:
+      operationId: getProviderCapabilities
+      description: Discover the enabled provider contract, exact canonical scope dimensions, operation limits, and compatibility version.
+      parameters:
+        - $ref: '#/components/parameters/PublicAPIKey'
+        - $ref: '#/components/parameters/TenantHeader'
+        - $ref: '#/components/parameters/ProjectHeader'
+        - $ref: '#/components/parameters/NamespaceHeader'
+      responses:
+        '200':
+          description: Bounded provider capabilities
+          content:
+            application/json:
+              schema: {$ref: '#/components/schemas/ProviderCapabilities'}
+        '404': {description: Provider surface is disabled}
+  /v1/provider/runtimes:
+    post:
+      operationId: initializeProviderRuntime
+      description: Bind an agent, session, conversation, and provider instance to one exact server-authorized scope.
+      parameters:
+        - $ref: '#/components/parameters/PublicAPIKey'
+        - $ref: '#/components/parameters/TenantHeader'
+        - $ref: '#/components/parameters/ProjectHeader'
+        - $ref: '#/components/parameters/NamespaceHeader'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: {$ref: '#/components/schemas/ProviderRuntimeInitialization'}
+      responses:
+        '201': {description: Opaque runtime binding with resolved exact scope}
+        '400': {description: Invalid request}
+        '401': {description: Authentication failed}
+        '403': {description: Exact scope is not granted}
+        '404': {description: Provider surface is disabled}
+  /v1/provider/operations/{operation}:
+    post:
+      operationId: invokeProviderOperation
+      description: Invoke a governed provider operation after binding and schema compatibility validation.
+      parameters:
+        - $ref: '#/components/parameters/PublicAPIKey'
+        - $ref: '#/components/parameters/TenantHeader'
+        - $ref: '#/components/parameters/ProjectHeader'
+        - $ref: '#/components/parameters/NamespaceHeader'
+        - $ref: '#/components/parameters/ProviderRuntimeBindingHeader'
+        - $ref: '#/components/parameters/ProviderRuntimeSessionHeader'
+        - in: path
+          name: operation
+          required: true
+          schema:
+            type: string
+            enum: [event.ingest, memory.intent, memory.retrieve, context.assemble, memory.forget, status.read]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: {$ref: '#/components/schemas/ProviderOperationRequest'}
+      responses:
+        '200':
+          description: Governed result with bounded citations
+          content:
+            application/json:
+              schema: {$ref: '#/components/schemas/ProviderOperationResponse'}
+        '400': {description: Validation error}
+        '403': {description: Authentication or exact-scope mismatch}
+        '409': {description: Idempotency or sequence conflict}
+        '422': {description: Lifecycle policy denial}
+        '424': {description: Dependency degraded or projection stale}
+        '503': {description: Retryable interruption}
   /v1/events:
     post:
       operationId: createEvent
@@ -3741,6 +3811,16 @@ components:
       required: true
       schema:
         type: string
+    ProviderRuntimeBindingHeader:
+      in: header
+      name: X-Stele-Runtime-Binding
+      required: true
+      schema: {type: string, maxLength: 256}
+    ProviderRuntimeSessionHeader:
+      in: header
+      name: X-Stele-Runtime-Session
+      required: true
+      schema: {type: string, maxLength: 256}
     MemoryIDPath:
       in: path
       name: memory_id
@@ -7689,5 +7769,82 @@ components:
           type: array
           items:
             $ref: '#/components/schemas/RankingRolloutPolicy'
+    ProviderOperationMetadata:
+      type: object
+      additionalProperties: false
+      required: [request_id, operation_id, event_seq, schema_version]
+      properties:
+        request_id: {type: string, maxLength: 128}
+        operation_id: {type: string, maxLength: 128}
+        idempotency_key: {type: string, maxLength: 128}
+        event_seq: {type: integer, minimum: 0}
+        schema_version: {type: string, enum: [provider-v1]}
+    ProviderLimits:
+      type: object
+      properties:
+        event_bytes: {type: integer, minimum: 1}
+        intent_bytes: {type: integer, minimum: 1}
+        retrieval_items: {type: integer, minimum: 1}
+        context_items: {type: integer, minimum: 1}
+        citation_items: {type: integer, minimum: 1}
+        metadata_bytes: {type: integer, minimum: 1}
+    ProviderCapabilities:
+      type: object
+      required: [provider_version, schema_version, schema_digest, operations, scope, limits]
+      properties:
+        provider_version: {type: string}
+        schema_version: {type: string, enum: [provider-v1]}
+        schema_digest: {type: string}
+        operations: {type: array, items: {type: string}}
+        scope:
+          type: object
+          properties:
+            dimensions: {type: array, items: {type: string, enum: [tenant, project, namespace]}}
+            exact: {type: boolean, const: true}
+        limits: {$ref: '#/components/schemas/ProviderLimits'}
+    ProviderRuntimeInitialization:
+      type: object
+      additionalProperties: false
+      required: [agent_id, session_id]
+      properties:
+        agent_id: {type: string, maxLength: 256}
+        session_id: {type: string, maxLength: 256}
+        conversation_id: {type: string, maxLength: 256}
+        provider_instance_id: {type: string, maxLength: 256}
+    ProviderOperationRequest:
+      type: object
+      additionalProperties: false
+      required: [metadata, input]
+      properties:
+        metadata: {$ref: '#/components/schemas/ProviderOperationMetadata'}
+        input: {type: object}
+    ProviderCitation:
+      type: object
+      required: [source_kind, reference, availability]
+      properties:
+        source_kind: {type: string, enum: [memory, raw_event, projection, intent, lifecycle]}
+        reference: {type: string, maxLength: 256}
+        version: {type: integer, minimum: 0}
+        watermark: {type: string, maxLength: 128}
+        availability: {type: string, enum: [available, unavailable]}
+    ProviderError:
+      type: object
+      required: [category, code, message]
+      properties:
+        category: {type: string, enum: [authentication, scope_mismatch, compatibility, validation, conflict, lifecycle, stale, dependency, retryable]}
+        code: {type: string, maxLength: 64}
+        message: {type: string, maxLength: 256}
+        retryable: {type: boolean}
+    ProviderOperationResponse:
+      type: object
+      required: [metadata]
+      properties:
+        metadata: {$ref: '#/components/schemas/ProviderOperationMetadata'}
+        result:
+          type: object
+          properties:
+            data: {}
+            citations: {type: array, items: {$ref: '#/components/schemas/ProviderCitation'}}
+        error: {$ref: '#/components/schemas/ProviderError'}
 `
 }

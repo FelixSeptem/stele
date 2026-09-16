@@ -1,6 +1,6 @@
 # Archive Index
 
-Updated: 2026-09-13 15:59:27
+Updated: 2026-09-16 22:04:37
 
 - 001 -> bootstrap-foundation-and-event-ingestion
 - 002 -> governance-pipeline-and-memory-consolidation
@@ -39,3 +39,5 @@ Updated: 2026-09-13 15:59:27
 - 035 -> retrieval-release-gate-and-progressive-context-evaluation
 - 036 -> quality-aware-signals-and-controlled-reranking
 - 037 -> durable-multiscope-maintenance-observability
+- 038 -> agent-runtime-memory-provider-contract
+- 039 -> retrieval-release-evidence-and-progressive-evaluation

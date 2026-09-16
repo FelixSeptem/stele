@@ -19,6 +19,7 @@ import (
 	"github.com/FelixSeptem/stele/internal/jobs"
 	"github.com/FelixSeptem/stele/internal/memory"
 	"github.com/FelixSeptem/stele/internal/policy"
+	"github.com/FelixSeptem/stele/internal/provider"
 	"github.com/FelixSeptem/stele/internal/retrieval"
 	"github.com/FelixSeptem/stele/internal/telemetry"
 	"github.com/FelixSeptem/stele/internal/workflow"
@@ -67,6 +68,11 @@ type HTTPDependencies struct {
 	JobExecutionRead          JobExecutionReader
 	Metrics                   MetricsRecorder
 	Logger                    *log.Logger
+	ProviderEnabled           bool
+	ProviderCapabilities      provider.CapabilityDocument
+	ProviderInitializer       *provider.RuntimeInitializer
+	ProviderBindings          provider.RuntimeBindingStore
+	ProviderOperations        *provider.OperationService
 }
 
 type ContextProjectionAdminService interface {
@@ -779,6 +785,23 @@ func NewHTTPHandler(deps HTTPDependencies) http.Handler {
 		}
 		_, _ = w.Write([]byte("# HELP stele_runtime_info Stele runtime information\n# TYPE stele_runtime_info gauge\nstele_runtime_info 1\n"))
 	})
+	if deps.ProviderEnabled {
+		capabilitiesHandler := auth.APIKeyMiddleware(deps.APIKeys)(auth.ScopeMiddleware()(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+			writeJSON(w, http.StatusOK, deps.ProviderCapabilities)
+		})))
+		mux.Handle("GET /v1/provider/capabilities", capabilitiesHandler)
+		runtimeHandler := auth.APIKeyMiddleware(deps.APIKeys)(auth.ScopeMiddleware()(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			handleProviderRuntimeInitialize(w, r, deps.ProviderInitializer)
+		})))
+		mux.Handle("POST /v1/provider/runtimes", runtimeHandler)
+		operationHandler := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			handleProviderOperation(w, r, deps.ProviderOperations)
+		})
+		if deps.ProviderBindings != nil && deps.PrincipalAuthorizer != nil {
+			operationHandler = provider.RuntimeBindingMiddleware(deps.ProviderBindings, deps.PrincipalAuthorizer)(operationHandler).ServeHTTP
+		}
+		mux.Handle("POST /v1/provider/operations/{operation}", auth.APIKeyMiddleware(deps.APIKeys)(operationHandler))
+	}
 	protectedEvents := auth.APIKeyMiddleware(deps.APIKeys)(
 		auth.ScopeMiddleware()(
 			http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -1501,6 +1524,82 @@ func principalProtectedRoutes(next http.Handler, authorizer auth.PrincipalAuthor
 		}
 		auth.PrincipalMiddlewareWithObserver(authorizer, requiredRole, observer)(next).ServeHTTP(w, r)
 	})
+}
+
+type providerRuntimeInitializationRequest struct {
+	AgentID            string `json:"agent_id"`
+	SessionID          string `json:"session_id"`
+	ConversationID     string `json:"conversation_id,omitempty"`
+	ProviderInstanceID string `json:"provider_instance_id,omitempty"`
+}
+
+type providerOperationRequest struct {
+	Metadata provider.OperationMetadata `json:"metadata"`
+	Input    json.RawMessage            `json:"input"`
+}
+
+func handleProviderRuntimeInitialize(w http.ResponseWriter, r *http.Request, initializer *provider.RuntimeInitializer) {
+	if initializer == nil {
+		writeProviderError(w, http.StatusServiceUnavailable, "dependency", "provider_not_configured", false)
+		return
+	}
+	var req providerRuntimeInitializationRequest
+	if !decodeJSONBody(w, r, &req) {
+		return
+	}
+	scope := memory.Scope{Tenant: r.Header.Get(auth.HeaderTenant), Project: r.Header.Get(auth.HeaderProject), Namespace: r.Header.Get(auth.HeaderNamespace)}.Normalized()
+	binding, err := initializer.InitializeAuthenticated(r.Context(), r.Header.Get(auth.HeaderAPIKey), provider.RuntimeInitialization{Scope: scope, AgentID: req.AgentID, SessionID: req.SessionID, ConversationID: req.ConversationID, ProviderInstanceID: req.ProviderInstanceID})
+	if err != nil {
+		status, category := http.StatusBadRequest, "validation"
+		if strings.Contains(err.Error(), "unauthorized") {
+			status, category = http.StatusUnauthorized, "authentication"
+		}
+		if strings.Contains(err.Error(), "forbidden") {
+			status, category = http.StatusForbidden, "scope_mismatch"
+		}
+		writeProviderError(w, status, category, "runtime_initialization_failed", false)
+		return
+	}
+	writeJSON(w, http.StatusCreated, binding)
+}
+
+func handleProviderOperation(w http.ResponseWriter, r *http.Request, service *provider.OperationService) {
+	if service == nil {
+		writeProviderError(w, http.StatusServiceUnavailable, "dependency", "provider_not_configured", true)
+		return
+	}
+	binding, ok := provider.RuntimeBindingFromContext(r.Context())
+	if !ok {
+		writeProviderError(w, http.StatusForbidden, "scope_mismatch", "binding_required", false)
+		return
+	}
+	var req providerOperationRequest
+	if !decodeJSONBody(w, r, &req) {
+		return
+	}
+	response, err := service.Execute(r.Context(), binding, r.PathValue("operation"), req.Metadata, req.Input)
+	if err != nil {
+		status, category := http.StatusBadRequest, "validation"
+		switch {
+		case errors.Is(err, provider.ErrCompatibility):
+			status, category = http.StatusBadRequest, "compatibility"
+		case errors.Is(err, provider.ErrOperationConflict):
+			status, category = http.StatusConflict, "conflict"
+		case errors.Is(err, provider.ErrLifecycleDenied):
+			status, category = http.StatusUnprocessableEntity, "lifecycle"
+		case errors.Is(err, provider.ErrStaleProjection):
+			status, category = http.StatusFailedDependency, "stale"
+		case errors.Is(err, context.Canceled), errors.Is(err, context.DeadlineExceeded):
+			status, category = http.StatusServiceUnavailable, "retryable"
+		}
+		writeProviderError(w, status, category, "operation_failed", status == http.StatusServiceUnavailable)
+		return
+	}
+	writeJSON(w, http.StatusOK, response)
+}
+
+func writeProviderError(w http.ResponseWriter, status int, category, code string, retryable bool) {
+	writeJSON(w, status, provider.BoundedError{Category: category, Code: code, Message: code, Retryable: retryable})
 }
 
 func NewHTTPServer(addr string, deps HTTPDependencies) *http.Server {

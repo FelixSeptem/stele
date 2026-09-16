@@ -378,6 +378,30 @@ func TestMemorySessionServiceIngestsOutcomeEventPayloadsThroughEventPath(t *test
 	}
 }
 
+func TestMemorySessionServiceUsesDurableIdempotencyForOutcomePayloads(t *testing.T) {
+	scope := Scope{Tenant: "tenant-a", Project: "project-a", Namespace: "namespace-a"}
+	store := &stubMemorySessionStore{sessions: []MemorySessionRun{{ID: "session_1", Scope: scope}}}
+	ingestor := &stubIdempotentMemorySessionOutcomeIngestor{eventID: "evt_stable"}
+	service := NewMemorySessionService(MemorySessionServiceOptions{Store: store, EventIngestor: ingestor})
+	input := RecordMemorySessionTurnOutcomeInput{
+		Scope: scope, SessionID: "session_1", TurnID: "turn_1", IdempotencyKey: "outcome-key",
+		OutcomeEventPayloads: []MemorySessionOutcomeEventPayload{{EventType: "agent_observation", Content: "stable"}},
+	}
+
+	if _, err := service.RecordTurnOutcome(context.Background(), input); err != nil {
+		t.Fatalf("RecordTurnOutcome() first error = %v", err)
+	}
+	if _, err := service.RecordTurnOutcome(context.Background(), input); err != nil {
+		t.Fatalf("RecordTurnOutcome() retry error = %v", err)
+	}
+	if ingestor.idempotencyKey != "outcome-key:event:0" || ingestor.principalID != "memory-session:session_1" {
+		t.Fatalf("durable correlation = principal %q key %q", ingestor.principalID, ingestor.idempotencyKey)
+	}
+	if ingestor.uniqueWrites != 1 {
+		t.Fatalf("unique event writes = %d, want 1", ingestor.uniqueWrites)
+	}
+}
+
 func TestMemorySessionServiceRejectsInvalidOutcomeEventPayload(t *testing.T) {
 	scope := Scope{Tenant: "tenant-a", Project: "project-a", Namespace: "namespace-a"}
 	service := NewMemorySessionService(MemorySessionServiceOptions{
@@ -455,6 +479,30 @@ type stubTaskSummaryReader struct {
 type stubMemorySessionOutcomeIngestor struct {
 	eventID  string
 	gotInput IngestEventInput
+}
+
+type stubIdempotentMemorySessionOutcomeIngestor struct {
+	eventID                     string
+	principalID, idempotencyKey string
+	seen                        map[string]struct{}
+	uniqueWrites                int
+}
+
+func (s *stubIdempotentMemorySessionOutcomeIngestor) Ingest(ctx context.Context, input IngestEventInput) (RawEvent, error) {
+	return RawEvent{ID: s.eventID}, nil
+}
+
+func (s *stubIdempotentMemorySessionOutcomeIngestor) IngestIdempotent(_ context.Context, input IngestEventInput, principalID, idempotencyKey string) (IdempotentEventIngestResult, error) {
+	s.principalID, s.idempotencyKey = principalID, idempotencyKey
+	if s.seen == nil {
+		s.seen = map[string]struct{}{}
+	}
+	_, replayed := s.seen[idempotencyKey]
+	if !replayed {
+		s.seen[idempotencyKey] = struct{}{}
+		s.uniqueWrites++
+	}
+	return IdempotentEventIngestResult{Event: RawEvent{ID: s.eventID, Scope: input.Scope}, Replayed: replayed}, nil
 }
 
 func (s *stubMemorySessionOutcomeIngestor) Ingest(ctx context.Context, input IngestEventInput) (RawEvent, error) {

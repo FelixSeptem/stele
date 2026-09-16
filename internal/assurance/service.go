@@ -167,6 +167,8 @@ type ConformanceRunInput struct {
 	StartedAt                  time.Time
 	MaintenanceEvidence        []MaintenanceEvidence
 	MaintenanceActionSucceeded bool
+	ProviderEvidence           map[string]any
+	ProviderVerdict            string
 }
 
 type ReadinessReportInput struct {
@@ -956,6 +958,21 @@ func (s *Service) RunConformance(ctx context.Context, input ConformanceRunInput)
 	}
 	evidenceCounts := make(map[string]any, len(profile.ExpectedEvidence))
 	result := ConformanceResultPassed
+	if len(input.ProviderEvidence) > 0 {
+		if err := validateMetadata(input.ProviderEvidence, "provider evidence"); err != nil {
+			return ConformanceRun{}, nil, err
+		}
+		evidenceCounts["provider"] = input.ProviderEvidence
+		switch strings.TrimSpace(input.ProviderVerdict) {
+		case "pass":
+		case "incomplete", "degraded":
+			result = ConformanceResultDegraded
+		case "failed":
+			result = ConformanceResultFailed
+		default:
+			return ConformanceRun{}, nil, fmt.Errorf("provider verdict is invalid")
+		}
+	}
 	if len(input.MaintenanceEvidence) > 0 || input.MaintenanceActionSucceeded {
 		maintenance, maintenanceErr := EvaluateMaintenanceConformance(MaintenanceConformanceInput{Scope: scope, ObservedAt: input.StartedAt.UTC(), ActionSucceeded: input.MaintenanceActionSucceeded, Evidence: input.MaintenanceEvidence})
 		if maintenanceErr != nil {

@@ -19,6 +19,7 @@ import (
 	"github.com/FelixSeptem/stele/internal/jobs"
 	"github.com/FelixSeptem/stele/internal/memory"
 	"github.com/FelixSeptem/stele/internal/policy"
+	"github.com/FelixSeptem/stele/internal/provider"
 	"github.com/FelixSeptem/stele/internal/retrieval"
 	"github.com/FelixSeptem/stele/internal/storage/postgres"
 	"github.com/FelixSeptem/stele/internal/telemetry"
@@ -426,7 +427,7 @@ func principalAuthorizerForRuntime(cfg config.Config, store principalRuntimeStor
 }
 
 func httpDependenciesFromConfig(cfg config.Config) HTTPDependencies {
-	return HTTPDependencies{
+	deps := HTTPDependencies{
 		Contract: RuntimeContract{
 			ServiceVersion: BuildVersion,
 			BuildID:        BuildID,
@@ -444,6 +445,16 @@ func httpDependenciesFromConfig(cfg config.Config) HTTPDependencies {
 		APIKeys:      staticAPIKeysFromConfig(cfg),
 		AdminAPIKeys: staticAdminAPIKeysFromConfig(cfg),
 	}
+	deps.ProviderEnabled = cfg.Provider.Enabled
+	deps.ProviderCapabilities = provider.DiscoverCapabilities(provider.RuntimeMetadata{
+		ServiceVersion: BuildVersion, BuildID: BuildID, BuildTimestamp: BuildTimestamp,
+		SchemaVersion: postgres.CurrentMigrationVersion,
+	}, provider.CapabilityConfig{Limits: provider.Limits{
+		EventBytes: cfg.Provider.Limits.EventBytes, IntentBytes: cfg.Provider.Limits.IntentBytes,
+		RetrievalItems: cfg.Provider.Limits.RetrievalItems, ContextItems: cfg.Provider.Limits.ContextItems,
+		CitationItems: cfg.Provider.Limits.CitationItems, MetadataBytes: cfg.Provider.Limits.MetadataBytes,
+	}})
+	return deps
 }
 
 func httpDependenciesFromConfigWithIngestor(cfg config.Config, ingestor memory.EventIngestor) HTTPDependencies {
@@ -573,6 +584,18 @@ func buildAPIRuntime(ctx context.Context, cfg config.Config, deps apiRuntimeDepe
 	httpDeps.EmbeddingAdminRead = memory.NewEmbeddingAdminQueryService(repo, embeddingRuntime.Status)
 	httpDeps.MemorySearcher = retrievalService
 	httpDeps.ContextAssembler = retrievalService
+	if cfg.Provider.Enabled {
+		httpDeps.ProviderBindings = repo
+		httpDeps.ProviderInitializer = provider.NewRuntimeInitializer(provider.RuntimeInitializerOptions{
+			Authorizer: httpDeps.PrincipalAuthorizer, Bindings: repo, BindingTTL: cfg.Provider.BindingLifetime, Now: time.Now,
+		})
+		intentService := memory.MemoryIntentService{Processor: repo, Now: time.Now, NewID: newID}
+		httpDeps.MemoryIntent = intentService
+		httpDeps.ProviderOperations = provider.NewOperationService(provider.OperationServiceOptions{
+			Events: ingestor, Intents: intentService, Lifecycle: lifecycleService,
+			Reader: providerRuntimeReader{searcher: retrievalService, assembler: retrievalService},
+		})
+	}
 	httpDeps.GovernanceStatusRead = observedGovernanceStatusReader{
 		reader: governanceStatusReaderFunc(func(ctx context.Context) (GovernanceStatus, error) {
 			return repo.ReadGovernanceStatus(ctx, time.Now().UTC())
