@@ -86,21 +86,23 @@ func (s WorkflowHealthSnapshot) Validate() error {
 }
 
 type ServiceOptions struct {
-	Store    AssuranceStore
-	Workflow WorkflowHealthReader
-	Now      func() time.Time
-	NewID    func(prefix string) string
-	Observer telemetry.Observer
-	Logger   *log.Logger
+	Store               AssuranceStore
+	Workflow            WorkflowHealthReader
+	Now                 func() time.Time
+	NewID               func(prefix string) string
+	Observer            telemetry.Observer
+	Logger              *log.Logger
+	ProviderConformance ProviderFixtureExecutor
 }
 
 type Service struct {
-	store    AssuranceStore
-	workflow WorkflowHealthReader
-	now      func() time.Time
-	newID    func(prefix string) string
-	observer telemetry.Observer
-	logger   *log.Logger
+	store               AssuranceStore
+	workflow            WorkflowHealthReader
+	now                 func() time.Time
+	newID               func(prefix string) string
+	observer            telemetry.Observer
+	logger              *log.Logger
+	providerConformance ProviderFixtureExecutor
 }
 
 type HealthObservation struct {
@@ -167,8 +169,6 @@ type ConformanceRunInput struct {
 	StartedAt                  time.Time
 	MaintenanceEvidence        []MaintenanceEvidence
 	MaintenanceActionSucceeded bool
-	ProviderEvidence           map[string]any
-	ProviderVerdict            string
 }
 
 type ReadinessReportInput struct {
@@ -425,7 +425,7 @@ func NewService(options ServiceOptions) *Service {
 			return fmt.Sprintf("%s_%d", strings.TrimSpace(prefix), now().UnixNano())
 		}
 	}
-	return &Service{store: options.Store, workflow: options.Workflow, now: now, newID: newID, observer: options.Observer, logger: options.Logger}
+	return &Service{store: options.Store, workflow: options.Workflow, now: now, newID: newID, observer: options.Observer, logger: options.Logger, providerConformance: options.ProviderConformance}
 }
 
 func (s *Service) CreateHealthEvaluation(ctx context.Context, input HealthEvaluationInput) (HealthEvaluation, error) {
@@ -958,21 +958,6 @@ func (s *Service) RunConformance(ctx context.Context, input ConformanceRunInput)
 	}
 	evidenceCounts := make(map[string]any, len(profile.ExpectedEvidence))
 	result := ConformanceResultPassed
-	if len(input.ProviderEvidence) > 0 {
-		if err := validateMetadata(input.ProviderEvidence, "provider evidence"); err != nil {
-			return ConformanceRun{}, nil, err
-		}
-		evidenceCounts["provider"] = input.ProviderEvidence
-		switch strings.TrimSpace(input.ProviderVerdict) {
-		case "pass":
-		case "incomplete", "degraded":
-			result = ConformanceResultDegraded
-		case "failed":
-			result = ConformanceResultFailed
-		default:
-			return ConformanceRun{}, nil, fmt.Errorf("provider verdict is invalid")
-		}
-	}
 	if len(input.MaintenanceEvidence) > 0 || input.MaintenanceActionSucceeded {
 		maintenance, maintenanceErr := EvaluateMaintenanceConformance(MaintenanceConformanceInput{Scope: scope, ObservedAt: input.StartedAt.UTC(), ActionSucceeded: input.MaintenanceActionSucceeded, Evidence: input.MaintenanceEvidence})
 		if maintenanceErr != nil {

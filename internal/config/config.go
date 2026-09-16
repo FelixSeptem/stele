@@ -8,18 +8,8 @@ import (
 	"time"
 
 	"github.com/FelixSeptem/stele/internal/assurance"
+	"github.com/FelixSeptem/stele/internal/provider"
 )
-
-type ProviderLimitsConfig struct {
-	EventBytes, IntentBytes, RetrievalItems, ContextItems, CitationItems, MetadataBytes int
-}
-
-type ProviderConfig struct {
-	Enabled                 bool
-	SupportedSchemaVersions []string
-	Limits                  ProviderLimitsConfig
-	BindingLifetime         time.Duration
-}
 
 type Mode string
 
@@ -56,6 +46,13 @@ type Config struct {
 	QueryAnalysis                       QueryAnalysisConfig
 	Evaluation                          EvaluationConfig
 	Provider                            ProviderConfig
+}
+
+type ProviderConfig struct {
+	Enabled         bool
+	SchemaVersions  []string
+	Limits          provider.ProviderLimits
+	BindingLifetime time.Duration
 }
 
 type EvaluationConfig struct {
@@ -555,6 +552,57 @@ func LoadFromEnv() (Config, error) {
 	}, nil
 }
 
+func loadProviderConfig() (ProviderConfig, error) {
+	versions := splitCSVEnv("STELE_PROVIDER_SCHEMA_VERSIONS")
+	if len(versions) == 0 {
+		versions = []string{"provider-v1"}
+	}
+	if len(versions) > 16 {
+		return ProviderConfig{}, fmt.Errorf("provider schema versions exceed limit")
+	}
+	seen := make(map[string]struct{}, len(versions))
+	for _, version := range versions {
+		if !safeEvaluationProfile(version) || len(version) > provider.MaxSchemaVersionBytes {
+			return ProviderConfig{}, fmt.Errorf("provider schema version %q is invalid", version)
+		}
+		if _, ok := seen[version]; ok {
+			return ProviderConfig{}, fmt.Errorf("provider schema version %q is duplicated", version)
+		}
+		seen[version] = struct{}{}
+	}
+	limits := provider.ProviderLimits{}
+	var err error
+	if limits.MaxEventBytes, err = loadIntWithDefault("STELE_PROVIDER_MAX_EVENT_BYTES", 1<<20); err != nil {
+		return ProviderConfig{}, err
+	}
+	if limits.MaxIntentBytes, err = loadIntWithDefault("STELE_PROVIDER_MAX_INTENT_BYTES", 1<<20); err != nil {
+		return ProviderConfig{}, err
+	}
+	if limits.MaxRetrievalResults, err = loadIntWithDefault("STELE_PROVIDER_MAX_RETRIEVAL_RESULTS", 100); err != nil {
+		return ProviderConfig{}, err
+	}
+	if limits.MaxContextBytes, err = loadIntWithDefault("STELE_PROVIDER_MAX_CONTEXT_BYTES", 1<<20); err != nil {
+		return ProviderConfig{}, err
+	}
+	if limits.MaxCitations, err = loadIntWithDefault("STELE_PROVIDER_MAX_CITATIONS", 100); err != nil {
+		return ProviderConfig{}, err
+	}
+	if limits.MaxMetadataBytes, err = loadIntWithDefault("STELE_PROVIDER_MAX_METADATA_BYTES", 64<<10); err != nil {
+		return ProviderConfig{}, err
+	}
+	if err := limits.Validate(); err != nil {
+		return ProviderConfig{}, err
+	}
+	lifetime, err := loadDurationWithDefault("STELE_PROVIDER_BINDING_LIFETIME", time.Hour)
+	if err != nil {
+		return ProviderConfig{}, err
+	}
+	if lifetime < time.Minute || lifetime > 24*time.Hour {
+		return ProviderConfig{}, fmt.Errorf("provider binding lifetime must be between 1m and 24h")
+	}
+	return ProviderConfig{Enabled: loadBoolEnv("STELE_PROVIDER_ENABLED"), SchemaVersions: versions, Limits: limits, BindingLifetime: lifetime}, nil
+}
+
 func loadQueryAnalysisConfig() (QueryAnalysisConfig, error) {
 	q := QueryAnalysisConfig{
 		MaxQueryBytes: 4096, MaxHints: 4, MaxSignals: 8, MaxSubqueries: 4,
@@ -616,60 +664,6 @@ func loadEvaluationConfig(runtimeDSN string) (EvaluationConfig, error) {
 		return EvaluationConfig{}, fmt.Errorf("STELE_RETRIEVAL_EVALUATION_PROVIDER_PROFILE is invalid")
 	}
 	return EvaluationConfig{OwnedDSN: owned, ProviderProfile: profile}, nil
-}
-
-func loadProviderConfig() (ProviderConfig, error) {
-	enabled, err := loadStrictBoolWithDefault("STELE_PROVIDER_ENABLED", false)
-	if err != nil {
-		return ProviderConfig{}, err
-	}
-	c := ProviderConfig{Enabled: enabled, SupportedSchemaVersions: []string{"provider-v1"}, BindingLifetime: 15 * time.Minute,
-		Limits: ProviderLimitsConfig{EventBytes: 1 << 20, IntentBytes: 64 << 10, RetrievalItems: 100, ContextItems: 100, CitationItems: 100, MetadataBytes: 128}}
-	if raw := strings.TrimSpace(os.Getenv("STELE_PROVIDER_SCHEMA_VERSIONS")); raw != "" {
-		parts := splitCSVEnv("STELE_PROVIDER_SCHEMA_VERSIONS")
-		if len(parts) == 0 {
-			return ProviderConfig{}, fmt.Errorf("STELE_PROVIDER_SCHEMA_VERSIONS is invalid")
-		}
-		for _, v := range parts {
-			if v != "provider-v1" {
-				return ProviderConfig{}, fmt.Errorf("unsupported provider schema version %q", v)
-			}
-		}
-		c.SupportedSchemaVersions = parts
-	}
-	if c.BindingLifetime, err = loadDurationWithDefault("STELE_PROVIDER_BINDING_LIFETIME", c.BindingLifetime); err != nil {
-		return ProviderConfig{}, err
-	}
-	if c.BindingLifetime < time.Minute || c.BindingLifetime > 24*time.Hour {
-		return ProviderConfig{}, fmt.Errorf("provider binding lifetime must be between 1m and 24h")
-	}
-	for _, spec := range []struct {
-		key      string
-		dst      *int
-		min, max int
-	}{{"STELE_PROVIDER_MAX_EVENT_BYTES", &c.Limits.EventBytes, 1, 1 << 24}, {"STELE_PROVIDER_MAX_INTENT_BYTES", &c.Limits.IntentBytes, 1, 1 << 24}, {"STELE_PROVIDER_MAX_RETRIEVAL_ITEMS", &c.Limits.RetrievalItems, 1, 1000}, {"STELE_PROVIDER_MAX_CONTEXT_ITEMS", &c.Limits.ContextItems, 1, 1000}, {"STELE_PROVIDER_MAX_CITATION_ITEMS", &c.Limits.CitationItems, 1, 1000}, {"STELE_PROVIDER_MAX_METADATA_BYTES", &c.Limits.MetadataBytes, 1, 4096}} {
-		v, e := loadIntWithDefault(spec.key, *spec.dst)
-		if e != nil {
-			return ProviderConfig{}, e
-		}
-		if v < spec.min || v > spec.max {
-			return ProviderConfig{}, fmt.Errorf("%s is out of range", spec.key)
-		}
-		*spec.dst = v
-	}
-	return c, nil
-}
-
-func loadStrictBoolWithDefault(key string, fallback bool) (bool, error) {
-	raw := strings.TrimSpace(os.Getenv(key))
-	if raw == "" {
-		return fallback, nil
-	}
-	value, err := strconv.ParseBool(raw)
-	if err != nil {
-		return false, fmt.Errorf("%s is invalid: %w", key, err)
-	}
-	return value, nil
 }
 func safeEvaluationProfile(value string) bool {
 	if len(value) > 128 || value == "" {

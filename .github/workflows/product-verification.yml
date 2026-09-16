@@ -21,6 +21,9 @@ jobs:
       - name: Run deterministic maintenance closure coverage
         shell: pwsh
         run: go test ./internal/jobs ./internal/memory ./internal/assurance ./internal/storage/postgres -count=1
+      - name: Run deterministic agent runtime provider coverage
+        shell: pwsh
+        run: go test ./internal/provider ./internal/app ./internal/assurance ./openapi -count=1
       - name: Run progressive context and release-evidence unit coverage
         shell: pwsh
         run: go test ./internal/retrieval ./internal/config ./internal/memory ./internal/benchmark -count=1

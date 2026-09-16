@@ -23,6 +23,9 @@ const (
 	maxRuntimeBindingLength   = 256
 )
 
+// RuntimeInitialization is the client-supplied identity context for creating
+// a provider runtime. Scope is checked against the authenticated principal's
+// exact grant and never widened by the provider layer.
 type RuntimeInitialization struct {
 	Scope              memory.Scope `json:"scope"`
 	AgentID            string       `json:"agent_id"`
@@ -35,32 +38,30 @@ func (i RuntimeInitialization) Validate() error {
 	if err := i.Scope.Validate(); err != nil {
 		return err
 	}
-	if strings.TrimSpace(i.AgentID) == "" || len(i.AgentID) > maxRuntimeIdentityLength {
-		return fmt.Errorf("agent id is required and must be at most %d bytes", maxRuntimeIdentityLength)
+	for value, label := range map[string]string{i.AgentID: "agent id", i.SessionID: "session id"} {
+		if strings.TrimSpace(value) == "" || len(value) > maxRuntimeIdentityLength {
+			return fmt.Errorf("%s is required and must be at most %d bytes", label, maxRuntimeIdentityLength)
+		}
 	}
-	if strings.TrimSpace(i.SessionID) == "" || len(i.SessionID) > maxRuntimeIdentityLength {
-		return fmt.Errorf("session id is required and must be at most %d bytes", maxRuntimeIdentityLength)
-	}
-	if len(i.ConversationID) > maxRuntimeIdentityLength {
-		return fmt.Errorf("conversation id must be at most %d bytes", maxRuntimeIdentityLength)
-	}
-	if len(i.ProviderInstanceID) > maxRuntimeIdentityLength {
+	if i.ProviderInstanceID != "" && len(i.ProviderInstanceID) > maxRuntimeIdentityLength {
 		return fmt.Errorf("provider instance id must be at most %d bytes", maxRuntimeIdentityLength)
 	}
 	return nil
 }
 
+// RuntimeBinding is the server-owned opaque binding carried on every provider
+// operation. Callers must use Scope and identities returned by the server.
 type RuntimeBinding struct {
 	BindingID          string       `json:"binding_id"`
-	PrincipalID        string       `json:"-"`
+	PrincipalID        string       `json:"principal_id"`
 	Scope              memory.Scope `json:"scope"`
 	AgentID            string       `json:"agent_id"`
 	SessionID          string       `json:"session_id"`
-	ConversationID     string       `json:"conversation_id,omitempty"`
+	ConversationID     string       `json:"conversation_id"`
 	ProviderInstanceID string       `json:"provider_instance_id"`
 	CreatedAt          time.Time    `json:"created_at"`
 	ExpiresAt          time.Time    `json:"expires_at"`
-	RevokedAt          time.Time    `json:"-"`
+	RevokedAt          time.Time    `json:"revoked_at,omitempty"`
 }
 
 func (b RuntimeBinding) Validate(now time.Time) error {
@@ -73,7 +74,7 @@ func (b RuntimeBinding) Validate(now time.Time) error {
 	if err := b.Scope.Validate(); err != nil {
 		return err
 	}
-	if strings.TrimSpace(b.AgentID) == "" || strings.TrimSpace(b.SessionID) == "" {
+	if !runtimeIdentityValid(b.AgentID, true) || !runtimeIdentityValid(b.SessionID, true) || !runtimeIdentityValid(b.ConversationID, false) || !runtimeIdentityValid(b.ProviderInstanceID, true) {
 		return fmt.Errorf("runtime identity is invalid")
 	}
 	if b.CreatedAt.IsZero() || b.ExpiresAt.IsZero() {
@@ -85,17 +86,31 @@ func (b RuntimeBinding) Validate(now time.Time) error {
 	return nil
 }
 
+func runtimeIdentityValid(value string, required bool) bool {
+	value = strings.TrimSpace(value)
+	if value == "" {
+		return !required
+	}
+	return len(value) <= maxRuntimeIdentityLength && boundedToken(value, maxRuntimeIdentityLength)
+}
+
+// RuntimeBindingStore allows deployments to persist bindings in their
+// existing durable store. Implementations must enforce opaque ID lookup.
 type RuntimeBindingStore interface {
 	Create(context.Context, RuntimeBinding) error
 	Lookup(context.Context, string) (RuntimeBinding, error)
 }
+
+// MemoryBindingStore is a bounded in-process store intended for tests and
+// single-process development. Production deployments should provide a
+// PostgreSQL-backed RuntimeBindingStore.
 type MemoryBindingStore struct {
 	mu       sync.RWMutex
 	bindings map[string]RuntimeBinding
 }
 
 func NewMemoryBindingStore() *MemoryBindingStore {
-	return &MemoryBindingStore{bindings: map[string]RuntimeBinding{}}
+	return &MemoryBindingStore{bindings: make(map[string]RuntimeBinding)}
 }
 func (s *MemoryBindingStore) Create(_ context.Context, b RuntimeBinding) error {
 	if s == nil {
@@ -154,59 +169,66 @@ type RuntimeInitializer struct {
 	now        func() time.Time
 }
 
-func NewRuntimeInitializer(o RuntimeInitializerOptions) *RuntimeInitializer {
-	n := o.Now
-	if n == nil {
-		n = time.Now
+func NewRuntimeInitializer(options RuntimeInitializerOptions) *RuntimeInitializer {
+	now := options.Now
+	if now == nil {
+		now = time.Now
 	}
-	ttl := o.BindingTTL
+	ttl := options.BindingTTL
 	if ttl <= 0 {
 		ttl = time.Hour
 	}
-	return &RuntimeInitializer{o.Authorizer, o.Bindings, ttl, n}
+	return &RuntimeInitializer{authorizer: options.Authorizer, bindings: options.Bindings, ttl: ttl, now: now}
 }
+
 func (i *RuntimeInitializer) InitializeAuthenticated(ctx context.Context, secret string, input RuntimeInitialization) (RuntimeBinding, error) {
 	if i == nil || i.authorizer == nil {
 		return RuntimeBinding{}, fmt.Errorf("principal authorization is not configured")
 	}
-	p, _, err := i.authorizer.Authenticate(ctx, strings.TrimSpace(secret))
+	principal, _, err := i.authorizer.Authenticate(ctx, strings.TrimSpace(secret))
 	if err != nil {
 		return RuntimeBinding{}, fmt.Errorf("unauthorized")
 	}
-	return i.Initialize(ctx, p, input)
+	return i.Initialize(ctx, principal, input)
 }
-func (i *RuntimeInitializer) Initialize(ctx context.Context, p auth.Principal, input RuntimeInitialization) (RuntimeBinding, error) {
+
+func (i *RuntimeInitializer) Initialize(ctx context.Context, principal auth.Principal, input RuntimeInitialization) (RuntimeBinding, error) {
 	if i == nil || i.bindings == nil || i.authorizer == nil {
 		return RuntimeBinding{}, fmt.Errorf("runtime provider is not configured")
 	}
 	if err := input.Validate(); err != nil {
 		return RuntimeBinding{}, err
 	}
-	if p.Status != auth.PrincipalStatusActive || strings.TrimSpace(p.ID) == "" {
+	if principal.Status != auth.PrincipalStatusActive || strings.TrimSpace(principal.ID) == "" {
 		return RuntimeBinding{}, fmt.Errorf("unauthorized")
 	}
 	scope := input.Scope.Normalized()
-	ok, err := i.authorizer.AuthorizeScope(ctx, p.ID, scope)
-	if err != nil || !ok {
+	granted, err := i.authorizer.AuthorizeScope(ctx, principal.ID, scope)
+	if err != nil || !granted {
 		return RuntimeBinding{}, fmt.Errorf("forbidden")
 	}
 	now := i.now().UTC()
-	inst := strings.TrimSpace(input.ProviderInstanceID)
-	if inst == "" {
-		inst = opaqueID("pi_")
+	instance, err := opaqueID("pi_")
+	if err != nil {
+		return RuntimeBinding{}, fmt.Errorf("generate runtime identity: %w", err)
 	}
-	b := RuntimeBinding{BindingID: opaqueID("rb_"), PrincipalID: p.ID, Scope: scope, AgentID: strings.TrimSpace(input.AgentID), SessionID: strings.TrimSpace(input.SessionID), ConversationID: strings.TrimSpace(input.ConversationID), ProviderInstanceID: inst, CreatedAt: now, ExpiresAt: now.Add(i.ttl)}
-	if err := i.bindings.Create(ctx, b); err != nil {
+	bindingID, err := opaqueID("rb_")
+	if err != nil {
+		return RuntimeBinding{}, fmt.Errorf("generate runtime binding: %w", err)
+	}
+	binding := RuntimeBinding{BindingID: bindingID, PrincipalID: principal.ID, Scope: scope, AgentID: strings.TrimSpace(input.AgentID), SessionID: strings.TrimSpace(input.SessionID), ConversationID: strings.TrimSpace(input.ConversationID), ProviderInstanceID: instance, CreatedAt: now, ExpiresAt: now.Add(i.ttl)}
+	if err := i.bindings.Create(ctx, binding); err != nil {
 		return RuntimeBinding{}, fmt.Errorf("persist runtime binding: %w", err)
 	}
-	return b, nil
+	return binding, nil
 }
-func opaqueID(prefix string) string {
+
+func opaqueID(prefix string) (string, error) {
 	raw := make([]byte, 24)
 	if _, err := rand.Read(raw); err != nil {
-		return prefix + fmt.Sprintf("%d", time.Now().UnixNano())
+		return "", fmt.Errorf("secure random source unavailable: %w", err)
 	}
-	return prefix + base64.RawURLEncoding.EncodeToString(raw)
+	return prefix + base64.RawURLEncoding.EncodeToString(raw), nil
 }
 
 type runtimeBindingContextKey struct{}
@@ -215,6 +237,10 @@ func RuntimeBindingFromContext(ctx context.Context) (RuntimeBinding, bool) {
 	b, ok := ctx.Value(runtimeBindingContextKey{}).(RuntimeBinding)
 	return b, ok
 }
+
+// ValidateRuntimeOperation resolves and validates a binding for non-HTTP
+// provider handlers. It applies the same exact-scope and grant checks as the
+// HTTP middleware and returns the canonical server-owned binding.
 func ValidateRuntimeOperation(ctx context.Context, store RuntimeBindingStore, authorizer auth.PrincipalAuthorizer, bindingID, principalID, sessionID string, requestedScope *memory.Scope) (RuntimeBinding, error) {
 	if store == nil || authorizer == nil {
 		return RuntimeBinding{}, fmt.Errorf("forbidden")
@@ -223,67 +249,84 @@ func ValidateRuntimeOperation(ctx context.Context, store RuntimeBindingStore, au
 	if id == "" || len(id) > maxRuntimeBindingLength {
 		return RuntimeBinding{}, fmt.Errorf("forbidden")
 	}
-	b, err := store.Lookup(ctx, id)
-	if err != nil || b.Validate(time.Now().UTC()) != nil {
+	binding, err := store.Lookup(ctx, id)
+	if err != nil || binding.Validate(time.Now().UTC()) != nil {
 		return RuntimeBinding{}, fmt.Errorf("forbidden")
 	}
-	if strings.TrimSpace(principalID) != "" && strings.TrimSpace(principalID) != b.PrincipalID {
+	if strings.TrimSpace(principalID) != "" && strings.TrimSpace(principalID) != binding.PrincipalID {
 		return RuntimeBinding{}, fmt.Errorf("forbidden")
 	}
-	if strings.TrimSpace(sessionID) != "" && strings.TrimSpace(sessionID) != b.SessionID {
+	if strings.TrimSpace(sessionID) != "" && strings.TrimSpace(sessionID) != binding.SessionID {
 		return RuntimeBinding{}, fmt.Errorf("forbidden")
 	}
-	if requestedScope != nil && requestedScope.Normalized() != b.Scope.Normalized() {
+	if requestedScope != nil && requestedScope.Normalized() != binding.Scope.Normalized() {
 		return RuntimeBinding{}, fmt.Errorf("forbidden")
 	}
-	ok, err := authorizer.AuthorizeScope(ctx, b.PrincipalID, b.Scope)
-	if err != nil || !ok {
+	granted, err := authorizer.AuthorizeScope(ctx, binding.PrincipalID, binding.Scope)
+	if err != nil || !granted {
 		return RuntimeBinding{}, fmt.Errorf("forbidden")
 	}
-	return b, nil
+	return binding, nil
 }
+
+// RuntimeBindingMiddleware validates server-owned binding, principal, session,
+// and exact scope before invoking any provider operation. All failures use a
+// generic forbidden response to avoid existence disclosure.
 func RuntimeBindingMiddleware(store RuntimeBindingStore, authorizer auth.PrincipalAuthorizer) func(http.Handler) http.Handler {
 	return func(next http.Handler) http.Handler {
 		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-			sessionID := strings.TrimSpace(r.Header.Get(HeaderRuntimeSession))
-			if sessionID == "" {
+			if store == nil || authorizer == nil {
 				http.Error(w, "forbidden", http.StatusForbidden)
 				return
 			}
-			b, err := ValidateRuntimeOperation(r.Context(), store, authorizer, r.Header.Get(HeaderRuntimeBinding), "", sessionID, nil)
-			if err != nil {
+			id := strings.TrimSpace(r.Header.Get(HeaderRuntimeBinding))
+			if id == "" || len(id) > maxRuntimeBindingLength {
 				http.Error(w, "forbidden", http.StatusForbidden)
 				return
 			}
-			p, ok := auth.PrincipalFromContext(r.Context())
+			binding, err := store.Lookup(r.Context(), id)
+			if err != nil || binding.Validate(time.Now().UTC()) != nil {
+				http.Error(w, "forbidden", http.StatusForbidden)
+				return
+			}
+			principal, ok := auth.PrincipalFromContext(r.Context())
 			if !ok {
-				var c auth.Credential
-				p, c, err = authorizer.Authenticate(r.Context(), strings.TrimSpace(r.Header.Get(auth.HeaderAPIKey)))
-				if err != nil || !auth.PrincipalCredentialActive(p, c, time.Now().UTC()) {
+				var credential auth.Credential
+				principal, credential, err = authorizer.Authenticate(r.Context(), strings.TrimSpace(r.Header.Get(auth.HeaderAPIKey)))
+				if err != nil || !auth.PrincipalCredentialActive(principal, credential, time.Now().UTC()) {
 					http.Error(w, "forbidden", http.StatusForbidden)
 					return
 				}
 			}
-			if p.ID != b.PrincipalID || p.Status != auth.PrincipalStatusActive {
+			if principal.ID != binding.PrincipalID || principal.Status != auth.PrincipalStatusActive {
 				http.Error(w, "forbidden", http.StatusForbidden)
 				return
 			}
-			if a := strings.TrimSpace(r.Header.Get(HeaderRuntimeAgent)); a != "" && a != b.AgentID {
+			if session := strings.TrimSpace(r.Header.Get(HeaderRuntimeSession)); session == "" || session != binding.SessionID {
 				http.Error(w, "forbidden", http.StatusForbidden)
 				return
 			}
-			if c := strings.TrimSpace(r.Header.Get(HeaderRuntimeConversation)); c != "" && c != b.ConversationID {
+			if agent := strings.TrimSpace(r.Header.Get(HeaderRuntimeAgent)); agent != "" && agent != binding.AgentID {
 				http.Error(w, "forbidden", http.StatusForbidden)
 				return
 			}
-			req := memory.Scope{Tenant: r.Header.Get(auth.HeaderTenant), Project: r.Header.Get(auth.HeaderProject), Namespace: r.Header.Get(auth.HeaderNamespace)}
-			if req.Tenant != "" || req.Project != "" || req.Namespace != "" {
-				if req.Normalized() != b.Scope.Normalized() {
+			if conversation := strings.TrimSpace(r.Header.Get(HeaderRuntimeConversation)); conversation != "" && conversation != binding.ConversationID {
+				http.Error(w, "forbidden", http.StatusForbidden)
+				return
+			}
+			requested := memory.Scope{Tenant: r.Header.Get(auth.HeaderTenant), Project: r.Header.Get(auth.HeaderProject), Namespace: r.Header.Get(auth.HeaderNamespace)}
+			if requested.Tenant != "" || requested.Project != "" || requested.Namespace != "" {
+				if requested.Normalized() != binding.Scope.Normalized() {
 					http.Error(w, "forbidden", http.StatusForbidden)
 					return
 				}
 			}
-			ctx := context.WithValue(r.Context(), runtimeBindingContextKey{}, b)
+			granted, err := authorizer.AuthorizeScope(r.Context(), binding.PrincipalID, binding.Scope)
+			if err != nil || !granted {
+				http.Error(w, "forbidden", http.StatusForbidden)
+				return
+			}
+			ctx := context.WithValue(r.Context(), runtimeBindingContextKey{}, binding)
 			next.ServeHTTP(w, r.WithContext(ctx))
 		})
 	}

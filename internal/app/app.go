@@ -427,7 +427,7 @@ func principalAuthorizerForRuntime(cfg config.Config, store principalRuntimeStor
 }
 
 func httpDependenciesFromConfig(cfg config.Config) HTTPDependencies {
-	deps := HTTPDependencies{
+	return HTTPDependencies{
 		Contract: RuntimeContract{
 			ServiceVersion: BuildVersion,
 			BuildID:        BuildID,
@@ -445,16 +445,6 @@ func httpDependenciesFromConfig(cfg config.Config) HTTPDependencies {
 		APIKeys:      staticAPIKeysFromConfig(cfg),
 		AdminAPIKeys: staticAdminAPIKeysFromConfig(cfg),
 	}
-	deps.ProviderEnabled = cfg.Provider.Enabled
-	deps.ProviderCapabilities = provider.DiscoverCapabilities(provider.RuntimeMetadata{
-		ServiceVersion: BuildVersion, BuildID: BuildID, BuildTimestamp: BuildTimestamp,
-		SchemaVersion: postgres.CurrentMigrationVersion,
-	}, provider.CapabilityConfig{Limits: provider.Limits{
-		EventBytes: cfg.Provider.Limits.EventBytes, IntentBytes: cfg.Provider.Limits.IntentBytes,
-		RetrievalItems: cfg.Provider.Limits.RetrievalItems, ContextItems: cfg.Provider.Limits.ContextItems,
-		CitationItems: cfg.Provider.Limits.CitationItems, MetadataBytes: cfg.Provider.Limits.MetadataBytes,
-	}})
-	return deps
 }
 
 func httpDependenciesFromConfigWithIngestor(cfg config.Config, ingestor memory.EventIngestor) HTTPDependencies {
@@ -564,6 +554,35 @@ func buildAPIRuntime(ctx context.Context, cfg config.Config, deps apiRuntimeDepe
 	} else if len(cfg.Auth.APIKeys) == 0 && len(cfg.Auth.AdminAPIKeys) == 0 {
 		httpDeps.PrincipalAuthorizer = durableAuthorizer
 	}
+	httpDeps.ProviderEnabled = cfg.Provider.Enabled
+	httpDeps.ProviderSchemaVersions = cfg.Provider.SchemaVersions
+	httpDeps.ProviderLimits = cfg.Provider.Limits
+	httpDeps.MemorySession = memory.NewMemorySessionService(memory.MemorySessionServiceOptions{
+		Store:                repo,
+		ContextAssembler:     memorySessionContextAdapter{assembler: retrievalService},
+		EventIngestor:        ingestor,
+		UsefulnessSummarizer: repo,
+		Now:                  time.Now,
+		NewID:                newQualityID,
+	})
+	if cfg.Provider.Enabled && httpDeps.PrincipalAuthorizer != nil {
+		httpDeps.ProviderCapabilities = provider.Discover(provider.CapabilityInput{ProviderVersion: "provider-v1", SchemaVersion: cfg.Provider.SchemaVersions[0], ServiceVersion: BuildVersion, BuildID: BuildID})
+		httpDeps.ProviderCapabilities.Limits = cfg.Provider.Limits
+		httpDeps.ProviderBindings = repo
+		httpDeps.ProviderInitializer = provider.NewRuntimeInitializer(provider.RuntimeInitializerOptions{Authorizer: httpDeps.PrincipalAuthorizer, Bindings: repo, BindingTTL: cfg.Provider.BindingLifetime, Now: time.Now})
+		intentService := memory.MemoryIntentService{Processor: repo, Now: time.Now}
+		httpDeps.ProviderAdapter = provider.NewAdapter(provider.AdapterDependencies{
+			Ingestor: ingestor, IdempotentIngestor: ingestor, Intent: intentService,
+			Searcher: retrievalService, Assembler: retrievalService, Lifecycle: lifecycleService,
+			Session: httpDeps.MemorySession,
+			Limits:  cfg.Provider.Limits,
+			AllowLifecycle: func(ctx context.Context, binding provider.RuntimeBinding) bool {
+				principal, ok := auth.PrincipalFromContext(ctx)
+				return ok && principal.Role == auth.PrincipalRoleAdmin && principal.ID == binding.PrincipalID
+			},
+			LifecycleStore: repo,
+		})
+	}
 	readiness := &readinessGate{checker: runtimeReadinessChecker(config.ModeAPI, pool, embeddingRuntime, false, deps.observer)}
 	httpDeps.Readiness = readiness
 	if metrics, ok := deps.observer.(interface {
@@ -584,18 +603,6 @@ func buildAPIRuntime(ctx context.Context, cfg config.Config, deps apiRuntimeDepe
 	httpDeps.EmbeddingAdminRead = memory.NewEmbeddingAdminQueryService(repo, embeddingRuntime.Status)
 	httpDeps.MemorySearcher = retrievalService
 	httpDeps.ContextAssembler = retrievalService
-	if cfg.Provider.Enabled {
-		httpDeps.ProviderBindings = repo
-		httpDeps.ProviderInitializer = provider.NewRuntimeInitializer(provider.RuntimeInitializerOptions{
-			Authorizer: httpDeps.PrincipalAuthorizer, Bindings: repo, BindingTTL: cfg.Provider.BindingLifetime, Now: time.Now,
-		})
-		intentService := memory.MemoryIntentService{Processor: repo, Now: time.Now, NewID: newID}
-		httpDeps.MemoryIntent = intentService
-		httpDeps.ProviderOperations = provider.NewOperationService(provider.OperationServiceOptions{
-			Events: ingestor, Intents: intentService, Lifecycle: lifecycleService,
-			Reader: providerRuntimeReader{searcher: retrievalService, assembler: retrievalService},
-		})
-	}
 	httpDeps.GovernanceStatusRead = observedGovernanceStatusReader{
 		reader: governanceStatusReaderFunc(func(ctx context.Context) (GovernanceStatus, error) {
 			return repo.ReadGovernanceStatus(ctx, time.Now().UTC())
@@ -619,13 +626,18 @@ func buildAPIRuntime(ctx context.Context, cfg config.Config, deps apiRuntimeDepe
 		replayService.Observer = observer
 	}
 	httpDeps.DerivedInsightReplayAdmin = replayService
+	var providerConformance assurance.ProviderFixtureExecutor
+	if httpDeps.ProviderAdapter != nil {
+		providerConformance = assurance.ProviderHandlerExecutor{Adapter: httpDeps.ProviderAdapter, Capabilities: httpDeps.ProviderCapabilities}
+	}
 	httpDeps.AssuranceAdmin = assurance.NewService(assurance.ServiceOptions{
-		Store:    repo,
-		Workflow: repo,
-		Now:      time.Now,
-		NewID:    newQualityID,
-		Observer: deps.observer,
-		Logger:   httpDeps.Logger,
+		Store:               repo,
+		Workflow:            repo,
+		Now:                 time.Now,
+		NewID:               newQualityID,
+		Observer:            deps.observer,
+		Logger:              httpDeps.Logger,
+		ProviderConformance: providerConformance,
 	})
 	qualityService := memory.NewQualityService(memory.QualityServiceOptions{
 		Store:              repo,
@@ -640,14 +652,6 @@ func buildAPIRuntime(ctx context.Context, cfg config.Config, deps apiRuntimeDepe
 		Store: repo,
 		Now:   time.Now,
 		NewID: newQualityID,
-	})
-	httpDeps.MemorySession = memory.NewMemorySessionService(memory.MemorySessionServiceOptions{
-		Store:                repo,
-		ContextAssembler:     memorySessionContextAdapter{assembler: retrievalService},
-		EventIngestor:        ingestor,
-		UsefulnessSummarizer: repo,
-		Now:                  time.Now,
-		NewID:                newQualityID,
 	})
 	httpDeps.TaskEvaluations = repo
 	httpDeps.Workflow = workflow.NewService(workflow.ServiceOptions{

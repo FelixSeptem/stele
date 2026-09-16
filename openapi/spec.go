@@ -28,6 +28,212 @@ paths:
             application/json:
               schema:
                 type: object
+  /v1/provider/capabilities:
+    get:
+      operationId: getProviderCapabilities
+      summary: Discover the enabled memory provider contract
+      responses:
+        '200':
+          description: Bounded provider capabilities, limits, and scope dimensions
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ProviderCapabilityDocument'
+        '404':
+          description: Provider surface disabled
+  /v1/provider/runtime:
+    post:
+      operationId: initializeProviderRuntime
+      security:
+        - PublicAPIKey: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/ProviderRuntimeInitialization'
+      responses:
+        '201':
+          description: Server-owned runtime binding
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ProviderRuntimeBinding'
+        '400':
+          description: Validation or compatibility error
+        '401':
+          description: Authentication failed
+        '403':
+          description: Exact scope grant denied
+  /v1/provider/events:
+    post:
+      operationId: providerIngestEvent
+      security:
+        - PublicAPIKey: []
+      parameters:
+        - $ref: '#/components/parameters/RuntimeBindingHeader'
+        - $ref: '#/components/parameters/RuntimeSessionHeader'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/ProviderEventRequest'
+      responses:
+        '201':
+          description: Governed event result
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ProviderEventResponse'
+        '400':
+          description: Bounded provider error
+        '403':
+          description: Runtime binding or scope denied
+  /v1/provider/intents:
+    post:
+      operationId: providerSubmitIntent
+      security:
+        - PublicAPIKey: []
+      parameters:
+        - $ref: '#/components/parameters/RuntimeBindingHeader'
+        - $ref: '#/components/parameters/RuntimeSessionHeader'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/ProviderIntentRequest'
+      responses:
+        '202':
+          description: 'Governed memory intent accepted'
+          content:
+            application/json:
+              schema: {$ref: '#/components/schemas/ProviderIntentResponse'}
+        '400': {description: 'Bounded provider error'}
+        '403': {description: 'Runtime binding or scope denied'}
+  /v1/provider/retrieve:
+    post:
+      operationId: providerRetrieveMemory
+      security:
+        - PublicAPIKey: []
+      parameters:
+        - $ref: '#/components/parameters/RuntimeBindingHeader'
+        - $ref: '#/components/parameters/RuntimeSessionHeader'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/ProviderRetrieveRequest'
+      responses:
+        '200':
+          description: 'Scoped lifecycle-safe retrieval result'
+          content:
+            application/json:
+              schema: {$ref: '#/components/schemas/ProviderOperationResponse'}
+        '400': {description: 'Bounded provider error'}
+        '403': {description: 'Runtime binding or scope denied'}
+  /v1/provider/context:
+    post:
+      operationId: providerAssembleContext
+      security:
+        - PublicAPIKey: []
+      parameters:
+        - $ref: '#/components/parameters/RuntimeBindingHeader'
+        - $ref: '#/components/parameters/RuntimeSessionHeader'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/ProviderContextRequest'
+      responses:
+        '200':
+          description: 'Scoped assembled context with citations'
+          content:
+            application/json:
+              schema: {$ref: '#/components/schemas/ProviderOperationResponse'}
+        '400': {description: 'Bounded provider error'}
+        '403': {description: 'Runtime binding or scope denied'}
+  /v1/provider/turns:
+    post:
+      operationId: providerCreateTurn
+      security:
+        - PublicAPIKey: []
+      parameters:
+        - $ref: '#/components/parameters/RuntimeBindingHeader'
+        - $ref: '#/components/parameters/RuntimeSessionHeader'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/ProviderTurnRequest'
+      responses:
+        '201': {description: 'Memory session turn with assembled context'}
+        '400': {description: 'Bounded provider error'}
+        '403': {description: 'Runtime binding or scope denied'}
+  /v1/provider/turn-outcomes:
+    post:
+      operationId: providerRecordTurnOutcome
+      security:
+        - PublicAPIKey: []
+      parameters:
+        - $ref: '#/components/parameters/RuntimeBindingHeader'
+        - $ref: '#/components/parameters/RuntimeSessionHeader'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/ProviderTurnOutcomeRequest'
+      responses:
+        '200': {description: 'Recorded memory session turn outcome'}
+        '400': {description: 'Bounded provider error'}
+        '403': {description: 'Runtime binding or scope denied'}
+  /v1/provider/lifecycle:
+    post:
+      operationId: providerApplyLifecycle
+      summary: Apply an admin-authorized governed lifecycle action
+      security:
+        - PublicAPIKey: []
+      parameters:
+        - $ref: '#/components/parameters/RuntimeBindingHeader'
+        - $ref: '#/components/parameters/RuntimeSessionHeader'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              additionalProperties: false
+              required: [metadata, memory_id, action, reason]
+              properties:
+                metadata: {$ref: '#/components/schemas/ProviderOperationMetadata'}
+                memory_id: {type: string, maxLength: 256}
+                action: {type: string, enum: [suppress, expire, delete]}
+                reason: {type: string, maxLength: 512}
+      responses:
+        '200': {description: 'Governed lifecycle outcome with citation'}
+        '400': {description: 'Validation or compatibility error'}
+        '403': {description: 'Admin role, runtime binding, or scope denied'}
+  /v1/provider/status:
+    get:
+      operationId: providerReadStatus
+      summary: Read bounded status for the exact runtime scope
+      security:
+        - PublicAPIKey: []
+      parameters:
+        - $ref: '#/components/parameters/RuntimeBindingHeader'
+        - $ref: '#/components/parameters/RuntimeSessionHeader'
+      responses:
+        '200':
+          description: 'Scoped provider status without principal or operational internals'
+          content:
+            application/json:
+              schema: {type: object}
+        '403': {description: 'Runtime binding or scope denied'}
   /health:
     get:
       operationId: getHealth
@@ -66,76 +272,6 @@ paths:
             text/plain:
               schema:
                 type: string
-  /v1/provider/capabilities:
-    get:
-      operationId: getProviderCapabilities
-      description: Discover the enabled provider contract, exact canonical scope dimensions, operation limits, and compatibility version.
-      parameters:
-        - $ref: '#/components/parameters/PublicAPIKey'
-        - $ref: '#/components/parameters/TenantHeader'
-        - $ref: '#/components/parameters/ProjectHeader'
-        - $ref: '#/components/parameters/NamespaceHeader'
-      responses:
-        '200':
-          description: Bounded provider capabilities
-          content:
-            application/json:
-              schema: {$ref: '#/components/schemas/ProviderCapabilities'}
-        '404': {description: Provider surface is disabled}
-  /v1/provider/runtimes:
-    post:
-      operationId: initializeProviderRuntime
-      description: Bind an agent, session, conversation, and provider instance to one exact server-authorized scope.
-      parameters:
-        - $ref: '#/components/parameters/PublicAPIKey'
-        - $ref: '#/components/parameters/TenantHeader'
-        - $ref: '#/components/parameters/ProjectHeader'
-        - $ref: '#/components/parameters/NamespaceHeader'
-      requestBody:
-        required: true
-        content:
-          application/json:
-            schema: {$ref: '#/components/schemas/ProviderRuntimeInitialization'}
-      responses:
-        '201': {description: Opaque runtime binding with resolved exact scope}
-        '400': {description: Invalid request}
-        '401': {description: Authentication failed}
-        '403': {description: Exact scope is not granted}
-        '404': {description: Provider surface is disabled}
-  /v1/provider/operations/{operation}:
-    post:
-      operationId: invokeProviderOperation
-      description: Invoke a governed provider operation after binding and schema compatibility validation.
-      parameters:
-        - $ref: '#/components/parameters/PublicAPIKey'
-        - $ref: '#/components/parameters/TenantHeader'
-        - $ref: '#/components/parameters/ProjectHeader'
-        - $ref: '#/components/parameters/NamespaceHeader'
-        - $ref: '#/components/parameters/ProviderRuntimeBindingHeader'
-        - $ref: '#/components/parameters/ProviderRuntimeSessionHeader'
-        - in: path
-          name: operation
-          required: true
-          schema:
-            type: string
-            enum: [event.ingest, memory.intent, memory.retrieve, context.assemble, memory.forget, status.read]
-      requestBody:
-        required: true
-        content:
-          application/json:
-            schema: {$ref: '#/components/schemas/ProviderOperationRequest'}
-      responses:
-        '200':
-          description: Governed result with bounded citations
-          content:
-            application/json:
-              schema: {$ref: '#/components/schemas/ProviderOperationResponse'}
-        '400': {description: Validation error}
-        '403': {description: Authentication or exact-scope mismatch}
-        '409': {description: Idempotency or sequence conflict}
-        '422': {description: Lifecycle policy denial}
-        '424': {description: Dependency degraded or projection stale}
-        '503': {description: Retryable interruption}
   /v1/events:
     post:
       operationId: createEvent
@@ -3805,22 +3941,22 @@ components:
       schema:
         type: string
         maxLength: 256
+    RuntimeBindingHeader:
+      in: header
+      name: X-Stele-Runtime-Binding
+      required: true
+      schema: {type: string}
+    RuntimeSessionHeader:
+      in: header
+      name: X-Stele-Runtime-Session
+      required: true
+      schema: {type: string}
     ActorHeader:
       in: header
       name: X-Stele-Actor
       required: true
       schema:
         type: string
-    ProviderRuntimeBindingHeader:
-      in: header
-      name: X-Stele-Runtime-Binding
-      required: true
-      schema: {type: string, maxLength: 256}
-    ProviderRuntimeSessionHeader:
-      in: header
-      name: X-Stele-Runtime-Session
-      required: true
-      schema: {type: string, maxLength: 256}
     MemoryIDPath:
       in: path
       name: memory_id
@@ -3888,6 +4024,132 @@ components:
       schema:
         type: string
   schemas:
+    ProviderOperationMetadata:
+      type: object
+      additionalProperties: false
+      required: [request_id, operation_id, schema_version]
+      properties:
+        request_id: {type: string, maxLength: 256}
+        operation_id: {type: string, maxLength: 256}
+        idempotency_key: {type: string, maxLength: 256}
+        event_seq: {type: integer, minimum: 0}
+        schema_version: {type: string, maxLength: 64}
+    ProviderCapabilityDocument:
+      type: object
+      additionalProperties: false
+      required: [provider_version, schema_version, operations, scope_dimensions, limits, schema_digest]
+      properties:
+        provider_version: {type: string}
+        schema_version: {type: string}
+        service_version: {type: string}
+        build_id: {type: string}
+        operations: {type: array, maxItems: 32, items: {type: string}}
+        scope_dimensions: {type: array, maxItems: 16, items: {type: string}}
+        limits: {type: object, additionalProperties: {type: integer}}
+        schema_digest: {type: string}
+    ProviderRuntimeInitialization:
+      type: object
+      additionalProperties: false
+      required: [scope, agent_id, session_id]
+      properties:
+        scope: {$ref: '#/components/schemas/Scope'}
+        agent_id: {type: string, maxLength: 256}
+        session_id: {type: string, maxLength: 256}
+        conversation_id: {type: string, maxLength: 256}
+        provider_instance_id: {type: string, maxLength: 256}
+    ProviderRuntimeBinding:
+      type: object
+      required: [binding_id, scope, agent_id, session_id, provider_instance_id, expires_at]
+      properties:
+        binding_id: {type: string}
+        scope: {$ref: '#/components/schemas/Scope'}
+        agent_id: {type: string}
+        session_id: {type: string}
+        conversation_id: {type: string}
+        provider_instance_id: {type: string}
+        expires_at: {type: string, format: date-time}
+    ProviderEventRequest:
+      type: object
+      additionalProperties: false
+      required: [metadata, event_type, content]
+      properties:
+        metadata: {$ref: '#/components/schemas/ProviderOperationMetadata'}
+        event_type: {type: string}
+        content: {type: string}
+        metadata_map: {type: object}
+    ProviderEventResponse:
+      type: object
+      required: [event_id, replayed, metadata]
+      properties:
+        event_id: {type: string}
+        replayed: {type: boolean}
+        metadata: {$ref: '#/components/schemas/ProviderOperationMetadata'}
+    ProviderIntentRequest:
+      type: object
+      additionalProperties: false
+      required: [metadata, intent]
+      properties:
+        metadata: {$ref: '#/components/schemas/ProviderOperationMetadata'}
+        intent: {$ref: '#/components/schemas/MemoryIntentRequest'}
+    ProviderRetrieveRequest:
+      type: object
+      additionalProperties: false
+      required: [metadata, input]
+      properties:
+        metadata: {$ref: '#/components/schemas/ProviderOperationMetadata'}
+        input: {$ref: '#/components/schemas/MemorySearchRequest'}
+    ProviderContextRequest:
+      type: object
+      additionalProperties: false
+      required: [metadata, input]
+      properties:
+        metadata: {$ref: '#/components/schemas/ProviderOperationMetadata'}
+        input: {$ref: '#/components/schemas/ContextAssembleRequest'}
+    ProviderIntentResponse:
+      type: object
+      required: [metadata, result]
+      properties:
+        metadata: {$ref: '#/components/schemas/ProviderOperationMetadata'}
+        result: {type: object}
+        citations: {type: array, items: {$ref: '#/components/schemas/ProviderCitation'}}
+    ProviderOperationResponse:
+      type: object
+      required: [metadata, result]
+      properties:
+        metadata: {$ref: '#/components/schemas/ProviderOperationMetadata'}
+        result: {type: object}
+        citations: {type: array, items: {$ref: '#/components/schemas/ProviderCitation'}}
+    ProviderTurnRequest:
+      type: object
+      additionalProperties: false
+      required: [metadata, input]
+      properties:
+        metadata: {$ref: '#/components/schemas/ProviderOperationMetadata'}
+        input: {type: object}
+    ProviderTurnOutcomeRequest:
+      type: object
+      additionalProperties: false
+      required: [metadata, input]
+      properties:
+        metadata: {$ref: '#/components/schemas/ProviderOperationMetadata'}
+        input: {type: object}
+    ProviderCitation:
+      type: object
+      required: [source_kind, reference, availability]
+      properties:
+        source_kind: {type: string}
+        reference: {type: string}
+        version: {type: string}
+        watermark: {type: string}
+        availability: {type: string}
+    ProviderError:
+      type: object
+      required: [category, code, message, retryable]
+      properties:
+        category: {type: string, enum: [authentication, scope, compatibility, validation, conflict, lifecycle, stale, dependency, retryable]}
+        code: {type: string, maxLength: 64}
+        message: {type: string, maxLength: 256}
+        retryable: {type: boolean}
     Principal:
       type: object
       required: [id, role, status, label, created_at]
@@ -7769,82 +8031,5 @@ components:
           type: array
           items:
             $ref: '#/components/schemas/RankingRolloutPolicy'
-    ProviderOperationMetadata:
-      type: object
-      additionalProperties: false
-      required: [request_id, operation_id, event_seq, schema_version]
-      properties:
-        request_id: {type: string, maxLength: 128}
-        operation_id: {type: string, maxLength: 128}
-        idempotency_key: {type: string, maxLength: 128}
-        event_seq: {type: integer, minimum: 0}
-        schema_version: {type: string, enum: [provider-v1]}
-    ProviderLimits:
-      type: object
-      properties:
-        event_bytes: {type: integer, minimum: 1}
-        intent_bytes: {type: integer, minimum: 1}
-        retrieval_items: {type: integer, minimum: 1}
-        context_items: {type: integer, minimum: 1}
-        citation_items: {type: integer, minimum: 1}
-        metadata_bytes: {type: integer, minimum: 1}
-    ProviderCapabilities:
-      type: object
-      required: [provider_version, schema_version, schema_digest, operations, scope, limits]
-      properties:
-        provider_version: {type: string}
-        schema_version: {type: string, enum: [provider-v1]}
-        schema_digest: {type: string}
-        operations: {type: array, items: {type: string}}
-        scope:
-          type: object
-          properties:
-            dimensions: {type: array, items: {type: string, enum: [tenant, project, namespace]}}
-            exact: {type: boolean, const: true}
-        limits: {$ref: '#/components/schemas/ProviderLimits'}
-    ProviderRuntimeInitialization:
-      type: object
-      additionalProperties: false
-      required: [agent_id, session_id]
-      properties:
-        agent_id: {type: string, maxLength: 256}
-        session_id: {type: string, maxLength: 256}
-        conversation_id: {type: string, maxLength: 256}
-        provider_instance_id: {type: string, maxLength: 256}
-    ProviderOperationRequest:
-      type: object
-      additionalProperties: false
-      required: [metadata, input]
-      properties:
-        metadata: {$ref: '#/components/schemas/ProviderOperationMetadata'}
-        input: {type: object}
-    ProviderCitation:
-      type: object
-      required: [source_kind, reference, availability]
-      properties:
-        source_kind: {type: string, enum: [memory, raw_event, projection, intent, lifecycle]}
-        reference: {type: string, maxLength: 256}
-        version: {type: integer, minimum: 0}
-        watermark: {type: string, maxLength: 128}
-        availability: {type: string, enum: [available, unavailable]}
-    ProviderError:
-      type: object
-      required: [category, code, message]
-      properties:
-        category: {type: string, enum: [authentication, scope_mismatch, compatibility, validation, conflict, lifecycle, stale, dependency, retryable]}
-        code: {type: string, maxLength: 64}
-        message: {type: string, maxLength: 256}
-        retryable: {type: boolean}
-    ProviderOperationResponse:
-      type: object
-      required: [metadata]
-      properties:
-        metadata: {$ref: '#/components/schemas/ProviderOperationMetadata'}
-        result:
-          type: object
-          properties:
-            data: {}
-            citations: {type: array, items: {$ref: '#/components/schemas/ProviderCitation'}}
-        error: {$ref: '#/components/schemas/ProviderError'}
 `
 }

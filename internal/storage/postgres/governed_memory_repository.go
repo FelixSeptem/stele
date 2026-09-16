@@ -42,10 +42,13 @@ RETURNING id,tenant,project,namespace,intent_type,actor,reason,provenance,reques
 	if err == nil {
 		return created, nil
 	}
-	const existing = `SELECT id,tenant,project,namespace,intent_type,actor,reason,provenance,request_id,operation_id,idempotency_key,target_memory_id,target_version,payload,status,created_at FROM memory_intents WHERE tenant=$1 AND project=$2 AND namespace=$3 AND (idempotency_key=$4 OR operation_id=$5) ORDER BY created_at LIMIT 1`
-	existingRecord, lookupErr := scanMemoryIntent(r.db.QueryRow(ctx, existing, record.Scope.Tenant, record.Scope.Project, record.Scope.Namespace, record.IdempotencyKey, record.OperationID))
+	const existing = `SELECT request_fingerprint,id,tenant,project,namespace,intent_type,actor,reason,provenance,request_id,operation_id,idempotency_key,target_memory_id,target_version,payload,status,created_at FROM memory_intents WHERE tenant=$1 AND project=$2 AND namespace=$3 AND (idempotency_key=$4 OR operation_id=$5) ORDER BY created_at LIMIT 1`
+	existingRecord, existingFingerprint, lookupErr := scanMemoryIntentWithFingerprint(r.db.QueryRow(ctx, existing, record.Scope.Tenant, record.Scope.Project, record.Scope.Namespace, record.IdempotencyKey, record.OperationID))
 	if lookupErr != nil {
 		return memory.MemoryIntentRecord{}, fmt.Errorf("append memory intent: %w", err)
+	}
+	if existingFingerprint != fp {
+		return memory.MemoryIntentRecord{}, memory.ErrIdempotencyConflict
 	}
 	return existingRecord, nil
 }
@@ -203,4 +206,32 @@ func scanMemoryIntent(s interface{ Scan(...any) error }) (memory.MemoryIntentRec
 		out.Content = p.Content
 	}
 	return out, nil
+}
+
+func scanMemoryIntentWithFingerprint(s interface{ Scan(...any) error }) (memory.MemoryIntentRecord, string, error) {
+	var fingerprint string
+	var out memory.MemoryIntentRecord
+	var prov, payload []byte
+	var targetID *string
+	var targetVersion *int64
+	if err := s.Scan(&fingerprint, &out.ID, &out.Scope.Tenant, &out.Scope.Project, &out.Scope.Namespace, &out.Type, &out.Actor, &out.Reason, &prov, &out.RequestID, &out.OperationID, &out.IdempotencyKey, &targetID, &targetVersion, &payload, &out.Status, &out.CreatedAt); err != nil {
+		return out, "", err
+	}
+	if targetID != nil {
+		out.TargetMemoryID = *targetID
+	}
+	if targetVersion != nil {
+		out.TargetVersion = *targetVersion
+	}
+	if len(prov) > 0 {
+		_ = json.Unmarshal(prov, &out.Provenance)
+	}
+	if len(payload) > 0 {
+		var p struct {
+			Content string `json:"content"`
+		}
+		_ = json.Unmarshal(payload, &p)
+		out.Content = p.Content
+	}
+	return out, fingerprint, nil
 }

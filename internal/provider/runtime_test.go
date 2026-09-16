@@ -2,7 +2,6 @@ package provider
 
 import (
 	"context"
-	"errors"
 	"net/http"
 	"net/http/httptest"
 	"testing"
@@ -13,106 +12,154 @@ import (
 )
 
 type runtimeAuthorizer struct {
-	grant           bool
-	authenticateErr error
-	checks          int
+	grant  bool
+	checks int
 }
 
 func (a *runtimeAuthorizer) Authenticate(context.Context, string) (auth.Principal, auth.Credential, error) {
-	if a.authenticateErr != nil {
-		return auth.Principal{}, auth.Credential{}, a.authenticateErr
-	}
-	now := time.Now()
-	return auth.Principal{ID: "principal-1", Status: auth.PrincipalStatusActive, CreatedAt: now}, auth.Credential{ID: "credential-1", PrincipalID: "principal-1", Status: auth.CredentialStatusActive, CredentialID: "cred", Salt: []byte{1}, Digest: []byte{1}, CreatedAt: now}, nil
+	return auth.Principal{ID: "principal-1", Status: auth.PrincipalStatusActive, Role: auth.PrincipalRolePublic, Label: "runtime", CreatedAt: time.Now()}, auth.Credential{ID: "credential-1", PrincipalID: "principal-1", Status: auth.CredentialStatusActive, CredentialID: "runtime", Salt: []byte("salt"), Digest: []byte("digest"), CreatedAt: time.Now()}, nil
 }
 func (a *runtimeAuthorizer) AuthorizeScope(context.Context, string, memory.Scope) (bool, error) {
 	a.checks++
 	return a.grant, nil
 }
+
 func exactScope() memory.Scope {
 	return memory.Scope{Tenant: "tenant-a", Project: "project-a", Namespace: "namespace-a"}
 }
 
-func TestRuntimeInitializerAuthenticatesBeforePersistence(t *testing.T) {
-	a := &runtimeAuthorizer{grant: true, authenticateErr: errors.New("bad credential")}
+func TestRuntimeInitializerResolvesExactScopeAndSeparatesIdentity(t *testing.T) {
+	a := &runtimeAuthorizer{grant: true}
 	store := NewMemoryBindingStore()
-	i := NewRuntimeInitializer(RuntimeInitializerOptions{Authorizer: a, Bindings: store})
-	if _, err := i.InitializeAuthenticated(context.Background(), "bad", RuntimeInitialization{Scope: exactScope(), AgentID: "agent", SessionID: "session"}); err == nil {
-		t.Fatal("expected unauthorized error")
+	initializer := NewRuntimeInitializer(RuntimeInitializerOptions{Authorizer: a, Bindings: store, BindingTTL: time.Hour, Now: func() time.Time { return time.Unix(10, 0).UTC() }})
+	binding, err := initializer.Initialize(context.Background(), auth.Principal{ID: "principal-1", Status: auth.PrincipalStatusActive}, RuntimeInitialization{Scope: exactScope(), AgentID: "agent-1", SessionID: "session-1", ConversationID: "conversation-1"})
+	if err != nil {
+		t.Fatalf("Initialize() error = %v", err)
 	}
-	if store.Count() != 0 || a.checks != 0 {
-		t.Fatalf("store=%d checks=%d, want no repository or grant access", store.Count(), a.checks)
+	if binding.BindingID == "" || binding.ProviderInstanceID == "" {
+		t.Fatal("binding IDs must be opaque and non-empty")
 	}
-	a.authenticateErr = nil
-	if _, err := i.InitializeAuthenticated(context.Background(), "ok", RuntimeInitialization{Scope: exactScope(), AgentID: "", SessionID: "session"}); err == nil {
-		t.Fatal("expected malformed request rejection")
+	if binding.Scope != exactScope() || binding.AgentID != "agent-1" || binding.SessionID != "session-1" || binding.ConversationID != "conversation-1" {
+		t.Fatalf("binding = %+v", binding)
 	}
-	if store.Count() != 0 || a.checks != 0 {
-		t.Fatalf("store=%d checks=%d, malformed request must fail before lookup", store.Count(), a.checks)
+	if a.checks != 1 {
+		t.Fatalf("AuthorizeScope calls = %d, want 1", a.checks)
 	}
 }
 
-func TestRuntimeBindingPersistsSeparatedIdentities(t *testing.T) {
-	a := &runtimeAuthorizer{grant: true}
+func TestRuntimeInitializerRejectsInvalidOrUnauthorizedBeforeStore(t *testing.T) {
+	a := &runtimeAuthorizer{grant: false}
 	store := NewMemoryBindingStore()
-	now := time.Date(2026, 9, 16, 0, 0, 0, 0, time.UTC)
-	i := NewRuntimeInitializer(RuntimeInitializerOptions{Authorizer: a, Bindings: store, BindingTTL: time.Hour, Now: func() time.Time { return now }})
-	b, err := i.Initialize(context.Background(), auth.Principal{ID: "principal-1", Status: auth.PrincipalStatusActive}, RuntimeInitialization{Scope: exactScope(), AgentID: "agent", SessionID: "session", ConversationID: "conversation", ProviderInstanceID: "instance"})
-	if err != nil {
-		t.Fatal(err)
+	initializer := NewRuntimeInitializer(RuntimeInitializerOptions{Authorizer: a, Bindings: store})
+	if _, err := initializer.Initialize(context.Background(), auth.Principal{ID: "principal-1", Status: auth.PrincipalStatusActive}, RuntimeInitialization{Scope: exactScope(), AgentID: "", SessionID: "session-1"}); err == nil {
+		t.Fatal("missing agent id should fail")
 	}
-	got, err := store.Lookup(context.Background(), b.BindingID)
-	if err != nil {
-		t.Fatal(err)
+	if store.Count() != 0 {
+		t.Fatal("invalid initialization must not persist binding")
 	}
-	if got.AgentID != "agent" || got.SessionID != "session" || got.ConversationID != "conversation" || got.ProviderInstanceID != "instance" || got.Scope != exactScope() {
-		t.Fatalf("binding identities = %+v", got)
+	if _, err := initializer.Initialize(context.Background(), auth.Principal{ID: "principal-1", Status: auth.PrincipalStatusActive}, RuntimeInitialization{Scope: exactScope(), AgentID: "agent-1", SessionID: "session-1"}); err == nil {
+		t.Fatal("unauthorized initialization should fail")
+	}
+	if store.Count() != 0 {
+		t.Fatal("unauthorized initialization must not persist binding")
 	}
 }
 
-func TestRuntimeBindingMiddlewareRejectsMismatchesWithoutDisclosure(t *testing.T) {
+func TestRuntimeBindingMiddlewareRejectsWidenedScopeAndRechecksGrant(t *testing.T) {
 	a := &runtimeAuthorizer{grant: true}
 	store := NewMemoryBindingStore()
-	i := NewRuntimeInitializer(RuntimeInitializerOptions{Authorizer: a, Bindings: store})
-	b, err := i.Initialize(context.Background(), auth.Principal{ID: "principal-1", Status: auth.PrincipalStatusActive}, RuntimeInitialization{Scope: exactScope(), AgentID: "agent", SessionID: "session"})
+	initializer := NewRuntimeInitializer(RuntimeInitializerOptions{Authorizer: a, Bindings: store})
+	binding, err := initializer.Initialize(context.Background(), auth.Principal{ID: "principal-1", Status: auth.PrincipalStatusActive}, RuntimeInitialization{Scope: exactScope(), AgentID: "agent-1", SessionID: "session-1"})
 	if err != nil {
 		t.Fatal(err)
 	}
-	handler := RuntimeBindingMiddleware(store, a)(http.HandlerFunc(func(http.ResponseWriter, *http.Request) { t.Fatal("handler called") }))
-	tests := []struct{ name, binding, session, tenant string }{{"unknown", "rb_unknown", "session", "tenant-a"}, {"missing session", b.BindingID, "", "tenant-a"}, {"cross tenant", b.BindingID, "session", "tenant-b"}}
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			r := httptest.NewRequest(http.MethodPost, "/", nil)
-			r.Header.Set(auth.HeaderAPIKey, "key")
-			r.Header.Set(HeaderRuntimeBinding, tt.binding)
-			r.Header.Set(HeaderRuntimeSession, tt.session)
-			r.Header.Set(auth.HeaderTenant, tt.tenant)
-			r.Header.Set(auth.HeaderProject, "project-a")
-			r.Header.Set(auth.HeaderNamespace, "namespace-a")
-			w := httptest.NewRecorder()
-			handler.ServeHTTP(w, r)
-			if w.Code != http.StatusForbidden || w.Body.String() != "forbidden\n" {
-				t.Fatalf("status/body = %d %q", w.Code, w.Body.String())
-			}
-		})
+	next := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) { w.WriteHeader(http.StatusNoContent) })
+	request := httptest.NewRequest(http.MethodPost, "/provider/op", nil)
+	request.Header.Set(HeaderRuntimeBinding, binding.BindingID)
+	request.Header.Set(HeaderRuntimeSession, "session-1")
+	request.Header.Set(auth.HeaderTenant, "tenant-a")
+	request.Header.Set(auth.HeaderProject, "project-a")
+	request.Header.Set(auth.HeaderNamespace, "namespace-b")
+	rec := httptest.NewRecorder()
+	RuntimeBindingMiddleware(store, a)(next).ServeHTTP(rec, request)
+	if rec.Code != http.StatusForbidden {
+		t.Fatalf("widened scope status = %d, want 403", rec.Code)
 	}
-}
+	if got, ok := RuntimeBindingFromContext(request.Context()); ok || got.BindingID != "" {
+		t.Fatal("binding must not be injected on rejected request")
+	}
 
-func TestRuntimeBindingMiddlewareRevalidatesRevocation(t *testing.T) {
-	a := &runtimeAuthorizer{grant: true}
-	store := NewMemoryBindingStore()
-	i := NewRuntimeInitializer(RuntimeInitializerOptions{Authorizer: a, Bindings: store})
-	b, err := i.Initialize(context.Background(), auth.Principal{ID: "principal-1", Status: auth.PrincipalStatusActive}, RuntimeInitialization{Scope: exactScope(), AgentID: "agent", SessionID: "session"})
-	if err != nil {
-		t.Fatal(err)
-	}
 	a.grant = false
-	r := httptest.NewRequest(http.MethodPost, "/", nil)
-	r.Header.Set(HeaderRuntimeBinding, b.BindingID)
-	r.Header.Set(HeaderRuntimeSession, b.SessionID)
-	w := httptest.NewRecorder()
-	RuntimeBindingMiddleware(store, a)(http.HandlerFunc(func(http.ResponseWriter, *http.Request) { t.Fatal("handler called") })).ServeHTTP(w, r)
-	if w.Code != http.StatusForbidden {
-		t.Fatalf("status=%d", w.Code)
+	request.Header.Set(auth.HeaderNamespace, "namespace-a")
+	rec = httptest.NewRecorder()
+	RuntimeBindingMiddleware(store, a)(next).ServeHTTP(rec, request)
+	if rec.Code != http.StatusForbidden {
+		t.Fatalf("revoked grant status = %d, want 403", rec.Code)
+	}
+	if a.checks < 2 {
+		t.Fatal("middleware must revalidate grant on every operation")
+	}
+}
+
+func TestRuntimeBindingMiddlewareInjectsCanonicalScope(t *testing.T) {
+	a := &runtimeAuthorizer{grant: true}
+	store := NewMemoryBindingStore()
+	initializer := NewRuntimeInitializer(RuntimeInitializerOptions{Authorizer: a, Bindings: store})
+	binding, err := initializer.Initialize(context.Background(), auth.Principal{ID: "principal-1", Status: auth.PrincipalStatusActive}, RuntimeInitialization{Scope: exactScope(), AgentID: "agent-1", SessionID: "session-1"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	called := false
+	next := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		called = true
+		got, ok := RuntimeBindingFromContext(r.Context())
+		if !ok || got.Scope != exactScope() {
+			t.Fatalf("canonical binding = %+v, ok=%v", got, ok)
+		}
+		w.WriteHeader(http.StatusNoContent)
+	})
+	request := httptest.NewRequest(http.MethodGet, "/provider/op", nil)
+	request.Header.Set(HeaderRuntimeBinding, binding.BindingID)
+	request.Header.Set(HeaderRuntimeSession, "session-1")
+	rec := httptest.NewRecorder()
+	RuntimeBindingMiddleware(store, a)(next).ServeHTTP(rec, request)
+	if !called || rec.Code != http.StatusNoContent {
+		t.Fatalf("called=%v status=%d", called, rec.Code)
+	}
+}
+
+func TestRuntimeBindingMiddlewareRequiresExactSession(t *testing.T) {
+	a := &runtimeAuthorizer{grant: true}
+	store := NewMemoryBindingStore()
+	initializer := NewRuntimeInitializer(RuntimeInitializerOptions{Authorizer: a, Bindings: store})
+	binding, err := initializer.Initialize(context.Background(), auth.Principal{ID: "principal-1", Status: auth.PrincipalStatusActive}, RuntimeInitialization{Scope: exactScope(), AgentID: "agent-1", SessionID: "session-1"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	request := httptest.NewRequest(http.MethodGet, "/provider/op", nil)
+	request.Header.Set(HeaderRuntimeBinding, binding.BindingID)
+	rec := httptest.NewRecorder()
+	RuntimeBindingMiddleware(store, a)(http.HandlerFunc(func(http.ResponseWriter, *http.Request) { t.Fatal("handler called") })).ServeHTTP(rec, request)
+	if rec.Code != http.StatusForbidden {
+		t.Fatalf("missing session status = %d, want 403", rec.Code)
+	}
+}
+
+func TestRuntimeBindingMiddlewareRejectsExpiredBinding(t *testing.T) {
+	a := &runtimeAuthorizer{grant: true}
+	store := NewMemoryBindingStore()
+	now := time.Now().UTC().Add(-2 * time.Hour)
+	initializer := NewRuntimeInitializer(RuntimeInitializerOptions{Authorizer: a, Bindings: store, BindingTTL: time.Hour, Now: func() time.Time { return now }})
+	binding, err := initializer.Initialize(context.Background(), auth.Principal{ID: "principal-1", Status: auth.PrincipalStatusActive}, RuntimeInitialization{Scope: exactScope(), AgentID: "agent-1", SessionID: "session-1"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	request := httptest.NewRequest(http.MethodGet, "/provider/op", nil)
+	request.Header.Set(HeaderRuntimeBinding, binding.BindingID)
+	request.Header.Set(HeaderRuntimeSession, binding.SessionID)
+	rec := httptest.NewRecorder()
+	RuntimeBindingMiddleware(store, a)(http.HandlerFunc(func(http.ResponseWriter, *http.Request) { t.Fatal("handler called") })).ServeHTTP(rec, request)
+	if rec.Code != http.StatusForbidden {
+		t.Fatalf("expired binding status = %d, want 403", rec.Code)
 	}
 }
