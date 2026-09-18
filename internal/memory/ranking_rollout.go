@@ -179,6 +179,8 @@ type RankingRolloutPolicy struct {
 	DiversityCoverageWeights          map[string]float64           `json:"diversity_coverage_weights,omitempty"`
 	QueryAnalysisSelector             QueryAnalysisRolloutSelector `json:"query_analysis_selector,omitempty"`
 	QueryAnalysis                     *QueryAnalysisRolloutPolicy  `json:"query_analysis,omitempty"`
+	RetrievalPlannerSelector          RetrievalPlannerRolloutSelector `json:"retrieval_planner_selector,omitempty"`
+	RetrievalPlanner                  *RetrievalPlannerRolloutPolicy  `json:"retrieval_planner,omitempty"`
 	ActivatedAt                       time.Time                    `json:"activated_at,omitempty"`
 	DisabledAt                        time.Time                    `json:"disabled_at,omitempty"`
 	RolledBackAt                      time.Time                    `json:"rolled_back_at,omitempty"`
@@ -243,6 +245,9 @@ func (p RankingRolloutPolicy) Validate() error {
 		return err
 	}
 	if err := validateQueryAnalysisRollout(p); err != nil {
+		return err
+	}
+	if err := validateRetrievalPlannerRollout(p); err != nil {
 		return err
 	}
 	return nil
@@ -391,6 +396,132 @@ func queryAnalysisRolloutIncludesSurface(policy RankingRolloutPolicy, surface Ra
 		}
 	}
 	return false
+}
+
+const (
+	RetrievalPlannerRolloutSchemaVersionV1 = "retrieval-planner-rollout-v1"
+	RetrievalPlannerVersionV1              = "retrieval-planner-v1"
+	RetrievalPlanPolicyVersionV1           = "retrieval-plan-policy-v1"
+)
+
+type RetrievalPlannerRolloutSelector struct {
+	SessionID string `json:"session_id,omitempty"`
+	UserID    string `json:"user_id,omitempty"`
+}
+
+func (selector RetrievalPlannerRolloutSelector) Normalized() RetrievalPlannerRolloutSelector {
+	return RetrievalPlannerRolloutSelector{SessionID: strings.TrimSpace(selector.SessionID), UserID: strings.TrimSpace(selector.UserID)}
+}
+
+type RetrievalPlannerRolloutPolicy struct {
+	SchemaVersion         string        `json:"schema_version"`
+	PlannerVersion        string        `json:"planner_version"`
+	PolicyVersion         string        `json:"policy_version"`
+	AnalysisPolicyVersion string        `json:"analysis_policy_version"`
+	FusionVersion         string        `json:"fusion_version"`
+	RankingVersion        string        `json:"ranking_version"`
+	RendererVersion       string        `json:"renderer_version"`
+	MaxCandidates         int           `json:"max_candidates"`
+	MaxCandidatesPerChannel int         `json:"max_candidates_per_channel"`
+	MaxPasses             int           `json:"max_passes"`
+	MaxLatency            time.Duration `json:"max_latency_ns"`
+	MaxContextItems       int           `json:"max_context_items"`
+	MaxRerankerHeadroom   int           `json:"max_reranker_headroom"`
+	ExpiresAt             time.Time     `json:"expires_at"`
+}
+
+func (policy RetrievalPlannerRolloutPolicy) Validate() error {
+	if policy.SchemaVersion != RetrievalPlannerRolloutSchemaVersionV1 || policy.PlannerVersion != RetrievalPlannerVersionV1 || policy.PolicyVersion != RetrievalPlanPolicyVersionV1 {
+		return fmt.Errorf("retrieval-planner rollout contains an unsupported version")
+	}
+	identities := []struct{ name, value string }{{"analysis policy", policy.AnalysisPolicyVersion}, {"fusion", policy.FusionVersion}, {"ranking", policy.RankingVersion}, {"renderer", policy.RendererVersion}}
+	for _, identity := range identities {
+		if strings.TrimSpace(identity.value) == "" || len(identity.value) > 64 {
+			return fmt.Errorf("retrieval-planner %s identity must be between 1 and 64 characters", identity.name)
+		}
+	}
+	if policy.MaxCandidates <= 0 || policy.MaxCandidates > 5000 || policy.MaxCandidatesPerChannel <= 0 || policy.MaxCandidatesPerChannel > policy.MaxCandidates {
+		return fmt.Errorf("retrieval-planner candidate limits are invalid")
+	}
+	if policy.MaxPasses < 1 || policy.MaxPasses > 2 {
+		return fmt.Errorf("retrieval-planner max passes must be one or two")
+	}
+	if policy.MaxLatency <= 0 || policy.MaxLatency > 30*time.Second {
+		return fmt.Errorf("retrieval-planner max latency must be between 1ns and 30s")
+	}
+	if policy.MaxContextItems <= 0 || policy.MaxContextItems > 1000 || policy.MaxRerankerHeadroom < 0 || policy.MaxRerankerHeadroom > policy.MaxCandidates {
+		return fmt.Errorf("retrieval-planner context or reranker limit is invalid")
+	}
+	if policy.ExpiresAt.IsZero() {
+		return fmt.Errorf("retrieval-planner rollout expiry is required")
+	}
+	return nil
+}
+
+func validateRetrievalPlannerRollout(policy RankingRolloutPolicy) error {
+	selector := policy.RetrievalPlannerSelector.Normalized()
+	if policy.RetrievalPlanner == nil {
+		if selector.SessionID != "" || selector.UserID != "" {
+			return fmt.Errorf("retrieval-planner selector requires a planner policy")
+		}
+		return nil
+	}
+	return policy.RetrievalPlanner.Validate()
+}
+
+type RetrievalPlannerRolloutStage string
+
+const (
+	RetrievalPlannerRolloutStageBaseline        RetrievalPlannerRolloutStage = "baseline"
+	RetrievalPlannerRolloutStageDiagnosticsOnly RetrievalPlannerRolloutStage = "diagnostics_only"
+	RetrievalPlannerRolloutStageShadow           RetrievalPlannerRolloutStage = "shadow"
+	RetrievalPlannerRolloutStageActive           RetrievalPlannerRolloutStage = "active_for_scope"
+)
+
+type ResolveRetrievalPlannerRolloutInput struct {
+	Scope Scope
+	Surface RankingRolloutSurface
+	SessionID string
+	UserID string
+	Now time.Time
+	AnalysisPolicyVersion string
+	FusionVersion string
+	RankingVersion string
+	RendererVersion string
+}
+
+type RetrievalPlannerRolloutResolution struct {
+	Stage RetrievalPlannerRolloutStage
+	AffectsResults bool
+	Policy *RetrievalPlannerRolloutPolicy
+}
+
+func ResolveRetrievalPlannerRollout(policy *RankingRolloutPolicy, input ResolveRetrievalPlannerRolloutInput) RetrievalPlannerRolloutResolution {
+	fallback := RetrievalPlannerRolloutResolution{Stage: RetrievalPlannerRolloutStageBaseline}
+	if policy == nil || input.Scope.Validate() != nil || !input.Surface.Valid() || input.Now.IsZero() || policy.RetrievalPlanner == nil || policy.RetrievalPlanner.Validate() != nil {
+		return fallback
+	}
+	if policy.Scope.Normalized() != input.Scope.Normalized() || policy.RetrievalPlannerSelector.Normalized() != (RetrievalPlannerRolloutSelector{SessionID: input.SessionID, UserID: input.UserID}).Normalized() {
+		return fallback
+	}
+	configured := policy.RetrievalPlanner
+	if !input.Now.Before(configured.ExpiresAt) || configured.AnalysisPolicyVersion != input.AnalysisPolicyVersion || configured.FusionVersion != input.FusionVersion || configured.RankingVersion != input.RankingVersion || configured.RendererVersion != input.RendererVersion || !queryAnalysisRolloutIncludesSurface(*policy, input.Surface) {
+		return fallback
+	}
+	resolution := fallback
+	resolution.Policy = configured
+	switch {
+	case policy.Status == RankingRolloutPolicyStatusDiagnosticsOnly && policy.Mode == RankingRolloutModeDiagnosticsOnly:
+		resolution.Stage = RetrievalPlannerRolloutStageDiagnosticsOnly
+	case policy.Status == RankingRolloutPolicyStatusDryRun && policy.Mode == RankingRolloutModeDryRun:
+		resolution.Stage = RetrievalPlannerRolloutStageShadow
+	case policy.Status == RankingRolloutPolicyStatusActiveForScope && policy.Mode == RankingRolloutModeActiveForScope:
+		resolution.Stage = RetrievalPlannerRolloutStageActive
+		resolution.AffectsResults = true
+	default:
+		return fallback
+	}
+	return resolution
 }
 
 func validateRankingRolloutDiversity(policy RankingRolloutPolicy) error {
@@ -584,6 +715,19 @@ type ReadEffectiveQueryAnalysisRolloutPolicyInput struct {
 	Surface   RankingRolloutSurface
 	SessionID string
 	UserID    string
+}
+
+type ReadEffectiveRetrievalPlannerRolloutPolicyInput struct {
+	Scope Scope
+	Surface RankingRolloutSurface
+	SessionID string
+	UserID string
+}
+
+func (input ReadEffectiveRetrievalPlannerRolloutPolicyInput) Validate() error {
+	if err := input.Scope.Validate(); err != nil { return err }
+	if !input.Surface.Valid() { return fmt.Errorf("ranking rollout surface %q is invalid", input.Surface) }
+	return nil
 }
 
 func (i ReadEffectiveQueryAnalysisRolloutPolicyInput) Validate() error {

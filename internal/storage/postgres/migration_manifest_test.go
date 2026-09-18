@@ -14,8 +14,8 @@ func TestMigrationManifestIsDeterministicAndChecksummed(t *testing.T) {
 	if err != nil {
 		t.Fatalf("MigrationManifest() second call error = %v", err)
 	}
-	if len(first) != 12 {
-		t.Fatalf("manifest length = %d, want 12: %+v", len(first), first)
+	if len(first) != 13 {
+		t.Fatalf("manifest length = %d, want 13: %+v", len(first), first)
 	}
 	if first[0] != second[0] {
 		t.Fatalf("manifest is not deterministic: first=%+v second=%+v", first[0], second[0])
@@ -55,6 +55,9 @@ func TestMigrationManifestIsDeterministicAndChecksummed(t *testing.T) {
 	}
 	if first[11].Version != 12 || first[11].Name != "0012_provider_lifecycle_idempotency.up.sql" {
 		t.Fatalf("manifest entry = %+v, want version 12 provider lifecycle idempotency", first[11])
+	}
+	if first[12].Version != 13 || first[12].Name != "0013_query_adaptive_retrieval_planning.up.sql" {
+		t.Fatalf("manifest entry = %+v, want version 13 query-adaptive retrieval planning", first[12])
 	}
 	if len(first[0].ChecksumSHA256) != 64 {
 		t.Fatalf("checksum length = %d, want 64", len(first[0].ChecksumSHA256))

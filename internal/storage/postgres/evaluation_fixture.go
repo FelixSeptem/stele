@@ -208,7 +208,7 @@ func (s *EvaluationFixtureSeeder) SeedBatch(ctx context.Context, fixture retriev
 				state = memory.MemoryStateActive
 			}
 			createdAt := evaluationFixtureTimestamp(source.SourceTimestamp, caseIndex, sourceIndex)
-			key := fixture.Version + ":" + currentCase.ID + ":" + source.Alias
+			key := evaluationFixtureRecordKey(fixture.Version, currentCase, source)
 			alias := retrieval.EvaluationSeededAlias{CaseID: currentCase.ID, Alias: source.Alias, Scope: currentCase.Scope, MemoryID: evaluationFixtureID(key + ":memory"), RawEventID: evaluationFixtureID(key + ":raw-event"), State: state, FactCluster: source.FactCluster}
 			seen[source.Alias] = alias
 			seed.Aliases = append(seed.Aliases, alias)
@@ -338,7 +338,7 @@ func (s *EvaluationFixtureSeeder) Seed(ctx context.Context, fixture retrieval.Ev
 
 func (s *EvaluationFixtureSeeder) seedSource(ctx context.Context, fixtureVersion string, item retrieval.EvaluationCase, source retrieval.EvaluationSource, caseIndex, sourceIndex int) (retrieval.EvaluationSeededAlias, error) {
 	createdAt := evaluationFixtureTimestamp(source.SourceTimestamp, caseIndex, sourceIndex)
-	key := fixtureVersion + ":" + item.ID + ":" + source.Alias
+	key := evaluationFixtureRecordKey(fixtureVersion, item, source)
 	event, err := s.repository.IngestEvent(ctx, memory.IngestEventInput{
 		Scope:           item.Scope,
 		EventType:       source.EventType,
@@ -481,4 +481,9 @@ func evaluationFixtureTimestamp(sourceTimestamp time.Time, caseIndex, sourceInde
 
 func evaluationFixtureID(value string) string {
 	return uuid.NewSHA1(uuid.NameSpaceURL, []byte("stele:retrieval-evaluation:"+value)).String()
+}
+
+func evaluationFixtureRecordKey(fixtureVersion string, item retrieval.EvaluationCase, source retrieval.EvaluationSource) string {
+	scope := item.Scope.Normalized()
+	return strings.Join([]string{fixtureVersion, scope.Tenant, scope.Project, scope.Namespace, item.ID, source.Alias}, ":")
 }

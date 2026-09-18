@@ -49,6 +49,10 @@ func RenderEvaluationReport(report EvaluationReport) (string, error) {
 		fmt.Fprintf(&builder, "analysis_limits_version=%s\n", report.Metadata.AnalysisLimitsVersion)
 		fmt.Fprintf(&builder, "rollout_disposition=%s\n", report.Metadata.RolloutDisposition)
 	}
+	if report.Metadata.PlannerVersion != "" {
+		fmt.Fprintf(&builder, "planner_version=%s\n", report.Metadata.PlannerVersion)
+		fmt.Fprintf(&builder, "planner_policy_version=%s\n", report.Metadata.PlannerPolicyVersion)
+	}
 	fmt.Fprintf(&builder, "case_count=%d\n", len(report.Cases))
 	fmt.Fprintf(&builder, "safety_failure_count=%d\n", evaluationSafetyFailureCount(report.SafetyFailures))
 	fmt.Fprintf(&builder, "recall@1=%.4f\n", metrics.RecallAt1)
@@ -66,6 +70,14 @@ func RenderEvaluationReport(report EvaluationReport) (string, error) {
 	fmt.Fprintf(&builder, "analysis_signal_count=%d\n", metrics.AnalysisSignalCount)
 	fmt.Fprintf(&builder, "analysis_subquery_count=%d\n", metrics.AnalysisSubqueryCount)
 	fmt.Fprintf(&builder, "analysis_candidate_count=%d\n", metrics.AnalysisCandidateCount)
+	fmt.Fprintf(&builder, "first_pass_evidence_coverage=%.4f\n", metrics.FirstPassEvidenceCoverage)
+	fmt.Fprintf(&builder, "second_pass_evidence_coverage=%.4f\n", metrics.SecondPassEvidenceCoverage)
+	fmt.Fprintf(&builder, "second_pass_evidence_gain=%.4f\n", metrics.SecondPassEvidenceGain)
+	fmt.Fprintf(&builder, "second_pass_count=%d\n", metrics.SecondPassCount)
+	fmt.Fprintf(&builder, "max_passes_observed=%d\n", metrics.MaxPassesObserved)
+	fmt.Fprintf(&builder, "max_planner_candidates=%d\n", metrics.MaxPlannerCandidates)
+	fmt.Fprintf(&builder, "planner_fallback_rate=%.4f\n", metrics.PlannerFallbackRate)
+	fmt.Fprintf(&builder, "planner_reranker_use_rate=%.4f\n", metrics.PlannerRerankerUseRate)
 	for _, fallback := range sortedEvaluationAggregateKeys(report.AnalysisFallbackAggregates) {
 		fmt.Fprintf(&builder, "analysis_fallback.%s=%d\n", fallback, report.AnalysisFallbackAggregates[fallback])
 	}

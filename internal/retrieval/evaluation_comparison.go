@@ -13,6 +13,7 @@ const (
 	CompatibilityCodeEmbeddingProvider     CompatibilityCode = "incompatible_embedding_provider"
 	CompatibilityCodeAnalysisVersion       CompatibilityCode = "incompatible_analysis_version"
 	CompatibilityCodePolicyVersion         CompatibilityCode = "incompatible_release_policy_version"
+	CompatibilityCodePlannerVersion        CompatibilityCode = "incompatible_planner_version"
 )
 
 type evaluationCompatibilityError struct {
@@ -87,6 +88,12 @@ func CompareEvaluationReports(baseline, candidate EvaluationReport, protectedCat
 	if baseline.Metadata.AnalysisVersion != candidate.Metadata.AnalysisVersion || baseline.Metadata.AnalysisLimitsVersion != candidate.Metadata.AnalysisLimitsVersion {
 		return EvaluationComparison{}, evaluationCompatibilityError{CompatibilityCodeAnalysisVersion, "incompatible analysis version"}
 	}
+	if candidate.Metadata.PlannerVersion != "" && (candidate.Metadata.PlannerVersion != string(RetrievalPlannerVersionV1) || candidate.Metadata.PlannerPolicyVersion != string(RetrievalPlanPolicyVersionV1)) {
+		return EvaluationComparison{}, evaluationCompatibilityError{CompatibilityCodePlannerVersion, "incompatible planner version"}
+	}
+	if baseline.Metadata.PlannerVersion != "" && (baseline.Metadata.PlannerVersion != candidate.Metadata.PlannerVersion || baseline.Metadata.PlannerPolicyVersion != candidate.Metadata.PlannerPolicyVersion) {
+		return EvaluationComparison{}, evaluationCompatibilityError{CompatibilityCodePlannerVersion, "incompatible planner version"}
+	}
 	if evaluationIsAnalysisComparison(baseline, candidate) && baseline.Metadata.RolloutDisposition != "original_only" {
 		return EvaluationComparison{}, fmt.Errorf("immutable original-query baseline must use original_only disposition")
 	}
@@ -115,6 +122,11 @@ func CompareEvaluationReports(baseline, candidate EvaluationReport, protectedCat
 			evaluationMetricDelta("evidence_coverage", baseline.Metrics.EvidenceCoverage, candidate.Metrics.EvidenceCoverage),
 			evaluationMetricDelta("candidate_pool_size", float64(baseline.Metrics.CandidatePoolSize), float64(candidate.Metrics.CandidatePoolSize)),
 			evaluationMetricDelta("p95_latency_ms", baseline.Metrics.P95LatencyMS, candidate.Metrics.P95LatencyMS),
+			evaluationMetricDelta("first_pass_evidence_coverage", baseline.Metrics.FirstPassEvidenceCoverage, candidate.Metrics.FirstPassEvidenceCoverage),
+			evaluationMetricDelta("second_pass_evidence_coverage", baseline.Metrics.SecondPassEvidenceCoverage, candidate.Metrics.SecondPassEvidenceCoverage),
+			evaluationMetricDelta("second_pass_evidence_gain", baseline.Metrics.SecondPassEvidenceGain, candidate.Metrics.SecondPassEvidenceGain),
+			evaluationMetricDelta("max_planner_candidates", float64(baseline.Metrics.MaxPlannerCandidates), float64(candidate.Metrics.MaxPlannerCandidates)),
+			evaluationMetricDelta("planner_fallback_rate", baseline.Metrics.PlannerFallbackRate, candidate.Metrics.PlannerFallbackRate),
 		},
 	}
 	baselineCategories := evaluationCategoryMetrics(baseline.Cases)
@@ -174,6 +186,58 @@ func evaluationCategoryMetrics(cases []EvaluationCaseReport) map[string]Evaluati
 		current.RecallAt10 /= count
 		current.MultiHopEvidenceCoverage /= count
 		metrics[category] = current
+	}
+	return metrics
+}
+
+func evaluationProtectedFamilyRegressions(baseline, candidate []EvaluationCaseReport, families []RetrievalQueryFamily, recallTolerance, multiHopTolerance float64) []EvaluationProtectedRegression {
+	baselineFamilies := evaluationFamilyMetrics(baseline)
+	candidateFamilies := evaluationFamilyMetrics(candidate)
+	var regressions []EvaluationProtectedRegression
+	for _, family := range families {
+		baselineMetric, baselineFound := baselineFamilies[family]
+		candidateMetric, candidateFound := candidateFamilies[family]
+		if !baselineFound || !candidateFound {
+			regressions = append(regressions, EvaluationProtectedRegression{Category: string(family), Metric: "family_missing"})
+			continue
+		}
+		regressions = appendProtectedRegressionBeyond(regressions, string(family), "recall_at_1", baselineMetric.RecallAt1, candidateMetric.RecallAt1, recallTolerance)
+		regressions = appendProtectedRegressionBeyond(regressions, string(family), "recall_at_5", baselineMetric.RecallAt5, candidateMetric.RecallAt5, recallTolerance)
+		regressions = appendProtectedRegressionBeyond(regressions, string(family), "recall_at_10", baselineMetric.RecallAt10, candidateMetric.RecallAt10, recallTolerance)
+		regressions = appendProtectedRegressionBeyond(regressions, string(family), "multi_hop_evidence_coverage", baselineMetric.MultiHopEvidenceCoverage, candidateMetric.MultiHopEvidenceCoverage, multiHopTolerance)
+	}
+	return regressions
+}
+
+func appendProtectedRegressionBeyond(regressions []EvaluationProtectedRegression, category, metric string, baseline, candidate, tolerance float64) []EvaluationProtectedRegression {
+	if candidate >= baseline-tolerance {
+		return regressions
+	}
+	return append(regressions, EvaluationProtectedRegression{Category: category, Metric: metric, Baseline: baseline, Candidate: candidate, Delta: candidate - baseline})
+}
+
+func evaluationFamilyMetrics(cases []EvaluationCaseReport) map[RetrievalQueryFamily]EvaluationMetricReport {
+	metrics := make(map[RetrievalQueryFamily]EvaluationMetricReport)
+	counts := make(map[RetrievalQueryFamily]int)
+	for _, item := range cases {
+		if !item.QueryFamily.valid() {
+			continue
+		}
+		current := metrics[item.QueryFamily]
+		current.RecallAt1 += item.Metrics.RecallAt1
+		current.RecallAt5 += item.Metrics.RecallAt5
+		current.RecallAt10 += item.Metrics.RecallAt10
+		current.MultiHopEvidenceCoverage += item.Metrics.MultiHopEvidenceCoverage
+		metrics[item.QueryFamily] = current
+		counts[item.QueryFamily]++
+	}
+	for family, current := range metrics {
+		count := float64(counts[family])
+		current.RecallAt1 /= count
+		current.RecallAt5 /= count
+		current.RecallAt10 /= count
+		current.MultiHopEvidenceCoverage /= count
+		metrics[family] = current
 	}
 	return metrics
 }

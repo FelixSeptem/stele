@@ -4,6 +4,18 @@
       runtime database.
 - [ ] Fixture, representation, fusion, ranking, embedding, reranker, analysis,
       and release-policy identities are compatible with the immutable baseline.
+- [ ] Planner schema/planner/policy identities and analysis/fusion/ranking/
+      renderer dependencies are compatible and owned by the release policy.
+- [ ] All seven planner query families have deterministic replay evidence,
+      protected-category coverage, and no ambiguous-classification drift.
+- [ ] Shared candidate, per-channel, latency, context-item, pass, and reranker
+      headroom envelopes are enforced; no run exceeds two passes.
+- [ ] Planner reranker eligibility is separately authorized and consumes only
+      reserved ledger headroom.
+- [ ] First-pass and one optional follow-up metrics are reported separately;
+      fallback, unavailable-channel, no-headroom, and rollback cases are green.
+- [ ] Diagnostics/shadow planner stages are result-equivalent to baseline and
+      all diagnostics are aggregate/redacted with low-cardinality labels.
 - [ ] Real-stack replay is passed; skipped/synthetic evidence is not treated as
       a release pass.
 - [ ] Protected simple-fact recall, temporal coverage, multi-hop coverage,

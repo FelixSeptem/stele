@@ -484,6 +484,83 @@ func (o *MetricsObserver) RecordRetrievalRerank(ctx context.Context, event Retri
 	}, 1)
 }
 
+func (o *MetricsObserver) RecordRetrievalPlanner(ctx context.Context, event RetrievalPlannerEvent) {
+	if o == nil {
+		return
+	}
+	pass := "unknown"
+	if event.Pass == 1 || event.Pass == 2 {
+		pass = fmt.Sprintf("%d", event.Pass)
+	}
+	plannerVersion := plannerLabel(event.PlannerVersion, []string{"retrieval-planner-v1"})
+	policyVersion := plannerLabel(event.PolicyVersion, []string{"retrieval-plan-policy-v1"})
+	family := plannerLabel(event.Family, []string{"exact_lookup", "semantic", "temporal", "entity_relation", "multi_hop", "procedural", "general"})
+	stage := plannerLabel(event.Stage, []string{"baseline", "diagnostics_only", "shadow", "active_for_scope", "disabled", "rolled_back"})
+	o.addCounter("stele_retrieval_planner_total", map[string]string{
+		"planner_version": plannerVersion,
+		"policy_version":  policyVersion,
+		"family":          family,
+		"stage":           stage,
+		"disposition":     plannerLabel(event.Disposition, []string{"planned", "fallback", "skipped"}),
+		"pass":            pass,
+		"budget_bucket":   plannerLabel(event.BudgetBucket, []string{"0", "1_10", "11_50", "51_plus"}),
+		"evidence":        plannerLabel(event.Evidence, []string{"sufficient", "zero_hits", "below_minimum", "high_attrition", "channel_unavailable", "no_headroom", "terminal_incomplete", "not_evaluated"}),
+		"fallback":        plannerLabel(event.Fallback, []string{"none", "approved_baseline"}),
+		"latency_bucket":  plannerLabel(event.LatencyBucket, []string{"lt_100ms", "100ms_500ms", "500ms_1s", "gt_1s"}),
+		"reranker":        plannerLabel(event.Reranker, []string{"eligible", "ineligible", "skipped", "applied", "fallback"}),
+	}, 1)
+}
+
+func (o *MetricsObserver) RecordRetrievalPlannerChannel(ctx context.Context, event RetrievalPlannerChannelEvent) {
+	if o == nil {
+		return
+	}
+	o.addCounter("stele_retrieval_planner_channel_total", map[string]string{
+		"planner_version": plannerLabel(event.PlannerVersion, []string{"retrieval-planner-v1"}),
+		"policy_version":  plannerLabel(event.PolicyVersion, []string{"retrieval-plan-policy-v1"}),
+		"family":          plannerLabel(event.Family, []string{"exact_lookup", "semantic", "temporal", "entity_relation", "multi_hop", "procedural", "general"}),
+		"stage":           plannerLabel(event.Stage, []string{"baseline", "diagnostics_only", "shadow", "active_for_scope", "disabled", "rolled_back"}),
+		"channel":         plannerLabel(event.Channel, []string{"lexical", "semantic", "relation", "chunk"}),
+		"availability":    plannerLabel(event.Availability, []string{"available", "unavailable", "not_evaluated"}),
+	}, 1)
+}
+
+func (o *MetricsObserver) RecordRetrievalPlannerChangedRank(ctx context.Context, event RetrievalPlannerChangedRankEvent) {
+	if o == nil {
+		return
+	}
+	changedRankBucket := plannerLabel(event.Bucket, []string{"0", "1_5", "6_20", "21_plus"})
+	changedRankCount := event.Count
+	if changedRankCount < 0 || changedRankCount > 5000 {
+		changedRankCount = 0
+	}
+	o.setGauge("stele_retrieval_planner_changed_ranks", map[string]string{
+		"planner_version":     plannerLabel(event.PlannerVersion, []string{"retrieval-planner-v1"}),
+		"policy_version":      plannerLabel(event.PolicyVersion, []string{"retrieval-plan-policy-v1"}),
+		"family":              plannerLabel(event.Family, []string{"exact_lookup", "semantic", "temporal", "entity_relation", "multi_hop", "procedural", "general"}),
+		"stage":               plannerLabel(event.Stage, []string{"baseline", "diagnostics_only", "shadow", "active_for_scope", "disabled", "rolled_back"}),
+		"changed_rank_bucket": changedRankBucket,
+	}, float64(changedRankCount))
+}
+
+func (o *MetricsObserver) RecordRetrievalPlannerDiagnostic(ctx context.Context, event RetrievalPlannerDiagnosticEvent) {
+	if o == nil {
+		return
+	}
+	o.addCounter("stele_retrieval_planner_diagnostic_failure_total", map[string]string{
+		"failure_category": plannerLabel(event.FailureCategory, []string{"validation_failed"}),
+	}, 1)
+}
+
+func plannerLabel(value string, allowed []string) string {
+	for _, candidate := range allowed {
+		if value == candidate {
+			return candidate
+		}
+	}
+	return "unknown"
+}
+
 func retrievalFusionCandidateCountBucket(count int) string {
 	switch {
 	case count <= 0:
@@ -775,6 +852,10 @@ func (o *MetricsObserver) RenderPrometheus() string {
 	writeMetricFamilyHeader(&builder, "stele_ranking_rollout_total", "counter", "Ranking rollout lifecycle and impact operations by bounded categories.")
 	writeMetricFamilyHeader(&builder, "stele_retrieval_fusion_total", "counter", "Retrieval fusion availability and bounded candidate-pool outcomes.")
 	writeMetricFamilyHeader(&builder, "stele_retrieval_rerank_total", "counter", "Optional retrieval rerank outcomes by bounded categories.")
+	writeMetricFamilyHeader(&builder, "stele_retrieval_planner_total", "counter", "Retrieval planner execution outcomes by bounded categories.")
+	writeMetricFamilyHeader(&builder, "stele_retrieval_planner_channel_total", "counter", "Retrieval planner channel availability by bounded categories.")
+	writeMetricFamilyHeader(&builder, "stele_retrieval_planner_changed_ranks", "gauge", "Bounded count of rank positions changed by shadow retrieval planning.")
+	writeMetricFamilyHeader(&builder, "stele_retrieval_planner_diagnostic_failure_total", "counter", "Private retrieval planner diagnostic construction failures by bounded category.")
 	writeMetricFamilyHeader(&builder, "stele_retrieval_evaluation_total", "counter", "Retrieval release-gate outcomes by bounded categories.")
 	writeMetricFamilyHeader(&builder, "stele_derived_insight_replay_total", "counter", "Derived insight replay outcomes by low-cardinality categories.")
 	writeMetricFamilyHeader(&builder, "stele_quality_evaluation_total", "counter", "Memory quality evaluation outcomes.")

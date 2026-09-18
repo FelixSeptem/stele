@@ -25,10 +25,12 @@ Run the same owned-stack check with:
 
 ```powershell
 $env:STELE_TEST_RETRIEVAL_EVALUATION_DSN = '<owned-pg18-test-dsn>'
+$env:STELE_TEST_RETRIEVAL_EVALUATION_OWNED = 'true'
 pwsh -File scripts/retrieval-evaluation.ps1
 ```
 
-The command requires an explicitly owned disposable database and never falls back to
+The command requires an explicitly owned disposable database and ownership
+marker, and never falls back to
 `STELE_POSTGRES_DSN` or another ambient operator database.
 
 ## Chunk representation shadowing
@@ -226,3 +228,46 @@ original-versus-analyzed comparison pass with an explicitly owned disposable
 PostgreSQL + pgvector DSN. Without that DSN the stable result is
 `SKIP_RETRIEVAL_EVALUATION_DSN_REQUIRED`; this is a non-pass skip and must not be
 treated as release evidence.
+
+## Query-adaptive retrieval planning
+
+The query-adaptive planner is a provider-independent, deterministic policy
+layer over the existing lexical, semantic, relation, and chunk channels. A
+plan is identified by the schema, planner, and policy versions and records the
+compatible analysis, fusion, ranking, and renderer identities. The supported
+families are `exact_lookup`, `semantic`, `temporal`, `entity_relation`,
+`multi_hop`, `procedural`, and `general`; classification precedence and all
+channel ordering are canonicalized for replay.
+
+Each request receives one shared hard envelope for total candidates,
+per-channel candidates, elapsed latency, context items, reranker headroom, and
+passes. Class quotas and context priorities are applied after scope/lifecycle
+validation. The ledger reserves reranker headroom and redistributes unused
+channel capacity without allowing any channel or pass to exceed the aggregate
+bound. Planner reranker eligibility is only a hint: the separately governed
+reranker policy and the reserved ledger headroom are both required.
+
+Evidence assessment uses bounded aggregate counts and dispositions only. If the
+first pass is insufficient, an eligible plan may run at most one follow-up pass
+with the original query, exact scope, lifecycle filters, and remaining budget
+preserved. Failed, malformed, unavailable, or over-limit planner inputs fall
+back to the approved baseline; there is no recursive retrieval loop and no
+planner-generated final answer. The ordinary search and context response
+shapes remain unchanged.
+
+Planner rollout is exact-scope and dependency-compatible. `diagnostics_only`
+and `shadow` collect authorized, low-cardinality evidence without changing
+results. Only an unexpired `active_for_scope` policy with matching dependency
+identities can affect retrieval. Disabled, foreign, malformed, expired, or
+rolled-back policies fail closed to baseline. Without an explicitly owned
+PostgreSQL + pgvector evaluation DSN, the evaluator remains a stable
+`SKIP_RETRIEVAL_EVALUATION_DSN_REQUIRED` non-pass and active rollout is not
+permitted.
+
+The owned planner runner does not treat extension availability or a lexical
+proxy as pgvector evidence. It creates and activates the fixture-owned
+`planner-unit-x3-v1` vector revision, requires the production semantic query to
+return the expected semantic memory with a positive score, and then requires
+the planner replay candidate to retain a semantic-channel contribution. Any
+failure in vector seeding, activation, direct semantic retrieval, or replay
+attribution fails the run.

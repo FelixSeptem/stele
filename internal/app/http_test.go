@@ -51,11 +51,25 @@ type queryAnalysisHTTPPolicyReader struct {
 	policy memory.RankingRolloutPolicy
 }
 
+type plannerHTTPPolicyReader struct{ policy memory.RankingRolloutPolicy }
+
+func (reader plannerHTTPPolicyReader) ReadActiveRankingRolloutPolicy(context.Context, memory.ReadActiveRankingRolloutPolicyInput) (memory.RankingRolloutPolicy, error) {
+	return reader.policy, nil
+}
+
+func (reader plannerHTTPPolicyReader) ReadEffectiveRetrievalPlannerRolloutPolicy(context.Context, memory.ReadEffectiveRetrievalPlannerRolloutPolicyInput) (memory.RankingRolloutPolicy, error) {
+	return reader.policy, nil
+}
+
 func (queryAnalysisHTTPPolicyReader) ReadActiveRankingRolloutPolicy(context.Context, memory.ReadActiveRankingRolloutPolicyInput) (memory.RankingRolloutPolicy, error) {
 	return memory.RankingRolloutPolicy{}, pgx.ErrNoRows
 }
 
 func (r queryAnalysisHTTPPolicyReader) ReadEffectiveQueryAnalysisRolloutPolicy(_ context.Context, _ memory.ReadEffectiveQueryAnalysisRolloutPolicyInput) (memory.RankingRolloutPolicy, error) {
+	return r.policy, nil
+}
+
+func (r queryAnalysisHTTPPolicyReader) ReadEffectiveRetrievalPlannerRolloutPolicy(_ context.Context, _ memory.ReadEffectiveRetrievalPlannerRolloutPolicyInput) (memory.RankingRolloutPolicy, error) {
 	return r.policy, nil
 }
 
@@ -79,12 +93,69 @@ func (queryAnalysisHTTPLexical) SearchLexical(_ context.Context, input retrieval
 	}}, nil
 }
 
+type plannerHTTPRecordingLexical struct {
+	inputs []retrieval.SearchInput
+}
+
+func (recorder *plannerHTTPRecordingLexical) SearchLexical(ctx context.Context, input retrieval.SearchInput) ([]retrieval.ScoredMemory, error) {
+	recorder.inputs = append(recorder.inputs, input)
+	return queryAnalysisHTTPLexical{}.SearchLexical(ctx, input)
+}
+
+func (recorder *plannerHTTPRecordingLexical) plannedSince(index, topK int) bool {
+	for _, input := range recorder.inputs[index:] {
+		if input.TopK == topK {
+			return true
+		}
+	}
+	return false
+}
+
 type queryAnalysisHTTPCitations struct{}
 
 func (queryAnalysisHTTPCitations) ListCitations(_ context.Context, _ memory.Scope, memoryIDs []string) (map[string][]retrieval.Citation, error) {
 	result := make(map[string][]retrieval.Citation, len(memoryIDs))
 	for _, memoryID := range memoryIDs {
 		result[memoryID] = []retrieval.Citation{{MemoryID: memoryID, RawEventID: "event-1", Operation: "promote_candidate"}}
+	}
+	return result, nil
+}
+
+type plannerHTTPReranker struct{}
+
+func (plannerHTTPReranker) Rerank(_ context.Context, request retrieval.RerankRequest) ([]retrieval.RerankScore, error) {
+	result := make([]retrieval.RerankScore, 0, len(request.Candidates))
+	for _, candidate := range request.Candidates {
+		result = append(result, retrieval.RerankScore{ID: candidate.ID})
+	}
+	return result, nil
+}
+
+type plannerHTTPSlowLexical struct {
+	delay time.Duration
+	count int
+}
+
+type plannerHTTPSlowUsefulness struct{ delay time.Duration }
+
+func (summarizer plannerHTTPSlowUsefulness) SummarizeUsefulnessFeedback(context.Context, memory.SummarizeUsefulnessFeedbackInput) (memory.UsefulnessFeedbackSummary, error) {
+	if summarizer.delay > 0 {
+		time.Sleep(summarizer.delay)
+	}
+	return memory.UsefulnessFeedbackSummary{}, nil
+}
+
+func (searcher plannerHTTPSlowLexical) SearchLexical(_ context.Context, input retrieval.SearchInput) ([]retrieval.ScoredMemory, error) {
+	if searcher.delay > 0 {
+		time.Sleep(searcher.delay)
+	}
+	count := searcher.count
+	if count <= 0 {
+		count = 1
+	}
+	result := make([]retrieval.ScoredMemory, 0, count)
+	for index := 0; index < count; index++ {
+		result = append(result, retrieval.ScoredMemory{Memory: memory.CanonicalMemory{ID: "mem-rerank-" + strconv.Itoa(index), Scope: input.Scope, Class: memory.MemoryClassEpisodic, State: memory.MemoryStateActive, Content: "bounded public result"}})
 	}
 	return result, nil
 }
@@ -1915,6 +1986,165 @@ func TestQueryAnalysisRolloutPreservesOrdinarySearchAndContextHTTPContracts(t *t
 				}
 			}
 		})
+	}
+}
+
+func TestRetrievalPlannerRolloutPreservesOrdinarySearchAndContextHTTPContracts(t *testing.T) {
+	scope := memory.Scope{Tenant: "tenant-a", Project: "project-a", Namespace: "namespace-a"}
+	stages := []struct {
+		name   string
+		status memory.RankingRolloutPolicyStatus
+		mode   memory.RankingRolloutMode
+	}{
+		{name: "diagnostics-only", status: memory.RankingRolloutPolicyStatusDiagnosticsOnly, mode: memory.RankingRolloutModeDiagnosticsOnly},
+		{name: "shadow", status: memory.RankingRolloutPolicyStatusDryRun, mode: memory.RankingRolloutModeDryRun},
+		{name: "active", status: memory.RankingRolloutPolicyStatusActiveForScope, mode: memory.RankingRolloutModeActiveForScope},
+		{name: "disabled", status: memory.RankingRolloutPolicyStatusDisabled, mode: memory.RankingRolloutModeActiveForScope},
+		{name: "rolled-back", status: memory.RankingRolloutPolicyStatusRolledBack, mode: memory.RankingRolloutModeActiveForScope},
+	}
+	for _, stage := range stages {
+		t.Run(stage.name, func(t *testing.T) {
+			policy := plannerHTTPRollout(scope, stage.status, stage.mode)
+			lexical := &plannerHTTPRecordingLexical{}
+			service := retrieval.NewService(retrieval.ServiceDependencies{
+				Lexical: lexical, Citations: queryAnalysisHTTPCitations{},
+				RankingRolloutPolicyReader: queryAnalysisHTTPPolicyReader{policy: policy},
+				RetrievalPlanPolicy:        plannerHTTPPlanPolicy(4),
+			})
+			handler := NewHTTPHandler(HTTPDependencies{APIKeys: map[string]struct{}{"test-key": {}}, MemorySearcher: service, ContextAssembler: service})
+			for _, request := range []struct{ name, path, body string }{
+				{name: "search", path: "/v1/memories/search", body: `{"query":"private planner query","top_k":10,"include_feedback_diagnostics":true}`},
+				{name: "context", path: "/v1/context/assemble", body: `{"query":"private planner query","budget":10,"include_diagnostics":true,"include_feedback_diagnostics":true}`},
+			} {
+				t.Run(request.name, func(t *testing.T) {
+					firstInput := len(lexical.inputs)
+					req := httptest.NewRequest(http.MethodPost, request.path, strings.NewReader(request.body))
+					req.Header.Set("Content-Type", "application/json")
+					setAPIScopeHeaders(req)
+					rec := httptest.NewRecorder()
+					handler.ServeHTTP(rec, req)
+					if rec.Code != http.StatusOK {
+						t.Fatalf("status=%d body=%s", rec.Code, rec.Body.String())
+					}
+					if stage.name == "active" && !lexical.plannedSince(firstInput, 4) {
+						t.Fatalf("active planner did not execute planned top_k=4: inputs=%+v", lexical.inputs[firstInput:])
+					}
+					assertNoPlannerInternals(t, rec.Body.String())
+					if !strings.Contains(rec.Body.String(), `"id":"mem-original"`) {
+						t.Fatalf("public result shape lost: %s", rec.Body.String())
+					}
+				})
+			}
+		})
+	}
+}
+
+func TestActivePlannerRerankerFallbackReasonsRemainPrivateAcrossHTTPContracts(t *testing.T) {
+	scope := memory.Scope{Tenant: "tenant-a", Project: "project-a", Namespace: "namespace-a"}
+	for _, scenario := range []string{"ineligible", "insufficient_headroom", "latency_exhausted"} {
+		t.Run(scenario, func(t *testing.T) {
+			service := plannerRerankerHTTPService(scope, scenario, memory.RetrievalPlannerRolloutSelector{})
+			handler := NewHTTPHandler(HTTPDependencies{APIKeys: map[string]struct{}{"test-key": {}}, MemorySearcher: service, ContextAssembler: service})
+			for _, request := range []struct{ name, path, body string }{
+				{name: "search", path: "/v1/memories/search", body: `{"query":"ordinary","top_k":10,"include_feedback_diagnostics":true}`},
+				{name: "context", path: "/v1/context/assemble", body: `{"query":"ordinary","budget":10,"include_diagnostics":true,"include_feedback_diagnostics":true}`},
+			} {
+				t.Run(request.name, func(t *testing.T) {
+					req := httptest.NewRequest(http.MethodPost, request.path, strings.NewReader(request.body))
+					req.Header.Set("Content-Type", "application/json")
+					setAPIScopeHeaders(req)
+					rec := httptest.NewRecorder()
+					handler.ServeHTTP(rec, req)
+					if rec.Code != http.StatusOK {
+						t.Fatalf("status=%d body=%s", rec.Code, rec.Body.String())
+					}
+					assertNoPlannerRerankerCause(t, rec.Body.String())
+					if !strings.Contains(rec.Body.String(), `"reason":"optional reranker not applied"`) {
+						t.Fatalf("missing generic reranker fallback: %s", rec.Body.String())
+					}
+				})
+			}
+		})
+	}
+}
+
+func plannerRerankerHTTPService(scope memory.Scope, scenario string, selector memory.RetrievalPlannerRolloutSelector) *retrieval.Service {
+	policy := plannerHTTPRollout(scope, memory.RankingRolloutPolicyStatusActiveForScope, memory.RankingRolloutModeActiveForScope)
+	policy.RetrievalPlannerSelector = selector
+	policy.ThresholdStatus = memory.RankingRolloutThresholdStatusSatisfied
+	policy.LatestDryRunStatus = memory.RankingRolloutThresholdStatusSatisfied
+	policy.LatestDryRunID = "dry-run"
+	policy.RerankerMode = string(retrieval.RerankerModeActive)
+	policy.RerankerProvider = "static"
+	policy.RerankerVersion = "v1"
+	planPolicy := retrieval.DefaultRetrievalPlanPolicy()
+	count, lexicalDelay, feedbackDelay := 1, time.Duration(0), time.Duration(0)
+	for family, template := range planPolicy.Templates {
+		template.Channels = []retrieval.FusionChannel{retrieval.FusionChannelLexical}
+		template.ChannelCandidates = map[retrieval.FusionChannel]int{retrieval.FusionChannelLexical: 4}
+		template.TotalCandidates = 4
+		template.Fusion.TotalCandidates = 4
+		template.Fusion.PerChannelCandidate = 4
+		template.RerankerEligible = false
+		template.RerankerHeadroom = 0
+		template.MaxPasses = 1
+		template.FollowUp = retrieval.RetrievalPlanFollowUpRule{}
+		if scenario == "insufficient_headroom" {
+			template.RerankerEligible, template.RerankerHeadroom, count = true, 1, 2
+		}
+		if scenario == "latency_exhausted" {
+			template.RerankerEligible, template.RerankerHeadroom = true, 1
+			template.LatencyBudget, feedbackDelay = 5*time.Millisecond, 10*time.Millisecond
+		}
+		planPolicy.Templates[family] = template
+	}
+	return retrieval.NewService(retrieval.ServiceDependencies{Lexical: plannerHTTPSlowLexical{delay: lexicalDelay, count: count}, UsefulnessSummarizer: plannerHTTPSlowUsefulness{delay: feedbackDelay}, RankingRolloutPolicyReader: plannerHTTPPolicyReader{policy: policy}, RetrievalPlanPolicy: planPolicy, Reranker: plannerHTTPReranker{}, RerankerMode: retrieval.RerankerModeActive, RerankerProvider: "static", RerankerVersion: "v1"})
+}
+
+func assertNoPlannerRerankerCause(t *testing.T, body string) {
+	t.Helper()
+	for _, forbidden := range []string{"planner reranker", "planner_ineligible", "planner_headroom", "planner_latency", "eligibility", "headroom", "latency budget"} {
+		if strings.Contains(strings.ToLower(body), forbidden) {
+			t.Fatalf("ordinary response exposes private reranker cause %q: %s", forbidden, body)
+		}
+	}
+}
+
+func plannerHTTPRollout(scope memory.Scope, status memory.RankingRolloutPolicyStatus, mode memory.RankingRolloutMode) memory.RankingRolloutPolicy {
+	return memory.RankingRolloutPolicy{Scope: scope, Status: status, Mode: mode, Surfaces: []memory.RankingRolloutSurface{memory.RankingRolloutSurfaceSearch, memory.RankingRolloutSurfaceContext}, RetrievalPlanner: &memory.RetrievalPlannerRolloutPolicy{
+		SchemaVersion:  memory.RetrievalPlannerRolloutSchemaVersionV1,
+		PlannerVersion: string(retrieval.RetrievalPlannerVersionV1), PolicyVersion: string(retrieval.RetrievalPlanPolicyVersionV1),
+		AnalysisPolicyVersion: string(retrieval.QueryAnalysisPolicyVersionV1), FusionVersion: retrieval.DefaultRRFStrategy().Version,
+		RankingVersion: "quality-feature-v1", RendererVersion: "context-renderer-v1",
+		MaxCandidates: 200, MaxCandidatesPerChannel: 100, MaxPasses: 2, MaxLatency: 5 * time.Second,
+		MaxContextItems: 100, MaxRerankerHeadroom: 100, ExpiresAt: time.Date(2100, 1, 1, 0, 0, 0, 0, time.UTC),
+	}}
+}
+
+func plannerHTTPPlanPolicy(maxCandidates int) retrieval.RetrievalPlanPolicy {
+	policy := retrieval.DefaultRetrievalPlanPolicy()
+	for family, template := range policy.Templates {
+		template.Channels = []retrieval.FusionChannel{retrieval.FusionChannelLexical}
+		template.ChannelCandidates = map[retrieval.FusionChannel]int{retrieval.FusionChannelLexical: maxCandidates}
+		template.TotalCandidates = maxCandidates
+		template.Fusion = retrieval.DefaultRRFStrategy()
+		template.Fusion.TotalCandidates = maxCandidates
+		template.Fusion.PerChannelCandidate = maxCandidates
+		template.MaxPasses = 1
+		template.FollowUp = retrieval.RetrievalPlanFollowUpRule{}
+		template.RerankerEligible = false
+		template.RerankerHeadroom = 0
+		policy.Templates[family] = template
+	}
+	return policy
+}
+
+func assertNoPlannerInternals(t *testing.T, body string) {
+	t.Helper()
+	for _, forbidden := range []string{"retrieval_plan", "planner_version", "planner_policy_version", "query_family", "enabled_channels", "candidate_bucket", "evidence_disposition", "reranker_eligibility", "channel_availability", "changed_rank_count", "changed_rank_bucket", "context_planner", "omitted_by_quota_or_budget", "private planner query"} {
+		if strings.Contains(body, forbidden) {
+			t.Fatalf("ordinary response exposes planner detail %q: %s", forbidden, body)
+		}
 	}
 }
 
@@ -4967,6 +5197,24 @@ func TestNewHTTPHandlerServesRankingRolloutAPIs(t *testing.T) {
 	}
 	if service.gotImpact.PolicyID != "policy_1" || service.gotImpact.Scope != scope {
 		t.Fatalf("impact input = %+v, want scoped impact", service.gotImpact)
+	}
+}
+
+func TestAdminRankingRolloutCreateMapsRetrievalPlannerBundle(t *testing.T) {
+	scope := memory.Scope{Tenant: "tenant-a", Project: "project-a", Namespace: "namespace-a"}
+	service := &stubRankingRolloutAdminService{}
+	service.policy = memory.RankingRolloutPolicy{ID: "planner", Scope: scope, Status: memory.RankingRolloutPolicyStatusDryRun, Mode: memory.RankingRolloutModeDryRun, Surfaces: []memory.RankingRolloutSurface{memory.RankingRolloutSurfaceSearch}, SignalSources: []memory.RankingRolloutSignalSource{memory.RankingRolloutSignalSourceTaskEvaluations}, ThresholdStatus: memory.RankingRolloutThresholdStatusSatisfied, Actor: "operator", Reason: "planner", CreatedAt: time.Now(), UpdatedAt: time.Now()}
+	handler := NewHTTPHandler(HTTPDependencies{Readiness: stubReadinessChecker{}, AdminAPIKeys: map[string]struct{}{"admin-key": {}}, RankingRollout: service})
+	body := `{"id":"planner","status":"dry_run","mode":"dry_run","surfaces":["search"],"signal_sources":["task_evaluations"],"threshold_status":"satisfied","actor":"operator","reason":"planner","retrieval_planner_selector":{"session_id":"session-a","user_id":"user-a"},"retrieval_planner":{"schema_version":"retrieval-planner-rollout-v1","planner_version":"retrieval-planner-v1","policy_version":"retrieval-plan-policy-v1","analysis_policy_version":"query-analysis-v1","fusion_version":"rrf-v1","ranking_version":"quality-feature-v1","renderer_version":"context-renderer-v1","max_candidates":200,"max_candidates_per_channel":100,"max_passes":2,"max_latency_ns":5000000000,"max_context_items":100,"max_reranker_headroom":100,"expires_at":"2026-09-18T12:00:00Z"}}`
+	req := httptest.NewRequest(http.MethodPost, "/v1/admin/ranking-rollouts", strings.NewReader(body))
+	setAdminScopeHeaders(req)
+	resp := httptest.NewRecorder()
+	handler.ServeHTTP(resp, req)
+	if resp.Code != http.StatusCreated {
+		t.Fatalf("status = %d body=%s", resp.Code, resp.Body.String())
+	}
+	if service.gotCreate.RetrievalPlanner == nil || service.gotCreate.RetrievalPlanner.MaxPasses != 2 || service.gotCreate.RetrievalPlannerSelector.SessionID != "session-a" {
+		t.Fatalf("created input = %+v", service.gotCreate)
 	}
 }
 

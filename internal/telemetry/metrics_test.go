@@ -280,6 +280,76 @@ func TestMetricsObserverExportsRerankSignalsWithBoundedLabels(t *testing.T) {
 	}
 }
 
+func TestMetricsObserverExportsRetrievalPlannerSignalsWithAllowlistedLabels(t *testing.T) {
+	observer := NewMetricsObserver()
+	observer.RecordRetrievalPlanner(context.Background(), RetrievalPlannerEvent{
+		PlannerVersion: "retrieval-planner-v1",
+		PolicyVersion:  "retrieval-plan-policy-v1",
+		Family:         "semantic",
+		Stage:          "active_for_scope",
+		Disposition:    "planned",
+		Pass:           2,
+		BudgetBucket:   "11_50",
+		Evidence:       "below_minimum",
+		Fallback:       "none",
+		LatencyBucket:  "lt_100ms",
+		Reranker:       "eligible",
+	})
+	observer.RecordRetrievalPlannerChannel(context.Background(), RetrievalPlannerChannelEvent{PlannerVersion: "retrieval-planner-v1", PolicyVersion: "retrieval-plan-policy-v1", Family: "semantic", Stage: "active_for_scope", Channel: "lexical", Availability: "unavailable"})
+	observer.RecordRetrievalPlannerChannel(context.Background(), RetrievalPlannerChannelEvent{PlannerVersion: "retrieval-planner-v1", PolicyVersion: "retrieval-plan-policy-v1", Family: "semantic", Stage: "active_for_scope", Channel: "semantic", Availability: "available"})
+	observer.RecordRetrievalPlannerChangedRank(context.Background(), RetrievalPlannerChangedRankEvent{PlannerVersion: "retrieval-planner-v1", PolicyVersion: "retrieval-plan-policy-v1", Family: "semantic", Stage: "active_for_scope", Bucket: "1_5", Count: 3})
+	observer.RecordRetrievalPlannerDiagnostic(context.Background(), RetrievalPlannerDiagnosticEvent{FailureCategory: "validation_failed"})
+	metrics := observer.RenderPrometheus()
+	want := `stele_retrieval_planner_total{budget_bucket="11_50",disposition="planned",evidence="below_minimum",fallback="none",family="semantic",latency_bucket="lt_100ms",pass="2",planner_version="retrieval-planner-v1",policy_version="retrieval-plan-policy-v1",reranker="eligible",stage="active_for_scope"} 1`
+	if !strings.Contains(metrics, want) {
+		t.Fatalf("metrics missing bounded planner signal\n%s", metrics)
+	}
+	if strings.Count(metrics, "stele_retrieval_planner_total{") != 1 {
+		t.Fatalf("multi-channel execution overcounted planner total:\n%s", metrics)
+	}
+	if strings.Count(metrics, "stele_retrieval_planner_channel_total{") != 2 {
+		t.Fatalf("planner channel series count is not bounded by channel count:\n%s", metrics)
+	}
+	if !strings.Contains(metrics, `stele_retrieval_planner_changed_ranks{changed_rank_bucket="1_5",family="semantic",planner_version="retrieval-planner-v1",policy_version="retrieval-plan-policy-v1",stage="active_for_scope"} 3`) {
+		t.Fatalf("metrics missing bounded changed-rank count\n%s", metrics)
+	}
+	if !strings.Contains(metrics, `stele_retrieval_planner_diagnostic_failure_total{failure_category="validation_failed"} 1`) {
+		t.Fatalf("metrics missing bounded diagnostic failure\n%s", metrics)
+	}
+}
+
+func TestMetricsObserverPlannerTelemetryNormalizesUnknownAndRejectsSensitiveValues(t *testing.T) {
+	observer := NewMetricsObserver()
+	observer.RecordRetrievalPlanner(context.Background(), RetrievalPlannerEvent{
+		PlannerVersion: "query secret tenant-a",
+		PolicyVersion:  "policy-id-123",
+		Family:         "query text",
+		Stage:          "https://secret.invalid",
+		Disposition:    "raw score 0.99",
+		Pass:           99,
+		BudgetBucket:   "memory-id-1",
+		Evidence:       "scope-value",
+		Fallback:       "provider payload",
+		LatencyBucket:  "postgres://secret",
+		Reranker:       "candidate-id",
+	})
+	observer.RecordRetrievalPlannerChannel(context.Background(), RetrievalPlannerChannelEvent{PlannerVersion: "query secret tenant-a", PolicyVersion: "policy-id-123", Family: "query text", Stage: "https://secret.invalid", Channel: "query-channel", Availability: "scope-value-two"})
+	observer.RecordRetrievalPlannerChangedRank(context.Background(), RetrievalPlannerChangedRankEvent{PlannerVersion: "query secret tenant-a", PolicyVersion: "policy-id-123", Family: "query text", Stage: "https://secret.invalid", Bucket: "raw-rank", Count: 999999})
+	observer.RecordRetrievalPlannerDiagnostic(context.Background(), RetrievalPlannerDiagnosticEvent{FailureCategory: "private validation tenant-a"})
+	metrics := observer.RenderPrometheus()
+	for _, forbidden := range []string{"tenant-a", "policy-id-123", "secret.invalid", "raw score", "memory-id-1", "scope-value", "provider payload", "postgres://", "candidate-id", "query-channel", "raw-rank"} {
+		if strings.Contains(metrics, forbidden) {
+			t.Fatalf("planner telemetry leaked %q:\n%s", forbidden, metrics)
+		}
+	}
+	if !strings.Contains(metrics, `stele_retrieval_planner_total{budget_bucket="unknown",disposition="unknown",evidence="unknown",fallback="unknown",family="unknown",latency_bucket="unknown",pass="unknown",planner_version="unknown",policy_version="unknown",reranker="unknown",stage="unknown"} 1`) {
+		t.Fatalf("planner telemetry did not normalize unknown categories:\n%s", metrics)
+	}
+	if !strings.Contains(metrics, `stele_retrieval_planner_diagnostic_failure_total{failure_category="unknown"} 1`) {
+		t.Fatalf("diagnostic telemetry did not normalize unknown failure category:\n%s", metrics)
+	}
+}
+
 func TestMetricsObserverExportsDerivedInsightReplaySignalsWithoutHighCardinalityLabels(t *testing.T) {
 	observer := NewMetricsObserver()
 	ctx := context.Background()

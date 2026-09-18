@@ -48,6 +48,34 @@ func TestRepositoryReadsExactQueryAnalysisRolloutSelectorsAndRoundTripsPayload(t
 	}
 }
 
+func TestRepositoryReadsExactRetrievalPlannerRolloutSelectorsAndPayload(t *testing.T) {
+	mock, err := pgxmock.NewPool()
+	if err != nil { t.Fatal(err) }
+	defer mock.Close()
+	scope := memory.Scope{Tenant: "tenant-a", Project: "project-a", Namespace: "namespace-a"}
+	now := time.Date(2026, 9, 17, 12, 0, 0, 0, time.UTC)
+	payload := []byte(`{"schema_version":"retrieval-planner-rollout-v1","planner_version":"retrieval-planner-v1","policy_version":"retrieval-plan-policy-v1","analysis_policy_version":"query-analysis-v1","fusion_version":"rrf-v1","ranking_version":"quality-feature-v1","renderer_version":"context-renderer-v1","max_candidates":200,"max_candidates_per_channel":100,"max_passes":2,"max_latency_ns":5000000000,"max_context_items":100,"max_reranker_headroom":100,"expires_at":"2026-09-18T12:00:00Z"}`)
+	mock.ExpectQuery(`SELECT[\s\S]*FROM ranking_rollout_policies[\s\S]*tenant = \$1[\s\S]*project = \$2[\s\S]*namespace = \$3[\s\S]*retrieval_planner_session_id IS NOT DISTINCT FROM \$5[\s\S]*retrieval_planner_user_id IS NOT DISTINCT FROM \$6`).
+		WithArgs(scope.Tenant, scope.Project, scope.Namespace, string(memory.RankingRolloutSurfaceSearch), "session-a", "user-a").
+		WillReturnRows(pgxmock.NewRows([]string{"id", "tenant", "project", "namespace", "status", "mode", "surfaces", "retrieval_planner_session_id", "retrieval_planner_user_id", "retrieval_planner_policy", "activated_at", "disabled_at", "rolled_back_at", "created_at", "updated_at"}).AddRow("planner", scope.Tenant, scope.Project, scope.Namespace, memory.RankingRolloutPolicyStatusDryRun, memory.RankingRolloutModeDryRun, []string{"search"}, "session-a", "user-a", payload, nil, nil, nil, now, now))
+
+	policy, err := NewRepository(mock).ReadEffectiveRetrievalPlannerRolloutPolicy(context.Background(), memory.ReadEffectiveRetrievalPlannerRolloutPolicyInput{Scope: scope, Surface: memory.RankingRolloutSurfaceSearch, SessionID: "session-a", UserID: "user-a"})
+	if err != nil { t.Fatalf("ReadEffectiveRetrievalPlannerRolloutPolicy() error = %v", err) }
+	if policy.RetrievalPlanner == nil || policy.RetrievalPlanner.MaxPasses != 2 || policy.RetrievalPlannerSelector.SessionID != "session-a" { t.Fatalf("policy = %+v", policy) }
+	if err := mock.ExpectationsWereMet(); err != nil { t.Fatal(err) }
+}
+
+func TestRepositoryRetrievalPlannerPayloadUnknownFieldFailsClosed(t *testing.T) {
+	mock, err := pgxmock.NewPool()
+	if err != nil { t.Fatal(err) }
+	defer mock.Close()
+	scope := memory.Scope{Tenant: "tenant-a", Project: "project-a", Namespace: "namespace-a"}
+	now := time.Now()
+	mock.ExpectQuery("SELECT[\\s\\S]*FROM ranking_rollout_policies").WithArgs(scope.Tenant, scope.Project, scope.Namespace, string(memory.RankingRolloutSurfaceSearch), nil, nil).
+		WillReturnRows(pgxmock.NewRows([]string{"id", "tenant", "project", "namespace", "status", "mode", "surfaces", "retrieval_planner_session_id", "retrieval_planner_user_id", "retrieval_planner_policy", "activated_at", "disabled_at", "rolled_back_at", "created_at", "updated_at"}).AddRow("planner", scope.Tenant, scope.Project, scope.Namespace, memory.RankingRolloutPolicyStatusDryRun, memory.RankingRolloutModeDryRun, []string{"search"}, nil, nil, []byte(`{"schema_version":"retrieval-planner-rollout-v1","unknown":true}`), nil, nil, nil, now, now))
+	if _, err := NewRepository(mock).ReadEffectiveRetrievalPlannerRolloutPolicy(context.Background(), memory.ReadEffectiveRetrievalPlannerRolloutPolicyInput{Scope: scope, Surface: memory.RankingRolloutSurfaceSearch}); err == nil { t.Fatal("error = nil, want malformed payload rejection") }
+}
+
 func TestRepositoryQueryAnalysisPayloadUnknownFieldsAndVersionsFailClosed(t *testing.T) {
 	for _, payload := range [][]byte{
 		[]byte(`{"schema_version":"query-analysis-rollout-v1","unknown":true}`),
@@ -103,6 +131,31 @@ func TestRepositoryCreateQueryAnalysisPolicyPreservesRankingBundles(t *testing.T
 	if err := mock.ExpectationsWereMet(); err != nil {
 		t.Fatal(err)
 	}
+}
+
+func TestRepositoryCreateRetrievalPlannerPolicyPersistsBundleInSameTransaction(t *testing.T) {
+	mock, err := pgxmock.NewPool()
+	if err != nil { t.Fatal(err) }
+	defer mock.Close()
+	scope := memory.Scope{Tenant: "tenant-a", Project: "project-a", Namespace: "namespace-a"}
+	now := time.Date(2026, 9, 17, 12, 0, 0, 0, time.UTC)
+	policy := memory.RankingRolloutPolicy{
+		ID: "planner-policy", Scope: scope, Status: memory.RankingRolloutPolicyStatusDryRun, Mode: memory.RankingRolloutModeDryRun,
+		Surfaces: []memory.RankingRolloutSurface{memory.RankingRolloutSurfaceSearch}, SignalSources: []memory.RankingRolloutSignalSource{memory.RankingRolloutSignalSourceTaskEvaluations},
+		ThresholdStatus: memory.RankingRolloutThresholdStatusSatisfied, Actor: "operator", Reason: "planner rollout", CreatedAt: now, UpdatedAt: now,
+		RetrievalPlannerSelector: memory.RetrievalPlannerRolloutSelector{SessionID: "session-a", UserID: "user-a"},
+		RetrievalPlanner: &memory.RetrievalPlannerRolloutPolicy{SchemaVersion: memory.RetrievalPlannerRolloutSchemaVersionV1, PlannerVersion: memory.RetrievalPlannerVersionV1, PolicyVersion: memory.RetrievalPlanPolicyVersionV1, AnalysisPolicyVersion: memory.QueryAnalysisPolicyVersionV1, FusionVersion: "rrf-v1", RankingVersion: "quality-feature-v1", RendererVersion: "context-renderer-v1", MaxCandidates: 200, MaxCandidatesPerChannel: 100, MaxPasses: 2, MaxLatency: 5 * time.Second, MaxContextItems: 100, MaxRerankerHeadroom: 100, ExpiresAt: now.Add(time.Hour)},
+	}
+	row := rankingRolloutPolicyRow(policy.ID, scope, policy.Status, policy.Mode, policy.ThresholdStatus, 0, policy.Actor, policy.Reason, nil, nil, nil, nil, nil, now, now)
+	mock.ExpectBegin()
+	mock.ExpectQuery(`INSERT INTO ranking_rollout_policies`).WithArgs(anyRankingRolloutArgs(37)...).WillReturnRows(pgxmock.NewRows(rankingRolloutPolicyColumns()).AddRow(row...))
+	mock.ExpectExec(`UPDATE ranking_rollout_policies[\s\S]*retrieval_planner_session_id`).WithArgs("session-a", "user-a", pgxmock.AnyArg(), policy.ID, scope.Tenant, scope.Project, scope.Namespace).WillReturnResult(pgxmock.NewResult("UPDATE", 1))
+	mock.ExpectExec("INSERT INTO ranking_rollout_policy_states").WithArgs(anyRankingRolloutArgs(11)...).WillReturnResult(pgxmock.NewResult("INSERT", 1))
+	mock.ExpectCommit()
+	created, err := NewRepository(mock).CreateRankingRolloutPolicy(context.Background(), policy)
+	if err != nil { t.Fatalf("CreateRankingRolloutPolicy() error = %v", err) }
+	if created.RetrievalPlanner == nil || created.RetrievalPlanner.PolicyVersion != memory.RetrievalPlanPolicyVersionV1 || created.RetrievalPlannerSelector.SessionID != "session-a" { t.Fatalf("created policy = %+v", created) }
+	if err := mock.ExpectationsWereMet(); err != nil { t.Fatal(err) }
 }
 
 func TestRepositoryQueryAnalysisRolloutDoesNotFallbackToSameNameForeignPolicy(t *testing.T) {

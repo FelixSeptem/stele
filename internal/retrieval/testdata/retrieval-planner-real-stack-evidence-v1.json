@@ -1,0 +1,7 @@
+{
+  "version": "retrieval-planner-real-stack-evidence-v1",
+  "status": "non_pass",
+  "reason": "SKIP_RETRIEVAL_EVALUATION_DSN_REQUIRED",
+  "real_stack": false,
+  "max_rollout_stage": "shadow"
+}

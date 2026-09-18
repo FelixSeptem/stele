@@ -1918,10 +1918,16 @@ harness-owned DSN in `STELE_TEST_RETRIEVAL_EVALUATION_DSN`:
 
 ```powershell
 $env:STELE_TEST_RETRIEVAL_EVALUATION_DSN = '<owned-test-dsn>'
+$env:STELE_TEST_RETRIEVAL_EVALUATION_OWNED = 'true'
 pwsh -File scripts/retrieval-evaluation.ps1
 ```
 
-Without that variable the command prints
+The ownership marker is required by direct Go harness runs before any database
+connection or bootstrap. The script sets it after validating its explicit DSN.
+The harness also rejects normalized equivalents of `STELE_POSTGRES_DSN`, uses a
+unique namespace per run, and cleans up only the run's exact seeded IDs.
+
+Without the DSN variable the command prints
 `SKIP_RETRIEVAL_EVALUATION_DSN_REQUIRED` and exits with code `2`; it never falls
 back to `STELE_POSTGRES_DSN` or another ambient database. The seeder uses the
 reserved `eval` tenant and `retrieval-baseline` project, writes through normal
@@ -2087,6 +2093,33 @@ STELE_RERANK_TIMEOUT=30s
 STELE_RERANK_MAX_CANDIDATES=50
 STELE_RERANK_MAX_TEXT_BYTES=8192
 ```
+
+### Query-adaptive planner configuration
+
+The planner is disabled for ordinary result changes unless an administrator
+creates an exact-scope ranking rollout with a compatible versioned planner
+bundle. The service keeps the planner in `diagnostics_only` or `shadow` until
+owned PostgreSQL + pgvector evidence satisfies the retrieval release gate.
+Planner policy values are persisted with the rollout record; they are not
+ambient process-global switches. Existing deployments therefore continue with
+the baseline when these values are absent or incompatible.
+
+The planner hard envelope is intentionally bounded by policy: at most two
+passes, a finite total and per-channel candidate budget, a finite latency
+deadline, a finite context-item budget, and reserved reranker headroom. The
+only follow-up is one evidence-triggered pass using the original query and the
+same exact scope and lifecycle visibility. Disable or rollback the rollout to
+return immediately to baseline without rewriting canonical memory or derived
+state.
+
+Use the authenticated admin ranking-rollout routes to create, dry-run,
+activate, disable, or rollback a planner policy. Ordinary search/context
+responses do not expose planner identities, query families, plans, budgets, or
+follow-up details. Authorized diagnostics contain only bounded aggregate
+categories and counts. If `STELE_TEST_RETRIEVAL_EVALUATION_DSN` is absent,
+`scripts/retrieval-evaluation.ps1` returns
+`SKIP_RETRIEVAL_EVALUATION_DSN_REQUIRED` (exit `2`) and activation remains
+blocked; it never falls back to `STELE_POSTGRES_DSN`.
 
 For OpenAI-compatible embedding services that reject the optional
 `dimensions` request field (for example, some SiliconFlow deployments), set

@@ -1,6 +1,7 @@
 package retrieval
 
 import (
+	"strings"
 	"testing"
 	"time"
 )
@@ -22,13 +23,39 @@ func TestOwnedEvaluationGateNeverEligibleWithoutExplicitDSN(t *testing.T) {
 }
 
 func TestOwnedEvaluationDSNRejectsMalformedValue(t *testing.T) {
+	t.Setenv("STELE_TEST_RETRIEVAL_EVALUATION_OWNED", "true")
 	t.Setenv("STELE_TEST_RETRIEVAL_EVALUATION_DSN", "not-a-dsn")
 	if _, reason := OwnedEvaluationDSN(); reason != "STELE_TEST_RETRIEVAL_EVALUATION_DSN_INVALID" {
 		t.Fatalf("reason=%q", reason)
 	}
 }
 
+func TestOwnedEvaluationDSNRequiresExplicitDisposableOwnership(t *testing.T) {
+	t.Setenv("STELE_TEST_RETRIEVAL_EVALUATION_OWNED", "")
+	t.Setenv("STELE_TEST_RETRIEVAL_EVALUATION_DSN", "postgres://owned/evaluation")
+	if _, reason := OwnedEvaluationDSN(); reason != RetrievalEvaluationDSNOwnershipRequired {
+		t.Fatalf("reason=%q", reason)
+	}
+}
+
+func TestOwnedEvaluationDSNRejectsNormalizedRuntimeEquivalent(t *testing.T) {
+	t.Setenv("STELE_TEST_RETRIEVAL_EVALUATION_OWNED", "true")
+	t.Setenv("STELE_TEST_RETRIEVAL_EVALUATION_DSN", "postgresql://user:pass@LOCALHOST:5432/evaluation?sslmode=disable&application_name=planner")
+	t.Setenv("STELE_POSTGRES_DSN", "postgres://user:pass@localhost/evaluation?application_name=planner&sslmode=disable")
+	if _, reason := OwnedEvaluationDSN(); reason != RetrievalEvaluationDSNRuntimeReuse {
+		t.Fatalf("reason=%q", reason)
+	}
+}
+
+func TestValidateOwnedEvaluationDSNRejectsUnsafeTargetBeforeHarnessUse(t *testing.T) {
+	_, err := ValidateOwnedEvaluationDSN("postgres://owned/evaluation", "", false)
+	if err == nil || !strings.Contains(err.Error(), RetrievalEvaluationDSNOwnershipRequired) {
+		t.Fatalf("err=%v", err)
+	}
+}
+
 func TestRetrievalEvaluationGateAcceptsCompatibleFreshPhase64Evidence(t *testing.T) {
+	t.Setenv("STELE_TEST_RETRIEVAL_EVALUATION_OWNED", "true")
 	t.Setenv("STELE_TEST_RETRIEVAL_EVALUATION_DSN", "postgres://owned/evaluation")
 	gate := validRetrievalEvaluationGate(time.Date(2026, 9, 11, 12, 0, 0, 0, time.UTC))
 	if !gate.ActiveEligible() || gate.SkipReason() != "" {
@@ -37,6 +64,7 @@ func TestRetrievalEvaluationGateAcceptsCompatibleFreshPhase64Evidence(t *testing
 }
 
 func TestRetrievalEvaluationGateRejectsAbsentSkippedIncompatibleStaleOrFailingPhase64Evidence(t *testing.T) {
+	t.Setenv("STELE_TEST_RETRIEVAL_EVALUATION_OWNED", "true")
 	t.Setenv("STELE_TEST_RETRIEVAL_EVALUATION_DSN", "postgres://owned/evaluation")
 	now := time.Date(2026, 9, 11, 12, 0, 0, 0, time.UTC)
 	tests := []struct {

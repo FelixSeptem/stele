@@ -1,0 +1,40 @@
+{
+  "version": "retrieval-planner-fixture-v1",
+  "cases": [
+    {
+      "id": "planner-exact-lookup", "category": "exact-lookup", "scope": {"tenant":"eval","project":"retrieval-baseline","namespace":"planner-exact"}, "query": "Which database is authoritative?",
+      "sources": [{"alias":"exact-fact","event_type":"fixture","content":"PostgreSQL is authoritative.","class":"procedural"}], "expected_evidence_groups": [["exact-fact"]],
+      "planner": {"planner_version":"retrieval-planner-v1","policy_version":"retrieval-plan-policy-v1","family":"exact_lookup","plan_identity":"retrieval-planner-v1:retrieval-plan-policy-v1:exact_lookup:fallback=chunk:1,relation:1,semantic:1","channels":["lexical"],"fallback_channel_candidates":{"chunk":1,"relation":1,"semantic":1},"max_candidates":50,"max_candidates_per_channel":50,"protected":true,"expected_passes":1}
+    },
+    {
+      "id": "planner-semantic", "category": "semantic", "scope": {"tenant":"eval","project":"retrieval-baseline","namespace":"planner-semantic"}, "query": "Explain the meaning of durable memory.",
+      "sources": [{"alias":"semantic-fact","event_type":"fixture","content":"Durable memory survives process restarts.","class":"summary","embedding_revision":"planner-unit-x3-v1"}], "expected_evidence_groups": [["semantic-fact"]],
+      "planner": {"planner_version":"retrieval-planner-v1","policy_version":"retrieval-plan-policy-v1","family":"semantic","plan_identity":"retrieval-planner-v1:retrieval-plan-policy-v1:semantic:fallback=chunk:1,relation:1","channels":["lexical","semantic"],"fallback_channel_candidates":{"chunk":1,"relation":1},"max_candidates":100,"max_candidates_per_channel":50,"protected":true,"expected_passes":1}
+    },
+    {
+      "id": "planner-temporal", "category": "temporal", "scope": {"tenant":"eval","project":"retrieval-baseline","namespace":"planner-temporal"}, "query": "What is the current policy?",
+      "sources": [{"alias":"temporal-fact","event_type":"fixture","content":"The current policy is versioned.","class":"summary"}], "expected_evidence_groups": [["temporal-fact"]],
+      "planner": {"planner_version":"retrieval-planner-v1","policy_version":"retrieval-plan-policy-v1","family":"temporal","plan_identity":"retrieval-planner-v1:retrieval-plan-policy-v1:temporal:fallback=chunk:1,relation:1","channels":["lexical","semantic"],"fallback_channel_candidates":{"chunk":1,"relation":1},"max_candidates":100,"max_candidates_per_channel":50,"protected":true,"expected_passes":2,"follow_up_eligible":true}
+    },
+    {
+      "id": "planner-entity-relation", "category": "entity-relation", "scope": {"tenant":"eval","project":"retrieval-baseline","namespace":"planner-relation"}, "query": "What owns entity:pgvector?",
+      "sources": [{"alias":"relation-fact","event_type":"fixture","content":"PostgreSQL owns pgvector storage.","class":"relation"}], "expected_evidence_groups": [["relation-fact"]],
+      "planner": {"planner_version":"retrieval-planner-v1","policy_version":"retrieval-plan-policy-v1","family":"entity_relation","plan_identity":"retrieval-planner-v1:retrieval-plan-policy-v1:entity_relation:fallback=chunk:1,semantic:1","channels":["lexical","relation"],"fallback_channel_candidates":{"chunk":1,"semantic":1},"max_candidates":100,"max_candidates_per_channel":50,"protected":true,"expected_passes":1}
+    },
+    {
+      "id": "planner-multi-hop", "category": "multi-hop", "scope": {"tenant":"eval","project":"retrieval-baseline","namespace":"planner-multihop"}, "query": "What stores memory and what lifecycle applies?",
+      "sources": [{"alias":"storage","event_type":"fixture","content":"PostgreSQL stores memory.","class":"procedural"},{"alias":"lifecycle","event_type":"fixture","content":"Canonical memory is versioned.","class":"procedural"}], "expected_evidence_groups": [["storage"],["lifecycle"]],
+      "planner": {"planner_version":"retrieval-planner-v1","policy_version":"retrieval-plan-policy-v1","family":"multi_hop","plan_identity":"retrieval-planner-v1:retrieval-plan-policy-v1:multi_hop:fallback=chunk:1","channels":["lexical","relation","semantic"],"fallback_channel_candidates":{"chunk":1},"max_candidates":150,"max_candidates_per_channel":50,"protected":true,"expected_passes":2,"follow_up_eligible":true,"reranker_eligible":true}
+    },
+    {
+      "id": "planner-procedural", "category": "procedural", "scope": {"tenant":"eval","project":"retrieval-baseline","namespace":"planner-procedure"}, "query": "How should migrations run?",
+      "sources": [{"alias":"procedural-fact","event_type":"fixture","content":"Migrations run forward.","class":"procedural"}], "expected_evidence_groups": [["procedural-fact"]],
+      "planner": {"planner_version":"retrieval-planner-v1","policy_version":"retrieval-plan-policy-v1","family":"procedural","plan_identity":"retrieval-planner-v1:retrieval-plan-policy-v1:procedural:fallback=chunk:1,relation:1","channels":["lexical","semantic"],"fallback_channel_candidates":{"chunk":1,"relation":1},"max_candidates":100,"max_candidates_per_channel":50,"protected":true,"expected_passes":1}
+    },
+    {
+      "id": "planner-general", "category": "general", "scope": {"tenant":"eval","project":"retrieval-baseline","namespace":"planner-general"}, "query": "Tell me about memory.",
+      "sources": [{"alias":"general-fact","event_type":"fixture","content":"Memory is scoped.","class":"summary"}], "expected_evidence_groups": [["general-fact"]],
+      "planner": {"planner_version":"retrieval-planner-v1","policy_version":"retrieval-plan-policy-v1","family":"general","plan_identity":"retrieval-planner-v1:retrieval-plan-policy-v1:general","channels":["chunk","lexical","relation","semantic"],"max_candidates":200,"max_candidates_per_channel":50,"expected_passes":1}
+    }
+  ]
+}

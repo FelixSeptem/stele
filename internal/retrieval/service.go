@@ -14,26 +14,29 @@ import (
 )
 
 type SearchInput struct {
-	Scope                              memory.Scope
-	Query                              string
-	QueryEmbedding                     []float32
-	LexicalMatchMode                   LexicalMatchMode
-	Classes                            []memory.MemoryClass
-	rankingSurface                     memory.RankingRolloutSurface
-	rankingPolicyDisabled              bool
-	queryAnalysisPolicyDisabled        bool
-	queryAnalysisObserveOnly           bool
-	queryAnalysisDiagnosticsAuthorized bool
-	fusionStrategyOverride             *FusionStrategy
-	TimeFrom                           time.Time
-	TimeTo                             time.Time
-	TopK                               int
-	IncludeSummaries                   bool
-	IncludeRelations                   bool
-	IncludeFeedbackDiagnostics         bool
-	FeedbackAwareRanking               bool
-	SessionID                          string
-	UserID                             string
+	Scope                                 memory.Scope
+	Query                                 string
+	QueryEmbedding                        []float32
+	LexicalMatchMode                      LexicalMatchMode
+	Classes                               []memory.MemoryClass
+	rankingSurface                        memory.RankingRolloutSurface
+	rankingPolicyDisabled                 bool
+	queryAnalysisPolicyDisabled           bool
+	queryAnalysisObserveOnly              bool
+	queryAnalysisDiagnosticsAuthorized    bool
+	retrievalPlannerDiagnosticsAuthorized bool
+	retrievalPlannerDisabled              bool
+	fusionStrategyOverride                *FusionStrategy
+	TimeFrom                              time.Time
+	TimeTo                                time.Time
+	TopK                                  int
+	IncludeSummaries                      bool
+	IncludeRelations                      bool
+	IncludeFeedbackDiagnostics            bool
+	FeedbackAwareRanking                  bool
+	SessionID                             string
+	UserID                                string
+	queryAnalysis                         *QueryAnalysisResult
 }
 
 // LexicalMatchMode selects the full-text query composition used by an internal
@@ -65,16 +68,19 @@ func (i SearchInput) Validate() error {
 }
 
 type AssembleContextInput struct {
-	Scope                      memory.Scope
-	Query                      string
-	Budget                     int
-	CharacterBudget            int
-	IncludeRelations           bool
-	IncludeExperienceInsights  bool
-	IncludeDiagnostics         bool
-	IncludeFeedbackDiagnostics bool
-	FeedbackAwareRanking       bool
-	UseProjections             bool
+	Scope                                 memory.Scope
+	Query                                 string
+	SessionID                             string
+	UserID                                string
+	Budget                                int
+	CharacterBudget                       int
+	IncludeRelations                      bool
+	IncludeExperienceInsights             bool
+	IncludeDiagnostics                    bool
+	IncludeFeedbackDiagnostics            bool
+	FeedbackAwareRanking                  bool
+	UseProjections                        bool
+	retrievalPlannerDiagnosticsAuthorized bool
 }
 
 func (i AssembleContextInput) Validate() error {
@@ -118,14 +124,33 @@ type SearchHit struct {
 }
 
 type SearchResult struct {
-	Hits        []SearchHit         `json:"hits"`
-	Diagnostics []ContextDiagnostic `json:"diagnostics,omitempty"`
+	Hits               []SearchHit         `json:"hits"`
+	Diagnostics        []ContextDiagnostic `json:"diagnostics,omitempty"`
+	plannerDiagnostics []RetrievalPlannerDiagnostics
 
 	// fusionChannelAvailability and fusionStrategy are evaluation-only state.
 	// They remain unexported so ordinary API responses cannot expose internal
 	// recall execution details.
 	fusionChannelAvailability map[FusionChannel]fusionChannelAvailability
 	fusionStrategy            FusionStrategy
+	retrievalPlan             *RetrievalPlan
+	retrievalPassObservations []RetrievalPassObservation
+	rerankerObservation       RetrievalRerankerObservation
+}
+
+type RetrievalPassObservation struct {
+	Pass             int
+	CandidateCount   int
+	VisibleMemoryIDs []string
+	Evidence         EvidenceAssessment
+	Latency          time.Duration
+}
+
+type RetrievalRerankerObservation struct {
+	Attempted        bool
+	Used             bool
+	Safe             bool
+	FallbackCategory string
 }
 
 type fusionChannelAvailability string
@@ -176,15 +201,16 @@ type ContextDiagnostic struct {
 }
 
 type AssembledContext struct {
-	Profile           []SearchHit                `json:"profile"`
-	RecentSession     []SearchHit                `json:"recent_session"`
-	RecentEpisodes    []SearchHit                `json:"recent_episodes"`
-	RelevantSummaries []SearchHit                `json:"relevant_summaries"`
-	RelatedEntities   []SearchHit                `json:"related_entities"`
-	Citations         []Citation                 `json:"citations"`
-	KnownFailures     []ExperienceInsightContext `json:"known_failures,omitempty"`
-	ExperienceLessons []ExperienceInsightContext `json:"experience_lessons,omitempty"`
-	Diagnostics       []ContextDiagnostic        `json:"diagnostics,omitempty"`
+	Profile            []SearchHit                `json:"profile"`
+	RecentSession      []SearchHit                `json:"recent_session"`
+	RecentEpisodes     []SearchHit                `json:"recent_episodes"`
+	RelevantSummaries  []SearchHit                `json:"relevant_summaries"`
+	RelatedEntities    []SearchHit                `json:"related_entities"`
+	Citations          []Citation                 `json:"citations"`
+	KnownFailures      []ExperienceInsightContext `json:"known_failures,omitempty"`
+	ExperienceLessons  []ExperienceInsightContext `json:"experience_lessons,omitempty"`
+	Diagnostics        []ContextDiagnostic        `json:"diagnostics,omitempty"`
+	plannerDiagnostics []ContextDiagnostic
 }
 
 type ScoredMemory struct {
@@ -309,6 +335,7 @@ type ServiceDependencies struct {
 	RerankerProvider    string
 	RerankerVersion     string
 	QualityBounds       QualityAdjustmentBounds
+	RetrievalPlanPolicy RetrievalPlanPolicy
 }
 
 type QueryAnalyzer interface {
@@ -318,6 +345,15 @@ type QueryAnalyzer interface {
 type effectiveQueryAnalysisPolicyReader interface {
 	ReadEffectiveQueryAnalysisRolloutPolicy(ctx context.Context, input memory.ReadEffectiveQueryAnalysisRolloutPolicyInput) (memory.RankingRolloutPolicy, error)
 }
+
+type effectiveRetrievalPlannerPolicyReader interface {
+	ReadEffectiveRetrievalPlannerRolloutPolicy(ctx context.Context, input memory.ReadEffectiveRetrievalPlannerRolloutPolicyInput) (memory.RankingRolloutPolicy, error)
+}
+
+const (
+	retrievalPlannerRankingVersion  = "quality-feature-v1"
+	retrievalPlannerRendererVersion = "context-renderer-v1"
+)
 
 type Service struct {
 	lexical                      LexicalSearcher
@@ -340,6 +376,7 @@ type Service struct {
 	rerankerProvider             string
 	rerankerVersion              string
 	qualityBounds                QualityAdjustmentBounds
+	retrievalPlanPolicy          RetrievalPlanPolicy
 	observer                     telemetry.Observer
 }
 
@@ -374,6 +411,10 @@ func NewService(deps ServiceDependencies, observers ...telemetry.Observer) *Serv
 	if qualityBounds.Total <= 0 {
 		qualityBounds.Total = 0.25
 	}
+	retrievalPlanPolicy := deps.RetrievalPlanPolicy
+	if retrievalPlanPolicy.PlannerVersion == "" && retrievalPlanPolicy.Version == "" && retrievalPlanPolicy.Templates == nil {
+		retrievalPlanPolicy = DefaultRetrievalPlanPolicy()
+	}
 	return &Service{
 		lexical:                      deps.Lexical,
 		semantic:                     deps.Semantic,
@@ -395,6 +436,7 @@ func NewService(deps ServiceDependencies, observers ...telemetry.Observer) *Serv
 		rerankerProvider:             strings.TrimSpace(deps.RerankerProvider),
 		rerankerVersion:              strings.TrimSpace(deps.RerankerVersion),
 		qualityBounds:                qualityBounds,
+		retrievalPlanPolicy:          retrievalPlanPolicy,
 		observer:                     observer,
 	}
 }
@@ -466,12 +508,32 @@ func (s *Service) Search(ctx context.Context, input SearchInput) (result SearchR
 			fusionStrategy = configured
 		}
 	}
+	baselineFusionStrategy := fusionStrategy
 
 	// Query understanding is strictly rollout-gated. The immutable original
 	// signal is always retained; malformed/unavailable analysis falls back to it.
 	recallInputs, analysisDiagnostics := s.queryRecallInputs(ctx, input, queryAnalysisPolicy, surface)
+	qaResolution := memory.ResolveQueryAnalysisRollout(queryAnalysisPolicy, memory.ResolveQueryAnalysisRolloutInput{Scope: input.Scope, Surface: surface, SessionID: input.SessionID, UserID: input.UserID, Now: time.Now().UTC()})
+	analysis := originalQueryAnalysis(input)
+	if qaResolution.DerivedSignalsAffectResults && len(recallInputs) > 0 && recallInputs[0].queryAnalysis != nil {
+		analysis = *recallInputs[0].queryAnalysis
+	}
+	plannerExecution := retrievalPlannerExecution{stage: memory.RetrievalPlannerRolloutStageBaseline}
+	if !input.retrievalPlannerDisabled {
+		plannerExecution = s.resolveRetrievalPlannerExecution(ctx, input, surface, analysis, time.Now().UTC())
+	}
+	if plannerExecution.active() {
+		if !s.canExecuteRetrievalPlan(input, *plannerExecution.plan) || !s.canRetainPlannerBaseline(input, *plannerExecution.plan) {
+			fallback := input
+			fallback.retrievalPlannerDisabled = true
+			return s.Search(ctx, fallback)
+		}
+		fusionStrategy = plannerExecution.plan.Fusion
+	}
 
 	channelCandidates := make([]FusionChannelCandidates, 0, 4)
+	baselineChannelCandidates := make([]FusionChannelCandidates, 0, 4)
+	plannerFailed := false
 	diversityMetadata := make(map[string]ScoredMemory)
 	channelAvailability := defaultFusionChannelAvailability()
 	chunkCitationMap := map[string][]Citation{}
@@ -486,7 +548,6 @@ func (s *Service) Search(ctx context.Context, input SearchInput) (result SearchR
 	// shadow analysis may use their own analyzer bounds, but must not silently
 	// cap the canonical recall result until an exact-scope active rollout is
 	// authorized.
-	qaResolution := memory.ResolveQueryAnalysisRollout(queryAnalysisPolicy, memory.ResolveQueryAnalysisRolloutInput{Scope: input.Scope, Surface: surface, SessionID: input.SessionID, UserID: input.UserID, Now: time.Now().UTC()})
 	if qaResolution.DerivedSignalsAffectResults && queryAnalysisPolicy != nil && queryAnalysisPolicy.QueryAnalysis != nil {
 		qa := queryAnalysisPolicy.QueryAnalysis
 		analysisLimits = QueryAnalysisLimits{Version: QueryAnalysisLimitsVersionV1, MaxQueryBytes: qa.MaxQueryBytes, MaxHints: qa.MaxHints, MaxSignals: qa.MaxSignals, MaxSubqueries: qa.MaxSubqueries, MaxTermBytes: qa.MaxTermBytes, MaxSubqueryBytes: qa.MaxSubqueryBytes, MaxAnalysisWork: qa.MaxAnalysisWork, MaxCandidatesPerSignal: qa.MaxCandidatesPerSignal, MaxAggregateCandidates: qa.MaxAggregateCandidates, MaxElapsed: qa.MaxElapsed}
@@ -494,109 +555,244 @@ func (s *Service) Search(ctx context.Context, input SearchInput) (result SearchR
 			analysisLimits = DefaultQueryAnalysisLimits()
 		}
 	}
+	queryAnalysisShadowLimits := analysisLimits
+	resultRecallInputs := make([]SearchInput, 0, len(recallInputs))
+	queryAnalysisShadowInputs := make([]SearchInput, 0, len(recallInputs))
+	for _, recallInput := range recallInputs {
+		if recallInput.queryAnalysisObserveOnly {
+			queryAnalysisShadowInputs = append(queryAnalysisShadowInputs, recallInput)
+			continue
+		}
+		resultRecallInputs = append(resultRecallInputs, recallInput)
+	}
+	recallInputs = resultRecallInputs
+	if plannerExecution.active() && !plannerFailed {
+		analysisLimits.MaxCandidatesPerSignal = plannerExecution.plan.TotalCandidates
+		analysisLimits.MaxAggregateCandidates = plannerExecution.plan.TotalCandidates
+	}
 	aggregateCandidates := 0
+	recalledCandidates := 0
+	filteredCandidates := 0
+	requiredChannelUnavailable := false
 	shadowCandidates := 0
-
-	recordShadowCandidates := func(hits []ScoredMemory) {
-		limit := analysisLimits.MaxCandidatesPerSignal
-		if limit > 0 && len(hits) > limit {
-			hits = hits[:limit]
+	plannerEvidence := EvidenceAssessment{}
+	plannerEvidenceSet := false
+	plannerPassCount := 1
+	plannerCandidateCount := 0
+	plannerChannelAvailability := plannerNotEvaluatedChannels(plannerExecution.plan)
+	plannerChangedRankCount := 0
+	plannerChangedRankObserved := false
+	var shadowPlannedOrder []string
+	plannerPassObservations := make([]RetrievalPassObservation, 0, 2)
+	reserveRecall := func(channel FusionChannel, recallInput SearchInput) (SearchInput, bool, bool, error) {
+		if !plannerExecution.active() {
+			return recallInput, true, true, nil
 		}
-		for _, hit := range hits {
-			if shadowCandidates >= analysisLimits.MaxAggregateCandidates {
-				break
-			}
-			if hit.Memory.Scope.Normalized() != input.Scope.Normalized() || hit.Memory.State != memory.MemoryStateActive || !matchClassFilter(hit.Memory.Class, input.Classes) {
-				continue
-			}
-			shadowCandidates++
+		if plannerExecution.declaresChannel(channel) {
+			callInput, execute, err := plannerExecution.reserveChannelRequest(1, channel, recallInput)
+			return callInput, execute, true, err
 		}
+		callInput, execute, err := plannerExecution.reserveBaselineRequest(channel, recallInput)
+		return callInput, execute, false, err
 	}
 
-	filterChannel := func(channel FusionChannel, hits []ScoredMemory) {
+	filterChannel := func(pass int, channel FusionChannel, hits []ScoredMemory, includePlanned, includeBaseline bool) error {
+		if includePlanned {
+			recalledCandidates += len(hits)
+		}
 		if analysisLimits.MaxCandidatesPerSignal > 0 && len(hits) > analysisLimits.MaxCandidatesPerSignal {
+			if includePlanned {
+				filteredCandidates += len(hits) - analysisLimits.MaxCandidatesPerSignal
+			}
 			hits = hits[:analysisLimits.MaxCandidatesPerSignal]
 		}
-		filtered := make([]ScoredMemory, 0, len(hits))
-		for _, hit := range hits {
-			if aggregateCandidates >= analysisLimits.MaxAggregateCandidates {
-				break
+		if plannerExecution.active() && includePlanned {
+			remaining := plannerExecution.ledger.UnacceptedChannelRequestsForPass(pass, channel)
+			if len(hits) > remaining {
+				filteredCandidates += len(hits) - remaining
+				hits = hits[:remaining]
 			}
+		}
+		visible := make([]ScoredMemory, 0, len(hits))
+		for _, hit := range hits {
 			if hit.Memory.Scope.Normalized() != input.Scope.Normalized() || hit.Memory.State != memory.MemoryStateActive {
+				if includePlanned {
+					filteredCandidates++
+				}
 				continue
 			}
 			if !matchClassFilter(hit.Memory.Class, input.Classes) {
+				if includePlanned {
+					filteredCandidates++
+				}
 				continue
 			}
 			if !input.IncludeSummaries && hit.Memory.Class == memory.MemoryClassSummary {
+				if includePlanned {
+					filteredCandidates++
+				}
 				continue
 			}
 			if !input.IncludeRelations && hit.Memory.Class == memory.MemoryClassRelation {
+				if includePlanned {
+					filteredCandidates++
+				}
 				continue
 			}
-
-			filtered = append(filtered, hit)
-			aggregateCandidates++
+			visible = append(visible, hit)
+		}
+		planned := visible
+		if includePlanned && analysisLimits.MaxAggregateCandidates > 0 {
+			remaining := maxInt(analysisLimits.MaxAggregateCandidates-aggregateCandidates, 0)
+			if len(planned) > remaining {
+				filteredCandidates += len(planned) - remaining
+				planned = planned[:remaining]
+			}
+		}
+		if plannerExecution.active() && includePlanned && len(planned) > 0 {
+			if consumeErr := plannerExecution.ledger.RecordChannelAccepted(pass, channel, len(planned), time.Now().UTC()); consumeErr != nil {
+				filteredCandidates += len(planned)
+				if includeBaseline && len(visible) > 0 {
+					baselineChannelCandidates = append(baselineChannelCandidates, FusionChannelCandidates{Channel: channel, Candidates: visible})
+				}
+				return consumeErr
+			}
+		}
+		metadataHits := planned
+		if includeBaseline {
+			metadataHits = visible
+		}
+		for _, hit := range metadataHits {
 			if existing, exists := diversityMetadata[hit.Memory.ID]; !exists {
 				diversityMetadata[hit.Memory.ID] = hit
 			} else {
 				diversityMetadata[hit.Memory.ID] = mergeDiversityScoredMemory(existing, hit)
 			}
 		}
-		if len(filtered) > 0 {
-			channelCandidates = append(channelCandidates, FusionChannelCandidates{Channel: channel, Candidates: filtered})
+		if includePlanned && len(planned) > 0 {
+			aggregateCandidates += len(planned)
+			channelCandidates = append(channelCandidates, FusionChannelCandidates{Channel: channel, Candidates: planned})
 		}
+		if includeBaseline && len(visible) > 0 {
+			baselineChannelCandidates = append(baselineChannelCandidates, FusionChannelCandidates{Channel: channel, Candidates: visible})
+		}
+		return nil
 	}
 
 	// Process each signal across all physical channels before moving to the
 	// next signal. This reserves aggregate candidate capacity for the immutable
 	// original query even when a derived lexical channel is noisy.
 	for signalIndex, recallInput := range recallInputs {
-		if s.lexical != nil {
-			hits, recallErr := s.lexical.SearchLexical(ctx, recallInput)
-			if recallErr != nil {
-				if signalIndex == 0 {
-					return SearchResult{}, recallErr
+		if s.lexical != nil && plannerExecution.channelEnabled(FusionChannelLexical) {
+			callInput, execute, plannedChannel, reserveErr := reserveRecall(FusionChannelLexical, recallInput)
+			if reserveErr != nil {
+				plannerFailed = plannerExecution.active()
+				execute = false
+			}
+			if execute {
+				callCtx, cancel := ctx, func() {}
+				if plannerExecution.active() {
+					var ok bool
+					callCtx, cancel, ok = plannerExecution.callContext(ctx)
+					if !ok {
+						plannerFailed = true
+						execute = false
+					}
 				}
-				if input.IncludeFeedbackDiagnostics {
-					fusionDiagnostics = append(fusionDiagnostics, ContextDiagnostic{Section: "query_analysis", Status: "derived_signal_unavailable", Reason: "derived lexical recall failed closed"})
+				if !execute {
+					cancel()
+					continue
 				}
-			} else {
-				channelAvailability[FusionChannelLexical] = fusionChannelAvailable
-				if recallInput.queryAnalysisObserveOnly {
-					recordShadowCandidates(hits)
+				hits, recallErr := s.lexical.SearchLexical(callCtx, callInput)
+				cancel()
+				if recallErr != nil {
+					if signalIndex == 0 {
+						return SearchResult{}, recallErr
+					}
+					plannerFailed = plannerExecution.active()
+					if input.IncludeFeedbackDiagnostics {
+						fusionDiagnostics = append(fusionDiagnostics, ContextDiagnostic{Section: "query_analysis", Status: "derived_signal_unavailable", Reason: "derived lexical recall failed closed"})
+					}
 				} else {
-					filterChannel(FusionChannelLexical, hits)
+					channelAvailability[FusionChannelLexical] = fusionChannelAvailable
+					if filterErr := filterChannel(1, FusionChannelLexical, hits, plannedChannel, plannerExecution.active()); filterErr != nil {
+						plannerFailed = plannerExecution.active()
+					}
 				}
 			}
 		}
-		if s.semantic != nil {
-			hits, recallErr := s.semantic.SearchSemantic(ctx, recallInput)
-			if recallErr != nil {
-				if input.IncludeFeedbackDiagnostics {
-					fusionDiagnostics = append(fusionDiagnostics, ContextDiagnostic{Section: "fusion", Status: "optional_channel_unavailable", Reason: "semantic recall failed closed"})
+		if s.semantic != nil && plannerExecution.channelEnabled(FusionChannelSemantic) {
+			callInput, execute, plannedChannel, reserveErr := reserveRecall(FusionChannelSemantic, recallInput)
+			if reserveErr != nil {
+				plannerFailed = plannerExecution.active()
+				execute = false
+			}
+			if execute {
+				callCtx, cancel := ctx, func() {}
+				if plannerExecution.active() {
+					var ok bool
+					callCtx, cancel, ok = plannerExecution.callContext(ctx)
+					if !ok {
+						plannerFailed = true
+						execute = false
+					}
 				}
-			} else {
-				channelAvailability[FusionChannelSemantic] = fusionChannelAvailable
-				if recallInput.queryAnalysisObserveOnly {
-					recordShadowCandidates(hits)
+				if !execute {
+					cancel()
+					continue
+				}
+				hits, recallErr := s.semantic.SearchSemantic(callCtx, callInput)
+				cancel()
+				if recallErr != nil {
+					if plannerExecution.active() {
+						plannerFailed = true
+					}
+					if input.IncludeFeedbackDiagnostics {
+						fusionDiagnostics = append(fusionDiagnostics, ContextDiagnostic{Section: "fusion", Status: "optional_channel_unavailable", Reason: "semantic recall failed closed"})
+					}
 				} else {
-					filterChannel(FusionChannelSemantic, hits)
+					channelAvailability[FusionChannelSemantic] = fusionChannelAvailable
+					if filterErr := filterChannel(1, FusionChannelSemantic, hits, plannedChannel, plannerExecution.active()); filterErr != nil {
+						plannerFailed = plannerExecution.active()
+					}
 				}
 			}
 		}
-		if input.IncludeRelations && s.relations != nil {
-			hits, recallErr := s.relations.SearchRelations(ctx, recallInput)
-			if recallErr != nil {
-				if input.IncludeFeedbackDiagnostics {
-					fusionDiagnostics = append(fusionDiagnostics, ContextDiagnostic{Section: "fusion", Status: "optional_channel_unavailable", Reason: "relation recall failed closed"})
+		if input.IncludeRelations && s.relations != nil && plannerExecution.channelEnabled(FusionChannelRelation) {
+			callInput, execute, plannedChannel, reserveErr := reserveRecall(FusionChannelRelation, recallInput)
+			if reserveErr != nil {
+				plannerFailed = plannerExecution.active()
+				execute = false
+			}
+			if execute {
+				callCtx, cancel := ctx, func() {}
+				if plannerExecution.active() {
+					var ok bool
+					callCtx, cancel, ok = plannerExecution.callContext(ctx)
+					if !ok {
+						plannerFailed = true
+						execute = false
+					}
 				}
-			} else {
-				channelAvailability[FusionChannelRelation] = fusionChannelAvailable
-				if recallInput.queryAnalysisObserveOnly {
-					recordShadowCandidates(hits)
+				if !execute {
+					cancel()
+					continue
+				}
+				hits, recallErr := s.relations.SearchRelations(callCtx, callInput)
+				cancel()
+				if recallErr != nil {
+					if plannerExecution.active() {
+						plannerFailed = true
+					}
+					requiredChannelUnavailable = true
+					if input.IncludeFeedbackDiagnostics {
+						fusionDiagnostics = append(fusionDiagnostics, ContextDiagnostic{Section: "fusion", Status: "optional_channel_unavailable", Reason: "relation recall failed closed"})
+					}
 				} else {
-					filterChannel(FusionChannelRelation, hits)
+					channelAvailability[FusionChannelRelation] = fusionChannelAvailable
+					if filterErr := filterChannel(1, FusionChannelRelation, hits, plannedChannel, plannerExecution.active()); filterErr != nil {
+						plannerFailed = plannerExecution.active()
+					}
 				}
 			}
 		}
@@ -605,30 +801,43 @@ func (s *Service) Search(ctx context.Context, input SearchInput) (result SearchR
 	// Derived chunks are strictly opt-in. In shadow mode we execute the search
 	// only to produce diagnostics for explicitly requested evaluation callers;
 	// ordinary responses remain byte-for-byte compatible with canonical retrieval.
-	if s.chunks != nil && s.chunkRollout != memory.ChunkRolloutModeDefaultOff {
+	if s.chunks != nil && s.chunkRollout != memory.ChunkRolloutModeDefaultOff && plannerExecution.channelEnabled(FusionChannelChunk) {
 		allChunkCandidates := make([]ChunkCandidate, 0)
 		var chunkErr error
+		chunkPlannedChannel := !plannerExecution.active() || plannerExecution.declaresChannel(FusionChannelChunk)
 		for _, recallInput := range recallInputs {
 			if analysisLimits.MaxAggregateCandidates > 0 && aggregateCandidates >= analysisLimits.MaxAggregateCandidates {
 				break
 			}
-			chunkCandidates, err := s.chunks.SearchChunks(ctx, ChunkSearchInput{Scope: recallInput.Scope, Query: recallInput.Query, QueryEmbedding: recallInput.QueryEmbedding, Classes: recallInput.Classes, TopK: recallInput.TopK})
+			callInput, execute, _, reserveErr := reserveRecall(FusionChannelChunk, recallInput)
+			if reserveErr != nil {
+				plannerFailed = plannerExecution.active()
+				execute = false
+			}
+			if !execute {
+				continue
+			}
+			callCtx, cancel := ctx, func() {}
+			if plannerExecution.active() {
+				var ok bool
+				callCtx, cancel, ok = plannerExecution.callContext(ctx)
+				if !ok {
+					plannerFailed = true
+					cancel()
+					break
+				}
+			}
+			chunkCandidates, err := s.chunks.SearchChunks(callCtx, ChunkSearchInput{Scope: callInput.Scope, Query: callInput.Query, QueryEmbedding: callInput.QueryEmbedding, Classes: callInput.Classes, TopK: callInput.TopK})
+			cancel()
 			if err != nil {
+				if plannerExecution.active() {
+					plannerFailed = true
+				}
 				chunkErr = err
 				continue
 			}
 			if analysisLimits.MaxCandidatesPerSignal > 0 && len(chunkCandidates) > analysisLimits.MaxCandidatesPerSignal {
 				chunkCandidates = chunkCandidates[:analysisLimits.MaxCandidatesPerSignal]
-			}
-			if recallInput.queryAnalysisObserveOnly {
-				remaining := analysisLimits.MaxAggregateCandidates - shadowCandidates
-				if remaining > 0 {
-					if len(chunkCandidates) > remaining {
-						chunkCandidates = chunkCandidates[:remaining]
-					}
-					shadowCandidates += len(chunkCandidates)
-				}
-				continue
 			}
 			if analysisLimits.MaxAggregateCandidates > 0 {
 				remaining := analysisLimits.MaxAggregateCandidates - aggregateCandidates - len(allChunkCandidates)
@@ -643,6 +852,7 @@ func (s *Service) Search(ctx context.Context, input SearchInput) (result SearchR
 		}
 		chunkCandidates := allChunkCandidates
 		if chunkErr != nil {
+			requiredChannelUnavailable = true
 			if s.chunkRollout == memory.ChunkRolloutModeActive {
 				if input.IncludeFeedbackDiagnostics {
 					fusionDiagnostics = append(fusionDiagnostics, ContextDiagnostic{Section: "fusion", Status: "optional_channel_unavailable", Reason: "chunk recall failed closed"})
@@ -668,12 +878,6 @@ func (s *Service) Search(ctx context.Context, input SearchInput) (result SearchR
 				}
 				accepted++
 				if s.chunkRollout == memory.ChunkRolloutModeActive {
-					if analysisLimits.MaxAggregateCandidates > 0 && aggregateCandidates >= analysisLimits.MaxAggregateCandidates {
-						accepted--
-						omitted++
-						continue
-					}
-					aggregateCandidates++
 					// Parent memory is the public result. Keep chunk metadata private.
 					hit := ScoredMemory{Memory: candidate.Parent, LexicalScore: candidate.Score.Lexical, SemanticScore: candidate.Score.Semantic, RelationScore: candidate.Score.Relation}
 					chunkHits = append(chunkHits, hit)
@@ -685,12 +889,70 @@ func (s *Service) Search(ctx context.Context, input SearchInput) (result SearchR
 				}
 			}
 			if len(chunkHits) > 0 {
-				channelCandidates = append(channelCandidates, FusionChannelCandidates{Channel: FusionChannelChunk, Candidates: chunkHits})
+				if filterErr := filterChannel(1, FusionChannelChunk, chunkHits, chunkPlannedChannel, plannerExecution.active()); filterErr != nil {
+					plannerFailed = plannerExecution.active()
+				}
 			}
 			if input.IncludeFeedbackDiagnostics && s.chunkRollout == memory.ChunkRolloutModeShadow {
 				fusionDiagnostics = append(fusionDiagnostics, ContextDiagnostic{Section: "chunk_retrieval", Status: "shadow_evaluated", Available: len(chunkCandidates), Included: accepted, Omitted: omitted})
 			}
 		}
+	}
+
+	if plannerExecution.active() {
+		minimumVisible := 1
+		if plannerExecution.plan.FollowUp.Enabled {
+			minimumVisible = plannerExecution.plan.FollowUp.MinimumVisible
+		}
+		plannerEvidence, err = assessPlannedEvidence(input.Scope, fusionStrategy, channelCandidates, diversityMetadata, EvidenceAssessmentInput{
+			Pass: 1, MinimumVisible: minimumVisible, RecalledCandidates: recalledCandidates,
+			FilteredCandidates: filteredCandidates, RequiredChannelUnavailable: requiredChannelUnavailable,
+			RemainingCandidates: plannerExecution.ledger.RemainingForRetrieval(),
+		})
+		plannerEvidenceSet = err == nil
+		passOneCandidates := aggregateCandidates
+		passOneOrder, orderErr := plannedCandidateOrder(input.Scope, fusionStrategy, channelCandidates, diversityMetadata, 0)
+		if plannerEvidenceSet && orderErr == nil {
+			plannerPassObservations = append(plannerPassObservations, RetrievalPassObservation{Pass: 1, CandidateCount: passOneCandidates, VisibleMemoryIDs: passOneOrder, Evidence: plannerEvidence, Latency: time.Since(plannerExecution.startedAt)})
+		}
+		if plannerEvidenceSet && plannerExecution.plan.FollowUp.Enabled && plannerEvidence.FollowUpEligible {
+			followUpStarted := time.Now()
+			followUpExecuted, followUpErr := s.executeRetrievalFollowUp(ctx, input, plannerExecution, func(pass int, channel FusionChannel, hits []ScoredMemory) error {
+				return filterChannel(pass, channel, hits, true, false)
+			})
+			// Follow-up is optional. Accounting or provider failure preserves the
+			// successful first pass and never starts a new baseline provider pass.
+			if followUpErr != nil {
+				followUpExecuted = false
+			}
+			if followUpExecuted {
+				plannerPassCount = 2
+				plannerEvidence, err = assessPlannedEvidence(input.Scope, fusionStrategy, channelCandidates, diversityMetadata, EvidenceAssessmentInput{
+					Pass: 2, MinimumVisible: minimumVisible, RecalledCandidates: recalledCandidates,
+					FilteredCandidates: filteredCandidates, RequiredChannelUnavailable: requiredChannelUnavailable,
+					RemainingCandidates: plannerExecution.ledger.RemainingForRetrieval(),
+				})
+				plannerEvidenceSet = err == nil
+				passTwoOrder, orderErr := plannedCandidateOrder(input.Scope, fusionStrategy, channelCandidates, diversityMetadata, 0)
+				if plannerEvidenceSet && orderErr == nil {
+					plannerPassObservations = append(plannerPassObservations, RetrievalPassObservation{Pass: 2, CandidateCount: aggregateCandidates - passOneCandidates, VisibleMemoryIDs: passTwoOrder, Evidence: plannerEvidence, Latency: time.Since(followUpStarted)})
+				}
+			}
+		}
+		plannerCandidateCount = aggregateCandidates
+	} else if plannerExecution.shadow() {
+		plannerEvidence, plannerEvidenceSet, plannerCandidateCount, plannerChannelAvailability, shadowPlannedOrder = s.executeShadowRetrievalComparison(ctx, input, plannerExecution)
+		if plannerEvidenceSet {
+			plannerPassObservations = append(plannerPassObservations, RetrievalPassObservation{Pass: 1, CandidateCount: plannerCandidateCount, VisibleMemoryIDs: append([]string(nil), shadowPlannedOrder...), Evidence: plannerEvidence, Latency: time.Since(plannerExecution.startedAt)})
+		}
+	}
+	if plannerFailed {
+		channelCandidates = baselineChannelCandidates
+		fusionStrategy = baselineFusionStrategy
+		plannerExecution = retrievalPlannerExecution{stage: memory.RetrievalPlannerRolloutStageBaseline}
+		plannerEvidence = EvidenceAssessment{}
+		plannerEvidenceSet = false
+		plannerPassObservations = nil
 	}
 
 	channelCandidates = mergeSignalChannels(channelCandidates)
@@ -752,8 +1014,10 @@ func (s *Service) Search(ctx context.Context, input SearchInput) (result SearchR
 	if err != nil {
 		return SearchResult{}, err
 	}
-	if rerankDiagnostics := s.applyOptionalReranker(ctx, input, scored, activeRankingPolicy); len(rerankDiagnostics) > 0 {
+	rerankerObservation := RetrievalRerankerObservation{Safe: true}
+	if rerankDiagnostics, observation := s.applyOptionalReranker(ctx, input, scored, activeRankingPolicy, plannerExecution); len(rerankDiagnostics) > 0 {
 		diagnostics = append(diagnostics, rerankDiagnostics...)
+		rerankerObservation = observation
 	}
 
 	if !input.rankingPolicyDisabled {
@@ -777,6 +1041,15 @@ func (s *Service) Search(ctx context.Context, input SearchInput) (result SearchR
 	if input.TopK > 0 && len(scored) > input.TopK {
 		scored = scored[:input.TopK]
 	}
+	if plannerExecution.shadow() && plannerEvidenceSet {
+		baselineOrder := make([]string, 0, len(scored))
+		for _, hit := range scored {
+			baselineOrder = append(baselineOrder, hit.Memory.ID)
+		}
+		plannerChangedRankCount = changedRankCount(baselineOrder, shadowPlannedOrder)
+		plannerChangedRankObserved = true
+	}
+	shadowCandidates = s.observeQueryAnalysisShadow(ctx, input, queryAnalysisShadowInputs, queryAnalysisShadowLimits)
 
 	if s.citations != nil && len(scored) > 0 {
 		memoryIDs = make([]string, 0, len(scored))
@@ -813,13 +1086,192 @@ func (s *Service) Search(ctx context.Context, input SearchInput) (result SearchR
 	if !input.queryAnalysisDiagnosticsAuthorized {
 		diagnostics = filterQueryAnalysisDiagnostics(diagnostics)
 	}
+	if plannerExecution.plan != nil && !plannerEvidenceSet {
+		plannerCandidateCount = aggregateCandidates
+		plannerEvidence, err = AssessRetrievalEvidence(EvidenceAssessmentInput{
+			Pass: 1, VisibleCandidates: len(scored), MinimumVisible: 1,
+			RecalledCandidates: recalledCandidates, FilteredCandidates: filteredCandidates,
+			DuplicateCandidates: maxInt(aggregateCandidates-len(scored), 0),
+			RemainingCandidates: plannerExecution.ledgerRemaining(),
+		})
+		plannerEvidenceSet = err == nil
+	}
+	if plannerExecution.active() {
+		plannerChannelAvailability = plannerObservedChannels(plannerExecution.plan, channelAvailability)
+	}
+	plannerElapsed := plannerDiagnosticElapsed(plannerExecution.startedAt, time.Now())
+	var plannerDiagnostics []RetrievalPlannerDiagnostics
+	if input.retrievalPlannerDiagnosticsAuthorized && plannerExecution.plan != nil && plannerEvidenceSet {
+		plannerDiagnostics = s.retrievalPlannerDiagnostics(ctx, RetrievalPlannerDiagnosticsInput{Plan: *plannerExecution.plan, RolloutStage: plannerExecution.stage, Evidence: plannerEvidence, PassCount: plannerPassCount, CandidateCount: plannerCandidateCount, Elapsed: plannerElapsed, ChannelAvailability: plannerChannelAvailability, ChangedRankCount: plannerChangedRankCount, ChangedRankObserved: plannerChangedRankObserved})
+	}
+	s.recordRetrievalPlannerTelemetry(ctx, plannerExecution, plannerEvidence, plannerEvidenceSet, plannerPassCount, plannerCandidateCount, plannerElapsed, plannerChannelAvailability, plannerChangedRankCount, plannerChangedRankObserved)
 	result = SearchResult{
 		Hits:                      scored,
 		Diagnostics:               diagnostics,
+		plannerDiagnostics:        plannerDiagnostics,
 		fusionChannelAvailability: channelAvailability,
 		fusionStrategy:            fusionStrategy,
+		retrievalPlan: func() *RetrievalPlan {
+			if plannerExecution.active() {
+				return plannerExecution.plan
+			}
+			return nil
+		}(),
+		retrievalPassObservations: plannerPassObservations,
+		rerankerObservation:       rerankerObservation,
 	}
 	return result, nil
+}
+
+func (s *Service) observeQueryAnalysisShadow(ctx context.Context, original SearchInput, inputs []SearchInput, limits QueryAnalysisLimits) int {
+	if len(inputs) == 0 {
+		return 0
+	}
+	perSignal := limits.MaxCandidatesPerSignal
+	aggregate := limits.MaxAggregateCandidates
+	if perSignal <= 0 || aggregate <= 0 {
+		defaults := DefaultQueryAnalysisLimits()
+		if perSignal <= 0 {
+			perSignal = defaults.MaxCandidatesPerSignal
+		}
+		if aggregate <= 0 {
+			aggregate = defaults.MaxAggregateCandidates
+		}
+	}
+	observed := 0
+	record := func(hits []ScoredMemory) {
+		if len(hits) > perSignal {
+			hits = hits[:perSignal]
+		}
+		for _, hit := range hits {
+			if observed >= aggregate {
+				return
+			}
+			if hit.Memory.Scope.Normalized() != original.Scope.Normalized() || hit.Memory.State != memory.MemoryStateActive || !matchClassFilter(hit.Memory.Class, original.Classes) || (!original.IncludeSummaries && hit.Memory.Class == memory.MemoryClassSummary) || (!original.IncludeRelations && hit.Memory.Class == memory.MemoryClassRelation) {
+				continue
+			}
+			observed++
+		}
+	}
+	for _, shadowInput := range inputs {
+		if observed >= aggregate {
+			break
+		}
+		remaining := aggregate - observed
+		shadowInput.TopK = minInt(perSignal, remaining)
+		if s.lexical != nil {
+			if hits, err := s.lexical.SearchLexical(ctx, shadowInput); err == nil {
+				record(hits)
+			}
+		}
+		if observed >= aggregate {
+			break
+		}
+		if s.semantic != nil {
+			if hits, err := s.semantic.SearchSemantic(ctx, shadowInput); err == nil {
+				record(hits)
+			}
+		}
+		if observed >= aggregate {
+			break
+		}
+		if original.IncludeRelations && s.relations != nil {
+			if hits, err := s.relations.SearchRelations(ctx, shadowInput); err == nil {
+				record(hits)
+			}
+		}
+		if observed >= aggregate {
+			break
+		}
+		if s.chunks != nil && s.chunkRollout != memory.ChunkRolloutModeDefaultOff {
+			chunks, err := s.chunks.SearchChunks(ctx, ChunkSearchInput{Scope: shadowInput.Scope, Query: shadowInput.Query, QueryEmbedding: shadowInput.QueryEmbedding, Classes: shadowInput.Classes, TopK: shadowInput.TopK})
+			if err == nil {
+				hits := make([]ScoredMemory, 0, len(chunks))
+				for _, candidate := range chunks {
+					hits = append(hits, ScoredMemory{Memory: candidate.Parent})
+				}
+				record(hits)
+			}
+		}
+	}
+	return observed
+}
+
+type retrievalPlannerMetricObserver interface {
+	RecordRetrievalPlanner(context.Context, telemetry.RetrievalPlannerEvent)
+}
+
+type retrievalPlannerChannelMetricObserver interface {
+	RecordRetrievalPlannerChannel(context.Context, telemetry.RetrievalPlannerChannelEvent)
+}
+
+type retrievalPlannerChangedRankMetricObserver interface {
+	RecordRetrievalPlannerChangedRank(context.Context, telemetry.RetrievalPlannerChangedRankEvent)
+}
+
+type retrievalPlannerDiagnosticMetricObserver interface {
+	RecordRetrievalPlannerDiagnostic(context.Context, telemetry.RetrievalPlannerDiagnosticEvent)
+}
+
+func (s *Service) recordRetrievalPlannerTelemetry(ctx context.Context, execution retrievalPlannerExecution, evidence EvidenceAssessment, evidenceSet bool, pass, recalled int, elapsed time.Duration, channels []RetrievalPlannerChannelAvailability, changedRanks int, changedRankObserved bool) {
+	observer, ok := s.observer.(retrievalPlannerMetricObserver)
+	if !ok || observer == nil || execution.plan == nil || !evidenceSet {
+		return
+	}
+	reranker := "ineligible"
+	if execution.plan.RerankerEligible && execution.plan.RerankerHeadroom > 0 {
+		reranker = "eligible"
+	}
+	plannerVersion := string(execution.plan.Identity.PlannerVersion)
+	policyVersion := string(execution.plan.Identity.PolicyVersion)
+	family := string(execution.plan.Family)
+	stage := string(execution.stage)
+	observer.RecordRetrievalPlanner(ctx, telemetry.RetrievalPlannerEvent{
+		PlannerVersion: plannerVersion, PolicyVersion: policyVersion,
+		Family: family, Stage: stage, Disposition: string(execution.plan.Disposition), Pass: pass,
+		BudgetBucket: plannerCandidateBucket(recalled), Evidence: string(evidence.Disposition), Fallback: string(execution.plan.Fallback),
+		LatencyBucket: plannerLatencyBucket(elapsed), Reranker: reranker,
+	})
+	if channelObserver, ok := s.observer.(retrievalPlannerChannelMetricObserver); ok {
+		for _, channel := range channels {
+			channelObserver.RecordRetrievalPlannerChannel(ctx, telemetry.RetrievalPlannerChannelEvent{
+				PlannerVersion: plannerVersion, PolicyVersion: policyVersion, Family: family, Stage: stage,
+				Channel: string(channel.Channel), Availability: channel.Availability,
+			})
+		}
+	}
+	if changedRankObserved {
+		if changedRankObserver, ok := s.observer.(retrievalPlannerChangedRankMetricObserver); ok {
+			changedRankObserver.RecordRetrievalPlannerChangedRank(ctx, telemetry.RetrievalPlannerChangedRankEvent{
+				PlannerVersion: plannerVersion, PolicyVersion: policyVersion, Family: family, Stage: stage,
+				Bucket: plannerChangedRankBucket(changedRanks), Count: changedRanks,
+			})
+		}
+	}
+}
+
+func (s *Service) recordRetrievalPlannerDiagnosticFailure(ctx context.Context, failure string) {
+	observer, ok := s.observer.(retrievalPlannerDiagnosticMetricObserver)
+	if !ok || observer == nil {
+		return
+	}
+	observer.RecordRetrievalPlannerDiagnostic(ctx, telemetry.RetrievalPlannerDiagnosticEvent{FailureCategory: failure})
+}
+
+func (s *Service) retrievalPlannerDiagnostics(ctx context.Context, input RetrievalPlannerDiagnosticsInput) []RetrievalPlannerDiagnostics {
+	diagnostic, failure := buildRetrievalPlannerDiagnostics(input)
+	if failure != "" {
+		s.recordRetrievalPlannerDiagnosticFailure(ctx, failure)
+		return nil
+	}
+	return []RetrievalPlannerDiagnostics{diagnostic}
+}
+
+func (execution retrievalPlannerExecution) ledgerRemaining() int {
+	if execution.ledger == nil {
+		return 0
+	}
+	return execution.ledger.RemainingForRetrieval()
 }
 
 func filterQueryAnalysisDiagnostics(diagnostics []ContextDiagnostic) []ContextDiagnostic {
@@ -830,6 +1282,311 @@ func filterQueryAnalysisDiagnostics(diagnostics []ContextDiagnostic) []ContextDi
 		}
 	}
 	return filtered
+}
+
+func (s *Service) canExecuteRetrievalPlan(input SearchInput, plan RetrievalPlan) bool {
+	for _, channel := range plan.Channels {
+		switch channel {
+		case FusionChannelLexical:
+			if s.lexical == nil {
+				return false
+			}
+		case FusionChannelSemantic:
+			if s.semantic == nil {
+				return false
+			}
+		case FusionChannelRelation:
+			if s.relations == nil || !input.IncludeRelations {
+				return false
+			}
+		case FusionChannelChunk:
+			if s.chunks == nil || s.chunkRollout != memory.ChunkRolloutModeActive {
+				return false
+			}
+		default:
+			return false
+		}
+	}
+	return true
+}
+
+func (s *Service) canRetainPlannerBaseline(input SearchInput, plan RetrievalPlan) bool {
+	required := make(map[FusionChannel]bool, 4)
+	if s.lexical != nil {
+		required[FusionChannelLexical] = true
+	}
+	if s.semantic != nil {
+		required[FusionChannelSemantic] = true
+	}
+	if input.IncludeRelations && s.relations != nil {
+		required[FusionChannelRelation] = true
+	}
+	if s.chunks != nil && s.chunkRollout == memory.ChunkRolloutModeActive {
+		required[FusionChannelChunk] = true
+	}
+	planned := make(map[FusionChannel]bool, len(plan.Channels))
+	for _, channel := range plan.Channels {
+		planned[channel] = true
+	}
+	for channel := range required {
+		if !planned[channel] && plan.FallbackChannelCandidates[channel] <= 0 {
+			return false
+		}
+	}
+	for channel := range plan.FallbackChannelCandidates {
+		if !required[channel] || planned[channel] {
+			return false
+		}
+	}
+	return true
+}
+
+func assessPlannedEvidence(scope memory.Scope, strategy FusionStrategy, channels []FusionChannelCandidates, metadata map[string]ScoredMemory, input EvidenceAssessmentInput) (EvidenceAssessment, error) {
+	merged := mergeSignalChannels(channels)
+	fused, err := FuseCandidates(strategy, merged)
+	if err != nil {
+		return EvidenceAssessment{}, err
+	}
+	candidates := make([]DiversityCandidate, 0, len(fused))
+	for _, candidate := range fused {
+		item := metadata[candidate.Memory.ID]
+		candidates = append(candidates, DiversityCandidate{FusedCandidate: candidate, SourceEventID: item.SourceEventID, ParentMemoryID: item.ParentMemoryID, EmbeddingRevision: item.EmbeddingRevision, EmbeddingRevisionActive: item.EmbeddingRevisionActive})
+	}
+	selection := DeduplicateDiversityCandidates(scope, candidates)
+	input.VisibleCandidates = len(selection.Candidates)
+	accepted := input.RecalledCandidates - input.FilteredCandidates
+	input.DuplicateCandidates = maxInt(accepted-input.VisibleCandidates, 0)
+	return AssessRetrievalEvidence(input)
+}
+
+func (s *Service) executeRetrievalFollowUp(ctx context.Context, input SearchInput, execution retrievalPlannerExecution, filter func(int, FusionChannel, []ScoredMemory) error) (bool, error) {
+	if !execution.active() || !execution.plan.FollowUp.Enabled || len(execution.plan.FollowUp.Channels) == 0 {
+		return false, nil
+	}
+	executed := false
+	remainingAllocation := execution.plan.FollowUp.CandidateAllocation
+	for _, channel := range execution.plan.FollowUp.Channels {
+		if !execution.channelEnabled(channel) || execution.ledger.RemainingForRetrieval() <= 0 || remainingAllocation <= 0 {
+			continue
+		}
+		limit := minInt(execution.ledger.UnusedChannelAllocation(channel), remainingAllocation)
+		limit = minInt(limit, execution.ledger.RemainingForRetrieval())
+		if limit <= 0 {
+			continue
+		}
+		followUpInput := input
+		followUpInput.TopK = limit
+		callCtx, cancel, ok := execution.callContext(ctx)
+		if !ok {
+			break
+		}
+		if err := execution.ledger.ReserveChannelRequest(2, channel, limit, time.Now().UTC()); err != nil {
+			cancel()
+			break
+		}
+		remainingAllocation -= limit
+		executed = true
+		var hits []ScoredMemory
+		var err error
+		switch channel {
+		case FusionChannelLexical:
+			if s.lexical != nil {
+				hits, err = s.lexical.SearchLexical(callCtx, followUpInput)
+			}
+		case FusionChannelSemantic:
+			if s.semantic != nil {
+				hits, err = s.semantic.SearchSemantic(callCtx, followUpInput)
+			}
+		case FusionChannelRelation:
+			if s.relations != nil && input.IncludeRelations {
+				hits, err = s.relations.SearchRelations(callCtx, followUpInput)
+			}
+		}
+		cancel()
+		if err != nil || len(hits) == 0 {
+			continue
+		}
+		if len(hits) > limit {
+			hits = hits[:limit]
+		}
+		if filterErr := filter(2, channel, hits); filterErr != nil {
+			return executed, filterErr
+		}
+	}
+	return executed, nil
+}
+
+func (s *Service) executeShadowRetrievalComparison(ctx context.Context, input SearchInput, execution retrievalPlannerExecution) (EvidenceAssessment, bool, int, []RetrievalPlannerChannelAvailability, []string) {
+	if !execution.shadow() || !s.canExecuteRetrievalPlan(input, *execution.plan) {
+		return EvidenceAssessment{}, false, 0, plannerNotEvaluatedChannels(execution.plan), nil
+	}
+	channels := make([]FusionChannelCandidates, 0, len(execution.plan.Channels))
+	metadata := make(map[string]ScoredMemory)
+	recalled, filtered, accepted := 0, 0, 0
+	unavailable := false
+	availability := make([]RetrievalPlannerChannelAvailability, 0, len(execution.plan.Channels))
+	for _, channel := range execution.plan.Channels {
+		channelObservation := RetrievalPlannerChannelAvailability{Channel: channel, Availability: "available"}
+		limit := minInt(execution.ledger.UnusedChannelAllocation(channel), execution.ledger.RemainingForRetrieval())
+		if limit <= 0 {
+			continue
+		}
+		callInput := input
+		callInput.TopK = limit
+		callCtx, cancel, ok := execution.callContext(ctx)
+		if !ok {
+			unavailable = true
+			channelObservation.Availability = "unavailable"
+			availability = append(availability, channelObservation)
+			break
+		}
+		if err := execution.ledger.ReserveChannelRequest(1, channel, limit, time.Now().UTC()); err != nil {
+			cancel()
+			unavailable = true
+			channelObservation.Availability = "unavailable"
+			availability = append(availability, channelObservation)
+			continue
+		}
+		var hits []ScoredMemory
+		var callErr error
+		switch channel {
+		case FusionChannelLexical:
+			hits, callErr = s.lexical.SearchLexical(callCtx, callInput)
+		case FusionChannelSemantic:
+			hits, callErr = s.semantic.SearchSemantic(callCtx, callInput)
+		case FusionChannelRelation:
+			hits, callErr = s.relations.SearchRelations(callCtx, callInput)
+		case FusionChannelChunk:
+			chunkHits, err := s.chunks.SearchChunks(callCtx, ChunkSearchInput{Scope: callInput.Scope, Query: callInput.Query, QueryEmbedding: callInput.QueryEmbedding, Classes: callInput.Classes, TopK: limit})
+			callErr = err
+			for _, candidate := range chunkHits {
+				hits = append(hits, ScoredMemory{Memory: candidate.Parent, LexicalScore: candidate.Score.Lexical, SemanticScore: candidate.Score.Semantic, RelationScore: candidate.Score.Relation})
+			}
+		}
+		cancel()
+		if callErr != nil {
+			unavailable = true
+			channelObservation.Availability = "unavailable"
+			availability = append(availability, channelObservation)
+			continue
+		}
+		recalled += len(hits)
+		if len(hits) > limit {
+			filtered += len(hits) - limit
+			hits = hits[:limit]
+		}
+		visible := hits[:0]
+		for _, hit := range hits {
+			if hit.Memory.Scope.Normalized() != input.Scope.Normalized() || hit.Memory.State != memory.MemoryStateActive || !matchClassFilter(hit.Memory.Class, input.Classes) || (!input.IncludeSummaries && hit.Memory.Class == memory.MemoryClassSummary) || (!input.IncludeRelations && hit.Memory.Class == memory.MemoryClassRelation) {
+				filtered++
+				continue
+			}
+			visible = append(visible, hit)
+			metadata[hit.Memory.ID] = hit
+		}
+		if len(visible) > 0 {
+			if err := execution.ledger.RecordChannelAccepted(1, channel, len(visible), time.Now().UTC()); err != nil {
+				unavailable = true
+				continue
+			}
+			accepted += len(visible)
+			channels = append(channels, FusionChannelCandidates{Channel: channel, Candidates: visible})
+		}
+		availability = append(availability, channelObservation)
+	}
+	availability = completePlannerChannelAvailability(execution.plan, availability, "unavailable")
+	minimumVisible := 1
+	if execution.plan.FollowUp.Enabled {
+		minimumVisible = execution.plan.FollowUp.MinimumVisible
+	}
+	assessment, err := assessPlannedEvidence(input.Scope, execution.plan.Fusion, channels, metadata, EvidenceAssessmentInput{Pass: 1, MinimumVisible: minimumVisible, RecalledCandidates: recalled, FilteredCandidates: filtered, RequiredChannelUnavailable: unavailable, RemainingCandidates: execution.ledger.RemainingForRetrieval()})
+	if err != nil {
+		return EvidenceAssessment{}, false, accepted, availability, nil
+	}
+	plannedOrder, err := plannedCandidateOrder(input.Scope, execution.plan.Fusion, channels, metadata, input.TopK)
+	if err != nil {
+		return EvidenceAssessment{}, false, accepted, availability, nil
+	}
+	return assessment, true, accepted, availability, plannedOrder
+}
+
+func plannedCandidateOrder(scope memory.Scope, strategy FusionStrategy, channels []FusionChannelCandidates, metadata map[string]ScoredMemory, topK int) ([]string, error) {
+	fused, err := FuseCandidates(strategy, mergeSignalChannels(channels))
+	if err != nil {
+		return nil, err
+	}
+	candidates := make([]DiversityCandidate, 0, len(fused))
+	for _, candidate := range fused {
+		item := metadata[candidate.Memory.ID]
+		candidates = append(candidates, DiversityCandidate{FusedCandidate: candidate, SourceEventID: item.SourceEventID, ParentMemoryID: item.ParentMemoryID, EmbeddingRevision: item.EmbeddingRevision, EmbeddingRevisionActive: item.EmbeddingRevisionActive})
+	}
+	selection := DeduplicateDiversityCandidates(scope, candidates)
+	if topK > 0 && len(selection.Candidates) > topK {
+		selection.Candidates = selection.Candidates[:topK]
+	}
+	result := make([]string, 0, len(selection.Candidates))
+	for _, candidate := range selection.Candidates {
+		result = append(result, candidate.Memory.ID)
+	}
+	return result, nil
+}
+
+func changedRankCount(baseline, planned []string) int {
+	count, size := 0, maxInt(len(baseline), len(planned))
+	for i := 0; i < size; i++ {
+		var left, right string
+		if i < len(baseline) {
+			left = baseline[i]
+		}
+		if i < len(planned) {
+			right = planned[i]
+		}
+		if left != right {
+			count++
+		}
+	}
+	return count
+}
+
+func plannerNotEvaluatedChannels(plan *RetrievalPlan) []RetrievalPlannerChannelAvailability {
+	if plan == nil {
+		return nil
+	}
+	result := make([]RetrievalPlannerChannelAvailability, 0, len(plan.Channels))
+	for _, channel := range plan.Channels {
+		result = append(result, RetrievalPlannerChannelAvailability{Channel: channel, Availability: "not_evaluated"})
+	}
+	return result
+}
+
+func plannerObservedChannels(plan *RetrievalPlan, availability map[FusionChannel]fusionChannelAvailability) []RetrievalPlannerChannelAvailability {
+	if plan == nil {
+		return nil
+	}
+	result := make([]RetrievalPlannerChannelAvailability, 0, len(plan.Channels))
+	for _, channel := range plan.Channels {
+		result = append(result, RetrievalPlannerChannelAvailability{Channel: channel, Availability: string(availability[channel])})
+	}
+	return result
+}
+
+func completePlannerChannelAvailability(plan *RetrievalPlan, observations []RetrievalPlannerChannelAvailability, missing string) []RetrievalPlannerChannelAvailability {
+	if plan == nil {
+		return nil
+	}
+	byChannel := make(map[FusionChannel]string, len(observations))
+	for _, observation := range observations {
+		byChannel[observation.Channel] = observation.Availability
+	}
+	result := make([]RetrievalPlannerChannelAvailability, 0, len(plan.Channels))
+	for _, channel := range plan.Channels {
+		availability := byChannel[channel]
+		if availability == "" {
+			availability = missing
+		}
+		result = append(result, RetrievalPlannerChannelAvailability{Channel: channel, Availability: availability})
+	}
+	return result
 }
 
 // mergeSignalChannels converts per-signal recall streams into one stable rank
@@ -918,6 +1675,9 @@ func (s *Service) queryRecallInputs(ctx context.Context, input SearchInput, rank
 		}
 		return inputs, diagnostics
 	}
+	analysisCopy := analysis
+	inputs[0].queryAnalysis = &analysisCopy
+	input.queryAnalysis = &analysisCopy
 	resolution := memory.ResolveQueryAnalysisRollout(rankingPolicy, memory.ResolveQueryAnalysisRolloutInput{Scope: input.Scope, Surface: surface, SessionID: input.SessionID, UserID: input.UserID, Now: time.Now().UTC()})
 	fallback := queryAnalysisFallbackForResult(analysis)
 	if !resolution.DerivedSignalsAffectResults {
@@ -1371,36 +2131,81 @@ func (s *Service) applyUsefulnessFeedbackSignals(ctx context.Context, input Sear
 	return diagnostics, nil
 }
 
-func (s *Service) applyOptionalReranker(ctx context.Context, input SearchInput, scored []SearchHit, policy *memory.RankingRolloutPolicy) []ContextDiagnostic {
+func (s *Service) applyOptionalReranker(ctx context.Context, input SearchInput, scored []SearchHit, policy *memory.RankingRolloutPolicy, planner retrievalPlannerExecution) ([]ContextDiagnostic, RetrievalRerankerObservation) {
+	observation := RetrievalRerankerObservation{Safe: true}
 	if s.reranker == nil || s.rerankerMode == RerankerModeDisabled || len(scored) == 0 {
-		return nil
+		return nil, observation
 	}
-	if s.rerankerMode == RerankerModeActive {
-		if policy == nil || !rerankerAllowedForPolicy(*policy, input.Scope, s.rerankerMode, s.rerankerProvider, s.rerankerVersion) {
-			s.recordRerankTelemetry(ctx, "fallback", "no_matching_policy", len(scored))
-			return []ContextDiagnostic{{Section: "rerank", Status: "fallback", Reason: "no matching active scoped reranker policy"}}
+	rerankerPolicy := policy
+	if s.rerankerMode == RerankerModeShadow {
+		rerankerPolicy = planner.rolloutPolicy
+	}
+	if rerankerPolicy == nil || !rerankerAllowedForPolicy(*rerankerPolicy, input.Scope, s.rerankerMode, s.rerankerProvider, s.rerankerVersion) {
+		s.recordRerankTelemetry(ctx, "fallback", "no_matching_policy", len(scored))
+		observation.FallbackCategory = "no_matching_policy"
+		if rerankerPolicy != nil || planner.planned() {
+			return []ContextDiagnostic{{Section: "rerank", Status: "fallback", Reason: "optional reranker not applied"}}, observation
+		}
+		return []ContextDiagnostic{{Section: "rerank", Status: "fallback", Reason: "no matching scoped reranker policy"}}, observation
+	}
+	if planner.plan != nil && !planner.plan.RerankerEligible {
+		observation.FallbackCategory = "planner_ineligible_or_no_headroom"
+		return []ContextDiagnostic{{Section: "rerank", Status: "fallback", Reason: "optional reranker not applied"}}, observation
+	}
+	if planner.planned() {
+		if !time.Now().Before(planner.deadline) {
+			observation.FallbackCategory = "planner_latency_exhausted"
+			return []ContextDiagnostic{{Section: "rerank", Status: "fallback", Reason: "optional reranker not applied"}}, observation
+		}
+		if !planner.plan.RerankerEligible || planner.ledger.RemainingForReranker() < len(scored) {
+			observation.FallbackCategory = "planner_ineligible_or_no_headroom"
+			return []ContextDiagnostic{{Section: "rerank", Status: "fallback", Reason: "optional reranker not applied"}}, observation
+		}
+		if err := planner.ledger.ConsumeReranker(len(scored), time.Now().UTC()); err != nil {
+			observation.FallbackCategory = "planner_headroom_exhausted"
+			if !time.Now().Before(planner.deadline) {
+				observation.FallbackCategory = "planner_latency_exhausted"
+			}
+			return []ContextDiagnostic{{Section: "rerank", Status: "fallback", Reason: "optional reranker not applied"}}, observation
 		}
 	}
 	candidates := make([]RerankCandidate, 0, len(scored))
 	for _, hit := range scored {
 		if hit.Memory.Scope.Normalized() != input.Scope.Normalized() || hit.Memory.State != memory.MemoryStateActive {
 			s.recordRerankTelemetry(ctx, "fallback", "visibility_validation", len(scored))
-			return []ContextDiagnostic{{Section: "rerank", Status: "fallback", Reason: "candidate visibility validation failed"}}
+			observation.Safe = false
+			observation.FallbackCategory = "visibility_validation"
+			return []ContextDiagnostic{{Section: "rerank", Status: "fallback", Reason: "candidate visibility validation failed"}}, observation
 		}
 		candidates = append(candidates, RerankCandidate{ID: hit.Memory.ID, Text: hit.Memory.Content})
 	}
-	scores, err := s.reranker.Rerank(ctx, RerankRequest{Query: input.Query, Candidates: candidates})
+	observation.Attempted = true
+	rerankCtx, cancel := ctx, func() {}
+	if planner.planned() {
+		var ok bool
+		rerankCtx, cancel, ok = planner.callContext(ctx)
+		if !ok {
+			observation.Attempted = false
+			observation.FallbackCategory = "planner_latency_exhausted"
+			return []ContextDiagnostic{{Section: "rerank", Status: "fallback", Reason: "optional reranker not applied"}}, observation
+		}
+	}
+	scores, err := s.reranker.Rerank(rerankCtx, RerankRequest{Query: input.Query, Candidates: candidates})
+	cancel()
 	if err != nil {
 		s.recordRerankTelemetry(ctx, "fallback", "provider_unavailable", len(scored))
-		return []ContextDiagnostic{{Section: "rerank", Status: "fallback", Reason: "optional reranker unavailable"}}
+		observation.FallbackCategory = "provider_unavailable"
+		return []ContextDiagnostic{{Section: "rerank", Status: "fallback", Reason: "optional reranker unavailable"}}, observation
 	}
 	if err := ValidateRerankResponse(candidates, scores); err != nil {
 		s.recordRerankTelemetry(ctx, "fallback", "invalid_response", len(scored))
-		return []ContextDiagnostic{{Section: "rerank", Status: "fallback", Reason: "optional reranker response invalid"}}
+		observation.Safe = false
+		observation.FallbackCategory = "invalid_response"
+		return []ContextDiagnostic{{Section: "rerank", Status: "fallback", Reason: "optional reranker response invalid"}}, observation
 	}
 	if s.rerankerMode != RerankerModeActive {
 		s.recordRerankTelemetry(ctx, "shadow", "", len(scored))
-		return []ContextDiagnostic{{Section: "rerank", Status: "shadow_evaluated", Reason: "reranker executed without changing ordinary ordering"}}
+		return []ContextDiagnostic{{Section: "rerank", Status: "shadow_evaluated", Reason: "reranker executed without changing ordinary ordering"}}, observation
 	}
 	byID := make(map[string]float64, len(scores))
 	for _, score := range scores {
@@ -1434,7 +2239,8 @@ func (s *Service) applyOptionalReranker(ctx context.Context, input SearchInput, 
 		return scored[i].Score.Overall > scored[j].Score.Overall
 	})
 	s.recordRerankTelemetry(ctx, "applied", "", len(scored))
-	return []ContextDiagnostic{{Section: "rerank", Status: "applied", Reason: "active scoped reranker applied"}}
+	observation.Used = true
+	return []ContextDiagnostic{{Section: "rerank", Status: "applied", Reason: "active scoped reranker applied"}}, observation
 }
 
 func (s *Service) qualityFeaturesForHit(ctx context.Context, scope memory.Scope, hit SearchHit) (QualityFeatureVector, error) {
@@ -1512,7 +2318,20 @@ func (s *Service) recordRerankTelemetry(ctx context.Context, outcome, fallbackCa
 }
 
 func rerankerAllowedForPolicy(policy memory.RankingRolloutPolicy, scope memory.Scope, runtimeMode RerankerMode, runtimeProvider, runtimeVersion string) bool {
-	if policy.Scope.Normalized() != scope.Normalized() || policy.Status != memory.RankingRolloutPolicyStatusActiveForScope || policy.Mode != memory.RankingRolloutModeActiveForScope {
+	if policy.Scope.Normalized() != scope.Normalized() {
+		return false
+	}
+	switch runtimeMode {
+	case RerankerModeShadow:
+		if policy.Status != memory.RankingRolloutPolicyStatusDryRun || policy.Mode != memory.RankingRolloutModeDryRun || policy.RerankerMode != string(runtimeMode) || strings.TrimSpace(policy.RerankerProvider) == "" || policy.RerankerProvider != strings.TrimSpace(runtimeProvider) || strings.TrimSpace(policy.RerankerVersion) == "" || policy.RerankerVersion != strings.TrimSpace(runtimeVersion) {
+			return false
+		}
+		return true
+	case RerankerModeActive:
+		if policy.Status != memory.RankingRolloutPolicyStatusActiveForScope || policy.Mode != memory.RankingRolloutModeActiveForScope {
+			return false
+		}
+	default:
 		return false
 	}
 	if policy.ThresholdStatus != memory.RankingRolloutThresholdStatusSatisfied {
@@ -1601,6 +2420,8 @@ func (s *Service) AssembleContext(ctx context.Context, input AssembleContextInpu
 	result, err := s.Search(ctx, SearchInput{
 		Scope:                      input.Scope,
 		Query:                      input.Query,
+		SessionID:                  input.SessionID,
+		UserID:                     input.UserID,
 		TopK:                       maxInt(input.Budget*3, input.Budget),
 		IncludeSummaries:           true,
 		IncludeRelations:           input.IncludeRelations,
@@ -1698,6 +2519,75 @@ func (s *Service) AssembleContext(ctx context.Context, input AssembleContextInpu
 				output.Citations = append(output.Citations, citation)
 			}
 		}
+	}
+
+	if result.retrievalPlan != nil {
+		remaining := minInt(input.Budget, result.retrievalPlan.ContextItems)
+		if remaining < 0 {
+			remaining = 0
+		}
+		classHits := map[memory.MemoryClass][]SearchHit{
+			memory.MemoryClassProfile:    profiles,
+			memory.MemoryClassSummary:    summaries,
+			memory.MemoryClassRelation:   relations,
+			memory.MemoryClassEpisodic:   episodes,
+			memory.MemoryClassProcedural: others,
+		}
+		seenClasses := make(map[memory.MemoryClass]struct{}, len(result.retrievalPlan.ContextPriorities))
+		availableContextItems := len(profiles) + len(summaries) + len(episodes) + len(others)
+		if input.IncludeRelations {
+			availableContextItems += len(relations)
+		}
+		includedContextItems := 0
+		priorities := append([]memory.MemoryClass(nil), result.retrievalPlan.ContextPriorities...)
+		for _, class := range []memory.MemoryClass{memory.MemoryClassProfile, memory.MemoryClassSummary, memory.MemoryClassRelation, memory.MemoryClassEpisodic, memory.MemoryClassProcedural} {
+			if _, seen := seenClasses[class]; !seen {
+				priorities = append(priorities, class)
+			}
+		}
+		priorities = preserveContextSummaryPreference(priorities)
+		for _, class := range priorities {
+			if remaining <= 0 {
+				break
+			}
+			if _, duplicate := seenClasses[class]; duplicate {
+				continue
+			}
+			seenClasses[class] = struct{}{}
+			candidates := classHits[class]
+			if class == memory.MemoryClassRelation && !input.IncludeRelations {
+				continue
+			}
+			if quota := result.retrievalPlan.MemoryClassQuotas[class]; quota > 0 && len(candidates) > quota {
+				candidates = candidates[:quota]
+			}
+			take := minInt(len(candidates), remaining)
+			switch class {
+			case memory.MemoryClassProfile:
+				output.Profile = append(output.Profile, candidates[:take]...)
+			case memory.MemoryClassSummary:
+				output.RelevantSummaries = append(output.RelevantSummaries, candidates[:take]...)
+			case memory.MemoryClassRelation:
+				output.RelatedEntities = append(output.RelatedEntities, candidates[:take]...)
+			case memory.MemoryClassEpisodic:
+				output.RecentSession = append(output.RecentSession, candidates[:take]...)
+			case memory.MemoryClassProcedural:
+				output.RecentEpisodes = append(output.RecentEpisodes, candidates[:take]...)
+			}
+			remaining -= take
+			includedContextItems += take
+		}
+		if input.retrievalPlannerDiagnosticsAuthorized && availableContextItems > includedContextItems {
+			output.plannerDiagnostics = append(output.plannerDiagnostics, ContextDiagnostic{Section: "context_planner", Status: "omitted_by_quota_or_budget", Reason: "planned context quota or caller budget omitted visible items", Omitted: availableContextItems - includedContextItems})
+		}
+		if input.IncludeExperienceInsights && remaining > 0 && s.insights != nil {
+			if err := s.appendExperienceInsights(ctx, input.Scope, input.IncludeDiagnostics, &output, &remaining); err != nil {
+				return AssembledContext{}, err
+			}
+		} else if input.IncludeDiagnostics {
+			output.Diagnostics = append(output.Diagnostics, skippedExperienceDiagnostics(input.IncludeExperienceInsights, s.insights != nil, remaining)...)
+		}
+		return output, nil
 	}
 
 	remaining := input.Budget
@@ -1994,6 +2884,22 @@ func experienceVisibilityDiagnostics(ctx context.Context, insights DerivedInsigh
 	}
 
 	return items
+}
+
+func preserveContextSummaryPreference(priorities []memory.MemoryClass) []memory.MemoryClass {
+	summaryIndex, episodicIndex := -1, -1
+	for index, class := range priorities {
+		if class == memory.MemoryClassSummary && summaryIndex < 0 {
+			summaryIndex = index
+		}
+		if class == memory.MemoryClassEpisodic && episodicIndex < 0 {
+			episodicIndex = index
+		}
+	}
+	if summaryIndex >= 0 && episodicIndex >= 0 && episodicIndex < summaryIndex {
+		priorities[summaryIndex], priorities[episodicIndex] = priorities[episodicIndex], priorities[summaryIndex]
+	}
+	return priorities
 }
 
 func skippedExperienceDiagnostics(includeExperienceInsights bool, insightsConfigured bool, remaining int) []ContextDiagnostic {

@@ -5,6 +5,7 @@ import (
 	"math"
 	"sort"
 	"strings"
+	"time"
 
 	"github.com/FelixSeptem/stele/internal/memory"
 )
@@ -33,6 +34,12 @@ func CalculateEvaluationMetrics(replay EvaluationReplay) (EvaluationReport, erro
 	temporalCases := 0
 	multiHopCases := 0
 	analysisCases := 0
+	plannerCases := 0
+	plannerFallbacks := 0
+	plannerRerankerUses := 0
+	plannerRerankerSafe := true
+	plannerCompatible := true
+	plannerRollbackTested := true
 	for _, item := range replay.Cases {
 		if err := validateEvaluationReplayAnalysis(item.AnalysisDiagnostics, replay.Metadata); err != nil {
 			return EvaluationReport{}, NewEvaluationFailure(EvaluationSafetyFailureUnsafeDiagnostics, err.Error())
@@ -62,6 +69,62 @@ func CalculateEvaluationMetrics(replay EvaluationReplay) (EvaluationReport, erro
 			CandidatePoolSize: item.CandidatePoolSize,
 			LatencyMS:         float64(item.Latency) / float64(1_000_000),
 			ChunkDerivedCount: chunkDerivedCount,
+		}
+		if item.PlannerFamily != "" || len(item.Passes) > 0 {
+			plannerCases++
+			caseReport.QueryFamily = item.PlannerFamily
+			caseReport.PlannerIdentity = item.PlannerIdentity
+			caseReport.PlannerVersion = item.PlannerVersion
+			caseReport.PlannerPolicyVersion = item.PlannerPolicyVersion
+			caseReport.PassCount = len(item.Passes)
+			caseReport.PlannerFallbackCategory = item.FallbackCategory
+			caseReport.PlannerRerankerUsed = item.RerankerUsed
+			caseReport.PlannerProtected = item.PlannerProtected
+			if !item.RerankerSafe {
+				plannerRerankerSafe = false
+			}
+			if !item.RollbackVerified {
+				plannerRollbackTested = false
+			}
+			if item.PlannerFamily == "" || !item.PlannerFamily.valid() || strings.TrimSpace(item.PlannerIdentity) == "" || len(item.Passes) == 0 || len(item.Passes) > 2 {
+				plannerCompatible = false
+			}
+			for index, pass := range item.Passes {
+				if pass.Pass != index+1 || pass.CandidateCount < 0 || pass.CandidateCount > 5000 || pass.VisibleCount < 0 || pass.VisibleCount > 5000 || !boundedRate(pass.EvidenceCoverage) || pass.Latency < 0 || pass.Evidence.Disposition == "" {
+					plannerCompatible = false
+					continue
+				}
+				caseReport.MaxPlannerCandidates += pass.CandidateCount
+				coverage := pass.EvidenceCoverage
+				if index == 0 {
+					caseReport.FirstPassEvidenceCoverage = coverage
+					caseReport.FirstPassCandidates = pass.CandidateCount
+					caseReport.FirstPassLatencyMS = float64(pass.Latency) / float64(time.Millisecond)
+				} else {
+					caseReport.SecondPassEvidenceCoverage = coverage
+					caseReport.SecondPassCandidates = pass.CandidateCount
+					caseReport.SecondPassLatencyMS = float64(pass.Latency) / float64(time.Millisecond)
+				}
+			}
+			caseReport.SecondPassEvidenceGain = math.Max(caseReport.SecondPassEvidenceCoverage-caseReport.FirstPassEvidenceCoverage, 0)
+			if caseReport.PassCount > report.Metrics.MaxPassesObserved {
+				report.Metrics.MaxPassesObserved = caseReport.PassCount
+			}
+			if caseReport.MaxPlannerCandidates > report.Metrics.MaxPlannerCandidates {
+				report.Metrics.MaxPlannerCandidates = caseReport.MaxPlannerCandidates
+			}
+			report.Metrics.FirstPassEvidenceCoverage += caseReport.FirstPassEvidenceCoverage
+			if caseReport.PassCount == 2 {
+				report.Metrics.SecondPassCount++
+				report.Metrics.SecondPassEvidenceCoverage += caseReport.SecondPassEvidenceCoverage
+				report.Metrics.SecondPassEvidenceGain += caseReport.SecondPassEvidenceGain
+			}
+			if item.FallbackCategory != "" && item.FallbackCategory != "none" {
+				plannerFallbacks++
+			}
+			if item.RerankerUsed {
+				plannerRerankerUses++
+			}
 		}
 		if diagnostic := item.AnalysisDiagnostics; diagnostic != nil {
 			analysisCases++
@@ -152,6 +215,16 @@ func CalculateEvaluationMetrics(replay EvaluationReplay) (EvaluationReport, erro
 		report.Metrics.AnalysisSignalCount = int(math.Round(float64(report.Metrics.AnalysisSignalCount) / float64(analysisCases)))
 		report.Metrics.AnalysisSubqueryCount = int(math.Round(float64(report.Metrics.AnalysisSubqueryCount) / float64(analysisCases)))
 		report.Metrics.AnalysisCandidateCount = int(math.Round(float64(report.Metrics.AnalysisCandidateCount) / float64(analysisCases)))
+	}
+	if plannerCases > 0 {
+		report.Metrics.FirstPassEvidenceCoverage /= float64(plannerCases)
+		if report.Metrics.SecondPassCount > 0 {
+			report.Metrics.SecondPassEvidenceCoverage /= float64(report.Metrics.SecondPassCount)
+			report.Metrics.SecondPassEvidenceGain /= float64(report.Metrics.SecondPassCount)
+		}
+		report.Metrics.PlannerFallbackRate = float64(plannerFallbacks) / float64(plannerCases)
+		report.Metrics.PlannerRerankerUseRate = float64(plannerRerankerUses) / float64(plannerCases)
+		report.PlannerEvidence = EvaluationPlannerReleaseEvidence{Compatible: plannerCompatible, SafetyFailures: evaluationSafetyFailureCount(report.SafetyFailures), MaxPasses: report.Metrics.MaxPassesObserved, MaxCandidateCount: report.Metrics.MaxPlannerCandidates, FallbackRate: report.Metrics.PlannerFallbackRate, RerankerSafe: plannerRerankerSafe, RollbackTested: plannerRollbackTested}
 	}
 	report.Metrics.DuplicateRate /= caseCount
 	report.Metrics.CandidatePoolSize = int(math.Round(float64(report.Metrics.CandidatePoolSize) / caseCount))

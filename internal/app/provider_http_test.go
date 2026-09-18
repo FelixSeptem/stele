@@ -11,6 +11,7 @@ import (
 	"github.com/FelixSeptem/stele/internal/auth"
 	"github.com/FelixSeptem/stele/internal/memory"
 	"github.com/FelixSeptem/stele/internal/provider"
+	"github.com/FelixSeptem/stele/internal/retrieval"
 	"net/http"
 	"net/http/httptest"
 )
@@ -60,6 +61,98 @@ func TestProviderCapabilitiesRouteReturnsBoundedDocument(t *testing.T) {
 	}
 	if got.ProviderVersion != "provider-v1" {
 		t.Fatalf("doc=%+v", got)
+	}
+}
+
+func TestProviderRetrievalPlannerRolloutPreservesOperationContracts(t *testing.T) {
+	scope := memory.Scope{Tenant: "tenant-a", Project: "project-a", Namespace: "namespace-a"}
+	binding := provider.RuntimeBinding{BindingID: "rb-planner", PrincipalID: "principal-1", Scope: scope, AgentID: "agent-a", SessionID: "session-a", ProviderInstanceID: "provider-a", CreatedAt: time.Now().UTC(), ExpiresAt: time.Now().UTC().Add(time.Hour)}
+	metadata := provider.OperationMetadata{RequestID: "request-1", OperationID: "operation-1", SchemaVersion: "schema-v1"}
+	for _, stage := range []struct {
+		name   string
+		status memory.RankingRolloutPolicyStatus
+		mode   memory.RankingRolloutMode
+	}{
+		{name: "diagnostics-only", status: memory.RankingRolloutPolicyStatusDiagnosticsOnly, mode: memory.RankingRolloutModeDiagnosticsOnly},
+		{name: "shadow", status: memory.RankingRolloutPolicyStatusDryRun, mode: memory.RankingRolloutModeDryRun},
+		{name: "active", status: memory.RankingRolloutPolicyStatusActiveForScope, mode: memory.RankingRolloutModeActiveForScope},
+		{name: "disabled", status: memory.RankingRolloutPolicyStatusDisabled, mode: memory.RankingRolloutModeActiveForScope},
+		{name: "rolled-back", status: memory.RankingRolloutPolicyStatusRolledBack, mode: memory.RankingRolloutModeActiveForScope},
+	} {
+		t.Run(stage.name, func(t *testing.T) {
+			policy := plannerHTTPRollout(scope, stage.status, stage.mode)
+			policy.RetrievalPlannerSelector = memory.RetrievalPlannerRolloutSelector{SessionID: binding.SessionID}
+			lexical := &plannerHTTPRecordingLexical{}
+			service := retrieval.NewService(retrieval.ServiceDependencies{Lexical: lexical, Citations: queryAnalysisHTTPCitations{}, RankingRolloutPolicyReader: queryAnalysisHTTPPolicyReader{policy: policy}, RetrievalPlanPolicy: plannerHTTPPlanPolicy(4)})
+			adapter := provider.NewAdapter(provider.AdapterDependencies{Searcher: service, Assembler: service})
+			searchStart := len(lexical.inputs)
+			search, _, err := adapter.Search(context.Background(), binding, metadata, retrieval.SearchInput{Query: "private planner query", TopK: 10})
+			if err != nil {
+				t.Fatal(err)
+			}
+			if stage.name == "active" && !lexical.plannedSince(searchStart, 4) {
+				t.Fatalf("matching provider search did not execute active plan: inputs=%+v", lexical.inputs[searchStart:])
+			}
+			contextStart := len(lexical.inputs)
+			assembled, _, err := adapter.AssembleContext(context.Background(), binding, metadata, retrieval.AssembleContextInput{Query: "private planner query", Budget: 10})
+			if err != nil {
+				t.Fatal(err)
+			}
+			if stage.name == "active" && !lexical.plannedSince(contextStart, 4) {
+				t.Fatalf("matching provider context did not execute active plan: inputs=%+v", lexical.inputs[contextStart:])
+			}
+			for _, result := range []any{search, assembled} {
+				payload, marshalErr := json.Marshal(result)
+				if marshalErr != nil {
+					t.Fatal(marshalErr)
+				}
+				assertNoPlannerInternals(t, string(payload))
+				if !strings.Contains(string(payload), `"id":"mem-original"`) {
+					t.Fatalf("provider result lost public shape: %s", payload)
+				}
+			}
+			if stage.name == "active" {
+				foreign := binding
+				foreign.SessionID = "session-foreign"
+				foreignStart := len(lexical.inputs)
+				if _, _, err := adapter.Search(context.Background(), foreign, metadata, retrieval.SearchInput{Query: "private planner query", TopK: 10, SessionID: binding.SessionID}); err != nil {
+					t.Fatal(err)
+				}
+				if lexical.plannedSince(foreignStart, 4) || len(lexical.inputs) != foreignStart+1 || lexical.inputs[foreignStart].SessionID != foreign.SessionID || lexical.inputs[foreignStart].TopK != 10 {
+					t.Fatalf("foreign provider selector affected retrieval: inputs=%+v", lexical.inputs[foreignStart:])
+				}
+			}
+		})
+	}
+}
+
+func TestProviderActivePlannerRerankerFallbackReasonsRemainPrivate(t *testing.T) {
+	scope := memory.Scope{Tenant: "tenant-a", Project: "project-a", Namespace: "namespace-a"}
+	binding := provider.RuntimeBinding{BindingID: "rb-rerank", PrincipalID: "principal-1", Scope: scope, AgentID: "agent-a", SessionID: "session-a", ProviderInstanceID: "provider-a", CreatedAt: time.Now().UTC(), ExpiresAt: time.Now().UTC().Add(time.Hour)}
+	metadata := provider.OperationMetadata{RequestID: "request-1", OperationID: "operation-1", SchemaVersion: "schema-v1"}
+	for _, scenario := range []string{"ineligible", "insufficient_headroom", "latency_exhausted"} {
+		t.Run(scenario, func(t *testing.T) {
+			service := plannerRerankerHTTPService(scope, scenario, memory.RetrievalPlannerRolloutSelector{SessionID: binding.SessionID})
+			adapter := provider.NewAdapter(provider.AdapterDependencies{Searcher: service, Assembler: service})
+			search, _, err := adapter.Search(context.Background(), binding, metadata, retrieval.SearchInput{Query: "ordinary", TopK: 10, IncludeFeedbackDiagnostics: true})
+			if err != nil {
+				t.Fatal(err)
+			}
+			assembled, _, err := adapter.AssembleContext(context.Background(), binding, metadata, retrieval.AssembleContextInput{Query: "ordinary", Budget: 10, IncludeDiagnostics: true, IncludeFeedbackDiagnostics: true})
+			if err != nil {
+				t.Fatal(err)
+			}
+			for _, result := range []any{search, assembled} {
+				payload, marshalErr := json.Marshal(result)
+				if marshalErr != nil {
+					t.Fatal(marshalErr)
+				}
+				assertNoPlannerRerankerCause(t, string(payload))
+				if !strings.Contains(string(payload), `"reason":"optional reranker not applied"`) {
+					t.Fatalf("missing generic reranker fallback: %s", payload)
+				}
+			}
+		})
 	}
 }
 

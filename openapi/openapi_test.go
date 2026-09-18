@@ -23,7 +23,7 @@ func TestPublicRetrievalSchemasDoNotExposeQueryAnalysisInternals(t *testing.T) {
 	if err != nil {
 		t.Fatalf("LoadFromData() error = %v", err)
 	}
-	for _, schemaName := range []string{"MemorySearchRequest", "MemorySearchResponse", "ContextAssembleRequest", "ContextAssembleResponse", "ContextDiagnostic"} {
+	for _, schemaName := range []string{"MemorySearchRequest", "MemorySearchResponse", "ContextAssembleRequest", "ContextAssembleResponse", "ContextDiagnostic", "ProviderRetrieveRequest", "ProviderContextRequest", "ProviderOperationResponse"} {
 		schema := doc.Components.Schemas[schemaName]
 		if schema == nil || schema.Value == nil {
 			t.Fatalf("public schema %q is missing", schemaName)
@@ -31,6 +31,8 @@ func TestPublicRetrievalSchemasDoNotExposeQueryAnalysisInternals(t *testing.T) {
 		for _, forbidden := range []string{
 			"query_analysis", "query_plan", "normalized_query", "subqueries", "analysis_policy_version",
 			"limits_version", "original_retained", "normalization_status", "signal_count", "candidate_count", "rollout_stage",
+			"retrieval_plan", "query_family", "planner_version", "planner_policy_version", "follow_up", "budget_bucket",
+			"channel_availability", "changed_rank_count", "changed_rank_bucket", "context_planner", "omitted_by_quota_or_budget",
 		} {
 			if _, exposed := schema.Value.Properties[forbidden]; exposed {
 				t.Fatalf("public schema %q exposes query-analysis property %q", schemaName, forbidden)
@@ -669,10 +671,49 @@ func TestRankingRolloutContractUsesExplicitFusionSchemas(t *testing.T) {
 		"fusion_channel_weights",
 		"fusion_per_channel_candidate",
 		"fusion_total_candidates",
+		"retrieval_planner_selector",
+		"retrieval_planner",
 	} {
 		if request.Properties[field] == nil {
 			t.Fatalf("ranking rollout create schema missing fusion field %q", field)
 		}
+	}
+	if got := request.Properties["retrieval_planner_selector"].Ref; got != "#/components/schemas/RetrievalPlannerRolloutSelector" {
+		t.Fatalf("retrieval planner selector schema ref = %q", got)
+	}
+	if got := request.Properties["retrieval_planner"].Ref; got != "#/components/schemas/RetrievalPlannerRolloutPolicy" {
+		t.Fatalf("retrieval planner policy schema ref = %q", got)
+	}
+
+	selector := doc.Components.Schemas["RetrievalPlannerRolloutSelector"]
+	if selector == nil || selector.Value == nil {
+		t.Fatal("retrieval planner rollout selector schema is missing")
+	}
+	for _, field := range []string{"session_id", "user_id"} {
+		if selector.Value.Properties[field] == nil {
+			t.Fatalf("retrieval planner selector schema missing %q", field)
+		}
+	}
+
+	planner := doc.Components.Schemas["RetrievalPlannerRolloutPolicy"]
+	if planner == nil || planner.Value == nil {
+		t.Fatal("retrieval planner rollout policy schema is missing")
+	}
+	for _, field := range []string{
+		"schema_version", "planner_version", "policy_version", "analysis_policy_version",
+		"fusion_version", "ranking_version", "renderer_version", "max_candidates",
+		"max_candidates_per_channel", "max_passes", "max_latency_ns", "max_context_items",
+		"max_reranker_headroom", "expires_at",
+	} {
+		if planner.Value.Properties[field] == nil {
+			t.Fatalf("retrieval planner policy schema missing %q", field)
+		}
+	}
+	if got := planner.Value.Properties["max_passes"].Value.Max; got == nil || *got != 2 {
+		t.Fatalf("retrieval planner max_passes maximum = %v, want 2", got)
+	}
+	if got := planner.Value.Properties["max_latency_ns"].Value.Max; got == nil || *got != 30_000_000_000 {
+		t.Fatalf("retrieval planner max_latency_ns maximum = %v, want 30000000000", got)
 	}
 
 	spec := SpecYAML()

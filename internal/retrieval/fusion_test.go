@@ -44,6 +44,22 @@ func TestFusionStrategyValidateRejectsUnsafeParameters(t *testing.T) {
 				},
 			},
 		},
+		{
+			name: "normalized weighted with rrf version",
+			strategy: func() FusionStrategy {
+				strategy := DefaultNormalizedWeightedStrategy()
+				strategy.Version = DefaultRRFStrategy().Version
+				return strategy
+			}(),
+		},
+		{
+			name: "rrf with normalized weighted version",
+			strategy: func() FusionStrategy {
+				strategy := DefaultRRFStrategy()
+				strategy.Version = DefaultNormalizedWeightedStrategy().Version
+				return strategy
+			}(),
+		},
 	}
 
 	for _, tt := range tests {

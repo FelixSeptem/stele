@@ -7991,6 +7991,90 @@ components:
           type: integer
           minimum: 1
           maximum: 5000
+        retrieval_planner_selector:
+          $ref: '#/components/schemas/RetrievalPlannerRolloutSelector'
+        retrieval_planner:
+          $ref: '#/components/schemas/RetrievalPlannerRolloutPolicy'
+    RetrievalPlannerRolloutSelector:
+      type: object
+      additionalProperties: false
+      properties:
+        session_id:
+          type: string
+        user_id:
+          type: string
+    RetrievalPlannerRolloutPolicy:
+      type: object
+      additionalProperties: false
+      required:
+        - schema_version
+        - planner_version
+        - policy_version
+        - analysis_policy_version
+        - fusion_version
+        - ranking_version
+        - renderer_version
+        - max_candidates
+        - max_candidates_per_channel
+        - max_passes
+        - max_latency_ns
+        - max_context_items
+        - max_reranker_headroom
+        - expires_at
+      properties:
+        schema_version:
+          type: string
+          enum: [retrieval-planner-rollout-v1]
+        planner_version:
+          type: string
+          enum: [retrieval-planner-v1]
+        policy_version:
+          type: string
+          enum: [retrieval-plan-policy-v1]
+        analysis_policy_version:
+          type: string
+          minLength: 1
+          maxLength: 64
+        fusion_version:
+          type: string
+          minLength: 1
+          maxLength: 64
+        ranking_version:
+          type: string
+          minLength: 1
+          maxLength: 64
+        renderer_version:
+          type: string
+          minLength: 1
+          maxLength: 64
+        max_candidates:
+          type: integer
+          minimum: 1
+          maximum: 5000
+        max_candidates_per_channel:
+          type: integer
+          minimum: 1
+          maximum: 5000
+        max_passes:
+          type: integer
+          minimum: 1
+          maximum: 2
+        max_latency_ns:
+          type: integer
+          format: int64
+          minimum: 1
+          maximum: 30000000000
+        max_context_items:
+          type: integer
+          minimum: 1
+          maximum: 1000
+        max_reranker_headroom:
+          type: integer
+          minimum: 0
+          maximum: 5000
+        expires_at:
+          type: string
+          format: date-time
     RankingRolloutPolicy:
       allOf:
         - $ref: '#/components/schemas/RankingRolloutPolicyCreateRequest'
