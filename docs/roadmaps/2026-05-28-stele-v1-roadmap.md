@@ -39,7 +39,7 @@ explicitly requested; local branch/worktree cleanup is the default after a
 successful merge and push. Unrelated user or parallel-agent worktrees remain
 outside the proposal cleanup scope.
 
-## Global Status And Priority (2026-09-17)
+## Global Status And Priority (2026-09-18)
 
 The original Phase 1–5 sequence is now the historical foundation path. The
 repository has archived changes covering bootstrap and ingestion, governance,
@@ -55,14 +55,16 @@ not be conflated:
 
 - **Implemented baseline**: capability exists in the archived product changes;
   follow-up work is limited to regression coverage or a narrowly identified gap.
-- **Recently archived baseline**: `evidence-deduplication-and-diversity-aware-context-packing`
-  completed 16/16 tasks, passed strict change validation after preserving the
-  existing reranker fallback scenarios, and was archived on 2026-09-13 with its
-  delta specs synchronized to the main specifications.
+- **Recently archived baseline**: RQ1
+  `query-adaptive-retrieval-planning` completed 35/35 tasks, passed focused and
+  full Go tests, race tests, vet, strict/all OpenSpec validation, and was
+  archived as change 040 with its delta specs synchronized to the main
+  specifications. Active rollout remains unauthorized without fresh owned
+  PostgreSQL + pgvector release evidence.
 - **Proposed / pending implementation**: OpenSpec artifacts exist, but the task
-  checklist and release evidence are not complete. This now applies to RQ1
-  while its implementation and evidence are being verified; RQ2–RQ4 remain
-  pending proposals. It no longer describes the archived P0–P7 foundation.
+  checklist and release evidence are not complete. RQ2 is the current proposal
+  target; RQ3–RQ4 remain pending. It no longer describes the archived P0–P7 or
+  RQ1 baselines.
 - **Candidate expansion**: useful post-v1 ideas that must wait until the provider
   contract and quality gates are stable. This includes MCP adapters, namespace
   subtree conventions, agent self-model conventions, and autonomous reasoning
@@ -85,6 +87,7 @@ change an archived baseline.
 | P5 benchmark/release evidence | Archived changes 025, 026, 035, and 039 | Implemented and archived; real-stack activation still requires fresh owned PostgreSQL + pgvector evidence. |
 | P6 maintenance/observability | Archived change 037 | Implemented and archived; future work is regression and SLO evidence only. |
 | P7 provider contract | Archived change 038 | Implemented and archived; adapter remains outside the retrieval-quality critical path. |
+| RQ1 adaptive retrieval planning | Archived change 040, 35/35 tasks | Implemented and archived; active rollout still requires fresh owned PostgreSQL + pgvector release evidence. |
 
 ### Global priority order
 
@@ -135,7 +138,7 @@ rollout. RQ2–RQ4 are not implied by the RQ1 implementation.
 
 ## Retrieval-quality frontier
 
-### RQ1: Query-adaptive retrieval planning — implementation in progress
+### RQ1: Query-adaptive retrieval planning — archived baseline (change 040)
 
 Goal: turn bounded query understanding into a versioned, deterministic plan
 over the archived retrieval channels. The plan selects query family, enabled
@@ -151,7 +154,9 @@ lifecycle visibility, and remaining envelope. Diagnostics and shadow are
 result-equivalent; only compatible, unexpired `active_for_scope` policies may
 change ordinary retrieval. Planner internals never enter ordinary responses.
 
-RQ1 acceptance requires deterministic replay, family/protected-category
+RQ1 completed 35/35 tasks and passed focused/full Go tests, race tests, vet,
+and strict/all OpenSpec validation. Its acceptance contract requires
+deterministic replay, family/protected-category
 metrics, baseline-equivalent fallback, exact-scope isolation, lifecycle safety,
 stable citations, hard resource envelopes, reranker intersection, and tested
 rollback. Implementation completion does not authorize active rollout: an
@@ -159,7 +164,7 @@ explicitly owned PostgreSQL + pgvector release run is still required. Without
 that DSN, evaluation is a controlled non-pass and rollout remains at
 diagnostics/shadow maximum.
 
-### RQ2: Bi-temporal fact validity — pending
+### RQ2: Bi-temporal fact validity — current proposal target
 
 Separate recorded time from fact-valid time with append-only canonical
 versions, explicit validity intervals, and provenance propagation through
@@ -1581,8 +1586,8 @@ Recommended execution order for the current product baseline and next frontier:
 6. P5: benchmark/release evidence and progressive-context baseline (archived)
 7. P6: durable multi-scope maintenance and observability baseline (archived)
 8. P7: agent runtime memory-provider contract baseline (archived)
-9. RQ1: query-adaptive retrieval planning (current implementation)
-10. RQ2: bi-temporal fact validity
+9. RQ1: query-adaptive retrieval planning (archived change 040)
+10. RQ2: bi-temporal fact validity (current proposal target)
 11. RQ3: bounded graph-distance retrieval and evidence paths
 12. RQ4: context efficiency and feedback calibration
 13. P8: optional MCP, shared-memory conventions, and governed experience insights
@@ -1661,11 +1666,13 @@ Before moving between phases, verify:
 
 ## Immediate Next Step
 
-P0–P7 are archived baselines through change 039. The active next step is to
-finish and verify RQ1 `query-adaptive-retrieval-planning`: deterministic plans,
-shared hard envelopes, one evidence-triggered follow-up, exact-scope rollout,
-redacted diagnostics, family/pass evaluation, and baseline-safe rollback. Code
-and contract completion alone does not authorize activation. If an explicitly
-owned PostgreSQL + pgvector DSN is unavailable, record the stable non-pass and
-keep rollout at diagnostics/shadow maximum. RQ2–RQ4 remain pending and must not
-be folded into RQ1 implementation.
+P0–P7 and RQ1 are archived baselines through change 040. RQ1 completed 35/35
+tasks and passed focused/full Go tests, race tests, vet, and strict/all OpenSpec
+validation; its active rollout remains capped at diagnostics/shadow until an
+explicitly owned PostgreSQL + pgvector release run passes.
+
+The active next step is to propose and implement RQ2
+`bi-temporal-fact-validity`: distinguish recorded time from fact-valid time,
+preserve append-only canonical versions and provenance, make current retrieval
+exclude expired evidence by default, and require an explicit temporal plan for
+historical retrieval. RQ3–RQ4 remain pending and must not be folded into RQ2.
