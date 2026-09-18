@@ -1,0 +1,5 @@
+ALTER TABLE ranking_rollout_policies DROP CONSTRAINT IF EXISTS ranking_rollout_policies_retrieval_planner_selector_check;
+ALTER TABLE ranking_rollout_policies DROP CONSTRAINT IF EXISTS ranking_rollout_policies_retrieval_planner_payload_check;
+ALTER TABLE ranking_rollout_policies DROP COLUMN IF EXISTS retrieval_planner_policy;
+ALTER TABLE ranking_rollout_policies DROP COLUMN IF EXISTS retrieval_planner_user_id;
+ALTER TABLE ranking_rollout_policies DROP COLUMN IF EXISTS retrieval_planner_session_id;

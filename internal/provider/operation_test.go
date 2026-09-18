@@ -94,6 +94,33 @@ func TestProviderAdapterEnforcesConfiguredLimits(t *testing.T) {
 	}
 }
 
+func TestProviderAdapterPropagatesRuntimeSessionToRetrieval(t *testing.T) {
+	searcher := &adapterSearcher{}
+	assembler := &adapterAssembler{}
+	adapter := NewAdapter(AdapterDependencies{Searcher: searcher, Assembler: assembler})
+	binding := RuntimeBinding{BindingID: "b", PrincipalID: "principal", Scope: memory.Scope{Tenant: "t", Project: "p", Namespace: "n"}, AgentID: "a", SessionID: "session-bound", ProviderInstanceID: "pi"}
+	meta := OperationMetadata{RequestID: "r", OperationID: "o", SchemaVersion: "schema-v1"}
+
+	if _, _, err := adapter.Search(context.Background(), binding, meta, retrieval.SearchInput{Query: "q", TopK: 1, SessionID: "foreign"}); err != nil {
+		t.Fatal(err)
+	}
+	if searcher.got.SessionID != binding.SessionID {
+		t.Fatalf("search session=%q, want runtime binding %q", searcher.got.SessionID, binding.SessionID)
+	}
+	if searcher.got.UserID != "" {
+		t.Fatalf("search user=%q, principal id must not be mapped to a planner user selector", searcher.got.UserID)
+	}
+	if _, _, err := adapter.AssembleContext(context.Background(), binding, meta, retrieval.AssembleContextInput{Query: "q", Budget: 1, SessionID: "foreign"}); err != nil {
+		t.Fatal(err)
+	}
+	if assembler.got.SessionID != binding.SessionID {
+		t.Fatalf("context session=%q, want runtime binding %q", assembler.got.SessionID, binding.SessionID)
+	}
+	if assembler.got.UserID != "" {
+		t.Fatalf("context user=%q, principal id must not be mapped to a planner user selector", assembler.got.UserID)
+	}
+}
+
 func TestProviderAdapterLifecycleClaimsReplayAndAvoidsDuplicateMutation(t *testing.T) {
 	lifecycle := &adapterLifecycleStub{}
 	store := &adapterLifecycleStore{replay: OperationOutcome{Citations: []Citation{{SourceKind: "lifecycle", Reference: "mem-1", Availability: "available"}}}}

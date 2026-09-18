@@ -53,7 +53,8 @@ func (s ChunkSourceReference) Validate() error {
 }
 
 type ChunkRange struct {
-	Start, End int `json:"start"`
+	Start int `json:"start"`
+	End   int `json:"end"`
 }
 
 func (r ChunkRange) Validate() error {

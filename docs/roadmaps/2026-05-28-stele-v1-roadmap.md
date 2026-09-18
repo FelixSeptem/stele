@@ -39,7 +39,7 @@ explicitly requested; local branch/worktree cleanup is the default after a
 successful merge and push. Unrelated user or parallel-agent worktrees remain
 outside the proposal cleanup scope.
 
-## Global Status And Priority (2026-09-13)
+## Global Status And Priority (2026-09-17)
 
 The original Phase 1–5 sequence is now the historical foundation path. The
 repository has archived changes covering bootstrap and ingestion, governance,
@@ -60,10 +60,9 @@ not be conflated:
   existing reranker fallback scenarios, and was archived on 2026-09-13 with its
   delta specs synchronized to the main specifications.
 - **Proposed / pending implementation**: OpenSpec artifacts exist, but the task
-  checklist and release evidence are not complete. This now applies primarily to
-  the P5 retrieval release gate, progressive-context evaluation, and the P6
-  observability/maintenance follow-up; it no longer describes the archived P0–P2
-  foundation work.
+  checklist and release evidence are not complete. This now applies to RQ1
+  while its implementation and evidence are being verified; RQ2–RQ4 remain
+  pending proposals. It no longer describes the archived P0–P7 foundation.
 - **Candidate expansion**: useful post-v1 ideas that must wait until the provider
   contract and quality gates are stable. This includes MCP adapters, namespace
   subtree conventions, agent self-model conventions, and autonomous reasoning
@@ -82,23 +81,24 @@ change an archived baseline.
 | P2 projections/reflection | Archived changes 030 and 031 | Implemented baseline; freshness/watermark operations remain follow-up. |
 | P3 chunking/fusion | Archived changes 027 and 033 | Implemented and archived. |
 | P3 diversity packing | Archived `2026-09-13-evidence-deduplication-and-diversity-aware-context-packing`, 16/16 tasks | Implemented and archived after strict validation and main-spec synchronization. |
-| P4 quality-aware reranking | Archived change 032; query-understanding commits exist outside the archive index | Reranking baseline archived; query-understanding integration/archive status still requires branch reconciliation. |
-| P5 benchmark expansion | Archived changes 025 and 026 | Implemented benchmark infrastructure; Task 6.7 release gate and progressive-context work remain pending. |
-| P6 maintenance/observability | No corresponding active or archived change | Roadmap follow-up pending; do not infer implementation from baseline maintenance code alone. |
+| P4 quality-aware reranking | Archived changes 034 and 036 | Implemented and archived; bounded analysis and reranking remain governed by release evidence. |
+| P5 benchmark/release evidence | Archived changes 025, 026, 035, and 039 | Implemented and archived; real-stack activation still requires fresh owned PostgreSQL + pgvector evidence. |
+| P6 maintenance/observability | Archived change 037 | Implemented and archived; future work is regression and SLO evidence only. |
+| P7 provider contract | Archived change 038 | Implemented and archived; adapter remains outside the retrieval-quality critical path. |
 
 ### Global priority order
 
 | Priority | Workstream | Current state | Why this order |
 | --- | --- | --- | --- |
 | P0 | Product-ready self-hosting foundation | Implemented baseline; archived changes 023 and 029 | Migration integrity, startup admission, resource bounds, backup/restore, and real-stack verification are available; retain regression and operator-evidence follow-up only. |
-| P1 | Retrieval evaluation baseline | Implemented baseline; archived changes 024 and 028 | Versioned fixtures, deterministic replay, quality metrics, and zero-leakage assertions are available; the remaining work is release-gate expansion and real-provider evidence in P5. |
+| P1 | Retrieval evaluation baseline | Implemented baseline; archived changes 024 and 028 | Versioned fixtures, deterministic replay, quality metrics, and zero-leakage assertions are available; P5 release-gate expansion is also archived. |
 | P2 | Context hierarchy and governed reflection | Implemented baseline; archived changes 030 and 031 | Versioned projections, governed intents, reflection, and compaction evidence are available without canonical-memory mutation; retain regression and freshness follow-up only. |
 | P3 | Retrieval representation, fusion, and context diversity | Implemented baseline; chunking/fusion archived as 027/033 and diversity archived on 2026-09-13 | Chunking, stable fusion, deduplication, and diversity packing are archived; future changes remain subject to the retrieval release gate. |
-| P4 | Query understanding and controlled reranking | Quality-aware reranking archived (032); query-understanding integration requires branch/evidence reconciliation | Higher-risk quality changes remain behind the stable candidate/fusion path and measured evidence; do not infer a fully integrated P4 baseline solely from branch-local history. |
-| P5 | Benchmark expansion, retrieval release gate, and progressive context evaluation | Benchmark expansion archived (025, 026); Task 6.7 pending implementation, informed by the OpenViking comparison | Runs deterministic and task-level retrieval families only after retrieval behavior is stable; evaluates coarse-to-fine context projections and parent-first retrieval as reversible strategies; converts the evidence into CI, rebuild, retention, and rollback policy. |
-| P6 | Durable multi-scope maintenance follow-up and retrieval observability | Follow-up pending in Stage 8; baseline largely implemented | Verify that every newer durable surface participates in maintenance; close discovery, lease, SLO, recovery, projection freshness, and redacted retrieval-trace gaps without introducing a second source of record. |
-| P7 | Agent runtime memory-provider contract and adapter | New Letta-inspired roadmap work | Defines identity/session separation, capability discovery, canonical runtime scope, citations, idempotency, event replay, and compatibility before integration. |
-| P8 | Optional adapters and governed experience insights | Candidate follow-up tracks | MCP, shared-memory conventions, agent self-model, failure-pattern/lesson insights, and reasoning providers remain outside the critical path. |
+| P4 | Query understanding and controlled reranking | Archived changes 034 and 036 | Implemented baseline; active behavior remains exact-scope and evidence-gated. |
+| P5 | Benchmark expansion and retrieval release evidence | Archived changes 025, 026, 035, and 039 | Implemented baseline; owned real-stack evidence remains a prerequisite for activation. |
+| P6 | Durable multi-scope maintenance and observability | Archived change 037 | Implemented baseline; retain regression, freshness, and SLO evidence. |
+| P7 | Agent runtime memory-provider contract | Archived change 038 | Implemented baseline; integration remains optional to the retrieval path. |
+| P8 | Optional adapters and governed experience insights | Governed insight baseline in changes 013/014; MCP/conventions remain candidates | Keep outside the critical path until provider and quality gates are stable. |
 
 ### Critical path to provider readiness
 
@@ -117,13 +117,81 @@ P5 benchmark expansion + retrieval release gate + progressive context evaluation
         ↓
 P6 durable multi-scope maintenance closure
         ↓
-P7 agent runtime memory-provider adapter
+P7 agent runtime memory-provider contract
+        ↓
+RQ1 query-adaptive retrieval planning
+        ↓
+RQ2 bi-temporal fact validity
+        ↓
+RQ3 bounded graph-distance retrieval and evidence paths
+        ↓
+RQ4 context efficiency and feedback calibration
 ```
 
-P6 maintenance follow-up runs in parallel with P1–P5 when it concerns already
-implemented surfaces, but it must be complete before declaring the service
-operationally ready for unattended multi-scope deployments. P7 remains outside
-the critical path.
+RQ1–RQ4 are the next Stele-native retrieval-quality frontier. Each workstream
+must preserve the archived P0–P7 contracts, PostgreSQL as the sole system of
+record, exact scope/lifecycle filtering, bounded diagnostics, and reversible
+rollout. RQ2–RQ4 are not implied by the RQ1 implementation.
+
+## Retrieval-quality frontier
+
+### RQ1: Query-adaptive retrieval planning — implementation in progress
+
+Goal: turn bounded query understanding into a versioned, deterministic plan
+over the archived retrieval channels. The plan selects query family, enabled
+lexical/semantic/relation/chunk channels, per-channel and aggregate candidate
+budgets, fusion parameters, memory-class quotas, reranker eligibility, and
+context priorities. A shared request-local ledger enforces candidate,
+latency, context, reranker-headroom, and two-pass limits.
+
+The planner supports `exact_lookup`, `semantic`, `temporal`,
+`entity_relation`, `multi_hop`, `procedural`, and `general`. It may trigger one
+bounded evidence follow-up pass, retaining the original query, exact scope,
+lifecycle visibility, and remaining envelope. Diagnostics and shadow are
+result-equivalent; only compatible, unexpired `active_for_scope` policies may
+change ordinary retrieval. Planner internals never enter ordinary responses.
+
+RQ1 acceptance requires deterministic replay, family/protected-category
+metrics, baseline-equivalent fallback, exact-scope isolation, lifecycle safety,
+stable citations, hard resource envelopes, reranker intersection, and tested
+rollback. Implementation completion does not authorize active rollout: an
+explicitly owned PostgreSQL + pgvector release run is still required. Without
+that DSN, evaluation is a controlled non-pass and rollout remains at
+diagnostics/shadow maximum.
+
+### RQ2: Bi-temporal fact validity — pending
+
+Separate recorded time from fact-valid time with append-only canonical
+versions, explicit validity intervals, and provenance propagation through
+relations, chunks, citations, rebuilds, and fixtures. Current-fact retrieval
+must hide expired validity by default; historical intervals require an explicit
+temporal plan. Acceptance requires deterministic current/historical evidence,
+no stale-fact wins, and zero scope/lifecycle regression.
+
+### RQ3: Bounded graph-distance retrieval and evidence paths — pending
+
+Use PostgreSQL relation projections as an enhancement layer for entity and
+multi-hop queries. Seed expansion from authorized hits, cap traversal at one or
+two hops, rank bounded paths by distance, confidence, validity, and source
+reliability, and preserve citations as rebuildable evidence paths. No graph
+database or second source of record is introduced; every expansion step keeps
+the same scope, lifecycle, candidate, time, and context limits.
+
+### RQ4: Context efficiency and feedback calibration — pending
+
+Measure relevant-token ratio, evidence density, duplicate/stale token rates,
+quality per context budget, and pass-specific model/reranker cost. Calibrate
+packing and planning against efficiency while keeping access or reinforcement
+signals weak, capped, decayed, asynchronous, auditable, and independently
+disableable. Popularity alone must never promote evidence or override
+protected recall, provenance, lifecycle, or isolation gates.
+
+All four workstreams require a versioned owner/policy, exact scope, bounded
+resources, deterministic offline and owned-stack evidence, diagnostics/shadow
+before activation, explicit stop and rollback, PostgreSQL rebuildability, and
+zero-tolerance isolation/lifecycle leakage. External framework ideas may inform
+experiments, but vendor claims or LLM judges cannot replace deterministic qrels,
+safety, latency, provenance, or rollback evidence.
 
 ### OpenViking-informed integration rule
 
@@ -1136,11 +1204,9 @@ Scope:
 - keep model rerankers optional, time/cost/privacy bounded, and disabled by
   default until shadow evidence passes release policy.
 
-OpenSpec alignment: quality-aware signals, provider-configured optional
-reranking, fallback diagnostics, and rollout governance are archived in change
-032. Query-understanding work exists in branch history but is not represented
-by the current archive index, so P4 is not declared fully reconciled until its
-integration and archive evidence agree.
+OpenSpec alignment: bounded query understanding, quality-aware signals,
+provider-configured optional reranking, fallback diagnostics, and rollout
+governance are archived in changes 034 and 036.
 
 Exit signal:
 
@@ -1150,11 +1216,10 @@ Exit signal:
 
 Current evidence: deterministic query understanding and bounded multi-signal
 retrieval are implemented and remain default-disabled outside exact approved
-rollout scopes. Active decomposition remains blocked pending an explicitly owned
-real PostgreSQL + pgvector Phase 6.4 prerequisite and compatible analyzed-candidate
-release report; a local skip is not a passing gate. Roadmap Task 6.6 (quality-aware
-signals and controlled reranking) remains separate and is not implied by this
-implementation.
+rollout scopes. Active decomposition and optional reranking still require an
+explicitly owned real PostgreSQL + pgvector release report; a local skip is not
+a passing gate. These controls are the archived P4 baseline and are extended
+by RQ1, not re-planned here.
 
 ### Stage 7: Benchmark Expansion, Retrieval Release Gate And Progressive Context Evaluation (P5)
 
@@ -1164,8 +1229,8 @@ tuning exercise.
 Scope:
 
 - archived `agent-memory-benchmark-expansion` and
-  `local-agent-memory-benchmark-suite` changes 025/026, plus pending Phase 6
-  Task 6.7: CI quality gates, redacted reports, real-provider opt-in
+  `local-agent-memory-benchmark-suite` changes 025/026, plus archived Phase 6
+  Task 6.7 changes 035/039: CI quality gates, redacted reports, real-provider opt-in
   evidence, progressive context projection comparisons, parent-first retrieval
   experiments, rebuild/re-index and rollback runbooks, derived-data
   retention/deletion, and threshold ownership.
@@ -1187,7 +1252,7 @@ Exit signal:
   isolation, latency, and rollback evidence;
 - all derived artifacts can be rebuilt from durable PostgreSQL source records.
 
-### Stage 8: Durable Multi-Scope Maintenance And Retrieval Observability Follow-Up (P6)
+### Stage 8: Durable Multi-Scope Maintenance And Retrieval Observability (P6)
 
 Goal: ensure asynchronous maintenance reaches every active product surface and
 recovers safely across replicas or process restarts.
@@ -1217,7 +1282,7 @@ Exit signal:
 - Restarted or horizontally scaled workers do not strand or duplicate eligible
   workflow work.
 
-### Stage 9: Agent Runtime Memory-Provider Contract And Adapter (P7)
+### Stage 9: Agent Runtime Memory-Provider Contract And Adapter (P7, archived baseline)
 
 Goal: make Stele consumable as a durable memory provider by an external agent
 runtime without moving runtime state or authorization into the adapter.
@@ -1282,7 +1347,7 @@ Rollback:
 - disable the adapter or replay transport while preserving the HTTP/OpenAPI
   service and all durable state; no schema downgrade is required.
 
-### Stage 10: Optional Adapters And Governed Experience Insights (P8)
+### Stage 10: Optional Adapters And Governed Experience Insights (P8, candidates)
 
 Goal: add ecosystem ergonomics only after the core provider contract is stable.
 
@@ -1306,16 +1371,18 @@ Exit signal:
 ### Stage Sequencing
 
 1. `scoped-principal-auth-and-ingest-idempotency` (complete baseline)
-2. `versioned-migrations-and-runtime-hardening` (P0)
-3. `retrieval-evaluation-baseline` (P1)
-4. Stage 4 context hierarchy and governed reflection (P2)
-5. Phase 6 Tasks 6.2–6.4 (P3)
-6. Phase 6 Tasks 6.5–6.6 (P4)
-7. `agent-memory-benchmark-expansion` + `local-agent-memory-benchmark-suite` (P5a)
-8. Phase 6 Task 6.7 retrieval release gate and progressive context evaluation (P5b)
-9. Stage 8 durable multi-scope maintenance and retrieval observability follow-up (P6; parallel where safe)
-10. Stage 9 agent runtime memory-provider contract and adapter (P7)
-11. Stage 10 optional adapters and governed experience insights (P8)
+2. `versioned-migrations-and-runtime-hardening` (P0, archived)
+3. `retrieval-evaluation-baseline` (P1, archived)
+4. Stage 4 context hierarchy and governed reflection (P2, archived)
+5. Phase 6 Tasks 6.2–6.4 (P3, archived)
+6. Phase 6 Tasks 6.5–6.6 (P4, archived)
+7. `agent-memory-benchmark-expansion` + `local-agent-memory-benchmark-suite` (P5a, archived)
+8. Phase 6 Task 6.7 retrieval release gate and progressive context evaluation (P5b, archived)
+9. Stage 8 durable multi-scope maintenance and retrieval observability (P6, archived)
+10. Stage 9 agent runtime memory-provider contract and adapter (P7, archived)
+11. RQ1 query-adaptive retrieval planning (current implementation)
+12. RQ2–RQ4 retrieval-quality frontier (pending in order)
+13. Stage 10 optional adapters and governed experience insights (P8 candidates)
 
 Reasoning:
 
@@ -1504,20 +1571,25 @@ Non-goals for the first slice:
 
 ## Execution Order
 
-Recommended build order for the current product baseline:
+Recommended execution order for the current product baseline and next frontier:
 
 1. P0: `product-ready-self-hosting-foundation`
 2. P1: `retrieval-evaluation-baseline`
 3. P2: context hierarchy, projections, memory intents, reflection, and compaction evidence
 4. P3: Phase 6 Tasks 6.2 to 6.4 (chunking, fusion, deduplication, diversity)
 5. P4: Phase 6 Tasks 6.5 to 6.6 (query understanding and controlled reranking)
-6. P5: `agent-memory-benchmark-expansion`, `local-agent-memory-benchmark-suite`, and Phase 6 Task 6.7, including progressive-context and parent-first retrieval evaluation
-7. P6: durable multi-scope maintenance, retrieval observability, and assurance closure
-8. P7: agent runtime memory-provider contract and adapter
-9. P8: optional MCP, shared-memory conventions, and governed experience insights
+6. P5: benchmark/release evidence and progressive-context baseline (archived)
+7. P6: durable multi-scope maintenance and observability baseline (archived)
+8. P7: agent runtime memory-provider contract baseline (archived)
+9. RQ1: query-adaptive retrieval planning (current implementation)
+10. RQ2: bi-temporal fact validity
+11. RQ3: bounded graph-distance retrieval and evidence paths
+12. RQ4: context efficiency and feedback calibration
+13. P8: optional MCP, shared-memory conventions, and governed experience insights
 
 The original Phase 1–5 order remains the build order for a fresh repository;
-the P0–P8 sequence is the execution order for this already-developed baseline.
+the P0–P7 sequence is the archived baseline and RQ1–RQ4 are the next
+retrieval-quality execution order.
 
 Reasoning:
 
@@ -1574,17 +1646,26 @@ Before moving between phases, verify:
 - Provider gate: the agent-runtime adapter is tested against the public OpenAPI contract,
   readiness/version endpoints, scoped auth, idempotent ingest, consolidation, retrieval,
   context projection, memory intents, restart/drain, upgrade, and restore proof.
+- RQ1 gate: plan replay is deterministic; all query families and protected
+  categories meet policy; the shared candidate/latency/context/reranker envelope
+  holds across at most two passes; diagnostics/shadow preserve results; fallback
+  and rollback restore the approved baseline; and active rollout has fresh owned
+  PostgreSQL + pgvector evidence.
+- RQ2 gate: current and historical temporal fixtures pass without stale-fact,
+  isolation, lifecycle, provenance, or append-only regressions.
+- RQ3 gate: bounded one/two-hop evidence paths improve multi-hop coverage
+  without candidate explosion, leakage, unacceptable p95 latency, or a second
+  source of record.
+- RQ4 gate: context efficiency improves without protected-recall loss and weak
+  feedback remains capped, decayed, auditable, and independently disableable.
 
 ## Immediate Next Step
 
-The P0–P3 foundation and the benchmark infrastructure are represented by
-archived OpenSpec changes; the diversity change was archived on 2026-09-13 after
-strict validation and main-spec synchronization. P5 Task 6.7 release-gate
-contracts, progressive-context and parent-first offline/shadow evaluators,
-redacted trajectories, memory-integrity reports, retention, runbooks, CI smoke
-coverage, and provider-profile configuration are now implemented on the proposal
-branch. The remaining release prerequisite is an explicitly owned PostgreSQL 18
-+ pgvector run reproducing `canonical-v1` / `baseline-v1` evidence. Until that
-evidence is fresh and all quality, zero-leakage, latency, freshness, and rollback
-gates are green, experiments remain out of default retrieval. The provider
-adapter must consume the stable contracts produced by P0–P6.
+P0–P7 are archived baselines through change 039. The active next step is to
+finish and verify RQ1 `query-adaptive-retrieval-planning`: deterministic plans,
+shared hard envelopes, one evidence-triggered follow-up, exact-scope rollout,
+redacted diagnostics, family/pass evaluation, and baseline-safe rollback. Code
+and contract completion alone does not authorize activation. If an explicitly
+owned PostgreSQL + pgvector DSN is unavailable, record the stable non-pass and
+keep rollout at diagnostics/shadow maximum. RQ2–RQ4 remain pending and must not
+be folded into RQ1 implementation.

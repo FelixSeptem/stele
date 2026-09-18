@@ -22,6 +22,7 @@ func (r *Repository) CreateRankingRolloutPolicy(ctx context.Context, policy memo
 	}
 	policy.Scope = policy.Scope.Normalized()
 	policy.QueryAnalysisSelector = policy.QueryAnalysisSelector.Normalized()
+	policy.RetrievalPlannerSelector = policy.RetrievalPlannerSelector.Normalized()
 	fusionChannelWeights, err := marshalOptionalFusionChannelWeights(policy.FusionChannelWeights)
 	if err != nil {
 		return memory.RankingRolloutPolicy{}, err
@@ -100,6 +101,11 @@ RETURNING id, tenant, project, namespace, status, mode, surfaces, signal_sources
 		}
 		created.QueryAnalysis = policy.QueryAnalysis
 		created.QueryAnalysisSelector = policy.QueryAnalysisSelector
+		if err := persistRetrievalPlannerRollout(ctx, tx, policy); err != nil {
+			return memory.RankingRolloutPolicy{}, err
+		}
+		created.RetrievalPlanner = policy.RetrievalPlanner
+		created.RetrievalPlannerSelector = policy.RetrievalPlannerSelector
 		if err := upsertRankingRolloutPolicyState(ctx, tx, created, created.Status, created.Actor, created.Reason, created.UpdatedAt); err != nil {
 			return memory.RankingRolloutPolicy{}, err
 		}
@@ -143,6 +149,11 @@ RETURNING id, tenant, project, namespace, status, mode, surfaces, signal_sources
 	if err != nil {
 		return memory.RankingRolloutPolicy{}, fmt.Errorf("create ranking rollout policy: %w", err)
 	}
+	if err := persistRetrievalPlannerRollout(ctx, tx, policy); err != nil {
+		return memory.RankingRolloutPolicy{}, err
+	}
+	created.RetrievalPlanner = policy.RetrievalPlanner
+	created.RetrievalPlannerSelector = policy.RetrievalPlannerSelector
 	if err := upsertRankingRolloutPolicyState(ctx, tx, created, created.Status, created.Actor, created.Reason, created.UpdatedAt); err != nil {
 		return memory.RankingRolloutPolicy{}, err
 	}
@@ -151,6 +162,30 @@ RETURNING id, tenant, project, namespace, status, mode, surfaces, signal_sources
 		return memory.RankingRolloutPolicy{}, fmt.Errorf("commit ranking rollout policy transaction: %w", err)
 	}
 	return created, nil
+}
+
+func persistRetrievalPlannerRollout(ctx context.Context, tx pgx.Tx, policy memory.RankingRolloutPolicy) error {
+	if policy.RetrievalPlanner == nil {
+		return nil
+	}
+	payload, err := json.Marshal(policy.RetrievalPlanner)
+	if err != nil {
+		return fmt.Errorf("marshal retrieval-planner rollout policy: %w", err)
+	}
+	const query = `
+UPDATE ranking_rollout_policies
+SET retrieval_planner_session_id = $1,
+    retrieval_planner_user_id = $2,
+    retrieval_planner_policy = $3
+WHERE id = $4 AND tenant = $5 AND project = $6 AND namespace = $7`
+	result, err := tx.Exec(ctx, query, nullableString(policy.RetrievalPlannerSelector.SessionID), nullableString(policy.RetrievalPlannerSelector.UserID), payload, policy.ID, policy.Scope.Tenant, policy.Scope.Project, policy.Scope.Namespace)
+	if err != nil {
+		return fmt.Errorf("persist retrieval-planner rollout policy: %w", err)
+	}
+	if result.RowsAffected() != 1 {
+		return fmt.Errorf("persist retrieval-planner rollout policy: exact policy row not found")
+	}
+	return nil
 }
 
 func (r *Repository) ReadRankingRolloutPolicy(ctx context.Context, input memory.ReadRankingRolloutPolicyInput) (memory.RankingRolloutPolicy, error) {
@@ -283,6 +318,53 @@ LIMIT 1`
 		p.UpdatedAt = updated.Time
 	}
 	return p, nil
+}
+
+func (r *Repository) ReadEffectiveRetrievalPlannerRolloutPolicy(ctx context.Context, input memory.ReadEffectiveRetrievalPlannerRolloutPolicyInput) (memory.RankingRolloutPolicy, error) {
+	if err := input.Validate(); err != nil { return memory.RankingRolloutPolicy{}, err }
+	scope := input.Scope.Normalized()
+	const query = `
+SELECT id, tenant, project, namespace, status, mode, surfaces,
+       retrieval_planner_session_id, retrieval_planner_user_id, retrieval_planner_policy,
+       activated_at, disabled_at, rolled_back_at, created_at, updated_at
+FROM ranking_rollout_policies
+WHERE tenant = $1 AND project = $2 AND namespace = $3
+  AND $4 = ANY(surfaces)
+  AND retrieval_planner_policy IS NOT NULL
+  AND retrieval_planner_session_id IS NOT DISTINCT FROM $5
+  AND retrieval_planner_user_id IS NOT DISTINCT FROM $6
+ORDER BY activated_at DESC NULLS LAST, updated_at DESC, created_at DESC, id DESC
+LIMIT 1`
+	var policy memory.RankingRolloutPolicy
+	var surfaces []string
+	var sessionID, userID sql.NullString
+	var payload []byte
+	var activated, disabled, rolledBack, created, updated sql.NullTime
+	if err := r.db.QueryRow(ctx, query, scope.Tenant, scope.Project, scope.Namespace, string(input.Surface), nullableString(strings.TrimSpace(input.SessionID)), nullableString(strings.TrimSpace(input.UserID))).Scan(
+		&policy.ID, &policy.Scope.Tenant, &policy.Scope.Project, &policy.Scope.Namespace, &policy.Status, &policy.Mode, &surfaces,
+		&sessionID, &userID, &payload, &activated, &disabled, &rolledBack, &created, &updated,
+	); err != nil { return memory.RankingRolloutPolicy{}, fmt.Errorf("read effective retrieval-planner rollout policy: %w", err) }
+	policy.Surfaces = rankingRolloutSurfaces(surfaces)
+	if sessionID.Valid { policy.RetrievalPlannerSelector.SessionID = sessionID.String }
+	if userID.Valid { policy.RetrievalPlannerSelector.UserID = userID.String }
+	if len(payload) == 0 { return memory.RankingRolloutPolicy{}, fmt.Errorf("retrieval-planner rollout payload is empty") }
+	decoder := json.NewDecoder(bytes.NewReader(payload))
+	decoder.DisallowUnknownFields()
+	var planner memory.RetrievalPlannerRolloutPolicy
+	if err := decoder.Decode(&planner); err != nil { return memory.RankingRolloutPolicy{}, fmt.Errorf("decode retrieval-planner rollout payload: %w", err) }
+	var trailing any
+	if err := decoder.Decode(&trailing); err != io.EOF {
+		if err == nil { return memory.RankingRolloutPolicy{}, fmt.Errorf("decode retrieval-planner rollout payload: trailing JSON value") }
+		return memory.RankingRolloutPolicy{}, fmt.Errorf("decode retrieval-planner rollout payload: trailing data: %w", err)
+	}
+	if err := planner.Validate(); err != nil { return memory.RankingRolloutPolicy{}, fmt.Errorf("validate retrieval-planner rollout payload: %w", err) }
+	policy.RetrievalPlanner = &planner
+	if activated.Valid { policy.ActivatedAt = activated.Time }
+	if disabled.Valid { policy.DisabledAt = disabled.Time }
+	if rolledBack.Valid { policy.RolledBackAt = rolledBack.Time }
+	if created.Valid { policy.CreatedAt = created.Time }
+	if updated.Valid { policy.UpdatedAt = updated.Time }
+	return policy, nil
 }
 
 func (r *Repository) ListRankingRolloutPolicies(ctx context.Context, input memory.ListRankingRolloutPoliciesInput) ([]memory.RankingRolloutPolicy, error) {

@@ -78,6 +78,16 @@ func (s FusionStrategy) Validate() error {
 	if len(s.Version) > 64 {
 		return fmt.Errorf("fusion strategy version exceeds 64 characters")
 	}
+	expectedVersion := ""
+	switch s.Name {
+	case FusionStrategyRRF:
+		expectedVersion = "rrf-v1"
+	case FusionStrategyNormalizedWeighted:
+		expectedVersion = "normalized-weighted-v1"
+	}
+	if s.Version != expectedVersion {
+		return fmt.Errorf("fusion strategy %q requires version %q", s.Name, expectedVersion)
+	}
 	if s.RankConstant <= 0 || s.RankConstant > 10000 {
 		return fmt.Errorf("fusion rank constant must be between 1 and 10000")
 	}

@@ -13,9 +13,17 @@ only:
 
 ```text
 STELE_TEST_RETRIEVAL_EVALUATION_DSN=<owned PostgreSQL 18 + pgvector DSN>
+STELE_TEST_RETRIEVAL_EVALUATION_OWNED=true
 STELE_RETRIEVAL_EVALUATION_PROVIDER_PROFILE=canonical-v1
 STELE_RETRIEVAL_EVALUATION_REPORT_DIR=<optional local output directory>
 ```
+
+The ownership marker is mandatory for direct Go harness runs. It is an explicit
+assertion that the target is disposable and owned by the evaluation run; the
+harness rejects an absent marker and normalized reuse of `STELE_POSTGRES_DSN`
+before opening a connection or applying migrations. Each run also uses unique
+fixture namespaces and IDs, and cleanup deletes only records returned by that
+run's seed operation.
 
 The evaluation DSN must not equal `STELE_POSTGRES_DSN`. If it is absent, the
 workflow returns `SKIP_RETRIEVAL_EVALUATION_DSN_REQUIRED` and cannot authorize
@@ -56,6 +64,36 @@ and multi-hop coverage, duplicate/diversity, candidate budgets, fallback
 categories, safety outcomes, and bounded latency. It never records DSNs,
 endpoints, keys, prompts, source text, raw provider payloads, hidden IDs, or raw
 scores.
+
+For query-adaptive planning, the same report must additionally record the
+planner schema/planner/policy identities and compatible analysis, fusion,
+ranking, and renderer identities. Family-level results must cover all seven
+bounded query families and protected memory classes. First-pass and optional
+second-pass evidence is reported separately, including aggregate disposition,
+candidate counts, latency, context-item counts, reranker-headroom use, and
+follow-up/fallback categories. A second pass is valid only when it is the one
+policy-authorized follow-up and consumes the same request-local ledger.
+
+The owned planner gate must prove a real pgvector-backed semantic hit. The
+runner seeds and activates a fixture-owned vector revision, verifies the
+production semantic repository returns the expected memory with a positive
+semantic score, and verifies the replay attributes that candidate to the
+semantic channel. Merely finding the `vector` extension, executing an empty
+semantic query, or recovering the expected evidence through lexical recall is
+not sufficient release evidence.
+
+Planner activation gates require deterministic plan replay, compatible
+dependencies, exact scope, zero lifecycle/isolation leakage, stable citations,
+and green candidate, latency, context, and reranker hard envelopes. Planner
+eligibility cannot activate a reranker by itself; the separately approved
+reranker policy and reserved headroom must be present. Any malformed or
+incompatible plan, unavailable optional channel, follow-up failure, or budget
+exhaustion must demonstrate a baseline-equivalent fallback and a tested
+rollback. Diagnostics and shadow runs must prove ordinary response equivalence.
+
+An absent owned evaluation DSN is a controlled non-pass. It produces
+`SKIP_RETRIEVAL_EVALUATION_DSN_REQUIRED`, never authorizes `active_for_scope`,
+and must not be replaced by the runtime `STELE_POSTGRES_DSN`.
 
 Progressive context compares short retrieval projection, medium session/context
 overview, and canonical/chunk evidence. Each level must have a source watermark,

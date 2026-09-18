@@ -95,6 +95,90 @@ func TestCompareEvaluationReportsSafetyFailuresOverrideAggregateGains(t *testing
 	}
 }
 
+func TestCompareEvaluationReportsValidatesPlannerIdentityCompatibility(t *testing.T) {
+	baseline := compatibleAnalysisComparisonReport("original_only")
+	candidate := compatibleAnalysisComparisonReport("active_for_scope")
+	candidate.Metadata.PlannerVersion = "unsupported-planner"
+	candidate.Metadata.PlannerPolicyVersion = string(RetrievalPlanPolicyVersionV1)
+	_, err := CompareEvaluationReports(baseline, candidate, nil)
+	if err == nil {
+		t.Fatal("unknown planner identity accepted")
+	}
+	coded, ok := err.(interface{ CompatibilityCode() CompatibilityCode })
+	if !ok || coded.CompatibilityCode() != CompatibilityCodePlannerVersion {
+		t.Fatalf("error=%T %v, code=%v", err, err, coded)
+	}
+
+	candidate.Metadata.PlannerVersion = string(RetrievalPlannerVersionV1)
+	candidate.Metadata.PlannerPolicyVersion = string(RetrievalPlanPolicyVersionV1)
+	if _, err := CompareEvaluationReports(baseline, candidate, nil); err != nil {
+		t.Fatalf("supported planner identity rejected when baseline is legacy: %v", err)
+	}
+
+	baseline.Metadata.PlannerVersion = string(RetrievalPlannerVersionV1)
+	baseline.Metadata.PlannerPolicyVersion = string(RetrievalPlanPolicyVersionV1)
+	candidate.Metadata.PlannerPolicyVersion = "retrieval-plan-policy-v2"
+	_, err = CompareEvaluationReports(baseline, candidate, nil)
+	if err == nil {
+		t.Fatal("mismatched baseline/candidate planner identities accepted")
+	}
+}
+
+func TestCompareEvaluationReportsProtectsQueryFamilyRegression(t *testing.T) {
+	baseline := compatibleAnalysisComparisonReport("original_only")
+	candidate := compatibleAnalysisComparisonReport("active_for_scope")
+	baseline.Cases = []EvaluationCaseReport{{CaseID: "base", Category: "general", QueryFamily: RetrievalQueryFamilyExactLookup, Metrics: EvaluationMetricReport{RecallAt1: 1, RecallAt5: 1, RecallAt10: 1}}}
+	candidate.Cases = []EvaluationCaseReport{{CaseID: "candidate", Category: "general", QueryFamily: RetrievalQueryFamilyExactLookup, Metrics: EvaluationMetricReport{RecallAt1: 0, RecallAt5: 0, RecallAt10: 0}}}
+	policy := EvaluationReleasePolicy{Version: "release-policy-v1", ProtectedCutoffs: []int{1}, MaxP95LatencyMS: 100, ProtectedFamilies: []RetrievalQueryFamily{RetrievalQueryFamilyExactLookup}}
+	if err := policy.Validate(); err != nil {
+		t.Fatal(err)
+	}
+	comparison, err := CompareEvaluationReports(baseline, candidate, policy.ProtectedCategories)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(comparison.ProtectedRegressions) != 0 {
+		t.Fatalf("category selectors unexpectedly handled family regression: %+v", comparison.ProtectedRegressions)
+	}
+	decision, err := EvaluateReleasePolicy(policy, baseline, candidate)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if decision.Eligible || !containsString(decision.HardFailures, "protected_family_regression") {
+		t.Fatalf("decision=%+v", decision)
+	}
+}
+
+func TestProtectedQueryFamilyUsesConfiguredRegressionTolerance(t *testing.T) {
+	baseline := compatibleAnalysisComparisonReport("original_only")
+	candidate := compatibleAnalysisComparisonReport("active_for_scope")
+	baseline.Cases = []EvaluationCaseReport{{CaseID: "base", QueryFamily: RetrievalQueryFamilySemantic, Metrics: EvaluationMetricReport{RecallAt1: 1, RecallAt5: 1, RecallAt10: 1}}}
+	candidate.Cases = []EvaluationCaseReport{{CaseID: "candidate", QueryFamily: RetrievalQueryFamilySemantic, Metrics: EvaluationMetricReport{RecallAt1: .95, RecallAt5: .95, RecallAt10: .95}}}
+	policy := EvaluationReleasePolicy{Version: "release-policy-v1", ProtectedCutoffs: []int{1}, MaxRecallRegression: .1, MaxP95LatencyMS: 100, ProtectedFamilies: []RetrievalQueryFamily{RetrievalQueryFamilySemantic}}
+	decision, err := EvaluateReleasePolicy(policy, baseline, candidate)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !decision.Eligible {
+		t.Fatalf("within-tolerance family regression rejected: %+v", decision)
+	}
+}
+
+func TestFixtureProtectedPlannerFamilyAutomaticallyBlocksRegression(t *testing.T) {
+	baseline := compatibleAnalysisComparisonReport("original_only")
+	candidate := compatibleAnalysisComparisonReport("active_for_scope")
+	baseline.Cases = []EvaluationCaseReport{{CaseID: "base", Category: "temporal", QueryFamily: RetrievalQueryFamilyTemporal, PlannerProtected: true, Metrics: EvaluationMetricReport{RecallAt1: 1, RecallAt5: 1, RecallAt10: 1}}}
+	candidate.Cases = []EvaluationCaseReport{{CaseID: "candidate", Category: "temporal", QueryFamily: RetrievalQueryFamilyTemporal, PlannerProtected: true, Metrics: EvaluationMetricReport{RecallAt1: 0, RecallAt5: 0, RecallAt10: 0}}}
+	policy := EvaluationReleasePolicy{Version: "release-policy-v1", ProtectedCutoffs: []int{1}, MaxP95LatencyMS: 100}
+	decision, err := EvaluateReleasePolicy(policy, baseline, candidate)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if decision.Eligible || !containsString(decision.HardFailures, evaluationDecisionProtectedFamily) || !containsString(decision.HardFailures, evaluationDecisionProtectedCategory) {
+		t.Fatalf("decision=%+v", decision)
+	}
+}
+
 func compatibleAnalysisComparisonReport(disposition string) EvaluationReport {
 	return EvaluationReport{
 		Metadata: EvaluationRankingMetadata{

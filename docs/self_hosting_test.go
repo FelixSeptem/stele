@@ -510,6 +510,7 @@ func TestFusionContractAndRolloutRunbookAreDocumented(t *testing.T) {
 		"normalized_weighted:normalized-weighted-v1",
 		"active_for_scope",
 		"STELE_TEST_RETRIEVAL_EVALUATION_DSN",
+		"STELE_TEST_RETRIEVAL_EVALUATION_OWNED",
 	} {
 		if !strings.Contains(hosting, want) {
 			t.Fatalf("self-hosting guide missing fusion runbook contract %q", want)

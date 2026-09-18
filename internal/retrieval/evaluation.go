@@ -37,6 +37,24 @@ type EvaluationCase struct {
 	ExpectedEvidenceGroups [][]string                     `json:"expected_evidence_groups"`
 	ExcludedAliases        []string                       `json:"excluded_aliases,omitempty"`
 	ExpectedAnalysis       *EvaluationAnalysisExpectation `json:"expected_analysis,omitempty"`
+	Planner                *EvaluationPlannerExpectation  `json:"planner,omitempty"`
+}
+
+// EvaluationPlannerExpectation is a bounded fixture contract containing only
+// planner identities and aggregate resource expectations.
+type EvaluationPlannerExpectation struct {
+	PlannerVersion            string                `json:"planner_version,omitempty"`
+	PolicyVersion             string                `json:"policy_version,omitempty"`
+	Family                    RetrievalQueryFamily  `json:"family"`
+	PlanIdentity              string                `json:"plan_identity"`
+	Channels                  []FusionChannel       `json:"channels"`
+	FallbackChannelCandidates map[FusionChannel]int `json:"fallback_channel_candidates,omitempty"`
+	MaxCandidates             int                   `json:"max_candidates"`
+	MaxCandidatesPerChannel   int                   `json:"max_candidates_per_channel,omitempty"`
+	Protected                 bool                  `json:"protected,omitempty"`
+	ExpectedPasses            int                   `json:"expected_passes"`
+	FollowUpEligible          bool                  `json:"follow_up_eligible,omitempty"`
+	RerankerEligible          bool                  `json:"reranker_eligible,omitempty"`
 }
 
 // EvaluationAnalysisExpectation declares only bounded aggregate outcomes. It
@@ -86,6 +104,8 @@ type EvaluationRankingMetadata struct {
 	RerankerProvider            string           `json:"reranker_provider,omitempty"`
 	RerankerVersion             string           `json:"reranker_version,omitempty"`
 	RerankerMode                string           `json:"reranker_mode,omitempty"`
+	PlannerVersion              string           `json:"planner_version,omitempty"`
+	PlannerPolicyVersion        string           `json:"planner_policy_version,omitempty"`
 }
 
 // EvaluationSafetyFailureCategory is a stable non-sensitive failure reason.
@@ -128,62 +148,98 @@ func NewEvaluationFailure(category EvaluationSafetyFailureCategory, cause string
 // EvaluationMetricReport holds quality measurements calculated from visible,
 // in-scope results only.
 type EvaluationMetricReport struct {
-	RecallAt1                float64 `json:"recall_at_1"`
-	RecallAt5                float64 `json:"recall_at_5"`
-	RecallAt10               float64 `json:"recall_at_10"`
-	MRR                      float64 `json:"mrr"`
-	NDCGAt1                  float64 `json:"ndcg_at_1"`
-	NDCGAt5                  float64 `json:"ndcg_at_5"`
-	NDCGAt10                 float64 `json:"ndcg_at_10"`
-	MultiHopEvidenceCoverage float64 `json:"multi_hop_evidence_coverage"`
-	DuplicateRate            float64 `json:"duplicate_rate"`
-	CandidatePoolSize        int     `json:"candidate_pool_size"`
-	P50LatencyMS             float64 `json:"p50_latency_ms"`
-	P95LatencyMS             float64 `json:"p95_latency_ms"`
-	ProtectedRecall          float64 `json:"protected_recall"`
-	EvidenceCoverage         float64 `json:"evidence_coverage"`
-	BudgetOmissionRate       float64 `json:"budget_omission_rate"`
-	TemporalEvidenceCoverage float64 `json:"temporal_evidence_coverage"`
-	AnalysisSignalCount      int     `json:"analysis_signal_count"`
-	AnalysisSubqueryCount    int     `json:"analysis_subquery_count"`
-	AnalysisCandidateCount   int     `json:"analysis_candidate_count"`
+	RecallAt1                  float64 `json:"recall_at_1"`
+	RecallAt5                  float64 `json:"recall_at_5"`
+	RecallAt10                 float64 `json:"recall_at_10"`
+	MRR                        float64 `json:"mrr"`
+	NDCGAt1                    float64 `json:"ndcg_at_1"`
+	NDCGAt5                    float64 `json:"ndcg_at_5"`
+	NDCGAt10                   float64 `json:"ndcg_at_10"`
+	MultiHopEvidenceCoverage   float64 `json:"multi_hop_evidence_coverage"`
+	DuplicateRate              float64 `json:"duplicate_rate"`
+	CandidatePoolSize          int     `json:"candidate_pool_size"`
+	P50LatencyMS               float64 `json:"p50_latency_ms"`
+	P95LatencyMS               float64 `json:"p95_latency_ms"`
+	ProtectedRecall            float64 `json:"protected_recall"`
+	EvidenceCoverage           float64 `json:"evidence_coverage"`
+	BudgetOmissionRate         float64 `json:"budget_omission_rate"`
+	TemporalEvidenceCoverage   float64 `json:"temporal_evidence_coverage"`
+	AnalysisSignalCount        int     `json:"analysis_signal_count"`
+	AnalysisSubqueryCount      int     `json:"analysis_subquery_count"`
+	AnalysisCandidateCount     int     `json:"analysis_candidate_count"`
+	FirstPassEvidenceCoverage  float64 `json:"first_pass_evidence_coverage,omitempty"`
+	SecondPassEvidenceCoverage float64 `json:"second_pass_evidence_coverage,omitempty"`
+	SecondPassEvidenceGain     float64 `json:"second_pass_evidence_gain,omitempty"`
+	SecondPassCount            int     `json:"second_pass_count,omitempty"`
+	MaxPassesObserved          int     `json:"max_passes_observed,omitempty"`
+	MaxPlannerCandidates       int     `json:"max_planner_candidates,omitempty"`
+	PlannerFallbackRate        float64 `json:"planner_fallback_rate,omitempty"`
+	PlannerRerankerUseRate     float64 `json:"planner_reranker_use_rate,omitempty"`
 }
 
 // EvaluationCaseReport is a bounded per-case contribution to an evaluation report.
 type EvaluationCaseReport struct {
-	CaseID                   string                         `json:"case_id"`
-	Category                 string                         `json:"category,omitempty"`
-	Metrics                  EvaluationMetricReport         `json:"metrics"`
-	SafetyFailures           []EvaluationSafetyFailure      `json:"safety_failures,omitempty"`
-	CandidatePoolSize        int                            `json:"candidate_pool_size"`
-	LatencyMS                float64                        `json:"latency_ms"`
-	ChunkDerivedCount        int                            `json:"chunk_derived_count,omitempty"`
-	AnalysisSignalCount      int                            `json:"analysis_signal_count,omitempty"`
-	AnalysisSubqueryCount    int                            `json:"analysis_subquery_count,omitempty"`
-	AnalysisCandidateCount   int                            `json:"analysis_candidate_count,omitempty"`
-	AnalysisOriginalRetained bool                           `json:"analysis_original_retained,omitempty"`
-	AnalysisDisposition      QueryAnalysisDisposition       `json:"analysis_disposition,omitempty"`
-	AnalysisFallback         QueryAnalysisFallbackCategory  `json:"analysis_fallback,omitempty"`
-	AnalysisCategories       []QueryAnalysisDiagnosticCount `json:"analysis_categories,omitempty"`
-	AnalysisElapsedMS        float64                        `json:"analysis_elapsed_ms,omitempty"`
-	ChangedRankCount         int                            `json:"changed_rank_count,omitempty"`
-	RerankFallback           string                         `json:"rerank_fallback,omitempty"`
+	CaseID                     string                         `json:"case_id"`
+	Category                   string                         `json:"category,omitempty"`
+	Metrics                    EvaluationMetricReport         `json:"metrics"`
+	SafetyFailures             []EvaluationSafetyFailure      `json:"safety_failures,omitempty"`
+	CandidatePoolSize          int                            `json:"candidate_pool_size"`
+	LatencyMS                  float64                        `json:"latency_ms"`
+	ChunkDerivedCount          int                            `json:"chunk_derived_count,omitempty"`
+	AnalysisSignalCount        int                            `json:"analysis_signal_count,omitempty"`
+	AnalysisSubqueryCount      int                            `json:"analysis_subquery_count,omitempty"`
+	AnalysisCandidateCount     int                            `json:"analysis_candidate_count,omitempty"`
+	AnalysisOriginalRetained   bool                           `json:"analysis_original_retained,omitempty"`
+	AnalysisDisposition        QueryAnalysisDisposition       `json:"analysis_disposition,omitempty"`
+	AnalysisFallback           QueryAnalysisFallbackCategory  `json:"analysis_fallback,omitempty"`
+	AnalysisCategories         []QueryAnalysisDiagnosticCount `json:"analysis_categories,omitempty"`
+	AnalysisElapsedMS          float64                        `json:"analysis_elapsed_ms,omitempty"`
+	ChangedRankCount           int                            `json:"changed_rank_count,omitempty"`
+	RerankFallback             string                         `json:"rerank_fallback,omitempty"`
+	QueryFamily                RetrievalQueryFamily           `json:"query_family,omitempty"`
+	PlannerIdentity            string                         `json:"planner_identity,omitempty"`
+	PlannerVersion             string                         `json:"planner_version,omitempty"`
+	PlannerPolicyVersion       string                         `json:"planner_policy_version,omitempty"`
+	PassCount                  int                            `json:"pass_count,omitempty"`
+	FirstPassEvidenceCoverage  float64                        `json:"first_pass_evidence_coverage,omitempty"`
+	SecondPassEvidenceCoverage float64                        `json:"second_pass_evidence_coverage,omitempty"`
+	SecondPassEvidenceGain     float64                        `json:"second_pass_evidence_gain,omitempty"`
+	MaxPlannerCandidates       int                            `json:"max_planner_candidates,omitempty"`
+	FirstPassCandidates        int                            `json:"first_pass_candidates,omitempty"`
+	SecondPassCandidates       int                            `json:"second_pass_candidates,omitempty"`
+	FirstPassLatencyMS         float64                        `json:"first_pass_latency_ms,omitempty"`
+	SecondPassLatencyMS        float64                        `json:"second_pass_latency_ms,omitempty"`
+	PlannerFallbackCategory    string                         `json:"planner_fallback_category,omitempty"`
+	PlannerRerankerUsed        bool                           `json:"planner_reranker_used,omitempty"`
+	PlannerProtected           bool                           `json:"planner_protected,omitempty"`
 }
 
 // EvaluationReport is the versioned data model rendered by local and CI replay.
 type EvaluationReport struct {
-	Metadata                   EvaluationRankingMetadata `json:"metadata"`
-	Cases                      []EvaluationCaseReport    `json:"cases"`
-	Metrics                    EvaluationMetricReport    `json:"metrics"`
-	SafetyFailures             []EvaluationSafetyFailure `json:"safety_failures,omitempty"`
-	DispositionAggregates      map[string]int            `json:"disposition_aggregates,omitempty"`
-	AnalysisFallbackAggregates map[string]int            `json:"analysis_fallback_aggregates,omitempty"`
-	AnalysisCategoryAggregates map[string]int            `json:"analysis_category_aggregates,omitempty"`
-	GeneratedAt                time.Time                 `json:"generated_at"`
-	RealStack                  bool                      `json:"real_stack"`
-	ReleaseEligible            bool                      `json:"release_eligible"`
-	ChangedRankCount           int                       `json:"changed_rank_count,omitempty"`
-	RerankFallbackCounts       map[string]int            `json:"rerank_fallback_counts,omitempty"`
+	Metadata                   EvaluationRankingMetadata        `json:"metadata"`
+	Cases                      []EvaluationCaseReport           `json:"cases"`
+	Metrics                    EvaluationMetricReport           `json:"metrics"`
+	SafetyFailures             []EvaluationSafetyFailure        `json:"safety_failures,omitempty"`
+	DispositionAggregates      map[string]int                   `json:"disposition_aggregates,omitempty"`
+	AnalysisFallbackAggregates map[string]int                   `json:"analysis_fallback_aggregates,omitempty"`
+	AnalysisCategoryAggregates map[string]int                   `json:"analysis_category_aggregates,omitempty"`
+	GeneratedAt                time.Time                        `json:"generated_at"`
+	RealStack                  bool                             `json:"real_stack"`
+	ReleaseEligible            bool                             `json:"release_eligible"`
+	ChangedRankCount           int                              `json:"changed_rank_count,omitempty"`
+	RerankFallbackCounts       map[string]int                   `json:"rerank_fallback_counts,omitempty"`
+	PlannerEvidence            EvaluationPlannerReleaseEvidence `json:"planner_evidence,omitempty"`
+}
+
+type EvaluationPlannerReleaseEvidence struct {
+	Compatible        bool    `json:"compatible"`
+	SafetyFailures    int     `json:"safety_failures"`
+	ResourceFailure   bool    `json:"resource_failure,omitempty"`
+	MaxPasses         int     `json:"max_passes"`
+	MaxCandidateCount int     `json:"max_candidate_count"`
+	FallbackRate      float64 `json:"fallback_rate"`
+	RerankerSafe      bool    `json:"reranker_safe"`
+	RollbackTested    bool    `json:"rollback_tested"`
 }
 
 // EvaluationFixtureSeed is the alias-to-record resolution produced by a fixture
@@ -206,19 +262,29 @@ type EvaluationSeededAlias struct {
 
 // EvaluationReleasePolicy defines release decisions separately from measured reports.
 type EvaluationReleasePolicy struct {
-	Version                       string                      `json:"version"`
-	ProtectedCutoffs              []int                       `json:"protected_cutoffs"`
-	ProtectedCategories           []string                    `json:"protected_categories,omitempty"`
-	MaxRecallRegression           float64                     `json:"max_recall_regression"`
-	MaxMultiHopCoverageRegression float64                     `json:"max_multi_hop_coverage_regression"`
-	MaxEvidenceCoverageRegression float64                     `json:"max_evidence_coverage_regression,omitempty"`
-	MaxBudgetOmissionIncrease     float64                     `json:"max_budget_omission_increase,omitempty"`
-	MaxP95LatencyMS               int                         `json:"max_p95_latency_ms"`
-	MaxP95LatencyRegressionMS     int                         `json:"max_p95_latency_regression_ms,omitempty"`
-	ResourceBudget                EvaluationResourceBudget    `json:"resource_budget,omitempty"`
-	Prerequisites                 EvaluationPrerequisites     `json:"prerequisites,omitempty"`
-	Rollback                      EvaluationRollbackContract  `json:"rollback,omitempty"`
-	Retention                     EvaluationRetentionContract `json:"retention,omitempty"`
+	Version                       string                         `json:"version"`
+	ProtectedCutoffs              []int                          `json:"protected_cutoffs"`
+	ProtectedCategories           []string                       `json:"protected_categories,omitempty"`
+	ProtectedFamilies             []RetrievalQueryFamily         `json:"protected_families,omitempty"`
+	MaxRecallRegression           float64                        `json:"max_recall_regression"`
+	MaxMultiHopCoverageRegression float64                        `json:"max_multi_hop_coverage_regression"`
+	MaxEvidenceCoverageRegression float64                        `json:"max_evidence_coverage_regression,omitempty"`
+	MaxBudgetOmissionIncrease     float64                        `json:"max_budget_omission_increase,omitempty"`
+	MaxP95LatencyMS               int                            `json:"max_p95_latency_ms"`
+	MaxP95LatencyRegressionMS     int                            `json:"max_p95_latency_regression_ms,omitempty"`
+	ResourceBudget                EvaluationResourceBudget       `json:"resource_budget,omitempty"`
+	Prerequisites                 EvaluationPrerequisites        `json:"prerequisites,omitempty"`
+	Rollback                      EvaluationRollbackContract     `json:"rollback,omitempty"`
+	Retention                     EvaluationRetentionContract    `json:"retention,omitempty"`
+	Planner                       EvaluationPlannerReleasePolicy `json:"planner,omitempty"`
+}
+
+type EvaluationPlannerReleasePolicy struct {
+	RequireCompatible     bool    `json:"require_compatible,omitempty"`
+	MaxPasses             int     `json:"max_passes,omitempty"`
+	MaxCandidateCount     int     `json:"max_candidate_count,omitempty"`
+	MaxFallbackRate       float64 `json:"max_fallback_rate,omitempty"`
+	RequireRollbackTested bool    `json:"require_rollback_tested,omitempty"`
 }
 
 // EvaluationResourceBudget bounds work consumed by a release evaluation.
@@ -300,6 +366,14 @@ func (m EvaluationRankingMetadata) Validate() error {
 			return fmt.Errorf("%s identity is invalid", name)
 		}
 	}
+	for name, value := range map[string]string{"planner version": m.PlannerVersion, "planner policy version": m.PlannerPolicyVersion} {
+		if !evaluationSafeIdentity(value) {
+			return fmt.Errorf("%s identity is invalid", name)
+		}
+	}
+	if (m.PlannerVersion == "") != (m.PlannerPolicyVersion == "") {
+		return fmt.Errorf("planner version and policy version must be declared together")
+	}
 	for name, value := range map[string]string{"embedding provider": m.EmbeddingProvider, "embedding version": m.EmbeddingVersion} {
 		if !evaluationSafeIdentity(value) {
 			return fmt.Errorf("%s identity is invalid", name)
@@ -324,6 +398,12 @@ func (report EvaluationReport) validateSafeOutput() error {
 	if err := validateEvaluationSafetyFailures(report.SafetyFailures); err != nil {
 		return err
 	}
+	if report.PlannerEvidence.SafetyFailures < 0 || report.PlannerEvidence.SafetyFailures > QueryAnalysisHardMaxDiagnosticCount ||
+		report.PlannerEvidence.MaxPasses < 0 || report.PlannerEvidence.MaxPasses > 2 ||
+		report.PlannerEvidence.MaxCandidateCount < 0 || report.PlannerEvidence.MaxCandidateCount > 5000 ||
+		!boundedRate(report.PlannerEvidence.FallbackRate) {
+		return fmt.Errorf("evaluation planner release evidence is invalid")
+	}
 	for name, value := range map[string]string{"quality feature version": report.Metadata.QualityFeatureVersion, "reranker provider": report.Metadata.RerankerProvider, "reranker version": report.Metadata.RerankerVersion, "reranker mode": report.Metadata.RerankerMode} {
 		if !evaluationSafeIdentity(value) {
 			return fmt.Errorf("%s identity is invalid", name)
@@ -346,6 +426,18 @@ func (report EvaluationReport) validateSafeOutput() error {
 			item.AnalysisSubqueryCount < 0 || item.AnalysisSubqueryCount > QueryAnalysisHardMaxSubqueries ||
 			item.AnalysisCandidateCount < 0 || item.AnalysisCandidateCount > QueryAnalysisHardMaxAggregateCandidates {
 			return fmt.Errorf("evaluation case count is outside its bound")
+		}
+		if item.QueryFamily != "" && !item.QueryFamily.valid() {
+			return fmt.Errorf("evaluation query family is invalid")
+		}
+		for _, value := range []string{item.PlannerIdentity, item.PlannerVersion, item.PlannerPolicyVersion, item.PlannerFallbackCategory} {
+			if !evaluationSafeIdentity(value) {
+				return fmt.Errorf("evaluation planner identity is invalid")
+			}
+		}
+		if item.PassCount < 0 || item.PassCount > 2 || item.MaxPlannerCandidates < 0 || item.MaxPlannerCandidates > 5000 || item.FirstPassCandidates < 0 || item.SecondPassCandidates < 0 || item.FirstPassCandidates+item.SecondPassCandidates > 5000 || item.FirstPassLatencyMS < 0 || item.SecondPassLatencyMS < 0 ||
+			!boundedRate(item.FirstPassEvidenceCoverage) || !boundedRate(item.SecondPassEvidenceCoverage) || item.SecondPassEvidenceGain < 0 || item.SecondPassEvidenceGain > 1 {
+			return fmt.Errorf("evaluation planner metrics are invalid")
 		}
 		if err := validateEvaluationSafetyFailures(item.SafetyFailures); err != nil {
 			return err
@@ -412,7 +504,7 @@ func evaluationSafeIdentity(value string) bool {
 		if (character >= 'a' && character <= 'z') ||
 			(character >= 'A' && character <= 'Z') ||
 			(character >= '0' && character <= '9') ||
-			character == '_' || character == '-' || character == '.' || character == ':' || character == '/' {
+			character == '_' || character == '-' || character == '.' || character == ':' || character == '/' || character == '=' || character == ',' {
 			continue
 		}
 		return false
@@ -548,6 +640,68 @@ func (c EvaluationCase) validate() error {
 	} else if evaluationCategoryRequiresAnalysis(c.Category) {
 		return fmt.Errorf("analysis expectation is required for category")
 	}
+	if c.Planner != nil {
+		if err := c.Planner.validate(); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func (expectation EvaluationPlannerExpectation) validate() error {
+	if !expectation.Family.valid() || !evaluationSafeIdentity(expectation.PlanIdentity) || strings.TrimSpace(expectation.PlanIdentity) == "" {
+		return fmt.Errorf("planner fixture identity is invalid")
+	}
+	if expectation.PlannerVersion != string(RetrievalPlannerVersionV1) {
+		return fmt.Errorf("planner fixture version is unsupported")
+	}
+	if expectation.PolicyVersion != string(RetrievalPlanPolicyVersionV1) {
+		return fmt.Errorf("planner fixture policy version is unsupported")
+	}
+	if len(expectation.Channels) == 0 || len(expectation.Channels) > 4 {
+		return fmt.Errorf("planner fixture channels are invalid")
+	}
+	seen := make(map[FusionChannel]struct{}, len(expectation.Channels))
+	for _, channel := range expectation.Channels {
+		if !channel.valid() {
+			return fmt.Errorf("planner fixture channel is invalid")
+		}
+		if _, exists := seen[channel]; exists {
+			return fmt.Errorf("planner fixture channel is duplicated")
+		}
+		seen[channel] = struct{}{}
+	}
+	if expectation.MaxCandidates <= 0 || expectation.MaxCandidates > 5000 || expectation.MaxCandidatesPerChannel < 0 || expectation.MaxCandidatesPerChannel > expectation.MaxCandidates {
+		return fmt.Errorf("planner fixture candidate budget is invalid")
+	}
+	fallbackAllocated := 0
+	for channel, count := range expectation.FallbackChannelCandidates {
+		if !channel.valid() || count <= 0 || count > expectation.MaxCandidates {
+			return fmt.Errorf("planner fixture fallback candidate budget is invalid")
+		}
+		if expectation.MaxCandidatesPerChannel > 0 && count > expectation.MaxCandidatesPerChannel {
+			return fmt.Errorf("planner fixture fallback channel budget exceeds per-channel bound")
+		}
+		if _, planned := seen[channel]; planned {
+			return fmt.Errorf("planner fixture fallback channel overlaps planned channels")
+		}
+		fallbackAllocated += count
+	}
+	if fallbackAllocated >= expectation.MaxCandidates {
+		return fmt.Errorf("planner fixture fallback reserve exhausts candidate budget")
+	}
+	wantIdentity := RetrievalPlanIdentity{
+		PlannerVersion:            RetrievalPlannerVersion(expectation.PlannerVersion),
+		PolicyVersion:             RetrievalPlanPolicyVersion(expectation.PolicyVersion),
+		Family:                    expectation.Family,
+		FallbackChannelCandidates: expectation.FallbackChannelCandidates,
+	}.String()
+	if expectation.PlanIdentity != wantIdentity {
+		return fmt.Errorf("planner fixture plan identity is incompatible")
+	}
+	if expectation.ExpectedPasses < 1 || expectation.ExpectedPasses > 2 || (expectation.FollowUpEligible && expectation.ExpectedPasses != 2) {
+		return fmt.Errorf("planner fixture pass expectation is invalid")
+	}
 	return nil
 }
 
@@ -645,6 +799,9 @@ func (p EvaluationReleasePolicy) Validate() error {
 	if p.Retention.Owner != "" && !evaluationSafeIdentity(p.Retention.Owner) {
 		return fmt.Errorf("retention owner is invalid")
 	}
+	if p.Planner.MaxPasses < 0 || p.Planner.MaxPasses > 2 || p.Planner.MaxCandidateCount < 0 || p.Planner.MaxCandidateCount > 5000 || !boundedRate(p.Planner.MaxFallbackRate) {
+		return fmt.Errorf("planner release policy is invalid")
+	}
 	seenCategories := make(map[string]struct{}, len(p.ProtectedCategories))
 	for _, category := range p.ProtectedCategories {
 		category = strings.TrimSpace(category)
@@ -655,6 +812,16 @@ func (p EvaluationReleasePolicy) Validate() error {
 			return fmt.Errorf("duplicate protected category")
 		}
 		seenCategories[category] = struct{}{}
+	}
+	seenFamilies := make(map[RetrievalQueryFamily]struct{}, len(p.ProtectedFamilies))
+	for _, family := range p.ProtectedFamilies {
+		if !family.valid() {
+			return fmt.Errorf("protected query family is invalid")
+		}
+		if _, exists := seenFamilies[family]; exists {
+			return fmt.Errorf("duplicate protected query family")
+		}
+		seenFamilies[family] = struct{}{}
 	}
 	return nil
 }

@@ -303,6 +303,7 @@ func (a *Adapter) Search(ctx context.Context, binding RuntimeBinding, meta Opera
 		return retrieval.SearchResult{}, meta, err
 	}
 	input.Scope = binding.Scope
+	input.SessionID = binding.SessionID
 	if input.TopK > a.limits.MaxRetrievalResults {
 		input.TopK = a.limits.MaxRetrievalResults
 	}
@@ -317,6 +318,7 @@ func (a *Adapter) AssembleContext(ctx context.Context, binding RuntimeBinding, m
 		return retrieval.AssembledContext{}, meta, err
 	}
 	input.Scope = binding.Scope
+	input.SessionID = binding.SessionID
 	if input.Budget > a.limits.MaxContextBytes {
 		input.Budget = a.limits.MaxContextBytes
 	}

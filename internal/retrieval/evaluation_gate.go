@@ -1,6 +1,7 @@
 package retrieval
 
 import (
+	"fmt"
 	"math"
 	"net/url"
 	"os"
@@ -10,6 +11,8 @@ import (
 
 const (
 	RetrievalEvaluationDSNSkip                       = "SKIP_RETRIEVAL_EVALUATION_DSN_REQUIRED"
+	RetrievalEvaluationDSNOwnershipRequired          = "STELE_TEST_RETRIEVAL_EVALUATION_OWNERSHIP_REQUIRED"
+	RetrievalEvaluationDSNRuntimeReuse               = "STELE_TEST_RETRIEVAL_EVALUATION_DSN_MUST_NOT_REUSE_RUNTIME_DSN"
 	RetrievalEvaluationPhase64                       = "phase_6_4"
 	RetrievalEvaluationPhase64EvidenceRequired       = "RETRIEVAL_EVALUATION_PHASE_6_4_EVIDENCE_REQUIRED"
 	RetrievalEvaluationPhase64Skipped                = "RETRIEVAL_EVALUATION_PHASE_6_4_SKIPPED"
@@ -27,14 +30,60 @@ func OwnedEvaluationDSN() (string, string) {
 	if dsn == "" {
 		return "", RetrievalEvaluationDSNSkip
 	}
-	if runtime := os.Getenv("STELE_POSTGRES_DSN"); runtime != "" && runtime == dsn {
-		return "", "STELE_TEST_RETRIEVAL_EVALUATION_DSN_MUST_NOT_REUSE_RUNTIME_DSN"
+	owned := strings.EqualFold(strings.TrimSpace(os.Getenv("STELE_TEST_RETRIEVAL_EVALUATION_OWNED")), "true")
+	validated, err := ValidateOwnedEvaluationDSN(dsn, os.Getenv("STELE_POSTGRES_DSN"), owned)
+	if err != nil {
+		return "", err.Error()
 	}
-	u, err := url.Parse(dsn)
-	if err != nil || (u.Scheme != "postgres" && u.Scheme != "postgresql") || u.Host == "" {
-		return "", "STELE_TEST_RETRIEVAL_EVALUATION_DSN_INVALID"
+	return validated, ""
+}
+
+// RunOwnedPlannerEvaluation validates the only connection source accepted by a
+// planner real-stack runner. The database harness remains responsible for
+// executing baseline and planner replays after this boundary succeeds.
+func RunOwnedPlannerEvaluation(evaluationDSN, runtimeDSN string, disposableOwned bool) (string, error) {
+	return ValidateOwnedEvaluationDSN(evaluationDSN, runtimeDSN, disposableOwned)
+}
+
+// ValidateOwnedEvaluationDSN is the shared safety boundary for scripts and
+// direct Go integration-test invocations. It must succeed before a pool is
+// opened or migrations/fixtures are applied.
+func ValidateOwnedEvaluationDSN(evaluationDSN, runtimeDSN string, disposableOwned bool) (string, error) {
+	dsn := strings.TrimSpace(evaluationDSN)
+	if dsn == "" {
+		return "", fmt.Errorf("%s", RetrievalEvaluationDSNSkip)
 	}
-	return dsn, ""
+	if !disposableOwned {
+		return "", fmt.Errorf("%s", RetrievalEvaluationDSNOwnershipRequired)
+	}
+	canonical, err := canonicalPostgresDSN(dsn)
+	if err != nil {
+		return "", fmt.Errorf("STELE_TEST_RETRIEVAL_EVALUATION_DSN_INVALID")
+	}
+	if runtime := strings.TrimSpace(runtimeDSN); runtime != "" {
+		runtimeCanonical, runtimeErr := canonicalPostgresDSN(runtime)
+		if runtimeErr == nil && runtimeCanonical == canonical {
+			return "", fmt.Errorf("%s", RetrievalEvaluationDSNRuntimeReuse)
+		}
+	}
+	return dsn, nil
+}
+
+func canonicalPostgresDSN(raw string) (string, error) {
+	u, err := url.Parse(strings.TrimSpace(raw))
+	if err != nil || (u.Scheme != "postgres" && u.Scheme != "postgresql") || u.Hostname() == "" || strings.TrimSpace(u.Path) == "" || u.Path == "/" {
+		return "", fmt.Errorf("invalid PostgreSQL DSN")
+	}
+	u.Scheme = "postgres"
+	host := strings.ToLower(u.Hostname())
+	port := u.Port()
+	if port == "" {
+		port = "5432"
+	}
+	u.Host = host + ":" + port
+	u.RawQuery = u.Query().Encode()
+	u.Fragment = ""
+	return u.String(), nil
 }
 
 type RetrievalEvaluationEvidenceStatus string

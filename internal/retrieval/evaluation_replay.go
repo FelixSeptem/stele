@@ -3,7 +3,9 @@ package retrieval
 import (
 	"context"
 	"fmt"
+	"reflect"
 	"sort"
+	"strings"
 	"time"
 
 	"github.com/FelixSeptem/stele/internal/memory"
@@ -48,6 +50,25 @@ type EvaluationReplayCase struct {
 	CandidatePoolSize      int
 	Latency                time.Duration
 	AnalysisDiagnostics    *QueryAnalysisDiagnostics
+	PlannerFamily          RetrievalQueryFamily
+	PlannerIdentity        string
+	PlannerVersion         string
+	PlannerPolicyVersion   string
+	Passes                 []EvaluationReplayPass
+	RerankerUsed           bool
+	RerankerSafe           bool
+	FallbackCategory       string
+	RollbackVerified       bool
+	PlannerProtected       bool
+}
+
+type EvaluationReplayPass struct {
+	Pass             int
+	CandidateCount   int
+	VisibleCount     int
+	EvidenceCoverage float64
+	Latency          time.Duration
+	Evidence         EvidenceAssessment
 }
 
 type EvaluationCandidateDisposition string
@@ -93,10 +114,90 @@ type EvaluationReplayCandidate struct {
 	Relation      bool
 	Chunk         bool
 	FinalRank     int
+	Citations     []Citation
 	lexicalScore  float64
 	semanticScore float64
 	relationScore float64
 	ChunkDerived  bool
+}
+
+// PlannerRollbackEquivalent proves that a rollback execution is planner-free
+// and restores the baseline public retrieval result, citations, safety, and
+// bounded resource shape. Latency is intentionally excluded because it is
+// measured separately across interleaved samples.
+func PlannerRollbackEquivalent(baseline, rollback EvaluationReplay) bool {
+	if !reflect.DeepEqual(baseline.Metadata, rollback.Metadata) || len(baseline.Cases) != len(rollback.Cases) {
+		return false
+	}
+	for index := range baseline.Cases {
+		left, right := baseline.Cases[index], rollback.Cases[index]
+		if right.PlannerFamily != "" || right.PlannerIdentity != "" || right.PlannerVersion != "" || right.PlannerPolicyVersion != "" || len(right.Passes) != 0 || right.RerankerUsed || right.FallbackCategory != "" {
+			return false
+		}
+		if len(evaluationReplaySafetyFailures(left)) != 0 || len(evaluationReplaySafetyFailures(right)) != 0 {
+			return false
+		}
+		left.Latency, right.Latency = 0, 0
+		left.RollbackVerified, right.RollbackVerified = false, false
+		if !reflect.DeepEqual(left, right) {
+			return false
+		}
+	}
+	return true
+}
+
+// AggregateEvaluationReplaySamples preserves one deterministic replay shape
+// while replacing case and pass latency with the median of repeated samples.
+// Any non-latency divergence is rejected rather than hidden by aggregation.
+func AggregateEvaluationReplaySamples(samples []EvaluationReplay) (EvaluationReplay, error) {
+	if len(samples) == 0 {
+		return EvaluationReplay{}, fmt.Errorf("evaluation replay samples are required")
+	}
+	aggregated := samples[0]
+	aggregated.Cases = append([]EvaluationReplayCase(nil), samples[0].Cases...)
+	caseLatencies := make([][]time.Duration, len(aggregated.Cases))
+	passLatencies := make([][][]time.Duration, len(aggregated.Cases))
+	for caseIndex := range aggregated.Cases {
+		aggregated.Cases[caseIndex].Candidates = append([]EvaluationReplayCandidate(nil), samples[0].Cases[caseIndex].Candidates...)
+		aggregated.Cases[caseIndex].Passes = append([]EvaluationReplayPass(nil), samples[0].Cases[caseIndex].Passes...)
+		passLatencies[caseIndex] = make([][]time.Duration, len(aggregated.Cases[caseIndex].Passes))
+	}
+	for _, sample := range samples {
+		if !reflect.DeepEqual(samples[0].Metadata, sample.Metadata) || len(sample.Cases) != len(aggregated.Cases) {
+			return EvaluationReplay{}, fmt.Errorf("evaluation replay sample shape changed")
+		}
+		for caseIndex := range aggregated.Cases {
+			expected, current := samples[0].Cases[caseIndex], sample.Cases[caseIndex]
+			caseLatencies[caseIndex] = append(caseLatencies[caseIndex], current.Latency)
+			expected.Latency, current.Latency = 0, 0
+			if len(expected.Passes) != len(current.Passes) {
+				return EvaluationReplay{}, fmt.Errorf("evaluation replay pass shape changed")
+			}
+			expected.Passes = append([]EvaluationReplayPass(nil), expected.Passes...)
+			current.Passes = append([]EvaluationReplayPass(nil), current.Passes...)
+			for passIndex := range current.Passes {
+				passLatencies[caseIndex][passIndex] = append(passLatencies[caseIndex][passIndex], current.Passes[passIndex].Latency)
+				expected.Passes[passIndex].Latency = 0
+				current.Passes[passIndex].Latency = 0
+			}
+			if !reflect.DeepEqual(expected, current) {
+				return EvaluationReplay{}, fmt.Errorf("evaluation replay sample result changed")
+			}
+		}
+	}
+	for caseIndex := range aggregated.Cases {
+		aggregated.Cases[caseIndex].Latency = medianEvaluationDuration(caseLatencies[caseIndex])
+		for passIndex := range aggregated.Cases[caseIndex].Passes {
+			aggregated.Cases[caseIndex].Passes[passIndex].Latency = medianEvaluationDuration(passLatencies[caseIndex][passIndex])
+		}
+	}
+	return aggregated, nil
+}
+
+func medianEvaluationDuration(values []time.Duration) time.Duration {
+	ordered := append([]time.Duration(nil), values...)
+	sort.Slice(ordered, func(i, j int) bool { return ordered[i] < ordered[j] })
+	return ordered[(len(ordered)-1)/2]
 }
 
 func (r *EvaluationRunner) Replay(ctx context.Context, fixture EvaluationFixture, seed EvaluationFixtureSeed, metadata EvaluationRankingMetadata) (run EvaluationReplay, replayErr error) {
@@ -162,18 +263,21 @@ func (r *EvaluationRunner) Replay(ctx context.Context, fixture EvaluationFixture
 		}
 
 		started := time.Now()
-		result, err := r.searcher.Search(ctx, SearchInput{
-			Scope:                              item.Scope,
-			Query:                              item.Query,
-			LexicalMatchMode:                   metadata.LexicalMatchMode,
-			TopK:                               evaluationReplayTopK,
-			IncludeSummaries:                   true,
-			IncludeRelations:                   true,
-			rankingPolicyDisabled:              metadata.RolloutDisposition == "" || metadata.RolloutDisposition == "original_only",
-			queryAnalysisPolicyDisabled:        metadata.RolloutDisposition == "" || metadata.RolloutDisposition == "original_only",
-			IncludeFeedbackDiagnostics:         metadata.AnalysisVersion != "",
-			queryAnalysisDiagnosticsAuthorized: metadata.AnalysisVersion != "",
-		})
+		searchInput := SearchInput{
+			Scope:                                 item.Scope,
+			Query:                                 item.Query,
+			QueryEmbedding:                        evaluationPlannerQueryEmbedding(item.Planner),
+			LexicalMatchMode:                      metadata.LexicalMatchMode,
+			TopK:                                  evaluationReplayTopK,
+			IncludeSummaries:                      true,
+			IncludeRelations:                      true,
+			rankingPolicyDisabled:                 metadata.RolloutDisposition == "" || metadata.RolloutDisposition == "original_only",
+			queryAnalysisPolicyDisabled:           metadata.RolloutDisposition == "" || metadata.RolloutDisposition == "original_only",
+			IncludeFeedbackDiagnostics:            metadata.AnalysisVersion != "",
+			queryAnalysisDiagnosticsAuthorized:    metadata.AnalysisVersion != "",
+			retrievalPlannerDiagnosticsAuthorized: item.Planner != nil,
+		}
+		result, err := r.searcher.Search(ctx, searchInput)
 		if err != nil {
 			return EvaluationReplay{}, fmt.Errorf("execute evaluation retrieval query")
 		}
@@ -211,6 +315,7 @@ func (r *EvaluationRunner) Replay(ctx context.Context, fixture EvaluationFixture
 				Relation:      hit.Score.Relation != 0,
 				Chunk:         hit.Chunk != nil,
 				FinalRank:     index + 1,
+				Citations:     append([]Citation(nil), hit.Citations...),
 				lexicalScore:  hit.Score.Lexical,
 				semanticScore: hit.Score.Semantic,
 				relationScore: hit.Score.Relation,
@@ -219,9 +324,122 @@ func (r *EvaluationRunner) Replay(ctx context.Context, fixture EvaluationFixture
 		}
 		caseRun.Diagnostics = evaluationCandidateDiagnostics(caseRun.Candidates, metadata.FusionStrategy)
 		caseRun.Diagnostics = append(caseRun.Diagnostics, evaluationMissingCandidateDiagnostics(caseRun.Diagnostics, activeAliases, metadata.FusionStrategy)...)
+		if item.Planner != nil {
+			if metadata.PlannerVersion != item.Planner.PlannerVersion || metadata.PlannerPolicyVersion != item.Planner.PolicyVersion {
+				return EvaluationReplay{}, NewEvaluationFailure(EvaluationSafetyFailureUnsafeDiagnostics, "planner metadata does not match fixture")
+			}
+			if err := evaluationReplayPlannerObservation(&caseRun, result, item.Planner); err != nil {
+				return EvaluationReplay{}, NewEvaluationFailure(EvaluationSafetyFailureUnsafeDiagnostics, err.Error())
+			}
+		}
 		run.Cases = append(run.Cases, caseRun)
 	}
 	return run, nil
+}
+
+func evaluationPlannerQueryEmbedding(expectation *EvaluationPlannerExpectation) []float32 {
+	if expectation != nil && expectation.Family == RetrievalQueryFamilySemantic {
+		return []float32{1, 0, 0}
+	}
+	return nil
+}
+
+func evaluationReplayPlannerObservation(caseRun *EvaluationReplayCase, result SearchResult, expectation *EvaluationPlannerExpectation) error {
+	if caseRun == nil || expectation == nil {
+		return fmt.Errorf("planner replay expectation is required")
+	}
+	if err := expectation.validate(); err != nil {
+		return err
+	}
+	if result.retrievalPlan == nil || len(result.plannerDiagnostics) != 1 {
+		return fmt.Errorf("planner replay diagnostics are missing")
+	}
+	plan := result.retrievalPlan
+	diagnostic := result.plannerDiagnostics[0]
+	if err := diagnostic.Validate(); err != nil {
+		return err
+	}
+	if plan.Identity.String() != expectation.PlanIdentity || plan.Family != expectation.Family ||
+		string(plan.Identity.PlannerVersion) != expectation.PlannerVersion || string(plan.Identity.PolicyVersion) != expectation.PolicyVersion ||
+		diagnostic.PlannerVersion != plan.Identity.PlannerVersion || diagnostic.PolicyVersion != plan.Identity.PolicyVersion || diagnostic.QueryFamily != plan.Family ||
+		!equalFusionChannels(plan.Channels, expectation.Channels) || !channelCandidatesEqual(plan.FallbackChannelCandidates, expectation.FallbackChannelCandidates) ||
+		plan.TotalCandidates > expectation.MaxCandidates || diagnostic.PassCount != expectation.ExpectedPasses {
+		return fmt.Errorf("planner replay does not match fixture expectation")
+	}
+	if expectation.MaxCandidatesPerChannel > 0 {
+		for _, count := range plan.ChannelCandidates {
+			if count > expectation.MaxCandidatesPerChannel {
+				return fmt.Errorf("planner replay exceeds fixture channel budget")
+			}
+		}
+	}
+	if plan.RerankerEligible != expectation.RerankerEligible {
+		return fmt.Errorf("planner replay reranker eligibility mismatch")
+	}
+	if len(result.retrievalPassObservations) != diagnostic.PassCount {
+		return fmt.Errorf("planner replay requires explicit per-pass observations")
+	}
+	fallback := "none"
+	if diagnostic.Disposition == RetrievalPlanDispositionFallback {
+		fallback = string(diagnostic.Fallback)
+	}
+	caseRun.PlannerFamily = plan.Family
+	caseRun.PlannerIdentity = plan.Identity.String()
+	caseRun.PlannerVersion = string(plan.Identity.PlannerVersion)
+	caseRun.PlannerPolicyVersion = string(plan.Identity.PolicyVersion)
+	caseRun.FallbackCategory = fallback
+	caseRun.PlannerProtected = expectation.Protected
+	caseRun.RerankerUsed = result.rerankerObservation.Used
+	caseRun.RerankerSafe = result.rerankerObservation.Safe
+	caseRun.Passes = make([]EvaluationReplayPass, 0, len(result.retrievalPassObservations))
+	for index, observation := range result.retrievalPassObservations {
+		if observation.Pass != index+1 || observation.CandidateCount < 0 || observation.Latency < 0 {
+			return fmt.Errorf("planner replay pass observation is invalid")
+		}
+		coverage, visibleCount, err := evaluationPassEvidenceCoverage(*caseRun, observation.VisibleMemoryIDs)
+		if err != nil {
+			return err
+		}
+		caseRun.Passes = append(caseRun.Passes, EvaluationReplayPass{
+			Pass: observation.Pass, CandidateCount: observation.CandidateCount,
+			VisibleCount: visibleCount, EvidenceCoverage: coverage,
+			Latency: observation.Latency, Evidence: observation.Evidence,
+		})
+	}
+	return nil
+}
+
+func evaluationPassEvidenceCoverage(caseRun EvaluationReplayCase, visibleMemoryIDs []string) (float64, int, error) {
+	visible := make(map[string]struct{}, len(visibleMemoryIDs))
+	for _, id := range visibleMemoryIDs {
+		if strings.TrimSpace(id) == "" {
+			return 0, 0, fmt.Errorf("planner replay visible memory identity is invalid")
+		}
+		visible[id] = struct{}{}
+	}
+	passCase := caseRun
+	passCase.Candidates = make([]EvaluationReplayCandidate, 0, len(visible))
+	for _, candidate := range caseRun.Candidates {
+		if _, ok := visible[candidate.MemoryID]; ok {
+			passCase.Candidates = append(passCase.Candidates, candidate)
+		}
+	}
+	if len(passCase.Candidates) != len(visible) {
+		return 0, 0, fmt.Errorf("planner replay pass contains unknown visible memory")
+	}
+	return calculateCaseEvaluationMetrics(passCase).EvidenceCoverage, len(visible), nil
+}
+
+func equalFusionChannels(left, right []FusionChannel) bool {
+	if len(left) != len(right) {
+		return false
+	}
+	for index := range left {
+		if left[index] != right[index] {
+			return false
+		}
+	}
+	return true
 }
 
 func evaluationReplayAnalysisDiagnostics(diagnostics []ContextDiagnostic, metadata EvaluationRankingMetadata, expectation *EvaluationAnalysisExpectation) (*QueryAnalysisDiagnostics, error) {

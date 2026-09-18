@@ -223,4 +223,62 @@ func TestResolveQueryAnalysisRolloutRequiresStatusModePair(t *testing.T) {
 	}
 }
 
+func TestResolveRetrievalPlannerRolloutLifecycleAndCompatibility(t *testing.T) {
+	now := time.Date(2026, 9, 17, 0, 0, 0, 0, time.UTC)
+	scope := Scope{Tenant: "tenant-a", Project: "project-a", Namespace: "namespace-a"}
+	valid := func(status RankingRolloutPolicyStatus, mode RankingRolloutMode) RankingRolloutPolicy {
+		policy := validQueryAnalysisRolloutPolicyForTest(status)
+		policy.Mode = mode
+		policy.Scope = scope
+		policy.QueryAnalysisSelector = QueryAnalysisRolloutSelector{SessionID: "session-a", UserID: "user-a"}
+		policy.RetrievalPlannerSelector = RetrievalPlannerRolloutSelector{SessionID: "session-a", UserID: "user-a"}
+		policy.RetrievalPlanner = &RetrievalPlannerRolloutPolicy{
+			SchemaVersion: "retrieval-planner-rollout-v1", PlannerVersion: "retrieval-planner-v1", PolicyVersion: "retrieval-plan-policy-v1",
+			AnalysisPolicyVersion: QueryAnalysisPolicyVersionV1, FusionVersion: "rrf-v1", RankingVersion: "quality-feature-v1", RendererVersion: "context-renderer-v1",
+			MaxCandidates: 200, MaxCandidatesPerChannel: 100, MaxPasses: 2, MaxLatency: 5 * time.Second, MaxContextItems: 100, MaxRerankerHeadroom: 100,
+			ExpiresAt: now.Add(time.Hour),
+		}
+		return policy
+	}
+	tests := []struct{ name string; policy *RankingRolloutPolicy; want RetrievalPlannerRolloutStage; affects bool }{
+		{name: "missing", want: RetrievalPlannerRolloutStageBaseline},
+		{name: "diagnostics", policy: ptrRankingRolloutPolicy(valid(RankingRolloutPolicyStatusDiagnosticsOnly, RankingRolloutModeDiagnosticsOnly)), want: RetrievalPlannerRolloutStageDiagnosticsOnly},
+		{name: "shadow", policy: ptrRankingRolloutPolicy(valid(RankingRolloutPolicyStatusDryRun, RankingRolloutModeDryRun)), want: RetrievalPlannerRolloutStageShadow},
+		{name: "active", policy: ptrRankingRolloutPolicy(valid(RankingRolloutPolicyStatusActiveForScope, RankingRolloutModeActiveForScope)), want: RetrievalPlannerRolloutStageActive, affects: true},
+		{name: "disabled", policy: ptrRankingRolloutPolicy(valid(RankingRolloutPolicyStatusDisabled, RankingRolloutModeActiveForScope)), want: RetrievalPlannerRolloutStageBaseline},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			got := ResolveRetrievalPlannerRollout(test.policy, ResolveRetrievalPlannerRolloutInput{Scope: scope, Surface: RankingRolloutSurfaceSearch, SessionID: "session-a", UserID: "user-a", Now: now, AnalysisPolicyVersion: QueryAnalysisPolicyVersionV1, FusionVersion: "rrf-v1", RankingVersion: "quality-feature-v1", RendererVersion: "context-renderer-v1"})
+			if got.Stage != test.want || got.AffectsResults != test.affects { t.Fatalf("resolution = %+v", got) }
+		})
+	}
+}
+
+func TestResolveRetrievalPlannerRolloutFailsClosed(t *testing.T) {
+	now := time.Date(2026, 9, 17, 0, 0, 0, 0, time.UTC)
+	scope := Scope{Tenant: "tenant-a", Project: "project-a", Namespace: "namespace-a"}
+	base := validQueryAnalysisRolloutPolicyForTest(RankingRolloutPolicyStatusActiveForScope)
+	base.Scope = scope
+	base.Mode = RankingRolloutModeActiveForScope
+	base.RetrievalPlannerSelector = RetrievalPlannerRolloutSelector{SessionID: "session-a", UserID: "user-a"}
+	base.RetrievalPlanner = &RetrievalPlannerRolloutPolicy{SchemaVersion: "retrieval-planner-rollout-v1", PlannerVersion: "retrieval-planner-v1", PolicyVersion: "retrieval-plan-policy-v1", AnalysisPolicyVersion: QueryAnalysisPolicyVersionV1, FusionVersion: "rrf-v1", RankingVersion: "quality-feature-v1", RendererVersion: "context-renderer-v1", MaxCandidates: 200, MaxCandidatesPerChannel: 100, MaxPasses: 2, MaxLatency: 5 * time.Second, MaxContextItems: 100, MaxRerankerHeadroom: 100, ExpiresAt: now.Add(time.Hour)}
+	mutations := []func(*RankingRolloutPolicy){
+		func(p *RankingRolloutPolicy) { p.Scope.Namespace = "foreign" },
+		func(p *RankingRolloutPolicy) { p.RetrievalPlannerSelector.SessionID = "foreign" },
+		func(p *RankingRolloutPolicy) { p.RetrievalPlanner.ExpiresAt = now },
+		func(p *RankingRolloutPolicy) { p.RetrievalPlanner.SchemaVersion = "unknown" },
+		func(p *RankingRolloutPolicy) { p.RetrievalPlanner.MaxCandidates = 5001 },
+		func(p *RankingRolloutPolicy) { p.RetrievalPlanner.FusionVersion = "other" },
+	}
+	for index, mutate := range mutations {
+		policy := base
+		copyPlanner := *base.RetrievalPlanner
+		policy.RetrievalPlanner = &copyPlanner
+		mutate(&policy)
+		got := ResolveRetrievalPlannerRollout(&policy, ResolveRetrievalPlannerRolloutInput{Scope: scope, Surface: RankingRolloutSurfaceSearch, SessionID: "session-a", UserID: "user-a", Now: now, AnalysisPolicyVersion: QueryAnalysisPolicyVersionV1, FusionVersion: "rrf-v1", RankingVersion: "quality-feature-v1", RendererVersion: "context-renderer-v1"})
+		if got.Stage != RetrievalPlannerRolloutStageBaseline || got.AffectsResults { t.Fatalf("mutation %d resolution = %+v", index, got) }
+	}
+}
+
 func ptrRankingRolloutPolicy(policy RankingRolloutPolicy) *RankingRolloutPolicy { return &policy }

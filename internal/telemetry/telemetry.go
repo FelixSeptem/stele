@@ -58,6 +58,45 @@ type RetrievalEvaluationEvent struct {
 	Error    string
 }
 
+// RetrievalPlannerEvent carries only bounded planner execution categories.
+// It intentionally excludes query text, scope values, identifiers, provider
+// payloads, credentials, and raw scores.
+type RetrievalPlannerEvent struct {
+	PlannerVersion string
+	PolicyVersion  string
+	Family         string
+	Stage          string
+	Disposition    string
+	Pass           int
+	BudgetBucket   string
+	Evidence       string
+	Fallback       string
+	LatencyBucket  string
+	Reranker       string
+}
+
+type RetrievalPlannerChannelEvent struct {
+	PlannerVersion string
+	PolicyVersion  string
+	Family         string
+	Stage          string
+	Channel        string
+	Availability   string
+}
+
+type RetrievalPlannerChangedRankEvent struct {
+	PlannerVersion string
+	PolicyVersion  string
+	Family         string
+	Stage          string
+	Bucket         string
+	Count          int
+}
+
+type RetrievalPlannerDiagnosticEvent struct {
+	FailureCategory string
+}
+
 type Observer interface {
 	RecordOperation(ctx context.Context, event OperationEvent)
 	RecordBacklog(ctx context.Context, event BacklogEvent)

@@ -1,6 +1,19 @@
 package memory
 
-import "testing"
+import (
+	"encoding/json"
+	"testing"
+)
+
+func TestChunkRangeJSONPreservesStartAndEnd(t *testing.T) {
+	payload, err := json.Marshal(ChunkRange{Start: 2, End: 5})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got, want := string(payload), `{"start":2,"end":5}`; got != want {
+		t.Fatalf("json.Marshal(ChunkRange) = %s, want %s", got, want)
+	}
+}
 
 func TestMemoryChunkValidateEnforcesIdentityScopeLineageAndBounds(t *testing.T) {
 	scope := Scope{Tenant: "tenant-a", Project: "project-a", Namespace: "namespace-a"}

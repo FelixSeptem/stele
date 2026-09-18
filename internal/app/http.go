@@ -531,6 +531,8 @@ type rankingRolloutPolicyCreateRequest struct {
 	FusionChannelWeights      map[string]float64                   `json:"fusion_channel_weights,omitempty"`
 	FusionPerChannelCandidate int                                  `json:"fusion_per_channel_candidate,omitempty"`
 	FusionTotalCandidates     int                                  `json:"fusion_total_candidates,omitempty"`
+	RetrievalPlannerSelector  memory.RetrievalPlannerRolloutSelector `json:"retrieval_planner_selector,omitempty"`
+	RetrievalPlanner          *memory.RetrievalPlannerRolloutPolicy  `json:"retrieval_planner,omitempty"`
 }
 
 type rankingRolloutPolicyActionRequest struct {
@@ -3354,6 +3356,8 @@ func handleAdminRankingRolloutCreate(w http.ResponseWriter, r *http.Request, ser
 		FusionChannelWeights:      req.FusionChannelWeights,
 		FusionPerChannelCandidate: req.FusionPerChannelCandidate,
 		FusionTotalCandidates:     req.FusionTotalCandidates,
+		RetrievalPlannerSelector:  req.RetrievalPlannerSelector,
+		RetrievalPlanner:          req.RetrievalPlanner,
 		CreatedAt:                 time.Now().UTC(),
 		UpdatedAt:                 time.Now().UTC(),
 	}
