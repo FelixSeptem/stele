@@ -38,6 +38,10 @@ The service SHALL derive per-channel and total candidate budgets only from versi
 - **WHEN** first-pass exact-scope and lifecycle filtering produces an approved high-attrition category
 - **THEN** the service may allocate only the declared remaining candidate budget to an eligible follow-up pass and does not weaken the filters
 
+#### Scenario: Complex query receives additional headroom
+- **WHEN** an approved query family and complexity category justify more candidates than the baseline allocation
+- **THEN** the service may redistribute unused candidate headroom among declared channels without exceeding the request envelope
+
 ### Requirement: Plan execution preserves exact scope and lifecycle safety
 Every planned operation MUST execute within the already resolved tenant, project, namespace, and authorized optional session or user constraints. A plan MUST only narrow existing constraints and MUST NOT discover, infer, or broaden scope.
 

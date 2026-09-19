@@ -241,11 +241,17 @@ channel ordering are canonicalized for replay.
 
 Each request receives one shared hard envelope for total candidates,
 per-channel candidates, elapsed latency, context items, reranker headroom, and
-passes. Class quotas and context priorities are applied after scope/lifecycle
-validation. The ledger reserves reranker headroom and redistributes unused
-channel capacity without allowing any channel or pass to exceed the aggregate
-bound. Planner reranker eligibility is only a hint: the separately governed
-reranker policy and the reserved ledger headroom are both required.
+passes. Per-channel shares may be re-shared inside that envelope by a bounded
+`simple`, `moderate`, or `complex` query-complexity category derived only from
+validated analysis counts. A complexity allocation must cover every declared
+channel, keep each channel within the per-channel hard limit, and preserve the
+declared total candidate envelope, so it can never enlarge work or relax a
+service hard limit. Class quotas and context priorities are applied after
+scope/lifecycle validation. The ledger reserves reranker headroom and
+redistributes unused channel capacity without allowing any channel or pass to
+exceed the aggregate bound. Planner reranker eligibility is only a hint: the
+separately governed reranker policy and the reserved ledger headroom are both
+required.
 
 Evidence assessment uses bounded aggregate counts and dispositions only. If the
 first pass is insufficient, an eligible plan may run at most one follow-up pass

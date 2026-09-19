@@ -88,6 +88,166 @@ func TestBuildRetrievalPlanPreservesConfiguredContextPriority(t *testing.T) {
 	}
 }
 
+func TestClassifyRetrievalPlanComplexityIsBoundedAndDeterministic(t *testing.T) {
+	tests := []struct {
+		name    string
+		signals []QueryAnalysisSignal
+		want    RetrievalPlanComplexityCategory
+	}{
+		{name: "original query only", want: RetrievalPlanComplexitySimple},
+		{name: "one derived term", signals: []QueryAnalysisSignal{{Kind: QueryAnalysisSignalTerm, Text: "one"}}, want: RetrievalPlanComplexitySimple},
+		{name: "two derived terms", signals: []QueryAnalysisSignal{{Kind: QueryAnalysisSignalTerm, Text: "one"}, {Kind: QueryAnalysisSignalTerm, Text: "two"}}, want: RetrievalPlanComplexityModerate},
+		{name: "one subquery", signals: []QueryAnalysisSignal{{Kind: QueryAnalysisSignalSubquery, Text: "one"}}, want: RetrievalPlanComplexityModerate},
+		{name: "two subqueries", signals: []QueryAnalysisSignal{{Kind: QueryAnalysisSignalSubquery, Text: "one"}, {Kind: QueryAnalysisSignalSubquery, Text: "two"}}, want: RetrievalPlanComplexityComplex},
+		{name: "four derived signals", signals: []QueryAnalysisSignal{{Kind: QueryAnalysisSignalTerm, Text: "a"}, {Kind: QueryAnalysisSignalTerm, Text: "b"}, {Kind: QueryAnalysisSignalTerm, Text: "c"}, {Kind: QueryAnalysisSignalTerm, Text: "d"}}, want: RetrievalPlanComplexityComplex},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			input := plannerInputForTest(nil, test.signals, false)
+			plan, err := BuildRetrievalPlan(input)
+			if err != nil {
+				t.Fatalf("BuildRetrievalPlan() error = %v", err)
+			}
+			if plan.ComplexityCategory != test.want {
+				t.Fatalf("ComplexityCategory = %q, want %q", plan.ComplexityCategory, test.want)
+			}
+			repeated, err := BuildRetrievalPlan(input)
+			if err != nil {
+				t.Fatalf("BuildRetrievalPlan(repeat) error = %v", err)
+			}
+			if !reflect.DeepEqual(plan, repeated) {
+				t.Fatal("repeated complexity classification is not deterministic")
+			}
+		})
+	}
+}
+
+func plannerPolicyWithComplexity(category RetrievalPlanComplexityCategory, allocation map[FusionChannel]int) RetrievalPlanPolicy {
+	policy := DefaultRetrievalPlanPolicy()
+	template := policy.Templates[RetrievalQueryFamilyGeneral]
+	template.ComplexityCandidates = map[RetrievalPlanComplexityCategory]map[FusionChannel]int{category: allocation}
+	minimum := 0
+	for _, count := range allocation {
+		if count <= 0 {
+			continue
+		}
+		if minimum == 0 || count < minimum {
+			minimum = count
+		}
+	}
+	if minimum > 0 && template.Fusion.PerChannelCandidate > minimum {
+		template.Fusion.PerChannelCandidate = minimum
+	}
+	policy.Templates[RetrievalQueryFamilyGeneral] = template
+	return policy
+}
+
+func TestBuildRetrievalPlanResharesEnvelopeForModerateComplexity(t *testing.T) {
+	policy := plannerPolicyWithComplexity(RetrievalPlanComplexityModerate, map[FusionChannel]int{
+		FusionChannelLexical: 20, FusionChannelSemantic: 80, FusionChannelRelation: 50, FusionChannelChunk: 50,
+	})
+	if err := policy.Validate(); err != nil {
+		t.Fatalf("policy.Validate() error = %v", err)
+	}
+
+	moderateInput := plannerInputForTest(nil, []QueryAnalysisSignal{{Kind: QueryAnalysisSignalSubquery, Text: "second"}}, false)
+	moderateInput.Policy = policy
+	moderate, err := BuildRetrievalPlan(moderateInput)
+	if err != nil {
+		t.Fatalf("BuildRetrievalPlan(moderate) error = %v", err)
+	}
+	if moderate.Family != RetrievalQueryFamilyGeneral || moderate.ComplexityCategory != RetrievalPlanComplexityModerate {
+		t.Fatalf("moderate family/complexity = %q/%q", moderate.Family, moderate.ComplexityCategory)
+	}
+	if moderate.ChannelCandidates[FusionChannelLexical] != 20 || moderate.ChannelCandidates[FusionChannelSemantic] != 80 {
+		t.Fatalf("moderate channel allocation = %v", moderate.ChannelCandidates)
+	}
+	if moderate.TotalCandidates != 200 {
+		t.Fatalf("moderate total candidates = %d, want the unchanged envelope of 200", moderate.TotalCandidates)
+	}
+	if err := moderate.Validate(policy.HardLimits); err != nil {
+		t.Fatalf("moderate plan.Validate() error = %v", err)
+	}
+
+	simpleInput := plannerInputForTest(nil, nil, false)
+	simpleInput.Policy = policy
+	simple, err := BuildRetrievalPlan(simpleInput)
+	if err != nil {
+		t.Fatalf("BuildRetrievalPlan(simple) error = %v", err)
+	}
+	if simple.ComplexityCategory != RetrievalPlanComplexitySimple {
+		t.Fatalf("simple complexity = %q", simple.ComplexityCategory)
+	}
+	if simple.ChannelCandidates[FusionChannelLexical] != 50 || simple.ChannelCandidates[FusionChannelSemantic] != 50 {
+		t.Fatalf("simple channel allocation = %v, want the declared baseline allocation", simple.ChannelCandidates)
+	}
+}
+
+func TestBuildRetrievalPlanKeepsBaselineAllocationWithoutComplexityPolicy(t *testing.T) {
+	policy := DefaultRetrievalPlanPolicy()
+	input := plannerInputForTest(nil, []QueryAnalysisSignal{{Kind: QueryAnalysisSignalSubquery, Text: "second"}}, false)
+	input.Policy = policy
+	plan, err := BuildRetrievalPlan(input)
+	if err != nil {
+		t.Fatalf("BuildRetrievalPlan() error = %v", err)
+	}
+	if plan.ComplexityCategory != RetrievalPlanComplexityModerate {
+		t.Fatalf("ComplexityCategory = %q, want moderate", plan.ComplexityCategory)
+	}
+	for _, channel := range plan.Channels {
+		if plan.ChannelCandidates[channel] != 50 {
+			t.Fatalf("channel %q allocation = %d, want the unchanged 50 baseline", channel, plan.ChannelCandidates[channel])
+		}
+	}
+}
+
+func TestRetrievalPlanPolicyRejectsInvalidComplexityAllocation(t *testing.T) {
+	tests := []struct {
+		name       string
+		category   RetrievalPlanComplexityCategory
+		allocation map[FusionChannel]int
+	}{
+		{
+			name:     "envelope is enlarged",
+			category: RetrievalPlanComplexityComplex,
+			allocation: map[FusionChannel]int{
+				FusionChannelLexical: 20, FusionChannelSemantic: 20, FusionChannelRelation: 20, FusionChannelChunk: 20,
+			},
+		},
+		{
+			name:     "declared channel is omitted",
+			category: RetrievalPlanComplexityModerate,
+			allocation: map[FusionChannel]int{
+				FusionChannelLexical: 50, FusionChannelSemantic: 50, FusionChannelRelation: 100,
+			},
+		},
+		{
+			name:     "channel exceeds per-channel hard limit",
+			category: RetrievalPlanComplexityComplex,
+			allocation: map[FusionChannel]int{
+				FusionChannelLexical: 110, FusionChannelSemantic: 30, FusionChannelRelation: 30, FusionChannelChunk: 30,
+			},
+		},
+		{
+			name:     "unknown category",
+			category: RetrievalPlanComplexityCategory("extreme"),
+			allocation: map[FusionChannel]int{
+				FusionChannelLexical: 50, FusionChannelSemantic: 50, FusionChannelRelation: 50, FusionChannelChunk: 50,
+			},
+		},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			policy := plannerPolicyWithComplexity(test.category, test.allocation)
+			if err := policy.Validate(); err == nil {
+				t.Fatal("policy.Validate() error = nil, want a rejected complexity allocation")
+			}
+		})
+	}
+}
+
 func TestBuildRetrievalPlanRejectsUnknownVersionsAndIncompleteTemplates(t *testing.T) {
 	tests := []struct {
 		name   string
@@ -326,6 +486,99 @@ func FuzzBuildRetrievalPlanBoundsAndDeterminism(f *testing.F) {
 		}
 		if first.TotalCandidates > input.Policy.HardLimits.MaxCandidates || first.MaxPasses > 2 || first.LatencyBudget > input.Policy.HardLimits.MaxLatency || first.ContextItems > input.Policy.HardLimits.MaxContextItems {
 			t.Fatalf("plan exceeds hard limits: %+v", first)
+		}
+	})
+}
+
+// boundedRetrievalAllocation splits totalCandidates across channels so that
+// every channel keeps at least one and at most perChannelCap candidates.
+func boundedRetrievalAllocation(seed []byte, total, perChannelCap, channels int) []int {
+	counts := make([]int, channels)
+	remaining := total
+	for index := 0; index < channels; index++ {
+		slotsLeft := channels - index
+		maxHere := remaining - (slotsLeft - 1)
+		if maxHere > perChannelCap {
+			maxHere = perChannelCap
+		}
+		minHere := remaining - (slotsLeft-1)*perChannelCap
+		if minHere < 1 {
+			minHere = 1
+		}
+		if maxHere < minHere {
+			maxHere = minHere
+		}
+		value := minHere
+		if maxHere > minHere {
+			value = minHere + int(seed[index%len(seed)])%(maxHere-minHere+1)
+		}
+		counts[index] = value
+		remaining -= value
+	}
+	return counts
+}
+
+func FuzzRetrievalPlanComplexityAllocationStaysBounded(f *testing.F) {
+	f.Add([]byte{3, 7, 11, 13}, uint8(1))
+	f.Add([]byte{0, 0, 0, 0}, uint8(0))
+	f.Fuzz(func(t *testing.T, seed []byte, signalCount uint8) {
+		if len(seed) == 0 {
+			seed = []byte{1}
+		}
+		policy := DefaultRetrievalPlanPolicy()
+		template := policy.Templates[RetrievalQueryFamilyGeneral]
+		counts := boundedRetrievalAllocation(seed, template.TotalCandidates, policy.HardLimits.MaxCandidatesPerChannel, len(template.Channels))
+		allocation := make(map[FusionChannel]int, len(template.Channels))
+		minimum := counts[0]
+		for index, channel := range template.Channels {
+			allocation[channel] = counts[index]
+			if counts[index] < minimum {
+				minimum = counts[index]
+			}
+		}
+		if template.Fusion.PerChannelCandidate > minimum {
+			template.Fusion.PerChannelCandidate = minimum
+		}
+		template.ComplexityCandidates = map[RetrievalPlanComplexityCategory]map[FusionChannel]int{RetrievalPlanComplexityModerate: allocation}
+		policy.Templates[RetrievalQueryFamilyGeneral] = template
+		if err := policy.Validate(); err != nil {
+			t.Fatalf("policy.Validate() error = %v", err)
+		}
+
+		signals := make([]QueryAnalysisSignal, 0, 4)
+		for index := 0; index < int(signalCount)%4+1; index++ {
+			signals = append(signals, QueryAnalysisSignal{Kind: QueryAnalysisSignalTerm, Text: "term"})
+		}
+		input := plannerInputForTest(nil, signals, false)
+		input.Policy = policy
+
+		plan, err := BuildRetrievalPlan(input)
+		if err != nil {
+			t.Fatalf("BuildRetrievalPlan() error = %v", err)
+		}
+		if plan.TotalCandidates != template.TotalCandidates {
+			t.Fatalf("TotalCandidates = %d, want the unchanged envelope %d", plan.TotalCandidates, template.TotalCandidates)
+		}
+		allocated := 0
+		for channel, count := range plan.ChannelCandidates {
+			if count <= 0 || count > policy.HardLimits.MaxCandidatesPerChannel {
+				t.Fatalf("channel %q allocation = %d outside hard bounds", channel, count)
+			}
+			allocated += count
+		}
+		if allocated != plan.TotalCandidates {
+			t.Fatalf("channel allocations sum to %d, want %d", allocated, plan.TotalCandidates)
+		}
+		if err := plan.Validate(policy.HardLimits); err != nil {
+			t.Fatalf("plan.Validate() error = %v", err)
+		}
+
+		repeated, err := BuildRetrievalPlan(input)
+		if err != nil {
+			t.Fatalf("BuildRetrievalPlan(repeat) error = %v", err)
+		}
+		if !reflect.DeepEqual(plan, repeated) {
+			t.Fatal("complexity allocation is not deterministic")
 		}
 	})
 }

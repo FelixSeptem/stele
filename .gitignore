@@ -40,3 +40,19 @@ go.work.sum
 .tmp/gocache/
 .tmp/gomodcache/
 .tmp
+
+# Local Go build cache directories created by repeated isolated builds
+.gocache/
+.gocache-*/
+
+# Local agent/tooling scratch state
+.workbuddy/
+.omo/
+
+# Local debug output
+debug.log
+
+# Editor/tooling crash snapshots (e.g. service.go.1747888467243486062)
+*.go.[0-9]*
+*.sql.[0-9]*
+*.json.[0-9]*

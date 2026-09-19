@@ -48,6 +48,33 @@ func (family RetrievalQueryFamily) valid() bool {
 	return false
 }
 
+// RetrievalPlanComplexityCategory is a bounded, deterministic category derived
+// only from validated query-analysis counts. It never depends on query text, an
+// online model, or repository state, and it may only re-share the declared
+// candidate envelope between channels, never enlarge it.
+type RetrievalPlanComplexityCategory string
+
+const (
+	RetrievalPlanComplexitySimple   RetrievalPlanComplexityCategory = "simple"
+	RetrievalPlanComplexityModerate RetrievalPlanComplexityCategory = "moderate"
+	RetrievalPlanComplexityComplex  RetrievalPlanComplexityCategory = "complex"
+)
+
+var retrievalPlanComplexityCategories = []RetrievalPlanComplexityCategory{
+	RetrievalPlanComplexitySimple,
+	RetrievalPlanComplexityModerate,
+	RetrievalPlanComplexityComplex,
+}
+
+func (category RetrievalPlanComplexityCategory) valid() bool {
+	for _, candidate := range retrievalPlanComplexityCategories {
+		if category == candidate {
+			return true
+		}
+	}
+	return false
+}
+
 type RetrievalPlanDisposition string
 
 const (
@@ -108,16 +135,22 @@ type RetrievalPlanTemplate struct {
 	Channels                  []FusionChannel
 	ChannelCandidates         map[FusionChannel]int
 	FallbackChannelCandidates map[FusionChannel]int
-	TotalCandidates           int
-	Fusion                    FusionStrategy
-	MemoryClassQuotas         map[memory.MemoryClass]int
-	ContextPriorities         []memory.MemoryClass
-	RerankerEligible          bool
-	RerankerHeadroom          int
-	MaxPasses                 int
-	LatencyBudget             time.Duration
-	ContextItems              int
-	FollowUp                  RetrievalPlanFollowUpRule
+	// ComplexityCandidates optionally re-shares the same total candidate
+	// envelope between declared channels for one bounded complexity category. A
+	// category entry must allocate every declared channel, keep each channel
+	// within the per-channel hard limit, and preserve TotalCandidates exactly so
+	// a plan can never enlarge its envelope.
+	ComplexityCandidates map[RetrievalPlanComplexityCategory]map[FusionChannel]int
+	TotalCandidates      int
+	Fusion               FusionStrategy
+	MemoryClassQuotas    map[memory.MemoryClass]int
+	ContextPriorities    []memory.MemoryClass
+	RerankerEligible     bool
+	RerankerHeadroom     int
+	MaxPasses            int
+	LatencyBudget        time.Duration
+	ContextItems         int
+	FollowUp             RetrievalPlanFollowUpRule
 }
 
 type RetrievalPlanPolicy struct {
@@ -214,6 +247,7 @@ func (identity RetrievalPlanIdentity) String() string {
 type RetrievalPlan struct {
 	Identity                  RetrievalPlanIdentity
 	Family                    RetrievalQueryFamily
+	ComplexityCategory        RetrievalPlanComplexityCategory
 	Disposition               RetrievalPlanDisposition
 	Channels                  []FusionChannel
 	ChannelCandidates         map[FusionChannel]int
@@ -242,13 +276,18 @@ func BuildRetrievalPlan(input RetrievalPlanInput) (RetrievalPlan, error) {
 		return RetrievalPlan{}, err
 	}
 	family := classifyRetrievalQueryFamily(input.Analysis, input.EmbeddingAvailable)
+	complexity := classifyRetrievalPlanComplexity(input.Analysis)
 	template := input.Policy.Templates[family]
+	channelCandidates := template.ChannelCandidates
+	if allocation, ok := template.ComplexityCandidates[complexity]; ok {
+		channelCandidates = allocation
+	}
 	fallbackCandidates := cloneChannelCandidates(template.FallbackChannelCandidates)
 	plan := RetrievalPlan{
 		Identity: RetrievalPlanIdentity{PlannerVersion: input.Policy.PlannerVersion, PolicyVersion: input.Policy.Version, Family: family, FallbackChannelCandidates: cloneChannelCandidates(fallbackCandidates)},
-		Family:   family, Disposition: RetrievalPlanDispositionPlanned,
+		Family:   family, ComplexityCategory: complexity, Disposition: RetrievalPlanDispositionPlanned,
 		Channels:                  append([]FusionChannel(nil), template.Channels...),
-		ChannelCandidates:         cloneChannelCandidates(template.ChannelCandidates),
+		ChannelCandidates:         cloneChannelCandidates(channelCandidates),
 		FallbackChannelCandidates: fallbackCandidates,
 		TotalCandidates:           template.TotalCandidates, Fusion: cloneFusionStrategy(template.Fusion),
 		MemoryClassQuotas: cloneClassQuotas(template.MemoryClassQuotas),
@@ -274,6 +313,9 @@ func (plan RetrievalPlan) Validate(limits RetrievalPlanHardLimits) error {
 	}
 	if plan.Disposition != RetrievalPlanDispositionPlanned && plan.Disposition != RetrievalPlanDispositionFallback {
 		return fmt.Errorf("invalid retrieval-plan disposition")
+	}
+	if !plan.ComplexityCategory.valid() {
+		return fmt.Errorf("invalid retrieval-plan complexity category %q", plan.ComplexityCategory)
 	}
 	template := RetrievalPlanTemplate{
 		Channels: plan.Channels, ChannelCandidates: plan.ChannelCandidates, FallbackChannelCandidates: plan.FallbackChannelCandidates, TotalCandidates: plan.TotalCandidates,
@@ -316,6 +358,31 @@ func validateRetrievalPlanTemplate(template RetrievalPlanTemplate, limits Retrie
 	if template.TotalCandidates <= 0 || template.TotalCandidates > limits.MaxCandidates || allocated != template.TotalCandidates {
 		return fmt.Errorf("invalid retrieval-plan total candidate budget")
 	}
+	for _, category := range retrievalPlanComplexityCategories {
+		allocation, declared := template.ComplexityCandidates[category]
+		if !declared {
+			continue
+		}
+		if len(allocation) != len(template.Channels) {
+			return fmt.Errorf("retrieval-plan complexity allocation for %q must cover declared channels", category)
+		}
+		complexityAllocated := 0
+		for _, channel := range template.Channels {
+			count, ok := allocation[channel]
+			if !ok || count <= 0 || count > limits.MaxCandidatesPerChannel {
+				return fmt.Errorf("invalid retrieval-plan complexity allocation for %q channel %q", category, channel)
+			}
+			complexityAllocated += count
+		}
+		if complexityAllocated != template.TotalCandidates {
+			return fmt.Errorf("retrieval-plan complexity allocation for %q must preserve the total candidate envelope", category)
+		}
+	}
+	for category := range template.ComplexityCandidates {
+		if !category.valid() {
+			return fmt.Errorf("unsupported retrieval-plan complexity category %q", category)
+		}
+	}
 	fallbackAllocated := 0
 	for channel, count := range template.FallbackChannelCandidates {
 		if !channel.valid() || count <= 0 || count > limits.MaxCandidatesPerChannel {
@@ -335,9 +402,18 @@ func validateRetrievalPlanTemplate(template RetrievalPlanTemplate, limits Retrie
 	if template.Fusion.PerChannelCandidate > limits.MaxCandidatesPerChannel {
 		return fmt.Errorf("retrieval-plan fusion channel limit exceeds hard limit")
 	}
-	for channel := range seenChannels {
+	for _, channel := range template.Channels {
 		if template.Fusion.PerChannelCandidate > template.ChannelCandidates[channel] {
 			return fmt.Errorf("retrieval-plan fusion channel limit exceeds allocation for %q", channel)
+		}
+		for _, category := range retrievalPlanComplexityCategories {
+			allocation, declared := template.ComplexityCandidates[category]
+			if !declared {
+				continue
+			}
+			if template.Fusion.PerChannelCandidate > allocation[channel] {
+				return fmt.Errorf("retrieval-plan fusion channel limit exceeds complexity allocation for %q channel %q", category, channel)
+			}
 		}
 	}
 	if template.MaxPasses < 1 || template.MaxPasses > limits.MaxPasses {
@@ -432,6 +508,35 @@ func classifyRetrievalQueryFamily(analysis QueryAnalysisResult, embeddingAvailab
 	return RetrievalQueryFamilyGeneral
 }
 
+// classifyRetrievalPlanComplexity derives a bounded complexity category from
+// validated query-analysis counts only. It is a pure function of the accepted
+// analysis identity and derived signal categories, so equivalent inputs always
+// produce the same category and the planner never inspects query text here.
+func classifyRetrievalPlanComplexity(analysis QueryAnalysisResult) RetrievalPlanComplexityCategory {
+	if analysis.Identity.PolicyVersion != QueryAnalysisPolicyVersionV1 || analysis.Identity.LimitsVersion != QueryAnalysisLimitsVersionV1 {
+		return RetrievalPlanComplexitySimple
+	}
+	subqueries := 0
+	derived := 0
+	for _, signal := range analysis.Signals {
+		if signal.Kind == QueryAnalysisSignalOriginal {
+			continue
+		}
+		derived++
+		if signal.Kind == QueryAnalysisSignalSubquery {
+			subqueries++
+		}
+	}
+	switch {
+	case subqueries >= 2 || derived >= 4:
+		return RetrievalPlanComplexityComplex
+	case subqueries == 1 || derived >= 2:
+		return RetrievalPlanComplexityModerate
+	default:
+		return RetrievalPlanComplexitySimple
+	}
+}
+
 func analysisHintPresent(hints []QueryAnalysisHint, kind QueryAnalysisHintKind) bool {
 	return analysisHintValue(hints, kind) != ""
 }
@@ -454,6 +559,17 @@ func cloneChannelCandidates(source map[FusionChannel]int) map[FusionChannel]int 
 	result := make(map[FusionChannel]int, len(source))
 	for channel, count := range source {
 		result[channel] = count
+	}
+	return result
+}
+
+func cloneComplexityCandidates(source map[RetrievalPlanComplexityCategory]map[FusionChannel]int) map[RetrievalPlanComplexityCategory]map[FusionChannel]int {
+	if len(source) == 0 {
+		return nil
+	}
+	result := make(map[RetrievalPlanComplexityCategory]map[FusionChannel]int, len(source))
+	for category, allocation := range source {
+		result[category] = cloneChannelCandidates(allocation)
 	}
 	return result
 }

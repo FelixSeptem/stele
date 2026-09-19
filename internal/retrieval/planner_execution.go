@@ -225,6 +225,7 @@ func cloneRetrievalPlanPolicy(source RetrievalPlanPolicy) RetrievalPlanPolicy {
 		template.Channels = append([]FusionChannel(nil), template.Channels...)
 		template.ChannelCandidates = cloneChannelCandidates(template.ChannelCandidates)
 		template.FallbackChannelCandidates = cloneChannelCandidates(template.FallbackChannelCandidates)
+		template.ComplexityCandidates = cloneComplexityCandidates(template.ComplexityCandidates)
 		template.Fusion = cloneFusionStrategy(template.Fusion)
 		template.MemoryClassQuotas = cloneClassQuotas(template.MemoryClassQuotas)
 		template.ContextPriorities = append([]memory.MemoryClass(nil), template.ContextPriorities...)
