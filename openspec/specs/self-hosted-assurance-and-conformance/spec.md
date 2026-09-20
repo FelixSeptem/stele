@@ -1,7 +1,7 @@
 # self-hosted-assurance-and-conformance Specification
 
 ## Purpose
-TBD - created by archiving change self-hosted-assurance-and-conformance-loop. Update Purpose after archive.
+Record scoped operational health evidence for self-hosted assurance and conformance.
 
 ## Requirements
 

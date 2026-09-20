@@ -1,7 +1,7 @@
 # admission-readiness-diagnostics Specification
 
 ## Purpose
-TBD - created by archiving change embedding-admission-readiness-observability. Update Purpose after archive.
+Define reusable, structured readiness decisions for safely admitting governed operations.
 ## Requirements
 ### Requirement: Admission evaluations produce structured decisions
 The service SHALL define a reusable admission evaluation contract that returns a decision, blocker findings, warning findings, observed time, and optional component-specific summary data.
@@ -65,4 +65,3 @@ The service MUST evaluate repair plan creation and repair action dispatch with t
 #### Scenario: Repair dispatch exceeds safety limits
 - **WHEN** a repair action would exceed configured scope, cardinality, action category, or dependency safety limits
 - **THEN** the admission result records `reject` and the action is not dispatched
-

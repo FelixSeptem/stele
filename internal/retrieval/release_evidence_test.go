@@ -87,6 +87,21 @@ func TestEvaluateReleaseEvidenceRejectsRuntimeDSNFallbackAndSafetyFailure(t *tes
 	}
 }
 
+func TestEvaluateReleaseEvidenceRejectsTemporalPolicyWithoutTemporalCoverage(t *testing.T) {
+	const temporalEvidenceRequired = "RETRIEVAL_RELEASE_EVIDENCE_TEMPORAL_REQUIRED"
+	in := validReleaseEvidenceInput(t)
+	in.Candidate.Metadata.TemporalPolicyVersion = "bi-temporal-policy-v1"
+	in.Candidate.Metadata.TemporalCoverageVersion = "temporal-coverage-v1"
+
+	report, err := EvaluateReleaseEvidence(in)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if report.ReleaseEligible || report.Verdict != ReleaseEvidenceRejected || !containsString(report.FailureCategories, temporalEvidenceRequired) {
+		t.Fatalf("report=%+v, want missing temporal coverage to be a hard non-pass", report)
+	}
+}
+
 func TestEvaluateReleaseEvidenceRequiresProgressiveAndParentFirstEligibility(t *testing.T) {
 	in := validReleaseEvidenceInput(t)
 	in.Progressive.Levels[1].Eligible = false

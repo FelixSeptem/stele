@@ -1,7 +1,7 @@
 # manual-mutation-governance-controls Specification
 
 ## Purpose
-TBD - created by archiving change manual-memory-mutation-and-reclassification. Update Purpose after archive.
+Protect privileged canonical-memory mutations with concurrency, authorization, and audit controls.
 ## Requirements
 ### Requirement: Manual mutations are optimistic-concurrency-aware
 The service SHALL protect manual canonical memory mutation from silent operator overwrite by requiring an explicit concurrency guard for mutating existing records.
@@ -27,4 +27,3 @@ The service MUST keep retrieval projections consistent when manual mutation chan
 #### Scenario: Manual mutation preserves vector audit continuity
 - **WHEN** a manual mutation invalidates the previously active semantic projection
 - **THEN** the service keeps the prior vector revision auditable, records that the new canonical projection requires rebuild, and does not silently overwrite semantic lineage in place
-

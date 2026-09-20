@@ -60,6 +60,19 @@ type EvaluationReplayCase struct {
 	FallbackCategory       string
 	RollbackVerified       bool
 	PlannerProtected       bool
+	// Temporal carries the fact-valid outcome of this case. It stays zero for a
+	// pre-temporal fixture, so replay shape is unchanged for existing fixtures.
+	TemporalKind                EvaluationTemporalCaseKind
+	TemporalMode                memory.TemporalSelectionMode
+	TemporalSelectorKind        string
+	TemporalSelectedVersions    int
+	TemporalHiddenAliasCount    int
+	TemporalStaleVersions       int
+	TemporalAmbiguousVersions   int
+	TemporalConflictDisposition string
+	TemporalProvenanceMismatch  int
+	TemporalHiddenVersionLeak   int
+	TemporalFallbackCategory    string
 }
 
 type EvaluationReplayPass struct {
@@ -200,6 +213,65 @@ func medianEvaluationDuration(values []time.Duration) time.Duration {
 	return ordered[(len(ordered)-1)/2]
 }
 
+// evaluationReplayTemporalConstraint resolves the selection a temporal fixture
+// replays. A pre-temporal case yields the zero constraint, which retrieval
+// resolves as current, so existing fixtures replay exactly as before.
+func evaluationReplayTemporalConstraint(item EvaluationCase) (memory.TemporalConstraint, error) {
+	if item.Temporal == nil {
+		return memory.TemporalConstraint{}, nil
+	}
+	if item.Temporal.Selector == nil {
+		// A current-class scenario still names the instant it evaluates at, so
+		// the replay is anchored rather than read from the wall clock.
+		if item.Temporal.EvaluationInstant != nil {
+			return memory.TemporalConstraint{Mode: memory.TemporalSelectionCurrent}, nil
+		}
+		return memory.TemporalConstraint{}, nil
+	}
+	return item.Temporal.Selector.Constraint()
+}
+
+func evaluationReplayTemporalKind(item EvaluationCase) EvaluationTemporalCaseKind {
+	if item.Temporal == nil {
+		return ""
+	}
+	return item.Temporal.Kind
+}
+
+func evaluationReplayTemporalMode(item EvaluationCase, constraint memory.TemporalConstraint) memory.TemporalSelectionMode {
+	if item.Temporal == nil {
+		return ""
+	}
+	if constraint.Mode != "" {
+		return constraint.Mode
+	}
+	return memory.TemporalSelectionCurrent
+}
+
+// evaluationReplaySelectorKind names the coarse shape of the selector. The
+// instants themselves are deliberately excluded: a report must not carry the
+// evaluation window it used.
+func evaluationReplaySelectorKind(item EvaluationCase) string {
+	if item.Temporal == nil {
+		return ""
+	}
+	switch item.Temporal.Kind {
+	case EvaluationTemporalCaseAsOf, EvaluationTemporalCaseRetroactiveCorrection:
+		return "point"
+	case EvaluationTemporalCaseInterval, EvaluationTemporalCaseTemporalIsolation:
+		return "interval"
+	default:
+		return "current"
+	}
+}
+
+func evaluationReplayHiddenAliasCount(item EvaluationCase) int {
+	if item.Temporal == nil {
+		return 0
+	}
+	return len(item.Temporal.HiddenAliases)
+}
+
 func (r *EvaluationRunner) Replay(ctx context.Context, fixture EvaluationFixture, seed EvaluationFixtureSeed, metadata EvaluationRankingMetadata) (run EvaluationReplay, replayErr error) {
 	started := time.Now()
 	defer func() {
@@ -262,6 +334,14 @@ func (r *EvaluationRunner) Replay(ctx context.Context, fixture EvaluationFixture
 			}
 		}
 
+		// A temporal fixture declares the exact selection it replays. Resolving it
+		// here means a replay cannot report a historical selection while running
+		// an ordinary current search.
+		temporalConstraint, err := evaluationReplayTemporalConstraint(item)
+		if err != nil {
+			return EvaluationReplay{}, NewEvaluationFailure(EvaluationSafetyFailureValidityAmbiguity, err.Error())
+		}
+
 		started := time.Now()
 		searchInput := SearchInput{
 			Scope:                                 item.Scope,
@@ -276,6 +356,7 @@ func (r *EvaluationRunner) Replay(ctx context.Context, fixture EvaluationFixture
 			IncludeFeedbackDiagnostics:            metadata.AnalysisVersion != "",
 			queryAnalysisDiagnosticsAuthorized:    metadata.AnalysisVersion != "",
 			retrievalPlannerDiagnosticsAuthorized: item.Planner != nil,
+			TemporalConstraint:                    temporalConstraint,
 		}
 		result, err := r.searcher.Search(ctx, searchInput)
 		if err != nil {
@@ -293,6 +374,10 @@ func (r *EvaluationRunner) Replay(ctx context.Context, fixture EvaluationFixture
 			Latency:                time.Since(started),
 			ChannelAvailability:    evaluationChannelAvailability(result.fusionChannelAvailability),
 		}
+		caseRun.TemporalKind = evaluationReplayTemporalKind(item)
+		caseRun.TemporalMode = evaluationReplayTemporalMode(item, temporalConstraint)
+		caseRun.TemporalSelectorKind = evaluationReplaySelectorKind(item)
+		caseRun.TemporalHiddenAliasCount = evaluationReplayHiddenAliasCount(item)
 		analysisDiagnostics, err := evaluationReplayAnalysisDiagnostics(result.Diagnostics, metadata, item.ExpectedAnalysis)
 		if err != nil {
 			return EvaluationReplay{}, NewEvaluationFailure(EvaluationSafetyFailureUnsafeDiagnostics, err.Error())

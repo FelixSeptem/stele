@@ -1,7 +1,7 @@
 # manual-memory-lifecycle-actions Specification
 
 ## Purpose
-TBD - created by archiving change memory-management-and-history-apis. Update Purpose after archive.
+Expose explicit, privileged lifecycle actions for governed canonical memory.
 ## Requirements
 ### Requirement: Explicit manual lifecycle actions
 The service SHALL expose explicit API actions for manual lifecycle management of canonical memory.
@@ -38,4 +38,3 @@ Repeated lifecycle action requests MUST remain safe for retry and operator re-en
 #### Scenario: Duplicate suppress or delete request is retried
 - **WHEN** the same lifecycle action is submitted more than once for the same memory
 - **THEN** the service avoids conflicting durable mutations and returns a stable post-action lifecycle outcome
-

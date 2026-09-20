@@ -38,6 +38,34 @@ type Repository struct {
 	db              queryRower
 	tx              transactionStarter
 	embeddingRouter embedding.Router
+	// now supplies the evaluation instant for fact-validity filtering. It is
+	// injectable so tests can pin one instant and prove a request never mixes
+	// clocks; nil falls back to the wall clock.
+	now func() time.Time
+	// temporalPolicyDisabled is the operational-rollback switch for reads that
+	// are not search requests and therefore carry no per-request temporal
+	// constraint, such as ordinary chunk retrieval. Turning it off returns those
+	// reads to the approved pre-temporal baseline without touching stored
+	// intervals or the correction ledger.
+	temporalPolicyDisabled bool
+}
+
+// SetTemporalPolicyDisabled turns temporal-aware filtering off for repository
+// reads that have no per-request constraint. It is the operational rollback for
+// derived-evidence reads and deliberately does not delete or rewrite any stored
+// validity data.
+func (r *Repository) SetTemporalPolicyDisabled(disabled bool) {
+	r.temporalPolicyDisabled = disabled
+}
+
+// evaluationInstant resolves the single instant used to evaluate fact-valid
+// time for one statement. Callers must resolve it once per request and reuse it
+// so current-valid selection cannot straddle a clock boundary mid-query.
+func (r *Repository) evaluationInstant() time.Time {
+	if r.now != nil {
+		return r.now()
+	}
+	return time.Now()
 }
 
 type governanceRawEventScanner interface {
@@ -953,7 +981,12 @@ SELECT
 	state,
 	content,
 	created_at,
-	updated_at
+	updated_at,
+	temporal_fact_id,
+	ingested_at,
+	valid_from,
+	valid_to,
+	validity_source
 FROM canonical_memories
 WHERE id = $1
 	AND tenant = $2
@@ -973,6 +1006,11 @@ WHERE id = $1
 		&canonical.Content,
 		&canonical.CreatedAt,
 		&canonical.ModifiedAt,
+		&canonical.TemporalValidity.TemporalFactID,
+		&canonical.TemporalValidity.IngestedAt,
+		&canonical.TemporalValidity.ValidFrom,
+		&canonical.TemporalValidity.ValidTo,
+		&canonical.TemporalValidity.ValiditySource,
 	); err != nil {
 		return memory.CanonicalMemory{}, fmt.Errorf("read canonical memory: %w", err)
 	}
@@ -1056,7 +1094,12 @@ SELECT
 	state,
 	content,
 	created_at,
-	modified_by
+	modified_by,
+	temporal_fact_id,
+	ingested_at,
+	valid_from,
+	valid_to,
+	validity_source
 FROM memory_versions
 WHERE memory_id = $1
 ORDER BY version DESC
@@ -1078,6 +1121,11 @@ ORDER BY version DESC
 			&version.Content,
 			&version.CreatedAt,
 			&version.ModifiedBy,
+			&version.TemporalValidity.TemporalFactID,
+			&version.TemporalValidity.IngestedAt,
+			&version.TemporalValidity.ValidFrom,
+			&version.TemporalValidity.ValidTo,
+			&version.TemporalValidity.ValiditySource,
 		); err != nil {
 			return memory.MemoryHistory{}, fmt.Errorf("scan memory version: %w", err)
 		}
@@ -1128,7 +1176,47 @@ ORDER BY created_at ASC
 		return memory.MemoryHistory{}, fmt.Errorf("iterate provenance history: %w", err)
 	}
 
+	// The correction ledger is part of the privileged audit surface, so it is
+	// only counted when the caller has already been authorized for hidden reads.
+	corrections := 0
+	if includeHidden {
+		if count, err := r.countTemporalCorrections(ctx, scope, memoryID); err != nil {
+			return memory.MemoryHistory{}, err
+		} else {
+			corrections = count
+		}
+	}
+
+	history.Temporal = memory.NewTemporalHistoryMetadata(
+		history.Memory.TemporalValidity,
+		history.Versions,
+		corrections,
+	)
+	history.Hidden = includeHidden
+
 	return history, nil
+}
+
+// countTemporalCorrections returns how many corrections are recorded against a
+// memory id. It is deliberately not filtered by temporal fact identity: the
+// caller is already authorized, and a count that silently dropped rows belonging
+// to a forked identity would misreport the audit surface.
+func (r *Repository) countTemporalCorrections(ctx context.Context, scope memory.Scope, memoryID string) (int, error) {
+	const query = `
+SELECT count(*)
+FROM temporal_corrections
+WHERE tenant = $1
+	AND project = $2
+	AND namespace = $3
+	AND memory_id = $4
+`
+
+	var count int
+	if err := r.db.QueryRow(ctx, query, scope.Tenant, scope.Project, scope.Namespace, memoryID).Scan(&count); err != nil {
+		return 0, fmt.Errorf("count temporal corrections: %w", err)
+	}
+
+	return count, nil
 }
 
 func (r *Repository) BeginJobExecution(ctx context.Context, execution jobs.JobExecution) (bool, error) {
@@ -1443,7 +1531,12 @@ SELECT
 	state,
 	content,
 	created_at,
-	updated_at
+	updated_at,
+	temporal_fact_id,
+	ingested_at,
+	valid_from,
+	valid_to,
+	validity_source
 FROM canonical_memories
 WHERE tenant = $1
 	AND project = $2
@@ -1465,6 +1558,11 @@ LIMIT 1
 		&canonical.Content,
 		&canonical.CreatedAt,
 		&canonical.ModifiedAt,
+		&canonical.TemporalValidity.TemporalFactID,
+		&canonical.TemporalValidity.IngestedAt,
+		&canonical.TemporalValidity.ValidFrom,
+		&canonical.TemporalValidity.ValidTo,
+		&canonical.TemporalValidity.ValiditySource,
 	)
 	if err != nil {
 		if errors.Is(err, pgx.ErrNoRows) {
@@ -1502,10 +1600,21 @@ INSERT INTO canonical_memories (
 	content,
 	search_text,
 	created_at,
-	updated_at
-) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, to_tsvector('simple', $8), $9, $10)
-RETURNING id, tenant, project, namespace, class, state, content, created_at, updated_at
+	updated_at,
+	temporal_fact_id,
+	ingested_at,
+	valid_from,
+	valid_to,
+	validity_source
+) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, to_tsvector('simple', $8), $9, $10, $11, $12, $13, $14, $15)
+RETURNING id, tenant, project, namespace, class, state, content, created_at, updated_at,
+	temporal_fact_id, ingested_at, valid_from, valid_to, validity_source
 `
+
+		validity, err := promotedTemporalValidity(input)
+		if err != nil {
+			return memory.CanonicalMemory{}, memory.MemoryVersion{}, err
+		}
 
 		var canonical memory.CanonicalMemory
 		if err := tx.QueryRow(
@@ -1521,6 +1630,11 @@ RETURNING id, tenant, project, namespace, class, state, content, created_at, upd
 			input.Candidate.Content,
 			input.CreatedAt,
 			input.CreatedAt,
+			validity.TemporalFactID,
+			validity.IngestedAt,
+			validity.ValidFrom,
+			validity.ValidTo,
+			string(validity.ValiditySource),
 		).Scan(
 			&canonical.ID,
 			&canonical.Scope.Tenant,
@@ -1531,6 +1645,11 @@ RETURNING id, tenant, project, namespace, class, state, content, created_at, upd
 			&canonical.Content,
 			&canonical.CreatedAt,
 			&canonical.ModifiedAt,
+			&canonical.TemporalValidity.TemporalFactID,
+			&canonical.TemporalValidity.IngestedAt,
+			&canonical.TemporalValidity.ValidFrom,
+			&canonical.TemporalValidity.ValidTo,
+			&canonical.TemporalValidity.ValiditySource,
 		); err != nil {
 			return memory.CanonicalMemory{}, memory.MemoryVersion{}, fmt.Errorf("insert canonical memory: %w", err)
 		}
@@ -1540,7 +1659,7 @@ RETURNING id, tenant, project, namespace, class, state, content, created_at, upd
 			return memory.CanonicalMemory{}, memory.MemoryVersion{}, err
 		}
 
-		if err := upsertRelationProjection(ctx, tx, canonical, input.CreatedAt); err != nil {
+		if err := upsertRelationProjection(ctx, tx, canonical, versionNumber, input.CreatedAt); err != nil {
 			return memory.CanonicalMemory{}, memory.MemoryVersion{}, err
 		}
 
@@ -1565,10 +1684,24 @@ RETURNING id, tenant, project, namespace, class, state, content, created_at, upd
 
 	const canonicalUpdateQuery = `
 UPDATE canonical_memories
-SET state = $2, retention_class = $3, content = $4, search_text = to_tsvector('simple', $4), updated_at = $5
+SET state = $2,
+	retention_class = $3,
+	content = $4,
+	search_text = to_tsvector('simple', $4),
+	updated_at = $5,
+	temporal_fact_id = COALESCE(temporal_fact_id, $6),
+	valid_from = $7,
+	valid_to = $8,
+	validity_source = $9
 WHERE id = $1
-RETURNING id, tenant, project, namespace, class, state, content, created_at, updated_at
+RETURNING id, tenant, project, namespace, class, state, content, created_at, updated_at,
+	temporal_fact_id, ingested_at, valid_from, valid_to, validity_source
 `
+
+	validity, err := promotedTemporalValidity(input)
+	if err != nil {
+		return memory.CanonicalMemory{}, memory.MemoryVersion{}, err
+	}
 
 	var canonical memory.CanonicalMemory
 	if err := tx.QueryRow(
@@ -1579,6 +1712,10 @@ RETURNING id, tenant, project, namespace, class, state, content, created_at, upd
 		input.Candidate.RetentionClass,
 		input.Candidate.Content,
 		input.CreatedAt,
+		validity.TemporalFactID,
+		validity.ValidFrom,
+		validity.ValidTo,
+		string(validity.ValiditySource),
 	).Scan(
 		&canonical.ID,
 		&canonical.Scope.Tenant,
@@ -1589,6 +1726,11 @@ RETURNING id, tenant, project, namespace, class, state, content, created_at, upd
 		&canonical.Content,
 		&canonical.CreatedAt,
 		&canonical.ModifiedAt,
+		&canonical.TemporalValidity.TemporalFactID,
+		&canonical.TemporalValidity.IngestedAt,
+		&canonical.TemporalValidity.ValidFrom,
+		&canonical.TemporalValidity.ValidTo,
+		&canonical.TemporalValidity.ValiditySource,
 	); err != nil {
 		return memory.CanonicalMemory{}, memory.MemoryVersion{}, fmt.Errorf("update canonical memory: %w", err)
 	}
@@ -1598,7 +1740,7 @@ RETURNING id, tenant, project, namespace, class, state, content, created_at, upd
 		return memory.CanonicalMemory{}, memory.MemoryVersion{}, err
 	}
 
-	if err := upsertRelationProjection(ctx, tx, canonical, input.CreatedAt); err != nil {
+	if err := upsertRelationProjection(ctx, tx, canonical, versionNumber, input.CreatedAt); err != nil {
 		return memory.CanonicalMemory{}, memory.MemoryVersion{}, err
 	}
 
@@ -1630,10 +1772,21 @@ INSERT INTO memory_versions (
 	state,
 	content,
 	created_at,
-	modified_by
-) VALUES ($1, $2, $3, $4, $5, $6, $7)
-RETURNING id, memory_id, version, state, content, created_at, modified_by
+	modified_by,
+	temporal_fact_id,
+	ingested_at,
+	valid_from,
+	valid_to,
+	validity_source
+) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12)
+RETURNING id, memory_id, version, state, content, created_at, modified_by,
+	temporal_fact_id, ingested_at, valid_from, valid_to, validity_source
 `
+
+	validity, err := promotedTemporalValidity(input)
+	if err != nil {
+		return memory.MemoryVersion{}, err
+	}
 
 	var version memory.MemoryVersion
 	if err := tx.QueryRow(
@@ -1646,6 +1799,11 @@ RETURNING id, memory_id, version, state, content, created_at, modified_by
 		input.Candidate.Content,
 		input.CreatedAt,
 		input.Candidate.ID,
+		validity.TemporalFactID,
+		validity.IngestedAt,
+		validity.ValidFrom,
+		validity.ValidTo,
+		string(validity.ValiditySource),
 	).Scan(
 		&version.ID,
 		&version.MemoryID,
@@ -1654,11 +1812,41 @@ RETURNING id, memory_id, version, state, content, created_at, modified_by
 		&version.Content,
 		&version.CreatedAt,
 		&version.ModifiedBy,
+		&version.TemporalValidity.TemporalFactID,
+		&version.TemporalValidity.IngestedAt,
+		&version.TemporalValidity.ValidFrom,
+		&version.TemporalValidity.ValidTo,
+		&version.TemporalValidity.ValiditySource,
 	); err != nil {
 		return memory.MemoryVersion{}, fmt.Errorf("insert memory version: %w", err)
 	}
 
 	return version, nil
+}
+
+// promotedTemporalValidity resolves the validity snapshot a consolidation write
+// must persist, enforcing the factual-class rules before any statement runs.
+//
+// A factual candidate that already carries an explicit snapshot is validated
+// as-is. A factual candidate with no snapshot at all (the pre-RQ2 shape) is
+// anchored on the recorded time as a legacy-compatible open interval, which is
+// the same shape the migration backfills, so an automatic promotion cannot
+// manufacture a fact-valid claim it was never given.
+//
+// A non-factual class (summary, relation) is a derived artifact with no
+// fact-valid time of its own: it keeps whatever snapshot it was given, which is
+// normally unset, rather than being stamped with an invented interval.
+func promotedTemporalValidity(input governance.CanonicalPromotion) (memory.TemporalValidity, error) {
+	validity := input.Candidate.TemporalValidity
+	if memory.IsTemporalFactClass(input.Candidate.Class) {
+		if validity.IsUnset() {
+			validity = validity.LegacyCurrentCompatible(input.CreatedAt)
+		}
+		if err := memory.ValidateTemporalForClass(input.Candidate.Class, validity, false); err != nil {
+			return memory.TemporalValidity{}, err
+		}
+	}
+	return validity, nil
 }
 
 func promotionProvenanceID(versionID string) string {
@@ -1791,7 +1979,12 @@ SELECT
 	state,
 	content,
 	created_at,
-	updated_at
+	updated_at,
+	temporal_fact_id,
+	ingested_at,
+	valid_from,
+	valid_to,
+	validity_source
 FROM canonical_memories
 WHERE tenant = $1
 	AND project = $2
@@ -1819,6 +2012,11 @@ ORDER BY updated_at DESC
 			&canonical.Content,
 			&canonical.CreatedAt,
 			&canonical.ModifiedAt,
+			&canonical.TemporalValidity.TemporalFactID,
+			&canonical.TemporalValidity.IngestedAt,
+			&canonical.TemporalValidity.ValidFrom,
+			&canonical.TemporalValidity.ValidTo,
+			&canonical.TemporalValidity.ValiditySource,
 		); err != nil {
 			return nil, fmt.Errorf("scan canonical memory: %w", err)
 		}
@@ -1848,6 +2046,11 @@ func (r *Repository) CreateMemory(ctx context.Context, record memory.ManualCreat
 		return memory.CanonicalMemory{}, fmt.Errorf("%w: manual create memory id already exists", memory.ErrManualMutationRejected)
 	}
 
+	validity, err := resolveManualCreateValidity(record.Class, record.CreatedAt)
+	if err != nil {
+		return memory.CanonicalMemory{}, err
+	}
+
 	const canonicalQuery = `
 INSERT INTO canonical_memories (
 	id,
@@ -1860,9 +2063,15 @@ INSERT INTO canonical_memories (
 	content,
 	search_text,
 	created_at,
-	updated_at
-) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, to_tsvector('simple', $8), $9, $10)
-RETURNING id, tenant, project, namespace, class, state, content, created_at, updated_at
+	updated_at,
+	temporal_fact_id,
+	ingested_at,
+	valid_from,
+	valid_to,
+	validity_source
+) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, to_tsvector('simple', $8), $9, $10, $11, $12, $13, $14, $15)
+RETURNING id, tenant, project, namespace, class, state, content, created_at, updated_at,
+	temporal_fact_id, ingested_at, valid_from, valid_to, validity_source
 `
 
 	var canonical memory.CanonicalMemory
@@ -1879,6 +2088,11 @@ RETURNING id, tenant, project, namespace, class, state, content, created_at, upd
 		record.Content,
 		record.CreatedAt,
 		record.CreatedAt,
+		validity.TemporalFactID,
+		validity.IngestedAt,
+		validity.ValidFrom,
+		validity.ValidTo,
+		string(validity.ValiditySource),
 	).Scan(
 		&canonical.ID,
 		&canonical.Scope.Tenant,
@@ -1889,15 +2103,20 @@ RETURNING id, tenant, project, namespace, class, state, content, created_at, upd
 		&canonical.Content,
 		&canonical.CreatedAt,
 		&canonical.ModifiedAt,
+		&canonical.TemporalValidity.TemporalFactID,
+		&canonical.TemporalValidity.IngestedAt,
+		&canonical.TemporalValidity.ValidFrom,
+		&canonical.TemporalValidity.ValidTo,
+		&canonical.TemporalValidity.ValiditySource,
 	); err != nil {
 		return memory.CanonicalMemory{}, fmt.Errorf("insert manual canonical memory: %w", err)
 	}
 
-	if _, err := writeManualMemoryVersion(ctx, tx, record.VersionID, record.MemoryID, versionNumber, canonical.State, record.Content, record.CreatedAt, record.Actor); err != nil {
+	if _, err := writeManualMemoryVersionWithValidity(ctx, tx, record.VersionID, record.MemoryID, versionNumber, canonical.State, record.Content, record.CreatedAt, record.Actor, validity); err != nil {
 		return memory.CanonicalMemory{}, err
 	}
 
-	if err := upsertRelationProjection(ctx, tx, canonical, record.CreatedAt); err != nil {
+	if err := upsertRelationProjection(ctx, tx, canonical, versionNumber, record.CreatedAt); err != nil {
 		return memory.CanonicalMemory{}, err
 	}
 
@@ -1936,18 +2155,36 @@ func (r *Repository) UpdateMemory(ctx context.Context, record memory.ManualUpdat
 		return memory.CanonicalMemory{}, memory.ErrManualMutationVersionConflict
 	}
 
+	// Read the existing row first so the temporal identity rule can be enforced
+	// before any content is written. A content-only edit must not be able to drop
+	// or re-point a fact's valid-time window.
+	existing, err := readScopedCanonicalMemory(ctx, tx, record.Scope, record.MemoryID)
+	if err != nil {
+		return memory.CanonicalMemory{}, err
+	}
+	validity, err := resolveManualTransitionValidity(existing.Class, existing.TemporalValidity, record.UpdatedAt)
+	if err != nil {
+		return memory.CanonicalMemory{}, err
+	}
+
 	const updateQuery = `
 UPDATE canonical_memories
 SET content = $5,
 	search_text = to_tsvector('simple', $5),
 	embedding = NULL,
-	updated_at = $6
+	updated_at = $6,
+	temporal_fact_id = COALESCE(temporal_fact_id, $7),
+	ingested_at = COALESCE(ingested_at, $8),
+	valid_from = $9,
+	valid_to = $10,
+	validity_source = $11
 WHERE id = $1
 	AND tenant = $2
 	AND project = $3
 	AND namespace = $4
 	AND state <> 'deleted'
-RETURNING id, tenant, project, namespace, class, state, content, created_at, updated_at
+RETURNING id, tenant, project, namespace, class, state, content, created_at, updated_at,
+	temporal_fact_id, ingested_at, valid_from, valid_to, validity_source
 `
 
 	var canonical memory.CanonicalMemory
@@ -1960,6 +2197,11 @@ RETURNING id, tenant, project, namespace, class, state, content, created_at, upd
 		record.Scope.Namespace,
 		record.Content,
 		record.UpdatedAt,
+		validity.TemporalFactID,
+		validity.IngestedAt,
+		validity.ValidFrom,
+		validity.ValidTo,
+		string(validity.ValiditySource),
 	).Scan(
 		&canonical.ID,
 		&canonical.Scope.Tenant,
@@ -1970,15 +2212,20 @@ RETURNING id, tenant, project, namespace, class, state, content, created_at, upd
 		&canonical.Content,
 		&canonical.CreatedAt,
 		&canonical.ModifiedAt,
+		&canonical.TemporalValidity.TemporalFactID,
+		&canonical.TemporalValidity.IngestedAt,
+		&canonical.TemporalValidity.ValidFrom,
+		&canonical.TemporalValidity.ValidTo,
+		&canonical.TemporalValidity.ValiditySource,
 	); err != nil {
 		return memory.CanonicalMemory{}, fmt.Errorf("update manual canonical memory: %w", err)
 	}
 
-	if _, err := writeManualMemoryVersion(ctx, tx, record.VersionID, record.MemoryID, currentVersion+1, canonical.State, record.Content, record.UpdatedAt, record.Actor); err != nil {
+	if _, err := writeManualMemoryVersionWithValidity(ctx, tx, record.VersionID, record.MemoryID, currentVersion+1, canonical.State, record.Content, record.UpdatedAt, record.Actor, canonical.TemporalValidity); err != nil {
 		return memory.CanonicalMemory{}, err
 	}
 
-	if err := upsertRelationProjection(ctx, tx, canonical, record.UpdatedAt); err != nil {
+	if err := upsertRelationProjection(ctx, tx, canonical, currentVersion+1, record.UpdatedAt); err != nil {
 		return memory.CanonicalMemory{}, err
 	}
 
@@ -2032,17 +2279,30 @@ func (r *Repository) MergeMemory(ctx context.Context, record memory.ManualMergeM
 		return memory.CanonicalMemory{}, memory.ErrManualMutationVersionConflict
 	}
 
+	// A merge folds the source into the target, so the target's fact-valid window
+	// must be preserved rather than silently reset by the content rewrite.
+	validity, err := resolveManualTransitionValidity(target.Class, target.TemporalValidity, record.AppliedAt)
+	if err != nil {
+		return memory.CanonicalMemory{}, err
+	}
+
 	const updateTargetQuery = `
 UPDATE canonical_memories
 SET content = $5,
 	search_text = to_tsvector('simple', $5),
 	embedding = NULL,
-	updated_at = $6
+	updated_at = $6,
+	temporal_fact_id = COALESCE(temporal_fact_id, $7),
+	ingested_at = COALESCE(ingested_at, $8),
+	valid_from = $9,
+	valid_to = $10,
+	validity_source = $11
 WHERE id = $1
 	AND tenant = $2
 	AND project = $3
 	AND namespace = $4
-RETURNING id, tenant, project, namespace, class, state, content, created_at, updated_at
+RETURNING id, tenant, project, namespace, class, state, content, created_at, updated_at,
+	temporal_fact_id, ingested_at, valid_from, valid_to, validity_source
 `
 
 	var canonical memory.CanonicalMemory
@@ -2055,6 +2315,11 @@ RETURNING id, tenant, project, namespace, class, state, content, created_at, upd
 		record.Scope.Namespace,
 		record.Content,
 		record.AppliedAt,
+		validity.TemporalFactID,
+		validity.IngestedAt,
+		validity.ValidFrom,
+		validity.ValidTo,
+		string(validity.ValiditySource),
 	).Scan(
 		&canonical.ID,
 		&canonical.Scope.Tenant,
@@ -2065,15 +2330,20 @@ RETURNING id, tenant, project, namespace, class, state, content, created_at, upd
 		&canonical.Content,
 		&canonical.CreatedAt,
 		&canonical.ModifiedAt,
+		&canonical.TemporalValidity.TemporalFactID,
+		&canonical.TemporalValidity.IngestedAt,
+		&canonical.TemporalValidity.ValidFrom,
+		&canonical.TemporalValidity.ValidTo,
+		&canonical.TemporalValidity.ValiditySource,
 	); err != nil {
 		return memory.CanonicalMemory{}, fmt.Errorf("update merge target memory: %w", err)
 	}
 
-	if _, err := writeManualMemoryVersion(ctx, tx, record.VersionID, record.TargetMemoryID, currentVersion+1, canonical.State, record.Content, record.AppliedAt, record.Actor); err != nil {
+	if _, err := writeManualMemoryVersionWithValidity(ctx, tx, record.VersionID, record.TargetMemoryID, currentVersion+1, canonical.State, record.Content, record.AppliedAt, record.Actor, canonical.TemporalValidity); err != nil {
 		return memory.CanonicalMemory{}, err
 	}
 
-	if err := upsertRelationProjection(ctx, tx, canonical, record.AppliedAt); err != nil {
+	if err := upsertRelationProjection(ctx, tx, canonical, currentVersion+1, record.AppliedAt); err != nil {
 		return memory.CanonicalMemory{}, err
 	}
 
@@ -2137,17 +2407,34 @@ func (r *Repository) ReclassifyMemory(ctx context.Context, record memory.ManualR
 		return memory.CanonicalMemory{}, memory.ErrManualMutationVersionConflict
 	}
 
+	// Reclassification can move a memory into a factual class, in which case it
+	// must end up with a well-formed interval; moving back out keeps whatever
+	// snapshot it already had rather than discarding history.
+	existingValidity := current.TemporalValidity
+	if memory.IsTemporalFactClass(record.TargetClass) && existingValidity.IsUnset() {
+		existingValidity = existingValidity.LegacyCurrentCompatible(record.AppliedAt)
+	}
+	if err := memory.ValidateTemporalForClass(record.TargetClass, existingValidity, false); err != nil {
+		return memory.CanonicalMemory{}, err
+	}
+
 	const updateQuery = `
 UPDATE canonical_memories
 SET class = $5,
 	embedding = NULL,
-	updated_at = $6
+	updated_at = $6,
+	temporal_fact_id = COALESCE(temporal_fact_id, $7),
+	ingested_at = COALESCE(ingested_at, $8),
+	valid_from = $9,
+	valid_to = $10,
+	validity_source = $11
 WHERE id = $1
 	AND tenant = $2
 	AND project = $3
 	AND namespace = $4
 	AND state <> 'deleted'
-RETURNING id, tenant, project, namespace, class, state, content, created_at, updated_at
+RETURNING id, tenant, project, namespace, class, state, content, created_at, updated_at,
+	temporal_fact_id, ingested_at, valid_from, valid_to, validity_source
 `
 
 	var canonical memory.CanonicalMemory
@@ -2160,6 +2447,11 @@ RETURNING id, tenant, project, namespace, class, state, content, created_at, upd
 		record.Scope.Namespace,
 		record.TargetClass,
 		record.AppliedAt,
+		existingValidity.TemporalFactID,
+		existingValidity.IngestedAt,
+		existingValidity.ValidFrom,
+		existingValidity.ValidTo,
+		string(existingValidity.ValiditySource),
 	).Scan(
 		&canonical.ID,
 		&canonical.Scope.Tenant,
@@ -2170,11 +2462,16 @@ RETURNING id, tenant, project, namespace, class, state, content, created_at, upd
 		&canonical.Content,
 		&canonical.CreatedAt,
 		&canonical.ModifiedAt,
+		&canonical.TemporalValidity.TemporalFactID,
+		&canonical.TemporalValidity.IngestedAt,
+		&canonical.TemporalValidity.ValidFrom,
+		&canonical.TemporalValidity.ValidTo,
+		&canonical.TemporalValidity.ValiditySource,
 	); err != nil {
 		return memory.CanonicalMemory{}, fmt.Errorf("reclassify canonical memory: %w", err)
 	}
 
-	if _, err := writeManualMemoryVersion(ctx, tx, record.VersionID, record.MemoryID, currentVersion+1, canonical.State, canonical.Content, record.AppliedAt, record.Actor); err != nil {
+	if _, err := writeManualMemoryVersionWithValidity(ctx, tx, record.VersionID, record.MemoryID, currentVersion+1, canonical.State, canonical.Content, record.AppliedAt, record.Actor, canonical.TemporalValidity); err != nil {
 		return memory.CanonicalMemory{}, err
 	}
 
@@ -2297,8 +2594,11 @@ INSERT INTO embedding_rebuilds (
 	failure_reason,
 	requested_at,
 	last_attempted_at,
-	active_vector_revision_id
-) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14)
+	active_vector_revision_id,
+	temporal_fact_id,
+	valid_from,
+	valid_to
+) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17)
 ON CONFLICT (memory_id) DO UPDATE SET
 	tenant = EXCLUDED.tenant,
 	project = EXCLUDED.project,
@@ -2312,7 +2612,10 @@ ON CONFLICT (memory_id) DO UPDATE SET
 	failure_reason = EXCLUDED.failure_reason,
 	requested_at = EXCLUDED.requested_at,
 	last_attempted_at = EXCLUDED.last_attempted_at,
-	active_vector_revision_id = COALESCE(EXCLUDED.active_vector_revision_id, embedding_rebuilds.active_vector_revision_id)
+	active_vector_revision_id = COALESCE(EXCLUDED.active_vector_revision_id, embedding_rebuilds.active_vector_revision_id),
+	temporal_fact_id = EXCLUDED.temporal_fact_id,
+	valid_from = EXCLUDED.valid_from,
+	valid_to = EXCLUDED.valid_to
 `
 
 	if _, err := db.Exec(
@@ -2332,6 +2635,9 @@ ON CONFLICT (memory_id) DO UPDATE SET
 		record.RequestedAt,
 		nullableTime(record.LastAttemptedAt),
 		nullableString(record.ActiveVectorRevision),
+		nullableString(record.TemporalValidity.TemporalFactID),
+		nullableTime(record.TemporalValidity.ValidFrom),
+		nullableTimePtr(record.TemporalValidity.ValidTo),
 	); err != nil {
 		return fmt.Errorf("record embedding rebuild required: %w", err)
 	}
@@ -2546,7 +2852,10 @@ SELECT
 	er.failure_reason,
 	er.requested_at,
 	er.last_attempted_at,
-	er.active_vector_revision_id
+	er.active_vector_revision_id,
+	er.temporal_fact_id,
+	er.valid_from,
+	er.valid_to
 FROM embedding_rebuilds er
 JOIN canonical_memories cm
 	ON cm.id = er.memory_id
@@ -2571,6 +2880,8 @@ LIMIT $2
 		var failureReason sql.NullString
 		var lastAttemptedAt sql.NullTime
 		var activeVectorRevision sql.NullString
+		var temporalFactID sql.NullString
+		var validFrom, validTo sql.NullTime
 		if err := rows.Scan(
 			&record.MemoryID,
 			&record.Scope.Tenant,
@@ -2586,6 +2897,9 @@ LIMIT $2
 			&record.RequestedAt,
 			&lastAttemptedAt,
 			&activeVectorRevision,
+			&temporalFactID,
+			&validFrom,
+			&validTo,
 		); err != nil {
 			return nil, fmt.Errorf("scan eligible embedding rebuild: %w", err)
 		}
@@ -2597,6 +2911,16 @@ LIMIT $2
 		}
 		if activeVectorRevision.Valid {
 			record.ActiveVectorRevision = activeVectorRevision.String
+		}
+		if temporalFactID.Valid {
+			record.TemporalValidity.TemporalFactID = temporalFactID.String
+		}
+		if validFrom.Valid {
+			record.TemporalValidity.ValidFrom = validFrom.Time
+		}
+		if validTo.Valid {
+			closed := validTo.Time
+			record.TemporalValidity.ValidTo = &closed
 		}
 		records = append(records, record)
 	}
@@ -4014,6 +4338,8 @@ func (r *Repository) SearchLexical(ctx context.Context, input retrieval.SearchIn
 		limit = 10
 	}
 
+	selection := temporalSelectionFor(input, r.evaluationInstant())
+
 	const allTermsQuery = `
 SELECT
 	id,
@@ -4034,6 +4360,7 @@ WHERE tenant = $1
 	AND search_text @@ plainto_tsquery('simple', $4)
 	AND ($5::timestamptz IS NULL OR updated_at >= $5)
 	AND ($6::timestamptz IS NULL OR updated_at <= $6)
+	/*temporal_validity_predicate*/
 ORDER BY lexical_score DESC, updated_at DESC
 LIMIT $7
 `
@@ -4074,6 +4401,7 @@ WHERE tenant = $1
 	AND search_text @@ query_terms.terms
 	AND ($5::timestamptz IS NULL OR updated_at >= $5)
 	AND ($6::timestamptz IS NULL OR updated_at <= $6)
+	/*temporal_validity_predicate*/
 ORDER BY lexical_score DESC, updated_at DESC
 LIMIT $7
 `
@@ -4081,8 +4409,20 @@ LIMIT $7
 	if input.LexicalMatchMode == retrieval.LexicalMatchAnyTerms {
 		query = anyTermsQuery
 	}
+	query = withTemporalPredicate(query, selection, 8, 9, 10, 11, 12, "")
 
-	rows, err := r.db.Query(ctx, query, input.Scope.Tenant, input.Scope.Project, input.Scope.Namespace, input.Query, nullableTime(input.TimeFrom), nullableTime(input.TimeTo), limit)
+	args := []any{
+		input.Scope.Tenant,
+		input.Scope.Project,
+		input.Scope.Namespace,
+		input.Query,
+		nullableTime(input.TimeFrom),
+		nullableTime(input.TimeTo),
+		limit,
+	}
+	args = appendTemporalArgs(args, selection)
+
+	rows, err := r.db.Query(ctx, query, args...)
 	if err != nil {
 		return nil, fmt.Errorf("search lexical memories: %w", err)
 	}
@@ -4128,7 +4468,9 @@ func (r *Repository) SearchSemantic(ctx context.Context, input retrieval.SearchI
 		limit = 10
 	}
 
-	const query = `
+	selection := temporalSelectionFor(input, r.evaluationInstant())
+
+	const semanticQuery = `
 SELECT
 	cm.id,
 	cm.tenant,
@@ -4165,13 +4507,13 @@ WHERE cm.tenant = $1
 	AND cm.class IN ('profile', 'episodic', 'procedural', 'summary')
 	AND ($5::timestamptz IS NULL OR cm.updated_at >= $5)
 	AND ($6::timestamptz IS NULL OR cm.updated_at <= $6)
+	/*temporal_validity_predicate*/
 ORDER BY semantic_score DESC, updated_at DESC
 LIMIT $7
 `
+	query := withTemporalPredicate(semanticQuery, selection, 8, 9, 10, 11, 12, "cm")
 
-	rows, err := r.db.Query(
-		ctx,
-		query,
+	semanticArgs := []any{
 		input.Scope.Tenant,
 		input.Scope.Project,
 		input.Scope.Namespace,
@@ -4179,6 +4521,13 @@ LIMIT $7
 		nullableTime(input.TimeFrom),
 		nullableTime(input.TimeTo),
 		limit,
+	}
+	semanticArgs = appendTemporalArgs(semanticArgs, selection)
+
+	rows, err := r.db.Query(
+		ctx,
+		query,
+		semanticArgs...,
 	)
 	if err != nil {
 		return nil, fmt.Errorf("search semantic memories: %w", err)
@@ -4225,7 +4574,9 @@ func (r *Repository) SearchRelations(ctx context.Context, input retrieval.Search
 		limit = 10
 	}
 
-	const query = `
+	selection := temporalSelectionFor(input, r.evaluationInstant())
+
+	const relationQuery = `
 SELECT
 	cm.id,
 	cm.tenant,
@@ -4258,13 +4609,15 @@ WHERE rp.tenant = $1
 	)
 	AND ($9::timestamptz IS NULL OR cm.updated_at >= $9)
 	AND ($10::timestamptz IS NULL OR cm.updated_at <= $10)
+	/*relation_source_currency_predicate*/
+	/*temporal_validity_predicate*/
 ORDER BY relation_score DESC, cm.updated_at DESC
 LIMIT $11
 `
+	query := withTemporalPredicate(relationQuery, selection, 12, 13, 14, 15, 16, "cm")
+	query = strings.Replace(query, relationSourceCurrencyPlaceholder, relationSourceCurrencyPredicate(selection), 1)
 
-	rows, err := r.db.Query(
-		ctx,
-		query,
+	relationArgs := []any{
 		input.Scope.Tenant,
 		input.Scope.Project,
 		input.Scope.Namespace,
@@ -4276,7 +4629,10 @@ LIMIT $11
 		nullableTime(input.TimeFrom),
 		nullableTime(input.TimeTo),
 		limit,
-	)
+	}
+	relationArgs = appendTemporalArgs(relationArgs, selection)
+
+	rows, err := r.db.Query(ctx, query, relationArgs...)
 	if err != nil {
 		return nil, fmt.Errorf("search relation memories: %w", err)
 	}
@@ -4413,6 +4769,10 @@ INSERT INTO deletion_markers (
 }
 
 func writeManualMemoryVersion(ctx context.Context, tx pgx.Tx, versionID string, memoryID string, versionNumber int64, state memory.MemoryState, content string, createdAt time.Time, modifiedBy string) (memory.MemoryVersion, error) {
+	return writeManualMemoryVersionWithValidity(ctx, tx, versionID, memoryID, versionNumber, state, content, createdAt, modifiedBy, memory.TemporalValidity{})
+}
+
+func writeManualMemoryVersionWithValidity(ctx context.Context, tx pgx.Tx, versionID string, memoryID string, versionNumber int64, state memory.MemoryState, content string, createdAt time.Time, modifiedBy string, validity memory.TemporalValidity) (memory.MemoryVersion, error) {
 	const versionQuery = `
 INSERT INTO memory_versions (
 	id,
@@ -4421,9 +4781,15 @@ INSERT INTO memory_versions (
 	state,
 	content,
 	created_at,
-	modified_by
-) VALUES ($1, $2, $3, $4, $5, $6, $7)
-RETURNING id, memory_id, version, state, content, created_at, modified_by
+	modified_by,
+	temporal_fact_id,
+	ingested_at,
+	valid_from,
+	valid_to,
+	validity_source
+) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12)
+RETURNING id, memory_id, version, state, content, created_at, modified_by,
+	temporal_fact_id, ingested_at, valid_from, valid_to, validity_source
 `
 
 	var version memory.MemoryVersion
@@ -4437,6 +4803,11 @@ RETURNING id, memory_id, version, state, content, created_at, modified_by
 		content,
 		createdAt,
 		modifiedBy,
+		validity.TemporalFactID,
+		validity.IngestedAt,
+		validity.ValidFrom,
+		validity.ValidTo,
+		string(validity.ValiditySource),
 	).Scan(
 		&version.ID,
 		&version.MemoryID,
@@ -4445,11 +4816,46 @@ RETURNING id, memory_id, version, state, content, created_at, modified_by
 		&version.Content,
 		&version.CreatedAt,
 		&version.ModifiedBy,
+		&version.TemporalValidity.TemporalFactID,
+		&version.TemporalValidity.IngestedAt,
+		&version.TemporalValidity.ValidFrom,
+		&version.TemporalValidity.ValidTo,
+		&version.TemporalValidity.ValiditySource,
 	); err != nil {
 		return memory.MemoryVersion{}, fmt.Errorf("insert manual memory version: %w", err)
 	}
 
 	return version, nil
+}
+
+// resolveManualCreateValidity derives and validates the validity snapshot for a
+// manual create. A factual class must end up with a well-formed interval; a
+// caller that supplied no snapshot gets the legacy-compatible one anchored on
+// the recorded time, matching what the migration backfills.
+func resolveManualCreateValidity(class memory.MemoryClass, createdAt time.Time) (memory.TemporalValidity, error) {
+	var validity memory.TemporalValidity
+	if memory.IsTemporalFactClass(class) {
+		validity = memory.TemporalValidity{}.LegacyCurrentCompatible(createdAt)
+		if err := memory.ValidateTemporalForClass(class, validity, false); err != nil {
+			return memory.TemporalValidity{}, err
+		}
+	}
+	return validity, nil
+}
+
+// resolveManualTransitionValidity validates that a proposed validity change to
+// an existing fact preserves its temporal identity. It returns the snapshot to
+// persist, keeping the existing one when the caller supplied none so an
+// unrelated edit cannot silently drop a fact's valid-time window.
+func resolveManualTransitionValidity(class memory.MemoryClass, existing memory.TemporalValidity, createdAt time.Time) (memory.TemporalValidity, error) {
+	proposed := existing
+	if proposed.IsUnset() {
+		proposed = proposed.LegacyCurrentCompatible(createdAt)
+	}
+	if err := memory.ValidateTemporalTransition(class, existing, proposed, false); err != nil {
+		return memory.TemporalValidity{}, err
+	}
+	return proposed, nil
 }
 
 func writeManualProvenance(ctx context.Context, tx pgx.Tx, scope memory.Scope, memoryID, operation, requestID, actor string, createdAt time.Time, sourceContext map[string]any) error {
@@ -4476,7 +4882,12 @@ SELECT
 	state,
 	content,
 	created_at,
-	updated_at
+	updated_at,
+	temporal_fact_id,
+	ingested_at,
+	valid_from,
+	valid_to,
+	validity_source
 FROM canonical_memories
 WHERE id = $1
 	AND tenant = $2
@@ -4495,6 +4906,11 @@ WHERE id = $1
 		&canonical.Content,
 		&canonical.CreatedAt,
 		&canonical.ModifiedAt,
+		&canonical.TemporalValidity.TemporalFactID,
+		&canonical.TemporalValidity.IngestedAt,
+		&canonical.TemporalValidity.ValidFrom,
+		&canonical.TemporalValidity.ValidTo,
+		&canonical.TemporalValidity.ValiditySource,
 	); err != nil {
 		return memory.CanonicalMemory{}, fmt.Errorf("read scoped canonical memory: %w", err)
 	}
@@ -4546,6 +4962,7 @@ func (r *Repository) recordEmbeddingRebuildRequiredTx(ctx context.Context, tx pg
 	record := memory.EmbeddingRebuildRecord{
 		MemoryID:            canonical.ID,
 		Scope:               canonical.Scope,
+		TemporalValidity:    canonical.TemporalValidity,
 		SourceVersion:       sourceVersion,
 		ContentHash:         contentHash(canonical.Content),
 		RequestedProvider:   target.Provider,
@@ -4580,7 +4997,7 @@ func contentHash(content string) string {
 	return "sha256:" + hex.EncodeToString(sum[:])
 }
 
-func upsertRelationProjection(ctx context.Context, tx pgx.Tx, canonical memory.CanonicalMemory, updatedAt time.Time) error {
+func upsertRelationProjection(ctx context.Context, tx pgx.Tx, canonical memory.CanonicalMemory, sourceVersion int64, updatedAt time.Time) error {
 	if canonical.Class != memory.MemoryClassRelation {
 		return nil
 	}
@@ -4598,8 +5015,12 @@ INSERT INTO relation_projections (
 	relation_text,
 	search_text,
 	created_at,
-	updated_at
-) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, to_tsvector('simple', $8), $9, $10)
+	updated_at,
+	source_version,
+	temporal_fact_id,
+	valid_from,
+	valid_to
+) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, to_tsvector('simple', $8), $9, $10, $11, $12, $13, $14)
 ON CONFLICT (memory_id) DO UPDATE SET
 	tenant = EXCLUDED.tenant,
 	project = EXCLUDED.project,
@@ -4609,9 +5030,17 @@ ON CONFLICT (memory_id) DO UPDATE SET
 	target_entity = EXCLUDED.target_entity,
 	relation_text = EXCLUDED.relation_text,
 	search_text = EXCLUDED.search_text,
-	updated_at = EXCLUDED.updated_at
+	updated_at = EXCLUDED.updated_at,
+	source_version = EXCLUDED.source_version,
+	temporal_fact_id = EXCLUDED.temporal_fact_id,
+	valid_from = EXCLUDED.valid_from,
+	valid_to = EXCLUDED.valid_to
 `
 
+	// A relation projection is derived evidence, so it carries the source
+	// version's identity and validity window rather than asserting one. An
+	// expired or conflicting source is then excluded by the same predicate that
+	// excludes the source itself, instead of lingering as stale evidence.
 	if _, err := tx.Exec(
 		ctx,
 		query,
@@ -4625,6 +5054,10 @@ ON CONFLICT (memory_id) DO UPDATE SET
 		canonical.Content,
 		canonical.CreatedAt,
 		updatedAt,
+		sourceVersion,
+		nullableString(canonical.TemporalValidity.TemporalFactID),
+		nullableTime(canonical.TemporalValidity.ValidFrom),
+		nullableTimePtr(canonical.TemporalValidity.ValidTo),
 	); err != nil {
 		return fmt.Errorf("upsert relation projection: %w", err)
 	}
@@ -5994,6 +6427,175 @@ func nullableTime(value time.Time) any {
 	}
 
 	return value
+}
+
+// nullableTimePtr renders an optional upper bound. A nil pointer means the
+// interval is open-ended and stays NULL, which is how "still current" is
+// persisted rather than being encoded as a sentinel date.
+func nullableTimePtr(value *time.Time) any {
+	if value == nil {
+		return nil
+	}
+
+	return *value
+}
+
+// temporalSelection carries the request-scoped fact-validity predicate into a
+// SQL query. The caller supplies every argument; nothing here reads a clock, so
+// every statement on one request is filtered at the same evaluation instant.
+type temporalSelection struct {
+	Mode             string
+	EvaluationAt     any
+	AsOf             any
+	ValidFrom        any
+	ValidTo          any
+	HasConstraint    bool
+	ConstraintReject bool
+	// Disabled marks the operational-rollback state: temporal-aware policy
+	// resolution is off, so the query carries no valid-time predicate at all and
+	// retrieval returns the approved current baseline. It is distinct from a
+	// rejected constraint, which returns no rows; disablement returns the
+	// baseline row set.
+	Disabled bool
+}
+
+// IsDisabled reports whether temporal-aware policy resolution is off for this
+// selection.
+func (s temporalSelection) IsDisabled() bool {
+	return s.Disabled
+}
+
+// temporalSelectionFor builds the predicate for a validated search input. An
+// absent constraint resolves to current-valid selection, and a constraint that
+// fails validation always rejects so an ambiguous selector can never silently
+// widen a query into historical scope.
+func temporalSelectionFor(input retrieval.SearchInput, evaluationInstant time.Time) temporalSelection {
+	// Operational rollback: disabling the policy removes the valid-time
+	// predicate entirely so retrieval falls back to the approved baseline. The
+	// stored intervals and correction ledger are untouched.
+	if input.TemporalPolicyDisabled() {
+		return temporalSelection{Disabled: true}
+	}
+
+	constraint := input.TemporalConstraint
+	if constraint.Mode == "" {
+		constraint = memory.TemporalConstraint{Mode: memory.TemporalSelectionCurrent}
+	}
+	if err := constraint.Validate(); err != nil {
+		return temporalSelection{ConstraintReject: true}
+	}
+
+	selection := temporalSelection{
+		Mode:          string(constraint.Mode),
+		EvaluationAt:  nullableTime(evaluationInstant),
+		HasConstraint: true,
+	}
+	switch constraint.Mode {
+	case memory.TemporalSelectionAsOf:
+		selection.AsOf = nullableTime(*constraint.AsOf)
+	case memory.TemporalSelectionDuring:
+		selection.ValidFrom = nullableTime(*constraint.ValidFrom)
+		selection.ValidTo = nullableTime(*constraint.ValidTo)
+	}
+	return selection
+}
+
+// temporalPredicatePlaceholder is substituted into a search query with the
+// shared lifecycle-plus-validity predicate. A textual placeholder is used
+// instead of fmt verbs because several search queries contain literal '%'
+// fragments for ILIKE patterns, which fmt would misread as format directives.
+const temporalPredicatePlaceholder = "/*temporal_validity_predicate*/"
+
+func withTemporalPredicate(query string, selection temporalSelection, modeArg, evaluationArg, asOfArg, validFromArg, validToArg int, alias string) string {
+	return strings.Replace(query, temporalPredicatePlaceholder, temporalSQLPredicate(alias, selection, modeArg, evaluationArg, asOfArg, validFromArg, validToArg), 1)
+}
+
+// appendTemporalArgs appends the temporal bind values, but only when the
+// predicate actually references them.
+//
+// This is what makes operational rollback work: when the policy is disabled the
+// rendered predicate is empty, so the query has no temporal placeholders and
+// sending the bind values would be an argument-count mismatch. Leaving them out
+// keeps the disabled query exactly the approved baseline.
+func appendTemporalArgs(args []any, selection temporalSelection) []any {
+	if selection.IsDisabled() {
+		return args
+	}
+	return append(args,
+		selection.Mode,
+		selection.EvaluationAt,
+		selection.AsOf,
+		selection.ValidFrom,
+		selection.ValidTo,
+	)
+}
+
+// relationSourceCurrencyPlaceholder marks where the relation path proves its
+// projection still names the version the fact currently points at.
+const relationSourceCurrencyPlaceholder = "/*relation_source_currency_predicate*/"
+
+// relationSourceCurrencyPredicate stops a relation projection from outliving the
+// version it was derived from.
+//
+// A relation is derived evidence, so it never asserts validity of its own: it
+// carries the source version's identity. Once a temporal successor advances the
+// fact's head, the projection still names the superseded version and must stop
+// being ordinary-visible until it is rebuilt against that successor. Excluding
+// it here is what makes "relation points to an expired source" fail closed
+// rather than leaking stale evidence.
+//
+// Legacy rows carry neither a projection source version nor a head pointer
+// (migration 0014 does not backfill them), so the guard compares only when both
+// sides are known. It therefore never hides a projection merely because the
+// migration has not run or has been rolled back.
+func relationSourceCurrencyPredicate(selection temporalSelection) string {
+	if selection.IsDisabled() {
+		return ""
+	}
+	return `AND (rp.source_version IS NULL OR cm.temporal_head_version IS NULL OR rp.source_version = cm.temporal_head_version)`
+}
+
+// temporalSQLPredicate renders the shared lifecycle-plus-validity filter. It is
+// deliberately placed in one helper so lexical, semantic, and relation paths
+// cannot drift apart in how they decide whether a version is selectable.
+//
+// A row with no temporal snapshot is treated as legacy current-compatible: its
+// interval starts at the recorded creation time and stays open, which is exactly
+// what migration 0014 backfills for pre-existing rows.
+func temporalSQLPredicate(alias string, selection temporalSelection, modeArg, evaluationArg, asOfArg, validFromArg, validToArg int) string {
+	if selection.ConstraintReject {
+		return "AND false"
+	}
+	// Disabled is the rollback baseline: no valid-time filtering at all. It is
+	// deliberately not the same as an empty string that later gets a predicate
+	// appended, and it must not be confused with ConstraintReject, which
+	// returns no rows -- disablement returns the baseline row set.
+	if selection.Disabled {
+		return ""
+	}
+	column := func(name string) string {
+		if alias == "" {
+			return name
+		}
+		return alias + "." + name
+	}
+
+	// Legacy rows have no valid_from; fall back to the recorded creation time so
+	// they remain current-valid instead of disappearing from ordinary retrieval.
+	effectiveFrom := "COALESCE(" + column("valid_from") + ", " + column("created_at") + ")"
+	validTo := column("valid_to")
+
+	return fmt.Sprintf(`AND (
+		$%[1]d = 'current'
+		AND %[3]s <= $%[2]d::timestamptz
+		AND (%[5]s IS NULL OR %[5]s > $%[2]d::timestamptz)
+		OR $%[1]d = 'as_of'
+		AND %[3]s <= $%[6]d::timestamptz
+		AND (%[5]s IS NULL OR %[5]s > $%[6]d::timestamptz)
+		OR $%[1]d = 'valid_during'
+		AND %[3]s < $%[8]d::timestamptz
+		AND (%[5]s IS NULL OR %[5]s > $%[7]d::timestamptz)
+	)`, modeArg, evaluationArg, effectiveFrom, validTo, validTo, asOfArg, validFromArg, validToArg)
 }
 
 func nullableInt(value *int) any {

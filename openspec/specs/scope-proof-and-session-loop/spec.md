@@ -1,7 +1,7 @@
 # scope-proof-and-session-loop Specification
 
 ## Purpose
-TBD - created by archiving change scope-proof-and-agent-session-memory-loop. Update Purpose after archive.
+Create durable, scoped proof runs for validating tenant, project, and namespace isolation.
 ## Requirements
 ### Requirement: Scope proof runs are durable and scoped
 The service SHALL allow authorized administrators to create durable proof runs for one tenant, project, and namespace.
@@ -199,4 +199,3 @@ The service SHALL recommend existing session and proof surfaces when workflow ev
 #### Scenario: Workflow lacks proof verification
 - **WHEN** a workflow run requires recent scope proof evidence and no valid proof exists
 - **THEN** next actions include a bounded recommendation to create or inspect a scope proof through the existing admin proof routes
-

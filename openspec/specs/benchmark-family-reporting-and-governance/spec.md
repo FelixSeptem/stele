@@ -1,7 +1,7 @@
 # benchmark-family-reporting-and-governance Specification
 
 ## Purpose
-TBD - created by archiving change agent-memory-benchmark-expansion. Update Purpose after archive.
+Produce family-scoped, reproducible benchmark reports with complete quality and safety evidence.
 ## Requirements
 ### Requirement: Reports are family-scoped and auditable
 Every benchmark report SHALL contain dataset and split identity, manifest and normalized corpus checksums, qrels version/checksum, Stele revision, PostgreSQL and pgvector identity when applicable, embedding/strategy profile, run scope, metrics, errors, safety outcomes, and retained artifact paths.
@@ -34,4 +34,3 @@ The expansion SHALL not be marked complete until LongMemEval has completed at le
 #### Scenario: Evaluate completion readiness
 - **WHEN** the change completion command checks benchmark artifacts
 - **THEN** it passes only when all required family evidence and provenance are present and synthetic smoke alone is rejected
-

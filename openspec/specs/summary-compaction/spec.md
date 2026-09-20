@@ -1,7 +1,7 @@
 # summary-compaction Specification
 
 ## Purpose
-TBD - created by archiving change governance-pipeline-and-memory-consolidation. Update Purpose after archive.
+Create governed summary memory through auditable compaction of episodic material.
 ## Requirements
 ### Requirement: Summary memory compaction
 The service SHALL support summary memory creation as a governed compaction path for dense or stale episodic material.
@@ -16,4 +16,3 @@ Summary generation MUST preserve access to the underlying raw events or episodic
 #### Scenario: Underlying evidence remains auditable
 - **WHEN** a summary memory is created
 - **THEN** the service keeps the underlying evidence available for audit and later reprocessing even if lifecycle visibility changes
-

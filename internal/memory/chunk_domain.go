@@ -78,6 +78,12 @@ type MemoryChunk struct {
 	PolicyVersion   string               `json:"policy_version"`
 	RendererVersion string               `json:"renderer_version"`
 	CreatedAt       time.Time            `json:"created_at"`
+	// TemporalValidity is the validity snapshot of the source version this chunk
+	// was rendered from. A chunk is derived evidence, so it carries the source's
+	// identity and window rather than inventing one of its own. It stays unset
+	// when the source has no fact-valid time (derived artifacts such as
+	// summaries), which is distinct from an unknown or malformed window.
+	TemporalValidity
 }
 
 // ChunkAdjacentOptions bounds parent-local evidence expansion. SessionID and

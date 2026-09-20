@@ -1,7 +1,7 @@
 # insight-quality-feedback Specification
 
 ## Purpose
-TBD - created by archiving change governed-insight-quality-feedback. Update Purpose after archive.
+Capture durable, scoped quality feedback for derived experience insights.
 ## Requirements
 ### Requirement: Insight quality feedback is durable and scoped
 The service SHALL persist quality feedback for derived insights as durable records scoped by tenant, project, and namespace.
@@ -46,4 +46,3 @@ The service SHALL provide scoped reads that summarize effective feedback state f
 #### Scenario: Superseded feedback exists
 - **WHEN** a feedback summary is computed for an insight with superseded feedback records
 - **THEN** the service excludes superseded records from active quality signals while preserving them in audit history reads
-

@@ -1,7 +1,7 @@
 # versioned-context-projections Specification
 
 ## Purpose
-TBD - created by archiving change versioned-context-projections-and-bounded-assembly. Update Purpose after archive.
+Persist durable, versioned context projections with exact scope and deterministic ordering.
 
 ## Requirements
 

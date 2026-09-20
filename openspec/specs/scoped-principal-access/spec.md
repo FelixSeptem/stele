@@ -1,7 +1,7 @@
 # scoped-principal-access Specification
 
 ## Purpose
-TBD - created by archiving change scoped-principal-auth-and-ingest-idempotency. Update Purpose after archive.
+Authenticate protected requests through durable principals and safely managed credentials.
 ## Requirements
 ### Requirement: Protected requests authenticate as durable principals
 The service SHALL authenticate protected requests using a durable PostgreSQL
@@ -80,4 +80,3 @@ free-form reasons in metrics or non-admin logs.
 #### Scenario: Authorization is denied
 - **WHEN** a credential is denied because it is invalid, expired, role-incompatible, or ungranted
 - **THEN** telemetry records a bounded denial category without sensitive identifiers or secrets
-

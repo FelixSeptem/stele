@@ -77,3 +77,21 @@ Planner diagnostics SHALL be available only to authorized evaluation or administ
 #### Scenario: Ordinary retrieval uses an adaptive plan
 - **WHEN** an ordinary caller receives search or assembled-context results
 - **THEN** the response preserves its existing public shape and omits the internal plan and planner diagnostics
+
+### Requirement: Temporal plans carry explicit valid-time constraints
+The planner SHALL represent temporal query constraints separately from recorded
+time filters. A historical family plan MUST contain an authorized `as_of` or
+`valid_during` constraint, and a missing or malformed constraint MUST fail closed
+to the approved current baseline.
+
+#### Scenario: Temporal plan is replayed
+- **WHEN** the same accepted query, temporal selector, scope, and policy versions
+  are replayed
+- **THEN** the planner produces the same valid-time constraint, plan identity,
+  and bounded disposition
+
+#### Scenario: Temporal family lacks explicit selector
+- **WHEN** query analysis suggests historical retrieval but no authorized temporal
+  selector is present
+- **THEN** the planner does not access history and uses the approved current
+  retrieval fallback

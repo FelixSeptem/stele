@@ -1,7 +1,7 @@
 # memory-merge-and-reclassification Specification
 
 ## Purpose
-TBD - created by archiving change manual-memory-mutation-and-reclassification. Update Purpose after archive.
+Support auditable merging and reclassification of governed canonical memories.
 ## Requirements
 ### Requirement: Duplicate canonical memories can be merged onto a surviving target
 The service SHALL support explicit merge of duplicate canonical memories onto one surviving target identity.
@@ -35,4 +35,3 @@ Manual merge and reclassification MUST not weaken the lifecycle-safe behavior of
 #### Scenario: Standard caller reads merged memory
 - **WHEN** a standard caller lists or searches memory after a duplicate merge
 - **THEN** the caller sees the surviving target memory while the suppressed source remains hidden from default public read paths
-

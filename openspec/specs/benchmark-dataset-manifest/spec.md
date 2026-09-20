@@ -1,7 +1,7 @@
 # benchmark-dataset-manifest Specification
 
 ## Purpose
-TBD - created by archiving change local-agent-memory-benchmark-suite. Update Purpose after archive.
+Govern benchmark dataset releases with versioned, auditable manifests and stable identities.
 ## Requirements
 ### Requirement: Dataset manifest is versioned and auditable
 The benchmark system SHALL represent every dataset release with a manifest containing name, version, license, upstream URL, upstream commit or tag, SHA256, source path, conversion version, available splits, redistribution status, and embedding profile.
@@ -38,4 +38,3 @@ The system SHALL use `<data-dir>/<dataset>/<version>/{raw,normalized,embeddings,
 #### Scenario: Same inputs resolve to same cache
 - **WHEN** two fetch or run invocations use identical data directory, dataset, and version
 - **THEN** they resolve to the same cache root and split identifiers
-

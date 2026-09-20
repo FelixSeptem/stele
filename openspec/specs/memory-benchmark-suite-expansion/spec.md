@@ -1,7 +1,7 @@
 # memory-benchmark-suite-expansion Specification
 
 ## Purpose
-TBD - created by archiving change agent-memory-benchmark-expansion. Update Purpose after archive.
+Expand deterministic agent-memory benchmark coverage while preserving session and memory semantics.
 ## Requirements
 ### Requirement: LongMemEval adapter preserves session and memory semantics
 The system SHALL normalize a checksum-locked LongMemEval source into ordered sessions, turns, timestamps, question metadata, answer-session evidence, abstention state, and update/conflict relationships without overwriting canonical memory in place.
@@ -35,4 +35,3 @@ The system SHALL require a manifest containing dataset version, license, upstrea
 #### Scenario: Keep restricted data out of the repository
 - **WHEN** a user fetches a redistribution-restricted dataset
 - **THEN** raw and normalized files are stored only under the configured local cache and the repository receives metadata or instructions only
-

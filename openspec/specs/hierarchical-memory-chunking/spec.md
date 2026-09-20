@@ -1,8 +1,10 @@
 # hierarchical-memory-chunking Specification
 
 ## Purpose
-TBD - created by archiving change hierarchical-memory-representation-bounded-chunking. Update Purpose after archive.
+Persist versioned, scope-isolated derived chunks without replacing source records of truth.
+
 ## Requirements
+
 ### Requirement: Derived chunks are versioned PostgreSQL records
 The service SHALL persist source chunks only as derived PostgreSQL records. Each
 chunk SHALL identify its exact tenant, project, and namespace; source kind, source
@@ -109,3 +111,19 @@ closed when lineage or visibility cannot be proven.
 - **WHEN** an adjacent candidate differs in session, user, tenant, project, or
   namespace from the selected chunk
 - **THEN** the service omits it and does not broaden the lookup
+
+### Requirement: Chunks preserve validity snapshots
+Every derived chunk MUST retain the immutable source canonical version and
+validity identity used at materialization. Ordinary and historical chunk reads
+MUST apply the same temporal predicate as canonical retrieval.
+
+#### Scenario: Chunk source expires
+- **WHEN** a chunk's source version is no longer valid for the current query
+- **THEN** ordinary chunk retrieval excludes the chunk and does not expose its
+  content or parent through fallback
+
+#### Scenario: Historical chunk query is authorized
+- **WHEN** an explicit temporal plan requests an interval containing the chunk's
+  source validity
+- **THEN** the chunk may participate with its source-version citation and exact
+  scope preserved

@@ -1,7 +1,7 @@
 # memory-governance-pipeline Specification
 
 ## Purpose
-TBD - created by archiving change governance-pipeline-and-memory-consolidation. Update Purpose after archive.
+Process raw events into governed memory through an asynchronous worker pipeline.
 ## Requirements
 ### Requirement: Worker-driven governance pipeline
 The service SHALL process raw events into governed memory through an asynchronous worker-driven pipeline rather than the synchronous ingest request path.
@@ -24,4 +24,3 @@ The service MUST persist candidate memory as a first-class lifecycle state with 
 #### Scenario: Candidate retains governance audit context
 - **WHEN** a candidate memory is written
 - **THEN** the service stores enough provenance and governance fields to explain later promotion, suppression, or expiry decisions
-

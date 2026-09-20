@@ -78,6 +78,40 @@ func TestRetrievalPlannerDiagnosticsAreBoundedAndRedacted(t *testing.T) {
 	}
 }
 
+func TestRetrievalPlannerDiagnosticsCarryOnlyBoundedTemporalOmissions(t *testing.T) {
+	plan := diagnosticTestPlan(t, "private query tenant-a memory-id-1")
+	var omissions TemporalOmissionReport
+	omissions.Add(TemporalOmissionUnsupportedClass)
+	omissions.Add(TemporalOmissionExpiredVersion)
+	omissions.Add(TemporalOmissionExpiredVersion)
+
+	diagnostics, err := RetrievalPlannerDiagnosticsFromExecution(RetrievalPlannerDiagnosticsInput{
+		Plan:              plan,
+		RolloutStage:      memory.RetrievalPlannerRolloutStageDiagnosticsOnly,
+		Evidence:          EvidenceAssessment{Disposition: EvidenceDispositionSufficient, VisibleBucket: "one_to_five", AttritionBucket: "none"},
+		PassCount:         1,
+		CandidateCount:    3,
+		Elapsed:           time.Millisecond,
+		TemporalOmissions: omissions,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	payload, err := MarshalRetrievalPlannerDiagnostics(diagnostics)
+	if err != nil {
+		t.Fatal(err)
+	}
+	text := string(payload)
+	if !strings.Contains(text, `"temporal_omissions":[{"category":"expired_version","count":2},{"category":"unsupported_class","count":1}]`) {
+		t.Fatalf("authorized diagnostics = %s, want sorted bounded temporal categories", text)
+	}
+	for _, forbidden := range []string{"private query", "tenant-a", "memory-id-1", "query_text", "scope_values", "candidate_id", "raw_score", "postgres://", "provider_payload"} {
+		if strings.Contains(text, forbidden) {
+			t.Fatalf("authorized temporal diagnostics leaked %q: %s", forbidden, text)
+		}
+	}
+}
+
 func TestRetrievalPlannerDiagnosticsRejectInvalidAggregates(t *testing.T) {
 	diagnostics := RetrievalPlannerDiagnostics{
 		PlannerVersion:      RetrievalPlannerVersionV1,

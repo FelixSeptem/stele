@@ -1,7 +1,7 @@
 # postgres-backup-recovery-operations Specification
 
 ## Purpose
-TBD - created by archiving change product-ready-self-hosting-foundation. Update Purpose after archive.
+Provide executable, secure PostgreSQL backup and recovery guidance for Stele operators.
 ## Requirements
 ### Requirement: Operators receive executable PostgreSQL backup guidance
 The repository SHALL provide a documented, executable operator command for
@@ -60,4 +60,3 @@ as backup/restore proof for the existing assurance and readiness loop.
 - **THEN** the verification reports a stable failed category, does not mark
   backup/restore proof healthy, and directs the operator to the relevant
   migration, bootstrap, or recovery diagnostic
-

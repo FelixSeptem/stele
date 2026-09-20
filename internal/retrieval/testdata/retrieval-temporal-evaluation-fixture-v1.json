@@ -1,0 +1,229 @@
+{
+  "version": "retrieval-temporal-evaluation-fixture-v1",
+  "cases": [
+    {
+      "id": "temporal-current-valid-fact",
+      "category": "temporal",
+      "scope": { "tenant": "eval", "project": "bi-temporal", "namespace": "current-valid" },
+      "query": "Which region owns the billing deployment?",
+      "sources": [
+        {
+          "alias": "billing-region-eu",
+          "event_type": "fixture",
+          "content": "The billing deployment is owned by the EU region.",
+          "class": "episodic",
+          "source_timestamp": "2026-01-01T00:00:00Z"
+        }
+      ],
+      "expected_evidence_groups": [["billing-region-eu"]],
+      "temporal": {
+        "kind": "current_valid",
+        "evaluation_instant": "2026-06-01T00:00:00Z",
+        "minimum_selected_versions": 1
+      }
+    },
+    {
+      "id": "temporal-expired-fact-is-withheld",
+      "category": "temporal",
+      "scope": { "tenant": "eval", "project": "bi-temporal", "namespace": "expired" },
+      "query": "Which region owns the billing deployment?",
+      "sources": [
+        {
+          "alias": "billing-region-expired",
+          "event_type": "fixture",
+          "content": "The billing deployment is owned by the US region.",
+          "class": "episodic",
+          "source_timestamp": "2025-01-01T00:00:00Z"
+        },
+        {
+          "alias": "billing-region-current-after-expiry",
+          "event_type": "fixture",
+          "content": "The billing deployment is owned by the EU region.",
+          "class": "episodic",
+          "source_timestamp": "2026-01-01T00:00:00Z"
+        }
+      ],
+      "expected_evidence_groups": [["billing-region-current-after-expiry"]],
+      "temporal": {
+        "kind": "expired",
+        "evaluation_instant": "2026-06-01T00:00:00Z",
+        "minimum_selected_versions": 1,
+        "hidden_aliases": ["billing-region-expired"]
+      }
+    },
+    {
+      "id": "temporal-as-of-selects-historical-version",
+      "category": "temporal",
+      "scope": { "tenant": "eval", "project": "bi-temporal", "namespace": "as-of" },
+      "query": "Which region owned the billing deployment in March 2025?",
+      "sources": [
+        {
+          "alias": "billing-region-march-2025",
+          "event_type": "fixture",
+          "content": "The billing deployment was owned by the APAC region through March 2025.",
+          "class": "episodic",
+          "source_timestamp": "2025-03-01T00:00:00Z"
+        },
+        {
+          "alias": "billing-region-from-april-2025",
+          "event_type": "fixture",
+          "content": "The billing deployment moved to the EU region in April 2025.",
+          "class": "episodic",
+          "source_timestamp": "2025-04-01T00:00:00Z"
+        }
+      ],
+      "expected_evidence_groups": [["billing-region-march-2025"]],
+      "temporal": {
+        "kind": "as_of",
+        "selector": { "mode": "as_of", "as_of": "2025-03-15T00:00:00Z" },
+        "minimum_selected_versions": 1,
+        "hidden_aliases": ["billing-region-from-april-2025"]
+      }
+    },
+    {
+      "id": "temporal-interval-selects-overlapping-version",
+      "category": "temporal",
+      "scope": { "tenant": "eval", "project": "bi-temporal", "namespace": "interval" },
+      "query": "Which region owned the billing deployment during Q2 2025?",
+      "sources": [
+        {
+          "alias": "billing-region-q2-2025",
+          "event_type": "fixture",
+          "content": "The billing deployment was owned by the EU region throughout Q2 2025.",
+          "class": "episodic",
+          "source_timestamp": "2025-04-01T00:00:00Z"
+        },
+        {
+          "alias": "billing-region-q4-2025",
+          "event_type": "fixture",
+          "content": "The billing deployment moved to the US region in Q4 2025.",
+          "class": "episodic",
+          "source_timestamp": "2025-10-01T00:00:00Z"
+        }
+      ],
+      "expected_evidence_groups": [["billing-region-q2-2025"]],
+      "temporal": {
+        "kind": "interval",
+        "selector": {
+          "mode": "valid_during",
+          "valid_from": "2025-04-01T00:00:00Z",
+          "valid_to": "2025-07-01T00:00:00Z"
+        },
+        "minimum_selected_versions": 1,
+        "hidden_aliases": ["billing-region-q4-2025"]
+      }
+    },
+    {
+      "id": "temporal-retroactive-correction-names-successor",
+      "category": "temporal",
+      "scope": { "tenant": "eval", "project": "bi-temporal", "namespace": "correction" },
+      "query": "Which region owns the billing deployment after the correction?",
+      "sources": [
+        {
+          "alias": "billing-region-corrected",
+          "event_type": "fixture",
+          "content": "The billing deployment is owned by the CA region following an authorized correction.",
+          "class": "episodic",
+          "source_timestamp": "2026-02-01T00:00:00Z"
+        },
+        {
+          "alias": "billing-region-superseded",
+          "event_type": "fixture",
+          "content": "The billing deployment was recorded as owned by the US region.",
+          "class": "episodic",
+          "source_timestamp": "2026-01-15T00:00:00Z"
+        }
+      ],
+      "expected_evidence_groups": [["billing-region-corrected"]],
+      "temporal": {
+        "kind": "retroactive_correction",
+        "selector": { "mode": "as_of", "as_of": "2026-03-01T00:00:00Z" },
+        "minimum_selected_versions": 1,
+        "authorized_correction": true,
+        "hidden_aliases": ["billing-region-superseded"]
+      }
+    },
+    {
+      "id": "temporal-legacy-compatible-row-stays-current",
+      "category": "temporal",
+      "scope": { "tenant": "eval", "project": "bi-temporal", "namespace": "legacy" },
+      "query": "Which region owns the legacy billing deployment?",
+      "sources": [
+        {
+          "alias": "billing-region-legacy",
+          "event_type": "fixture",
+          "content": "The legacy billing deployment is owned by the US region and predates valid-time tracking.",
+          "class": "procedural"
+        }
+      ],
+      "expected_evidence_groups": [["billing-region-legacy"]],
+      "temporal": {
+        "kind": "legacy_compatible",
+        "evaluation_instant": "2026-06-01T00:00:00Z",
+        "minimum_selected_versions": 1
+      }
+    },
+    {
+      "id": "temporal-stale-similarity-does-not-win",
+      "category": "temporal",
+      "scope": { "tenant": "eval", "project": "bi-temporal", "namespace": "stale-similarity" },
+      "query": "Which region owns the billing deployment?",
+      "sources": [
+        {
+          "alias": "billing-region-stale-near-identical",
+          "event_type": "fixture",
+          "content": "The billing deployment is owned by the US region. The billing deployment is owned by the US region.",
+          "class": "episodic",
+          "source_timestamp": "2024-01-01T00:00:00Z"
+        },
+        {
+          "alias": "billing-region-current-authoritative",
+          "event_type": "fixture",
+          "content": "The billing deployment is owned by the EU region.",
+          "class": "episodic",
+          "source_timestamp": "2026-01-01T00:00:00Z"
+        }
+      ],
+      "expected_evidence_groups": [["billing-region-current-authoritative"]],
+      "temporal": {
+        "kind": "stale_similarity",
+        "evaluation_instant": "2026-06-01T00:00:00Z",
+        "minimum_selected_versions": 1,
+        "hidden_aliases": ["billing-region-stale-near-identical"]
+      }
+    },    {
+      "id": "temporal-isolation-keeps-foreign-timed-fact-out",
+      "category": "temporal",
+      "scope": { "tenant": "eval", "project": "bi-temporal", "namespace": "isolation" },
+      "query": "Which region owned the billing deployment in Q3 2025?",
+      "sources": [
+        {
+          "alias": "billing-region-q3-2025-in-scope",
+          "event_type": "fixture",
+          "content": "The billing deployment was owned by the EU region during Q3 2025.",
+          "class": "episodic",
+          "source_timestamp": "2025-07-01T00:00:00Z"
+        },
+        {
+          "alias": "billing-region-q3-2025-other-scope",
+          "event_type": "fixture",
+          "content": "A differently scoped project recorded the billing deployment as owned by the APAC region during Q3 2025.",
+          "class": "episodic",
+          "source_timestamp": "2025-07-01T00:00:00Z"
+        }
+      ],
+      "expected_evidence_groups": [["billing-region-q3-2025-in-scope"]],
+      "temporal": {
+        "kind": "temporal_isolation",
+        "selector": {
+          "mode": "valid_during",
+          "valid_from": "2025-07-01T00:00:00Z",
+          "valid_to": "2025-10-01T00:00:00Z"
+        },
+        "minimum_selected_versions": 1,
+        "allow_unselected_expected": true,
+        "hidden_aliases": ["billing-region-q3-2025-other-scope"]
+      }
+    }
+  ]
+}

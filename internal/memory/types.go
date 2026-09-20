@@ -87,6 +87,7 @@ type CanonicalMemory struct {
 	Content    string      `json:"content"`
 	CreatedAt  time.Time   `json:"created_at"`
 	ModifiedAt time.Time   `json:"modified_at"`
+	TemporalValidity
 }
 
 type MemoryVersion struct {
@@ -97,6 +98,12 @@ type MemoryVersion struct {
 	Content    string      `json:"content"`
 	CreatedAt  time.Time   `json:"created_at"`
 	ModifiedBy string      `json:"modified_by"`
+	TemporalValidity
+}
+
+// TemporalMetadata returns the bounded view of this version's validity snapshot.
+func (v MemoryVersion) TemporalMetadata() TemporalMetadata {
+	return NewTemporalMetadata(v.TemporalValidity)
 }
 
 type EmbeddingRebuildStatus string
@@ -118,10 +125,16 @@ const (
 )
 
 type EmbeddingRebuildRecord struct {
-	MemoryID             string
-	Scope                Scope
-	Class                MemoryClass
-	Content              string
+	MemoryID string
+	Scope    Scope
+	Class    MemoryClass
+	Content  string
+	// TemporalValidity binds the rebuild to the fact-valid identity of the
+	// version being embedded. A vector is derived evidence, so it records which
+	// window its source described instead of asserting one of its own; a
+	// successor version then requires its own rebuild rather than silently
+	// reusing this one.
+	TemporalValidity     TemporalValidity
 	SourceVersion        int64
 	ContentHash          string
 	RequestedProvider    string
@@ -181,10 +194,47 @@ type ProvenanceRecord struct {
 	SourceContext     map[string]any `json:"source_context"`
 }
 
+// ProvenanceView is the response shape for a lineage query. It carries the
+// lineage records plus the bounded temporal summary, so a caller can tell
+// whether the memory's validity was asserted by a writer or inferred by the
+// service without a separate privileged read.
+type ProvenanceView struct {
+	MemoryID   string             `json:"memory_id"`
+	Provenance []ProvenanceRecord `json:"provenance"`
+	Temporal   TemporalMetadata   `json:"temporal"`
+}
+
 type MemoryHistory struct {
 	Memory     CanonicalMemory    `json:"memory"`
 	Versions   []MemoryVersion    `json:"versions"`
 	Provenance []ProvenanceRecord `json:"provenance"`
+	// Temporal is the bounded temporal summary of this history. It never carries
+	// raw instants; callers that need those must be reading a privileged view.
+	Temporal TemporalHistoryMetadata `json:"temporal"`
+	// Hidden reports whether this read was authorized to include hidden records.
+	// It lets a caller distinguish "no corrections exist" from "corrections were
+	// not disclosed to me".
+	Hidden bool `json:"hidden"`
+}
+
+// TemporalHistoryMetadata is the bounded temporal summary of a history read. It
+// reports the current head's interval shape and provenance class, plus counts of
+// the inferred and explicit versions in the chain, so an operator can tell at a
+// glance whether the history rests on asserted or backfilled validity.
+type TemporalHistoryMetadata struct {
+	TemporalMetadata
+	// VersionCount is the number of canonical versions in this history.
+	VersionCount int `json:"version_count"`
+	// ExplicitVersionCount and InferredVersionCount partition the versions by
+	// whether their interval was asserted or derived. Versions carrying no
+	// interval at all (derived artifacts) count in neither.
+	ExplicitVersionCount int `json:"explicit_version_count"`
+	InferredVersionCount int `json:"inferred_version_count"`
+	// Corrections is the number of temporal corrections recorded for this fact.
+	Corrections int `json:"corrections"`
+	// HasInferredValidity is true when any version in the history relies on a
+	// derived rather than asserted interval.
+	HasInferredValidity bool `json:"has_inferred_validity"`
 }
 
 type IngestEventInput struct {

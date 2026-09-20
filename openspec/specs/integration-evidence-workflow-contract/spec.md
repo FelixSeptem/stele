@@ -1,7 +1,7 @@
 # integration-evidence-workflow-contract Specification
 
 ## Purpose
-TBD - created by archiving change integration-evidence-workflow-contract. Update Purpose after archive.
+Define bounded, scoped integration workflow templates and their governed evidence contracts.
 ## Requirements
 ### Requirement: Workflow templates define bounded evidence contracts
 The service SHALL allow authorized administrators to define scoped integration workflow templates using bounded step kinds, evidence kinds, completion policy, freshness windows, and runbook hint categories.
@@ -103,4 +103,3 @@ The service SHALL apply configurable retention and cleanup to high-volume workfl
 #### Scenario: Cleanup is retried
 - **WHEN** workflow cleanup is retried after partial execution or restart
 - **THEN** cleanup remains idempotent and preserves tenant, project, and namespace isolation
-

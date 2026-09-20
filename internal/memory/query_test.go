@@ -175,3 +175,106 @@ func TestQueryServiceGetMemoryHistoryRedactsDeletedVersionPayload(t *testing.T) 
 		t.Fatalf("deleted version content = %q, want empty payload", history.Versions[0].Content)
 	}
 }
+
+// TestQueryServiceGetMemoryHistoryUsesOrdinaryRead proves the service path never
+// asks the store for hidden records, so a forgotten memory's history cannot be
+// assembled through the ordinary query surface.
+func TestQueryServiceGetMemoryHistoryUsesOrdinaryRead(t *testing.T) {
+	store := &stubQueryStore{
+		history: MemoryHistory{
+			Memory: CanonicalMemory{
+				ID:    "mem_123",
+				Scope: Scope{Tenant: "tenant-a", Project: "project-a", Namespace: "namespace-a"},
+				Class: MemoryClassProfile,
+			},
+		},
+	}
+
+	service := NewQueryService(store)
+	if _, err := service.GetMemoryHistory(context.Background(), Scope{Tenant: "tenant-a", Project: "project-a", Namespace: "namespace-a"}, "mem_123"); err != nil {
+		t.Fatalf("GetMemoryHistory() error = %v", err)
+	}
+
+	if store.gotReadIncludeHidden {
+		t.Fatal("store was asked to include hidden records; an ordinary read must not")
+	}
+}
+
+// TestQueryServiceGetMemoryProvenanceViewScopesCanonicalRead proves the
+// provenance view reads the canonical row through the ordinary, hidden-excluding
+// path, so the bounded temporal summary cannot describe a hidden interval.
+func TestQueryServiceGetMemoryProvenanceViewScopesCanonicalRead(t *testing.T) {
+	recorded := time.Date(2026, 6, 21, 10, 0, 0, 0, time.UTC)
+	scope := Scope{Tenant: "tenant-a", Project: "project-a", Namespace: "namespace-a"}
+
+	store := &stubQueryStore{
+		canonical: CanonicalMemory{
+			ID:    "mem_123",
+			Scope: scope,
+			Class: MemoryClassProfile,
+			TemporalValidity: TemporalValidity{
+				TemporalFactID: "fact_123",
+				IngestedAt:     recorded,
+				ValidFrom:      recorded,
+				ValiditySource: TemporalValiditySourceExplicit,
+			},
+		},
+		provenance: []ProvenanceRecord{{ID: "prov_1", MemoryID: "mem_123"}},
+	}
+
+	service := NewQueryService(store)
+	view, err := service.GetMemoryProvenanceView(context.Background(), scope, "mem_123")
+	if err != nil {
+		t.Fatalf("GetMemoryProvenanceView() error = %v", err)
+	}
+
+	if store.gotReadIncludeHidden {
+		t.Fatal("store was asked to include hidden records; the provenance view must not")
+	}
+	if len(view.Provenance) != 1 || view.Provenance[0].ID != "prov_1" {
+		t.Fatalf("Provenance = %+v, want one record", view.Provenance)
+	}
+	if view.Temporal.Origin != TemporalValidityOriginExplicit {
+		t.Fatalf("Temporal.Origin = %q, want %q", view.Temporal.Origin, TemporalValidityOriginExplicit)
+	}
+}
+
+// TestQueryServiceMemoryResourceReportsInferredOrigin proves the ordinary memory
+// resource distinguishes an inferred interval from an asserted one.
+func TestQueryServiceMemoryResourceReportsInferredOrigin(t *testing.T) {
+	recorded := time.Date(2026, 6, 21, 10, 0, 0, 0, time.UTC)
+
+	resource := NewMemoryResource(CanonicalMemory{
+		ID:               "mem_123",
+		Class:            MemoryClassProfile,
+		State:            MemoryStateActive,
+		Content:          "Likes concise answers",
+		TemporalValidity: TemporalValidity{}.LegacyCurrentCompatible(recorded),
+	})
+
+	if resource.Temporal.Origin != TemporalValidityOriginInferred {
+		t.Fatalf("Temporal.Origin = %q, want %q", resource.Temporal.Origin, TemporalValidityOriginInferred)
+	}
+	if !resource.Temporal.Set || !resource.Temporal.OpenEnded {
+		t.Fatalf("Temporal = %+v, want a set open-ended interval", resource.Temporal)
+	}
+}
+
+// TestQueryServiceMemoryResourceDerivedArtifactHasNoInterval proves a derived
+// artifact reports no interval rather than an inferred one, so a caller cannot
+// read a summary as carrying a fact-valid window of its own.
+func TestQueryServiceMemoryResourceDerivedArtifactHasNoInterval(t *testing.T) {
+	resource := NewMemoryResource(CanonicalMemory{
+		ID:      "mem_summary",
+		Class:   MemoryClassSummary,
+		State:   MemoryStateActive,
+		Content: "Summary of the week",
+	})
+
+	if resource.Temporal.Set {
+		t.Fatalf("Temporal.Set = true, want false for a derived artifact")
+	}
+	if resource.Temporal.Origin != TemporalValidityOriginNone {
+		t.Fatalf("Temporal.Origin = %q, want %q", resource.Temporal.Origin, TemporalValidityOriginNone)
+	}
+}

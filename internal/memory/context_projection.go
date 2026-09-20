@@ -118,12 +118,22 @@ type ContextProjectionItem struct {
 	LifecycleState MemoryState             `json:"lifecycle_state"`
 	SortKey        string                  `json:"sort_key"`
 	Citation       ProjectionCitation      `json:"citation,omitempty"`
+	// TemporalValidity is the validity snapshot of the source version this item
+	// was rendered from, so a projection can be audited against the fact window
+	// it actually described. It stays unset for derived sources that have no
+	// fact-valid time of their own.
+	TemporalValidity
 }
 
 type ProjectionCitation struct {
 	MemoryID   string `json:"memory_id,omitempty"`
 	RawEventID string `json:"raw_event_id,omitempty"`
 	Operation  string `json:"operation,omitempty"`
+	// SourceVersion names the exact canonical version the rendered text came
+	// from. A citation that only names the memory would make two projections of
+	// the same memory at different versions indistinguishable, which is exactly
+	// the ambiguity a retroactive correction has to resolve.
+	SourceVersion int64 `json:"source_version,omitempty"`
 }
 
 func (i ContextProjectionItem) Validate(parent Scope) error {

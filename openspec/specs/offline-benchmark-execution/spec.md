@@ -1,7 +1,7 @@
 # offline-benchmark-execution Specification
 
 ## Purpose
-TBD - created by archiving change local-agent-memory-benchmark-suite. Update Purpose after archive.
+Execute benchmark runs deterministically from local caches without network access by default.
 ## Requirements
 ### Requirement: Run is offline by default
 The benchmark run operation SHALL default `STELE_BENCHMARK_OFFLINE=true` and SHALL read data, normalized records, and embeddings only from the configured local cache.
@@ -64,4 +64,3 @@ The benchmark change SHALL NOT be considered complete solely because unit tests,
 #### Scenario: Real local run satisfies execution evidence
 - **WHEN** a locked benchmark corpus completes through the local PostgreSQL + pgvector retrieval path
 - **THEN** the runner retains a machine-readable report with input checksums, database runtime identity, scope, strategy, metrics, and quality/safety outcome
-

@@ -1,7 +1,7 @@
 # database-schema-migration-management Specification
 
 ## Purpose
-TBD - created by archiving change product-ready-self-hosting-foundation. Update Purpose after archive.
+Manage PostgreSQL schema evolution through immutable, ordered migrations and an applied-state ledger.
 ## Requirements
 ### Requirement: PostgreSQL schema changes use an immutable ordered migration ledger
 The service SHALL manage PostgreSQL schema evolution through immutable,
@@ -153,4 +153,3 @@ coordination shared by standalone commands and all runtime modes.
   admission completes
 - **THEN** later startup revalidates the driver and integrity ledgers and does
   not report current or admit work until a clean supported state is proven
-

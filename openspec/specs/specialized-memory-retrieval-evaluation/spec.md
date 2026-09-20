@@ -1,7 +1,7 @@
 # specialized-memory-retrieval-evaluation Specification
 
 ## Purpose
-TBD - created by archiving change agent-memory-benchmark-expansion. Update Purpose after archive.
+Evaluate specialized memory retrieval using session-aware profile and preference cases.
 ## Requirements
 ### Requirement: Profile and preference cases are session-aware
 The system SHALL normalize PersonaChat or Multi-Session Chat cases into explicit profile facts, preference updates, sessions, evidence groups, and expected current/obsolete states.
@@ -31,4 +31,3 @@ The system SHALL report profile recall/consistency, temporal update precedence, 
 #### Scenario: Report a specialized regression run
 - **WHEN** a profile, temporal, or multi-hop fixture run completes
 - **THEN** the machine-readable report identifies the subfamily, qrels version, targeted metrics, unmapped evidence count, and safety result
-

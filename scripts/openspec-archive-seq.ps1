@@ -85,7 +85,12 @@ function Write-ArchiveIndex {
         $lines += ("- n/a -> {0}" -f $slug)
     }
 
-    $lines | Set-Content -Path $OutputPath
+    $content = ($lines -join "`n") + "`n"
+    [System.IO.File]::WriteAllText(
+        $OutputPath,
+        $content,
+        [System.Text.UTF8Encoding]::new($false)
+    )
 }
 
 function Rename-ArchiveDirs {

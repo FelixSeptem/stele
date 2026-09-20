@@ -1,7 +1,7 @@
 # memory-management-surface Specification
 
 ## Purpose
-TBD - created by archiving change memory-management-and-history-apis. Update Purpose after archive.
+Publish a stable, resource-oriented API for governed canonical memory management.
 ## Requirements
 ### Requirement: Public canonical memory resource surface
 The service SHALL expose a stable resource-oriented API for governed canonical memory reads.
@@ -27,4 +27,3 @@ The memory resource representation MUST expose enough governed metadata for SDK 
 #### Scenario: Client inspects a memory resource
 - **WHEN** a client receives a canonical memory resource
 - **THEN** the representation includes stable identifier, scope, class, lifecycle-safe state, timestamps, and content fields appropriate for that visibility level
-
