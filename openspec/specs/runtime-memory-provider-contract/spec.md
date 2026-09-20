@@ -1,7 +1,7 @@
 # runtime-memory-provider-contract Specification
 
 ## Purpose
-TBD - created by archiving change agent-memory-benchmark-expansion. Update Purpose after archive.
+Validate offline replay of supported agent memory-provider operation contracts.
 ## Requirements
 ### Requirement: BFCL memory operations replay offline
 The system SHALL support offline replay of the BFCL-v4 `memory_kv`, `memory_rec_sum`, and `memory_vector` operation subsets or equivalent checksum-locked contract fixtures without requiring a remote model, search service, or judge.
@@ -31,4 +31,3 @@ The system SHALL report operation accuracy, malformed-call rate, refusal correct
 #### Scenario: Produce a contract report
 - **WHEN** all selected BFCL memory cases finish
 - **THEN** the report contains family identity, subset counts, operation metrics, safety outcomes, and artifact provenance independent of retrieval reports
-

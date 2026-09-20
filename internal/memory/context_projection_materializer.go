@@ -170,7 +170,7 @@ func MaterializeContextProjection(ctx context.Context, input MaterializeContextP
 		} else {
 			watermark.RawEventIDs = append(watermark.RawEventIDs, candidate.Source.ID)
 		}
-		item.Citation = ProjectionCitation{MemoryID: candidate.Source.MemoryID, Operation: "context_projection"}
+		item.Citation = ProjectionCitation{MemoryID: candidate.Source.MemoryID, Operation: "context_projection", SourceVersion: candidate.Source.Version}
 		if candidate.Source.Kind == ContextProjectionSourceRawEvent {
 			item.Citation.RawEventID = candidate.Source.ID
 		}

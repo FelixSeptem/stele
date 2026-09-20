@@ -1,7 +1,7 @@
 # derived-insight-replay Specification
 
 ## Purpose
-TBD - created by archiving change self-hosting-operational-replay-loop. Update Purpose after archive.
+Provide bounded, administrator-authorized dry-run planning for derived-insight replay.
 ## Requirements
 ### Requirement: Derived insight replay planning is bounded and admin-only
 The service SHALL provide an admin-only dry-run capability that plans derived insight replay for an authorized scope, bounded evidence window, and explicit execution limits without mutating derived insights or canonical memory.
@@ -46,4 +46,3 @@ The service MUST keep replay limited to derived insight evaluation and SHALL NOT
 #### Scenario: Replay would require canonical rewrite
 - **WHEN** a replay request asks to rewrite canonical memory content, memory versions, vector revisions, or event provenance
 - **THEN** the service rejects the request as unsupported
-

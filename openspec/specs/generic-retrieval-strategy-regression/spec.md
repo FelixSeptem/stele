@@ -1,7 +1,7 @@
 # generic-retrieval-strategy-regression Specification
 
 ## Purpose
-TBD - created by archiving change agent-memory-benchmark-expansion. Update Purpose after archive.
+Evaluate generic retrieval strategies with independently identified, reproducible benchmark families.
 ## Requirements
 ### Requirement: Generic retrieval datasets are explicitly identified
 The system SHALL support selected C-MTEB/MTEB and BEIR retrieval or reranking subsets only with a `generic_retrieval` family identity, independent manifest, and independent report namespace.
@@ -27,4 +27,3 @@ The generic retrieval runner SHALL use benchmark-only project, tenant, and names
 #### Scenario: Complete a generic IR run
 - **WHEN** a generic retrieval run imports and queries its corpus
 - **THEN** all returned records belong to the run scope and the report includes isolation and lifecycle safety outcomes
-

@@ -13,14 +13,15 @@ import (
 )
 
 const (
-	ReleaseEvidenceSkipDSN            = RetrievalEvaluationDSNSkip
-	ReleaseEvidenceSkipPrerequisite   = "RETRIEVAL_RELEASE_EVIDENCE_PREREQUISITE_REQUIRED"
-	ReleaseEvidenceIncompatible       = "RETRIEVAL_RELEASE_EVIDENCE_INCOMPATIBLE"
-	ReleaseEvidenceSafetyFailure      = "RETRIEVAL_RELEASE_EVIDENCE_SAFETY_FAILURE"
-	ReleaseEvidenceProgressiveFailure = "RETRIEVAL_RELEASE_EVIDENCE_PROGRESSIVE_FAILURE"
-	ReleaseEvidenceParentFirstFailure = "RETRIEVAL_RELEASE_EVIDENCE_PARENT_FIRST_FAILURE"
-	ReleaseEvidenceRollbackFailure    = "RETRIEVAL_RELEASE_EVIDENCE_ROLLBACK_FAILURE"
-	ReleaseEvidenceQualityFailure     = "RETRIEVAL_RELEASE_EVIDENCE_QUALITY_FAILURE"
+	ReleaseEvidenceSkipDSN                  = RetrievalEvaluationDSNSkip
+	ReleaseEvidenceSkipPrerequisite         = "RETRIEVAL_RELEASE_EVIDENCE_PREREQUISITE_REQUIRED"
+	ReleaseEvidenceIncompatible             = "RETRIEVAL_RELEASE_EVIDENCE_INCOMPATIBLE"
+	ReleaseEvidenceSafetyFailure            = "RETRIEVAL_RELEASE_EVIDENCE_SAFETY_FAILURE"
+	ReleaseEvidenceProgressiveFailure       = "RETRIEVAL_RELEASE_EVIDENCE_PROGRESSIVE_FAILURE"
+	ReleaseEvidenceParentFirstFailure       = "RETRIEVAL_RELEASE_EVIDENCE_PARENT_FIRST_FAILURE"
+	ReleaseEvidenceRollbackFailure          = "RETRIEVAL_RELEASE_EVIDENCE_ROLLBACK_FAILURE"
+	ReleaseEvidenceQualityFailure           = "RETRIEVAL_RELEASE_EVIDENCE_QUALITY_FAILURE"
+	ReleaseEvidenceTemporalEvidenceRequired = "RETRIEVAL_RELEASE_EVIDENCE_TEMPORAL_REQUIRED"
 )
 
 type ReleaseEvidenceVerdict string
@@ -188,6 +189,12 @@ func EvaluateReleaseEvidence(in ReleaseEvidenceInput) (ReleaseEvidenceReport, er
 		return r, nil
 	}
 	r.ScopeHash = scopeHash(in.Scope)
+	if temporalReleaseEvidenceRequired(in.Candidate) && !hasCompatibleTemporalReleaseEvidence(in.Candidate) {
+		r.ReleaseEligible = false
+		r.Verdict = ReleaseEvidenceRejected
+		r.FailureCategories = []string{ReleaseEvidenceTemporalEvidenceRequired}
+		return r, nil
+	}
 	decision, err := EvaluateReleasePolicy(in.Policy, in.Baseline, in.Candidate)
 	if err != nil {
 		r.Verdict = ReleaseEvidenceRejected
@@ -224,6 +231,19 @@ func EvaluateReleaseEvidence(in ReleaseEvidenceInput) (ReleaseEvidenceReport, er
 		r.ReleaseEligible = true
 	}
 	return r, nil
+}
+
+func temporalReleaseEvidenceRequired(report EvaluationReport) bool {
+	return report.Metadata.TemporalPolicyVersion != "" || report.Metadata.TemporalCoverageVersion != "" || report.TemporalCoverage != nil
+}
+
+func hasCompatibleTemporalReleaseEvidence(report EvaluationReport) bool {
+	coverage := report.TemporalCoverage
+	if coverage == nil || report.Metadata.TemporalPolicyVersion == "" || report.Metadata.TemporalCoverageVersion == "" ||
+		coverage.PolicyVersion != report.Metadata.TemporalPolicyVersion || coverage.CoverageVersion != report.Metadata.TemporalCoverageVersion || coverage.Cases == 0 {
+		return false
+	}
+	return report.validateSafeOutput() == nil
 }
 
 func appendUniqueCategory(categories []string, category string) []string {

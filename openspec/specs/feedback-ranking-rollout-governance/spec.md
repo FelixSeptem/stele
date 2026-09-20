@@ -1,7 +1,7 @@
 # feedback-ranking-rollout-governance Specification
 
 ## Purpose
-TBD - created by archiving change task-success-evaluation-and-feedback-ranking-rollout. Update Purpose after archive.
+Govern scoped, durable ranking rollout policies informed by feedback and task-success evidence.
 
 ## Requirements
 

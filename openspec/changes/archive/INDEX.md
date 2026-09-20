@@ -1,6 +1,6 @@
 # Archive Index
 
-Updated: 2026-09-18 21:41:29
+Updated: 2026-09-20 21:55:04
 
 - 001 -> bootstrap-foundation-and-event-ingestion
 - 002 -> governance-pipeline-and-memory-consolidation
@@ -42,3 +42,4 @@ Updated: 2026-09-18 21:41:29
 - 038 -> agent-runtime-memory-provider-contract
 - 039 -> retrieval-release-evidence-and-progressive-evaluation
 - 040 -> query-adaptive-retrieval-planning
+- 041 -> bi-temporal-fact-validity

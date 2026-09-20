@@ -1,7 +1,7 @@
 # long-context-stress-evaluation Specification
 
 ## Purpose
-TBD - created by archiving change agent-memory-benchmark-expansion. Update Purpose after archive.
+Run controlled long-context stress evaluations within explicit local resource budgets.
 ## Requirements
 ### Requirement: Stress datasets use explicit resource budgets
 The system SHALL support controlled subsets of Needle-in-a-Haystack, OpenAI MRCR, LongBench-v2, and VTCBench with explicit context-length, sample-count, timeout, disk, and memory budgets.
@@ -27,4 +27,3 @@ The system SHALL report context-length buckets, needle count or depth, latency, 
 #### Scenario: Produce a stress report
 - **WHEN** a stress subset completes across multiple context buckets
 - **THEN** the report includes per-bucket outcomes, run budget, input checksums, capability mode, and an explicit non-gating classification
-

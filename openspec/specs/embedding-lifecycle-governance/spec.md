@@ -1,7 +1,7 @@
 # embedding-lifecycle-governance Specification
 
 ## Purpose
-TBD - created by archiving change embedding-lifecycle-and-vector-governance. Update Purpose after archive.
+Maintain durable, governed vector lifecycle state for canonical memory semantic projections.
 ## Requirements
 ### Requirement: Canonical memory has governed vector lifecycle state
 The service SHALL persist durable embedding lifecycle state for the current canonical memory projection so semantic backfill, rebuild, and provider rotation can be coordinated without relying on implicit `NULL` embedding interpretation alone.

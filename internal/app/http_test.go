@@ -321,6 +321,18 @@ func (s *stubMemoryQueryService) GetMemoryProvenance(ctx context.Context, scope 
 	return s.provenance, s.err
 }
 
+// stubMemoryProvenanceViewService is stubMemoryQueryService plus the optional
+// view extension, so the additive temporal summary path can be exercised without
+// changing the behaviour of the plain stub above.
+type stubMemoryProvenanceViewService struct {
+	stubMemoryQueryService
+	view memory.ProvenanceView
+}
+
+func (s *stubMemoryProvenanceViewService) GetMemoryProvenanceView(ctx context.Context, scope memory.Scope, memoryID string) (memory.ProvenanceView, error) {
+	return s.view, s.err
+}
+
 type stubJobExecutionReader struct {
 	records []jobs.JobExecutionRecord
 	err     error
@@ -2440,6 +2452,122 @@ func TestNewHTTPHandlerReturnsMemoryProvenance(t *testing.T) {
 
 	if reader.gotProvMemoryID != "mem_123" {
 		t.Fatalf("memory id = %q, want mem_123", reader.gotProvMemoryID)
+	}
+}
+
+// TestNewHTTPHandlerMemoryProvenanceAddsBoundedTemporalSummary proves the
+// temporal summary is additive: the original provenance array keeps its shape and
+// the new field carries only the bounded classification, never the raw instants.
+func TestNewHTTPHandlerMemoryProvenanceAddsBoundedTemporalSummary(t *testing.T) {
+	recorded := time.Date(2026, 6, 21, 10, 0, 0, 0, time.UTC)
+	validFrom := time.Date(2026, 6, 20, 8, 0, 0, 0, time.UTC)
+
+	reader := &stubMemoryProvenanceViewService{
+		stubMemoryQueryService: stubMemoryQueryService{
+			provenance: []memory.ProvenanceRecord{
+				{ID: "prov_1", MemoryID: "mem_123", Operation: "promote_candidate"},
+			},
+		},
+		view: memory.ProvenanceView{
+			MemoryID: "mem_123",
+			Temporal: memory.NewTemporalMetadata(memory.TemporalValidity{
+				TemporalFactID: "fact_123",
+				IngestedAt:     recorded,
+				ValidFrom:      validFrom,
+				ValiditySource: memory.TemporalValiditySourceExplicit,
+			}),
+		},
+	}
+
+	handler := NewHTTPHandler(HTTPDependencies{
+		APIKeys:     map[string]struct{}{"test-key": {}},
+		MemoryQuery: reader,
+	})
+
+	req := httptest.NewRequest(http.MethodGet, "/v1/memories/mem_123/provenance", nil)
+	req.Header.Set("X-API-Key", "test-key")
+	req.Header.Set("X-Stele-Tenant", "tenant-a")
+	req.Header.Set("X-Stele-Project", "project-a")
+	req.Header.Set("X-Stele-Namespace", "namespace-a")
+	rec := httptest.NewRecorder()
+
+	handler.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d, want %d", rec.Code, http.StatusOK)
+	}
+
+	var payload map[string]json.RawMessage
+	if err := json.Unmarshal(rec.Body.Bytes(), &payload); err != nil {
+		t.Fatalf("json.Unmarshal() error = %v", err)
+	}
+
+	// The pre-existing key must still be present and unchanged in shape.
+	if _, ok := payload["provenance"]; !ok {
+		t.Fatalf("response %s is missing the provenance array", rec.Body.String())
+	}
+
+	rawTemporal, ok := payload["temporal"]
+	if !ok {
+		t.Fatalf("response %s is missing the temporal summary", rec.Body.String())
+	}
+
+	var temporal memory.TemporalMetadata
+	if err := json.Unmarshal(rawTemporal, &temporal); err != nil {
+		t.Fatalf("json.Unmarshal(temporal) error = %v", err)
+	}
+	if temporal.Origin != memory.TemporalValidityOriginExplicit {
+		t.Fatalf("temporal.Origin = %q, want %q", temporal.Origin, memory.TemporalValidityOriginExplicit)
+	}
+	if !temporal.Set || !temporal.OpenEnded {
+		t.Fatalf("temporal = %+v, want a set open-ended interval", temporal)
+	}
+
+	// The raw instants must not appear anywhere in the serialized response.
+	for _, forbidden := range []string{"2026-06-21T10:00:00Z", "2026-06-20T08:00:00Z", "ingested_at", "valid_from"} {
+		if strings.Contains(rec.Body.String(), forbidden) {
+			t.Fatalf("response %s leaks %q", rec.Body.String(), forbidden)
+		}
+	}
+}
+
+// TestNewHTTPHandlerMemoryProvenanceWithoutViewKeepsOriginalShape proves a reader
+// that has not implemented the view extension still serves the original response
+// shape rather than failing.
+func TestNewHTTPHandlerMemoryProvenanceWithoutViewKeepsOriginalShape(t *testing.T) {
+	reader := &stubMemoryQueryService{
+		provenance: []memory.ProvenanceRecord{
+			{ID: "prov_1", MemoryID: "mem_123", Operation: "promote_candidate"},
+		},
+	}
+
+	handler := NewHTTPHandler(HTTPDependencies{
+		APIKeys:     map[string]struct{}{"test-key": {}},
+		MemoryQuery: reader,
+	})
+
+	req := httptest.NewRequest(http.MethodGet, "/v1/memories/mem_123/provenance", nil)
+	req.Header.Set("X-API-Key", "test-key")
+	req.Header.Set("X-Stele-Tenant", "tenant-a")
+	req.Header.Set("X-Stele-Project", "project-a")
+	req.Header.Set("X-Stele-Namespace", "namespace-a")
+	rec := httptest.NewRecorder()
+
+	handler.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d, want %d", rec.Code, http.StatusOK)
+	}
+
+	var payload map[string]json.RawMessage
+	if err := json.Unmarshal(rec.Body.Bytes(), &payload); err != nil {
+		t.Fatalf("json.Unmarshal() error = %v", err)
+	}
+	if _, ok := payload["provenance"]; !ok {
+		t.Fatalf("response %s is missing the provenance array", rec.Body.String())
+	}
+	if _, ok := payload["temporal"]; ok {
+		t.Fatalf("response %s unexpectedly carries a temporal summary", rec.Body.String())
 	}
 }
 

@@ -30,6 +30,14 @@ func CalculateEvaluationMetrics(replay EvaluationReplay) (EvaluationReport, erro
 	}
 	latencies := make([]float64, 0, len(replay.Cases))
 	safetyCounts := make(map[EvaluationSafetyFailureCategory]int)
+	temporalCoverage := EvaluationTemporalCoverage{
+		PolicyVersion:     replay.Metadata.TemporalPolicyVersion,
+		CoverageVersion:   replay.Metadata.TemporalCoverageVersion,
+		KindCounts:        make(map[string]int),
+		ModeCounts:        make(map[string]int),
+		FallbackCounts:    make(map[string]int),
+		DispositionCounts: make(map[string]int),
+	}
 	protectedCases := 0
 	temporalCases := 0
 	multiHopCases := 0
@@ -126,6 +134,39 @@ func CalculateEvaluationMetrics(replay EvaluationReplay) (EvaluationReport, erro
 				plannerRerankerUses++
 			}
 		}
+		if item.TemporalKind != "" {
+			temporalCases++
+			caseReport.TemporalKind = item.TemporalKind
+			caseReport.TemporalMode = item.TemporalMode
+			caseReport.TemporalSelectorKind = item.TemporalSelectorKind
+			caseReport.TemporalSelectedVersions = item.TemporalSelectedVersions
+			caseReport.TemporalHiddenAliasCount = item.TemporalHiddenAliasCount
+			caseReport.TemporalStaleVersions = item.TemporalStaleVersions
+			caseReport.TemporalAmbiguousVersions = item.TemporalAmbiguousVersions
+			caseReport.TemporalConflictDisposition = item.TemporalConflictDisposition
+			caseReport.TemporalProvenanceMismatch = item.TemporalProvenanceMismatch
+			caseReport.TemporalHiddenVersionLeak = item.TemporalHiddenVersionLeak
+			caseReport.TemporalFallbackCategory = item.TemporalFallbackCategory
+			temporalCoverage.Cases++
+			temporalCoverage.KindCounts[string(item.TemporalKind)]++
+			if item.TemporalMode != "" {
+				temporalCoverage.ModeCounts[string(item.TemporalMode)]++
+			}
+			temporalCoverage.SelectedVersions += item.TemporalSelectedVersions
+			temporalCoverage.StaleVersions += item.TemporalStaleVersions
+			temporalCoverage.AmbiguousVersions += item.TemporalAmbiguousVersions
+			temporalCoverage.ProvenanceMismatch += item.TemporalProvenanceMismatch
+			temporalCoverage.HiddenVersionLeaks += item.TemporalHiddenVersionLeak
+			if item.TemporalFallbackCategory != "" {
+				temporalCoverage.FallbackCounts[item.TemporalFallbackCategory]++
+			}
+			if item.TemporalConflictDisposition != "" {
+				temporalCoverage.DispositionCounts[item.TemporalConflictDisposition]++
+			}
+			if item.TemporalSelectorKind != "" {
+				temporalCoverage.EvaluationInstants++
+			}
+		}
 		if diagnostic := item.AnalysisDiagnostics; diagnostic != nil {
 			analysisCases++
 			caseReport.AnalysisSignalCount = diagnostic.SignalCount
@@ -206,6 +247,12 @@ func CalculateEvaluationMetrics(replay EvaluationReplay) (EvaluationReport, erro
 	if temporalCases > 0 {
 		report.Metrics.TemporalEvidenceCoverage /= float64(temporalCases)
 	}
+	// Coverage is attached only when a case actually declared a temporal kind.
+	// Category-level "temporal" fixtures predate fact-valid selection and must
+	// not publish an empty coverage block claiming a policy was measured.
+	if temporalCoverage.Cases > 0 {
+		report.TemporalCoverage = &temporalCoverage
+	}
 	if multiHopCases > 0 {
 		report.Metrics.MultiHopEvidenceCoverage /= float64(multiHopCases)
 	} else {
@@ -274,6 +321,21 @@ func evaluationReplaySafetyFailures(item EvaluationReplayCase) []EvaluationSafet
 	counts := make(map[EvaluationSafetyFailureCategory]int)
 	if err := item.Scope.Validate(); err != nil {
 		counts[EvaluationSafetyFailureInvalidFixtureScope]++
+	}
+	if item.CandidatePoolSize > QueryAnalysisHardMaxAggregateCandidates {
+		counts[EvaluationSafetyFailureResourceOverflow]++
+	}
+	if item.TemporalStaleVersions > 0 {
+		counts[EvaluationSafetyFailureStaleFactWin] += item.TemporalStaleVersions
+	}
+	if item.TemporalAmbiguousVersions > 0 {
+		counts[EvaluationSafetyFailureValidityAmbiguity] += item.TemporalAmbiguousVersions
+	}
+	if item.TemporalProvenanceMismatch > 0 {
+		counts[EvaluationSafetyFailureProvenanceMismatch] += item.TemporalProvenanceMismatch
+	}
+	if item.TemporalHiddenVersionLeak > 0 {
+		counts[EvaluationSafetyFailureHiddenVersionLeakage] += item.TemporalHiddenVersionLeak
 	}
 	excluded := make(map[string]struct{}, len(item.ExcludedAliases))
 	for _, alias := range item.ExcludedAliases {

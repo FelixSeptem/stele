@@ -1,7 +1,7 @@
 # memory-usefulness-feedback Specification
 
 ## Purpose
-TBD - created by archiving change memory-usefulness-feedback-and-agent-session-contract. Update Purpose after archive.
+Record durable, scoped feedback about the usefulness of memory-assisted work.
 ## Requirements
 ### Requirement: Usefulness feedback is durable and scoped
 The service SHALL allow authorized scoped callers to record durable usefulness feedback for memory use without mutating canonical memory directly.
@@ -128,4 +128,3 @@ The service SHALL allow workflow steps to reference usefulness feedback as scope
 #### Scenario: Feedback evidence is out of scope
 - **WHEN** a workflow step references usefulness feedback outside the workflow run scope
 - **THEN** the service rejects the link or records a bounded out-of-scope diagnostic without exposing the feedback record
-

@@ -1,7 +1,7 @@
 # benchmark-qrels-and-reporting Specification
 
 ## Purpose
-TBD - created by archiving change local-agent-memory-benchmark-suite. Update Purpose after archive.
+Represent graded and grouped relevance evidence for accurate benchmark scoring and reporting.
 ## Requirements
 ### Requirement: QRELs support graded and grouped evidence
 The benchmark model SHALL support relevance grades, evidence roles, multiple evidence groups per query, query types, and must-not-return ids, while retaining compatibility with binary relevance metrics.
@@ -44,4 +44,3 @@ The report retained for change completion SHALL identify PostgreSQL version, pgv
 #### Scenario: Completion report is auditable
 - **WHEN** a real local benchmark run finishes
 - **THEN** its report contains the runtime and input identity needed to distinguish it from a unit-test or synthetic smoke report
-

@@ -1,7 +1,7 @@
 # memory-quality-admission-repair Specification
 
 ## Purpose
-TBD - created by archiving change memory-quality-admission-repair-loop. Update Purpose after archive.
+Run scoped, durable memory-quality evaluations and governed repair workflows.
 ## Requirements
 ### Requirement: Scoped memory quality evaluations
 The service SHALL allow authorized administrators to create durable memory quality evaluation runs scoped by tenant, project, and namespace.
@@ -208,4 +208,3 @@ The service MUST keep task-derived repair recommendations under existing admin a
 #### Scenario: Task evaluation implies repair
 - **WHEN** a public scoped caller records a failed task evaluation that implies a repair
 - **THEN** the service records task and quality evidence without approving, executing, suppressing, reranking, or replaying inline
-

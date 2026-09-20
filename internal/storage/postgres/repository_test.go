@@ -160,9 +160,11 @@ func TestRepositoryReadCanonicalMemoryReturnsVisibleScopedRecord(t *testing.T) {
 		WithArgs("mem_123", scope.Tenant, scope.Project, scope.Namespace, false).
 		WillReturnRows(pgxmock.NewRows([]string{
 			"id", "tenant", "project", "namespace", "class", "state", "content", "created_at", "updated_at",
+			"temporal_fact_id", "ingested_at", "valid_from", "valid_to", "validity_source",
 		}).AddRow(
 			"mem_123", scope.Tenant, scope.Project, scope.Namespace,
 			memory.MemoryClassProfile, memory.MemoryStateActive, "User prefers concise answers.", now.Add(-time.Hour), now,
+			"mem_123", now.Add(-time.Hour), now.Add(-time.Hour), nil, string(memory.TemporalValiditySourceLegacyCompatible),
 		))
 
 	repo := NewRepository(mock)
@@ -173,6 +175,15 @@ func TestRepositoryReadCanonicalMemoryReturnsVisibleScopedRecord(t *testing.T) {
 
 	if got.ID != "mem_123" {
 		t.Fatalf("ID = %q, want mem_123", got.ID)
+	}
+	if got.TemporalValidity.IsUnset() {
+		t.Fatal("read canonical memory must carry the persisted validity snapshot")
+	}
+	if got.TemporalValidity.TemporalFactID != "mem_123" {
+		t.Fatalf("TemporalFactID = %q, want mem_123", got.TemporalFactID)
+	}
+	if got.TemporalValidity.ValidTo != nil {
+		t.Fatalf("ValidTo = %v, want an open-ended interval", got.TemporalValidity.ValidTo)
 	}
 }
 
@@ -1061,6 +1072,7 @@ func TestRepositoryReadMemoryHistoryReturnsCanonicalVersionsAndProvenance(t *tes
 		WithArgs("mem_hidden", scope.Tenant, scope.Project, scope.Namespace, true).
 		WillReturnRows(pgxmock.NewRows([]string{
 			"id", "tenant", "project", "namespace", "class", "state", "content", "created_at", "updated_at",
+			"temporal_fact_id", "ingested_at", "valid_from", "valid_to", "validity_source",
 		}).AddRow(
 			"mem_hidden",
 			scope.Tenant,
@@ -1071,12 +1083,18 @@ func TestRepositoryReadMemoryHistoryReturnsCanonicalVersionsAndProvenance(t *tes
 			"Old preference",
 			now.Add(-time.Hour),
 			now,
+			"mem_hidden",
+			now.Add(-time.Hour),
+			now.Add(-time.Hour),
+			nil,
+			string(memory.TemporalValiditySourceLegacyCompatible),
 		))
 
 	mock.ExpectQuery("SELECT[\\s\\S]*FROM memory_versions").
 		WithArgs("mem_hidden").
 		WillReturnRows(pgxmock.NewRows([]string{
 			"id", "memory_id", "version", "state", "content", "created_at", "modified_by",
+			"temporal_fact_id", "ingested_at", "valid_from", "valid_to", "validity_source",
 		}).AddRow(
 			"ver_2",
 			"mem_hidden",
@@ -1085,6 +1103,11 @@ func TestRepositoryReadMemoryHistoryReturnsCanonicalVersionsAndProvenance(t *tes
 			"Old preference",
 			now,
 			"cand_2",
+			"mem_hidden",
+			now,
+			now,
+			nil,
+			string(memory.TemporalValiditySourceLegacyCompatible),
 		))
 
 	mock.ExpectQuery("SELECT[\\s\\S]*FROM provenance_links").
@@ -1106,6 +1129,12 @@ func TestRepositoryReadMemoryHistoryReturnsCanonicalVersionsAndProvenance(t *tes
 			now,
 		))
 
+	// The privileged read also counts the correction ledger so the operator can
+	// see whether the chain rests on a maintained history.
+	mock.ExpectQuery("SELECT count\\(\\*\\)[\\s\\S]*FROM temporal_corrections").
+		WithArgs(scope.Tenant, scope.Project, scope.Namespace, "mem_hidden").
+		WillReturnRows(pgxmock.NewRows([]string{"count"}).AddRow(2))
+
 	repo := NewRepository(mock)
 	history, err := repo.ReadMemoryHistory(context.Background(), scope, "mem_hidden", true)
 	if err != nil {
@@ -1120,8 +1149,107 @@ func TestRepositoryReadMemoryHistoryReturnsCanonicalVersionsAndProvenance(t *tes
 		t.Fatalf("Versions = %+v, want one version", history.Versions)
 	}
 
+	if !history.Hidden {
+		t.Fatal("Hidden = false, want true for an authorized read")
+	}
+
+	if history.Temporal.Corrections != 2 {
+		t.Fatalf("Temporal.Corrections = %d, want 2", history.Temporal.Corrections)
+	}
+
+	if history.Temporal.VersionCount != 1 {
+		t.Fatalf("Temporal.VersionCount = %d, want 1", history.Temporal.VersionCount)
+	}
+
+	// Both the canonical row and its version carry the legacy-compatible source,
+	// which is a derived interval rather than a writer's assertion.
+	if history.Temporal.Origin != memory.TemporalValidityOriginInferred {
+		t.Fatalf("Temporal.Origin = %q, want %q", history.Temporal.Origin, memory.TemporalValidityOriginInferred)
+	}
+	if !history.Temporal.HasInferredValidity {
+		t.Fatal("Temporal.HasInferredValidity = false, want true for a backfilled history")
+	}
+	if history.Temporal.InferredVersionCount != 1 || history.Temporal.ExplicitVersionCount != 0 {
+		t.Fatalf("Temporal counts = (%d explicit, %d inferred), want (0, 1)",
+			history.Temporal.ExplicitVersionCount, history.Temporal.InferredVersionCount)
+	}
+	if !history.Temporal.OpenEnded {
+		t.Fatal("Temporal.OpenEnded = false, want true for a nil valid_to")
+	}
+
 	if len(history.Provenance) != 1 || history.Provenance[0].ID != "prov_1" {
 		t.Fatalf("Provenance = %+v, want one provenance record", history.Provenance)
+	}
+}
+
+// TestRepositoryReadMemoryHistoryOrdinaryReadOmitsPrivilegedTemporalData proves
+// an ordinary read neither queries nor reports the privileged correction ledger,
+// and still reports that the view is not authorized. Without this, a caller could
+// read "0 corrections" as a fact rather than as a withheld count.
+func TestRepositoryReadMemoryHistoryOrdinaryReadOmitsPrivilegedTemporalData(t *testing.T) {
+	mock, err := pgxmock.NewPool()
+	if err != nil {
+		t.Fatalf("pgxmock.NewPool() error = %v", err)
+	}
+	defer mock.Close()
+
+	scope := memory.Scope{Tenant: "tenant-a", Project: "project-a", Namespace: "namespace-a"}
+	now := time.Date(2026, 6, 6, 19, 30, 0, 0, time.UTC)
+
+	mock.ExpectQuery("SELECT[\\s\\S]*FROM canonical_memories").
+		WithArgs("mem_ordinary", scope.Tenant, scope.Project, scope.Namespace, false).
+		WillReturnRows(pgxmock.NewRows([]string{
+			"id", "tenant", "project", "namespace", "class", "state", "content", "created_at", "updated_at",
+			"temporal_fact_id", "ingested_at", "valid_from", "valid_to", "validity_source",
+		}).AddRow(
+			"mem_ordinary", scope.Tenant, scope.Project, scope.Namespace,
+			memory.MemoryClassProfile, memory.MemoryStateActive, "Likes concise answers",
+			now.Add(-time.Hour), now,
+			"mem_ordinary", now.Add(-time.Hour), now.Add(-time.Hour), nil,
+			string(memory.TemporalValiditySourceExplicit),
+		))
+	mock.ExpectQuery("SELECT[\\s\\S]*FROM memory_versions").
+		WithArgs("mem_ordinary").
+		WillReturnRows(pgxmock.NewRows([]string{
+			"id", "memory_id", "version", "state", "content", "created_at", "modified_by",
+			"temporal_fact_id", "ingested_at", "valid_from", "valid_to", "validity_source",
+		}).AddRow(
+			"ver_1", "mem_ordinary", int64(1), memory.MemoryStateActive, "Likes concise answers",
+			now.Add(-time.Hour), "cand_1",
+			"mem_ordinary", now.Add(-time.Hour), now.Add(-time.Hour), nil,
+			string(memory.TemporalValiditySourceExplicit),
+		))
+	mock.ExpectQuery("SELECT[\\s\\S]*FROM provenance_links").
+		WithArgs(scope.Tenant, scope.Project, scope.Namespace, "mem_ordinary").
+		WillReturnRows(pgxmock.NewRows([]string{
+			"id", "raw_event_id", "candidate_memory_id", "memory_id", "tenant", "project", "namespace", "operation", "request_id", "actor", "source_context", "created_at",
+		}))
+
+	// No temporal_corrections query is expected: an ordinary read must not touch
+	// the privileged ledger at all.
+	repo := NewRepository(mock)
+	history, err := repo.ReadMemoryHistory(context.Background(), scope, "mem_ordinary", false)
+	if err != nil {
+		t.Fatalf("ReadMemoryHistory() error = %v", err)
+	}
+
+	if history.Hidden {
+		t.Fatal("Hidden = true, want false for an ordinary read")
+	}
+	if history.Temporal.Corrections != 0 {
+		t.Fatalf("Temporal.Corrections = %d, want 0 on an ordinary read", history.Temporal.Corrections)
+	}
+	// The interval itself is the writer's assertion, so the origin is still
+	// reported truthfully even though the ledger is withheld.
+	if history.Temporal.Origin != memory.TemporalValidityOriginExplicit {
+		t.Fatalf("Temporal.Origin = %q, want %q", history.Temporal.Origin, memory.TemporalValidityOriginExplicit)
+	}
+	if history.Temporal.ExplicitVersionCount != 1 {
+		t.Fatalf("Temporal.ExplicitVersionCount = %d, want 1", history.Temporal.ExplicitVersionCount)
+	}
+
+	if err := mock.ExpectationsWereMet(); err != nil {
+		t.Fatalf("ExpectationsWereMet() error = %v", err)
 	}
 }
 
@@ -1692,6 +1820,7 @@ func TestRepositoryGetLatestCanonicalByScopeAndClass(t *testing.T) {
 		WithArgs(scope.Tenant, scope.Project, scope.Namespace, memory.MemoryClassProfile, memory.MemoryStateActive).
 		WillReturnRows(pgxmock.NewRows([]string{
 			"id", "tenant", "project", "namespace", "class", "state", "content", "created_at", "updated_at",
+			"temporal_fact_id", "ingested_at", "valid_from", "valid_to", "validity_source",
 		}).AddRow(
 			"mem_123",
 			scope.Tenant,
@@ -1702,6 +1831,11 @@ func TestRepositoryGetLatestCanonicalByScopeAndClass(t *testing.T) {
 			"User prefers concise answers.",
 			now.Add(-time.Hour),
 			now,
+			"mem_123",
+			now.Add(-time.Hour),
+			now.Add(-time.Hour),
+			nil,
+			string(memory.TemporalValiditySourceLegacyCompatible),
 		))
 
 	repo := NewRepository(mock)
@@ -1727,6 +1861,9 @@ func TestRepositoryPromoteCandidateCreatesCanonicalMemoryVersionAndProvenance(t 
 	defer mock.Close()
 
 	now := time.Date(2026, 6, 1, 15, 10, 0, 0, time.UTC)
+	// The candidate carries no explicit snapshot, so promotion must anchor the
+	// interval on the recorded time as a legacy-compatible open interval.
+	legacy := memory.TemporalValidity{}.LegacyCurrentCompatible(now)
 	input := governance.CanonicalPromotion{
 		Candidate: governance.CandidateMemory{
 			ID:               "cand_123",
@@ -1770,9 +1907,15 @@ func TestRepositoryPromoteCandidateCreatesCanonicalMemoryVersionAndProvenance(t 
 			input.Candidate.Content,
 			input.CreatedAt,
 			input.CreatedAt,
+			legacy.TemporalFactID,
+			legacy.IngestedAt,
+			legacy.ValidFrom,
+			legacy.ValidTo,
+			string(legacy.ValiditySource),
 		).
 		WillReturnRows(pgxmock.NewRows([]string{
 			"id", "tenant", "project", "namespace", "class", "state", "content", "created_at", "updated_at",
+			"temporal_fact_id", "ingested_at", "valid_from", "valid_to", "validity_source",
 		}).AddRow(
 			input.MemoryID,
 			input.Candidate.Scope.Tenant,
@@ -1783,6 +1926,11 @@ func TestRepositoryPromoteCandidateCreatesCanonicalMemoryVersionAndProvenance(t 
 			input.Candidate.Content,
 			input.CreatedAt,
 			input.CreatedAt,
+			legacy.TemporalFactID,
+			legacy.IngestedAt,
+			legacy.ValidFrom,
+			legacy.ValidTo,
+			string(legacy.ValiditySource),
 		))
 	mock.ExpectQuery("INSERT INTO memory_versions").
 		WithArgs(
@@ -1793,9 +1941,15 @@ func TestRepositoryPromoteCandidateCreatesCanonicalMemoryVersionAndProvenance(t 
 			input.Candidate.Content,
 			input.CreatedAt,
 			input.Candidate.ID,
+			legacy.TemporalFactID,
+			legacy.IngestedAt,
+			legacy.ValidFrom,
+			legacy.ValidTo,
+			string(legacy.ValiditySource),
 		).
 		WillReturnRows(pgxmock.NewRows([]string{
 			"id", "memory_id", "version", "state", "content", "created_at", "modified_by",
+			"temporal_fact_id", "ingested_at", "valid_from", "valid_to", "validity_source",
 		}).AddRow(
 			input.VersionID,
 			input.MemoryID,
@@ -1804,6 +1958,11 @@ func TestRepositoryPromoteCandidateCreatesCanonicalMemoryVersionAndProvenance(t 
 			input.Candidate.Content,
 			input.CreatedAt,
 			input.Candidate.ID,
+			legacy.TemporalFactID,
+			legacy.IngestedAt,
+			legacy.ValidFrom,
+			legacy.ValidTo,
+			string(legacy.ValiditySource),
 		))
 	mock.ExpectExec("INSERT INTO provenance_links").
 		WithArgs(
@@ -1851,6 +2010,8 @@ func TestRepositoryPromoteCandidateSupersedeUpdatesCanonicalAndAppendsVersion(t 
 
 	createdAt := time.Date(2026, 6, 1, 14, 0, 0, 0, time.UTC)
 	updatedAt := time.Date(2026, 6, 1, 15, 10, 0, 0, time.UTC)
+	// A snapshot-free factual candidate is anchored on the recorded time.
+	legacy := memory.TemporalValidity{}.LegacyCurrentCompatible(updatedAt)
 	input := governance.CanonicalPromotion{
 		Candidate: governance.CandidateMemory{
 			ID:               "cand_456",
@@ -1889,9 +2050,14 @@ func TestRepositoryPromoteCandidateSupersedeUpdatesCanonicalAndAppendsVersion(t 
 			input.Candidate.RetentionClass,
 			input.Candidate.Content,
 			input.CreatedAt,
+			legacy.TemporalFactID,
+			legacy.ValidFrom,
+			legacy.ValidTo,
+			string(legacy.ValiditySource),
 		).
 		WillReturnRows(pgxmock.NewRows([]string{
 			"id", "tenant", "project", "namespace", "class", "state", "content", "created_at", "updated_at",
+			"temporal_fact_id", "ingested_at", "valid_from", "valid_to", "validity_source",
 		}).AddRow(
 			input.MemoryID,
 			input.Candidate.Scope.Tenant,
@@ -1902,6 +2068,11 @@ func TestRepositoryPromoteCandidateSupersedeUpdatesCanonicalAndAppendsVersion(t 
 			input.Candidate.Content,
 			createdAt,
 			input.CreatedAt,
+			legacy.TemporalFactID,
+			legacy.IngestedAt,
+			legacy.ValidFrom,
+			legacy.ValidTo,
+			string(legacy.ValiditySource),
 		))
 	mock.ExpectQuery("INSERT INTO memory_versions").
 		WithArgs(
@@ -1912,9 +2083,15 @@ func TestRepositoryPromoteCandidateSupersedeUpdatesCanonicalAndAppendsVersion(t 
 			input.Candidate.Content,
 			input.CreatedAt,
 			input.Candidate.ID,
+			legacy.TemporalFactID,
+			legacy.IngestedAt,
+			legacy.ValidFrom,
+			legacy.ValidTo,
+			string(legacy.ValiditySource),
 		).
 		WillReturnRows(pgxmock.NewRows([]string{
 			"id", "memory_id", "version", "state", "content", "created_at", "modified_by",
+			"temporal_fact_id", "ingested_at", "valid_from", "valid_to", "validity_source",
 		}).AddRow(
 			input.VersionID,
 			input.MemoryID,
@@ -1923,6 +2100,11 @@ func TestRepositoryPromoteCandidateSupersedeUpdatesCanonicalAndAppendsVersion(t 
 			input.Candidate.Content,
 			input.CreatedAt,
 			input.Candidate.ID,
+			legacy.TemporalFactID,
+			legacy.IngestedAt,
+			legacy.ValidFrom,
+			legacy.ValidTo,
+			string(legacy.ValiditySource),
 		))
 	mock.ExpectExec("INSERT INTO provenance_links").
 		WithArgs(
@@ -1965,6 +2147,9 @@ func TestRepositoryPromoteCandidateRelationUpsertsProjection(t *testing.T) {
 	defer mock.Close()
 
 	now := time.Date(2026, 6, 1, 15, 12, 0, 0, time.UTC)
+	// A relation is not a factual class, so promotion must leave the snapshot
+	// unset rather than inventing a fact-valid interval for a derived artifact.
+	unset := memory.TemporalValidity{}
 	input := governance.CanonicalPromotion{
 		Candidate: governance.CandidateMemory{
 			ID:               "cand_relation",
@@ -2008,9 +2193,15 @@ func TestRepositoryPromoteCandidateRelationUpsertsProjection(t *testing.T) {
 			input.Candidate.Content,
 			input.CreatedAt,
 			input.CreatedAt,
+			unset.TemporalFactID,
+			unset.IngestedAt,
+			unset.ValidFrom,
+			unset.ValidTo,
+			string(unset.ValiditySource),
 		).
 		WillReturnRows(pgxmock.NewRows([]string{
 			"id", "tenant", "project", "namespace", "class", "state", "content", "created_at", "updated_at",
+			"temporal_fact_id", "ingested_at", "valid_from", "valid_to", "validity_source",
 		}).AddRow(
 			input.MemoryID,
 			input.Candidate.Scope.Tenant,
@@ -2021,6 +2212,11 @@ func TestRepositoryPromoteCandidateRelationUpsertsProjection(t *testing.T) {
 			input.Candidate.Content,
 			input.CreatedAt,
 			input.CreatedAt,
+			unset.TemporalFactID,
+			unset.IngestedAt,
+			unset.ValidFrom,
+			unset.ValidTo,
+			string(unset.ValiditySource),
 		))
 	mock.ExpectQuery("INSERT INTO memory_versions").
 		WithArgs(
@@ -2031,9 +2227,15 @@ func TestRepositoryPromoteCandidateRelationUpsertsProjection(t *testing.T) {
 			input.Candidate.Content,
 			input.CreatedAt,
 			input.Candidate.ID,
+			unset.TemporalFactID,
+			unset.IngestedAt,
+			unset.ValidFrom,
+			unset.ValidTo,
+			string(unset.ValiditySource),
 		).
 		WillReturnRows(pgxmock.NewRows([]string{
 			"id", "memory_id", "version", "state", "content", "created_at", "modified_by",
+			"temporal_fact_id", "ingested_at", "valid_from", "valid_to", "validity_source",
 		}).AddRow(
 			input.VersionID,
 			input.MemoryID,
@@ -2042,7 +2244,15 @@ func TestRepositoryPromoteCandidateRelationUpsertsProjection(t *testing.T) {
 			input.Candidate.Content,
 			input.CreatedAt,
 			input.Candidate.ID,
+			unset.TemporalFactID,
+			unset.IngestedAt,
+			unset.ValidFrom,
+			unset.ValidTo,
+			string(unset.ValiditySource),
 		))
+	// A relation is a derived artifact, so its own validity snapshot stays unset:
+	// the projection carries the source version it was rendered from, and leaves
+	// the temporal columns NULL rather than inventing a fact-valid window.
 	mock.ExpectExec("INSERT INTO relation_projections").
 		WithArgs(
 			input.MemoryID,
@@ -2055,6 +2265,10 @@ func TestRepositoryPromoteCandidateRelationUpsertsProjection(t *testing.T) {
 			input.Candidate.Content,
 			input.CreatedAt,
 			input.CreatedAt,
+			int64(1),
+			nil,
+			nil,
+			nil,
 		).
 		WillReturnResult(pgxmock.NewResult("INSERT", 1))
 	mock.ExpectExec("INSERT INTO provenance_links").
@@ -2280,6 +2494,7 @@ func TestRepositoryListVisibleCanonicalMemoriesExcludesHiddenStatesByDefault(t *
 		WithArgs(scope.Tenant, scope.Project, scope.Namespace, false).
 		WillReturnRows(pgxmock.NewRows([]string{
 			"id", "tenant", "project", "namespace", "class", "state", "content", "created_at", "updated_at",
+			"temporal_fact_id", "ingested_at", "valid_from", "valid_to", "validity_source",
 		}).AddRow(
 			"mem_active",
 			scope.Tenant,
@@ -2290,6 +2505,11 @@ func TestRepositoryListVisibleCanonicalMemoriesExcludesHiddenStatesByDefault(t *
 			"User prefers concise answers.",
 			now.Add(-time.Hour),
 			now,
+			"mem_active",
+			now.Add(-time.Hour),
+			now.Add(-time.Hour),
+			nil,
+			string(memory.TemporalValiditySourceLegacyCompatible),
 		))
 
 	repo := NewRepository(mock)
@@ -2562,6 +2782,8 @@ func TestRepositoryCreateMemoryWritesCanonicalVersionAndProvenance(t *testing.T)
 	mock.ExpectQuery("SELECT COALESCE\\(MAX\\(version\\), 0\\)").
 		WithArgs(record.MemoryID).
 		WillReturnRows(pgxmock.NewRows([]string{"coalesce"}).AddRow(int64(0)))
+	legacy := memory.TemporalValidity{}.LegacyCurrentCompatible(record.CreatedAt)
+
 	mock.ExpectQuery("INSERT INTO canonical_memories").
 		WithArgs(
 			record.MemoryID,
@@ -2574,9 +2796,15 @@ func TestRepositoryCreateMemoryWritesCanonicalVersionAndProvenance(t *testing.T)
 			record.Content,
 			record.CreatedAt,
 			record.CreatedAt,
+			legacy.TemporalFactID,
+			legacy.IngestedAt,
+			legacy.ValidFrom,
+			legacy.ValidTo,
+			string(legacy.ValiditySource),
 		).
 		WillReturnRows(pgxmock.NewRows([]string{
 			"id", "tenant", "project", "namespace", "class", "state", "content", "created_at", "updated_at",
+			"temporal_fact_id", "ingested_at", "valid_from", "valid_to", "validity_source",
 		}).AddRow(
 			record.MemoryID,
 			record.Scope.Tenant,
@@ -2587,13 +2815,23 @@ func TestRepositoryCreateMemoryWritesCanonicalVersionAndProvenance(t *testing.T)
 			record.Content,
 			record.CreatedAt,
 			record.CreatedAt,
+			legacy.TemporalFactID,
+			legacy.IngestedAt,
+			legacy.ValidFrom,
+			legacy.ValidTo,
+			string(legacy.ValiditySource),
 		))
 	mock.ExpectQuery("INSERT INTO memory_versions").
-		WithArgs(record.VersionID, record.MemoryID, int64(1), memory.MemoryStateActive, record.Content, record.CreatedAt, record.Actor).
+		WithArgs(
+			record.VersionID, record.MemoryID, int64(1), memory.MemoryStateActive, record.Content, record.CreatedAt, record.Actor,
+			legacy.TemporalFactID, legacy.IngestedAt, legacy.ValidFrom, legacy.ValidTo, string(legacy.ValiditySource),
+		).
 		WillReturnRows(pgxmock.NewRows([]string{
 			"id", "memory_id", "version", "state", "content", "created_at", "modified_by",
+			"temporal_fact_id", "ingested_at", "valid_from", "valid_to", "validity_source",
 		}).AddRow(
 			record.VersionID, record.MemoryID, int64(1), memory.MemoryStateActive, record.Content, record.CreatedAt, record.Actor,
+			legacy.TemporalFactID, legacy.IngestedAt, legacy.ValidFrom, legacy.ValidTo, string(legacy.ValiditySource),
 		))
 	mock.ExpectExec("INSERT INTO provenance_links").
 		WithArgs(
@@ -2627,6 +2865,7 @@ func TestRepositoryCreateMemoryWritesCanonicalVersionAndProvenance(t *testing.T)
 			record.CreatedAt,
 			nil,
 			nil,
+			legacy.TemporalFactID, legacy.ValidFrom, nil,
 		).
 		WillReturnResult(pgxmock.NewResult("INSERT", 1))
 	mock.ExpectCommit()
@@ -2669,10 +2908,52 @@ func TestRepositoryUpdateMemoryQueuesEmbeddingRebuildAndClearsStaleSemanticProje
 	mock.ExpectQuery("SELECT COALESCE\\(MAX\\(version\\), 0\\)").
 		WithArgs(record.MemoryID).
 		WillReturnRows(pgxmock.NewRows([]string{"coalesce"}).AddRow(int64(1)))
-	mock.ExpectQuery("UPDATE canonical_memories[\\s\\S]*search_text[\\s\\S]*embedding = NULL").
-		WithArgs(record.MemoryID, record.Scope.Tenant, record.Scope.Project, record.Scope.Namespace, record.Content, record.UpdatedAt).
+	// The existing row is read before the update so the temporal identity rule is
+	// enforced prior to any content write; updated_at is the transition anchor for
+	// a pre-backfill row that carries no snapshot of its own.
+	existingLegacy := memory.TemporalValidity{}.LegacyCurrentCompatible(record.UpdatedAt.Add(-time.Hour))
+	mock.ExpectQuery("SELECT[\\s\\S]*FROM canonical_memories[\\s\\S]*WHERE id = \\$1").
+		WithArgs(record.MemoryID, record.Scope.Tenant, record.Scope.Project, record.Scope.Namespace).
 		WillReturnRows(pgxmock.NewRows([]string{
 			"id", "tenant", "project", "namespace", "class", "state", "content", "created_at", "updated_at",
+			"temporal_fact_id", "ingested_at", "valid_from", "valid_to", "validity_source",
+		}).AddRow(
+			record.MemoryID,
+			record.Scope.Tenant,
+			record.Scope.Project,
+			record.Scope.Namespace,
+			memory.MemoryClassProfile,
+			memory.MemoryStateActive,
+			"Original content.",
+			record.UpdatedAt.Add(-time.Hour),
+			record.UpdatedAt.Add(-time.Hour),
+			existingLegacy.TemporalFactID,
+			existingLegacy.IngestedAt,
+			existingLegacy.ValidFrom,
+			existingLegacy.ValidTo,
+			string(existingLegacy.ValiditySource),
+		))
+	// The existing row already carries a well-formed legacy snapshot, so the
+	// transition preserves it verbatim (COALESCE keeps ingested_at) rather than
+	// re-anchoring on updated_at.
+	transitionLegacy := existingLegacy
+	mock.ExpectQuery("UPDATE canonical_memories[\\s\\S]*search_text[\\s\\S]*embedding = NULL").
+		WithArgs(
+			record.MemoryID,
+			record.Scope.Tenant,
+			record.Scope.Project,
+			record.Scope.Namespace,
+			record.Content,
+			record.UpdatedAt,
+			transitionLegacy.TemporalFactID,
+			transitionLegacy.IngestedAt,
+			transitionLegacy.ValidFrom,
+			transitionLegacy.ValidTo,
+			string(transitionLegacy.ValiditySource),
+		).
+		WillReturnRows(pgxmock.NewRows([]string{
+			"id", "tenant", "project", "namespace", "class", "state", "content", "created_at", "updated_at",
+			"temporal_fact_id", "ingested_at", "valid_from", "valid_to", "validity_source",
 		}).AddRow(
 			record.MemoryID,
 			record.Scope.Tenant,
@@ -2683,13 +2964,23 @@ func TestRepositoryUpdateMemoryQueuesEmbeddingRebuildAndClearsStaleSemanticProje
 			record.Content,
 			record.UpdatedAt.Add(-time.Hour),
 			record.UpdatedAt,
+			transitionLegacy.TemporalFactID,
+			transitionLegacy.IngestedAt,
+			transitionLegacy.ValidFrom,
+			transitionLegacy.ValidTo,
+			string(transitionLegacy.ValiditySource),
 		))
 	mock.ExpectQuery("INSERT INTO memory_versions").
-		WithArgs(record.VersionID, record.MemoryID, int64(2), memory.MemoryStateActive, record.Content, record.UpdatedAt, record.Actor).
+		WithArgs(
+			record.VersionID, record.MemoryID, int64(2), memory.MemoryStateActive, record.Content, record.UpdatedAt, record.Actor,
+			transitionLegacy.TemporalFactID, transitionLegacy.IngestedAt, transitionLegacy.ValidFrom, transitionLegacy.ValidTo, string(transitionLegacy.ValiditySource),
+		).
 		WillReturnRows(pgxmock.NewRows([]string{
 			"id", "memory_id", "version", "state", "content", "created_at", "modified_by",
+			"temporal_fact_id", "ingested_at", "valid_from", "valid_to", "validity_source",
 		}).AddRow(
 			record.VersionID, record.MemoryID, int64(2), memory.MemoryStateActive, record.Content, record.UpdatedAt, record.Actor,
+			transitionLegacy.TemporalFactID, transitionLegacy.IngestedAt, transitionLegacy.ValidFrom, transitionLegacy.ValidTo, string(transitionLegacy.ValiditySource),
 		))
 	mock.ExpectExec("INSERT INTO provenance_links").
 		WithArgs(
@@ -2723,6 +3014,7 @@ func TestRepositoryUpdateMemoryQueuesEmbeddingRebuildAndClearsStaleSemanticProje
 			record.UpdatedAt,
 			nil,
 			nil,
+			transitionLegacy.TemporalFactID, transitionLegacy.ValidFrom, nil,
 		).
 		WillReturnResult(pgxmock.NewResult("INSERT", 1))
 	mock.ExpectCommit()
@@ -2798,40 +3090,60 @@ func TestRepositoryMergeMemorySuppressesSourceAndWritesTargetVersion(t *testing.
 		AppliedAt:       time.Date(2026, 6, 7, 20, 30, 0, 0, time.UTC),
 	}
 
+	// Both rows are read before the merge: the target so the identity rule can be
+	// enforced, and the source so its class/state can be validated. Pre-backfill
+	// rows carry the legacy-compatible snapshot anchored on their recorded time.
+	targetLegacy := memory.TemporalValidity{}.LegacyCurrentCompatible(record.AppliedAt.Add(-2 * time.Hour))
+	sourceLegacy := memory.TemporalValidity{}.LegacyCurrentCompatible(record.AppliedAt.Add(-3 * time.Hour))
+
 	mock.ExpectBegin()
 	mock.ExpectQuery("SELECT[\\s\\S]*FROM canonical_memories").
 		WithArgs(record.TargetMemoryID, record.Scope.Tenant, record.Scope.Project, record.Scope.Namespace).
 		WillReturnRows(pgxmock.NewRows([]string{
 			"id", "tenant", "project", "namespace", "class", "state", "content", "created_at", "updated_at",
+			"temporal_fact_id", "ingested_at", "valid_from", "valid_to", "validity_source",
 		}).AddRow(
 			record.TargetMemoryID, record.Scope.Tenant, record.Scope.Project, record.Scope.Namespace,
 			memory.MemoryClassProfile, memory.MemoryStateActive, "Old target", record.AppliedAt.Add(-2*time.Hour), record.AppliedAt.Add(-time.Hour),
+			targetLegacy.TemporalFactID, targetLegacy.IngestedAt, targetLegacy.ValidFrom, targetLegacy.ValidTo, string(targetLegacy.ValiditySource),
 		))
 	mock.ExpectQuery("SELECT[\\s\\S]*FROM canonical_memories").
 		WithArgs(record.SourceMemoryID, record.Scope.Tenant, record.Scope.Project, record.Scope.Namespace).
 		WillReturnRows(pgxmock.NewRows([]string{
 			"id", "tenant", "project", "namespace", "class", "state", "content", "created_at", "updated_at",
+			"temporal_fact_id", "ingested_at", "valid_from", "valid_to", "validity_source",
 		}).AddRow(
 			record.SourceMemoryID, record.Scope.Tenant, record.Scope.Project, record.Scope.Namespace,
 			memory.MemoryClassProfile, memory.MemoryStateActive, "Source duplicate", record.AppliedAt.Add(-3*time.Hour), record.AppliedAt.Add(-90*time.Minute),
+			sourceLegacy.TemporalFactID, sourceLegacy.IngestedAt, sourceLegacy.ValidFrom, sourceLegacy.ValidTo, string(sourceLegacy.ValiditySource),
 		))
 	mock.ExpectQuery("SELECT COALESCE\\(MAX\\(version\\), 0\\)").
 		WithArgs(record.TargetMemoryID).
 		WillReturnRows(pgxmock.NewRows([]string{"coalesce"}).AddRow(int64(2)))
 	mock.ExpectQuery("UPDATE canonical_memories[\\s\\S]*search_text[\\s\\S]*embedding = NULL").
-		WithArgs(record.TargetMemoryID, record.Scope.Tenant, record.Scope.Project, record.Scope.Namespace, record.Content, record.AppliedAt).
+		WithArgs(
+			record.TargetMemoryID, record.Scope.Tenant, record.Scope.Project, record.Scope.Namespace, record.Content, record.AppliedAt,
+			targetLegacy.TemporalFactID, targetLegacy.IngestedAt, targetLegacy.ValidFrom, targetLegacy.ValidTo, string(targetLegacy.ValiditySource),
+		).
 		WillReturnRows(pgxmock.NewRows([]string{
 			"id", "tenant", "project", "namespace", "class", "state", "content", "created_at", "updated_at",
+			"temporal_fact_id", "ingested_at", "valid_from", "valid_to", "validity_source",
 		}).AddRow(
 			record.TargetMemoryID, record.Scope.Tenant, record.Scope.Project, record.Scope.Namespace,
 			memory.MemoryClassProfile, memory.MemoryStateActive, record.Content, record.AppliedAt.Add(-2*time.Hour), record.AppliedAt,
+			targetLegacy.TemporalFactID, targetLegacy.IngestedAt, targetLegacy.ValidFrom, targetLegacy.ValidTo, string(targetLegacy.ValiditySource),
 		))
 	mock.ExpectQuery("INSERT INTO memory_versions").
-		WithArgs(record.VersionID, record.TargetMemoryID, int64(3), memory.MemoryStateActive, record.Content, record.AppliedAt, record.Actor).
+		WithArgs(
+			record.VersionID, record.TargetMemoryID, int64(3), memory.MemoryStateActive, record.Content, record.AppliedAt, record.Actor,
+			targetLegacy.TemporalFactID, targetLegacy.IngestedAt, targetLegacy.ValidFrom, targetLegacy.ValidTo, string(targetLegacy.ValiditySource),
+		).
 		WillReturnRows(pgxmock.NewRows([]string{
 			"id", "memory_id", "version", "state", "content", "created_at", "modified_by",
+			"temporal_fact_id", "ingested_at", "valid_from", "valid_to", "validity_source",
 		}).AddRow(
 			record.VersionID, record.TargetMemoryID, int64(3), memory.MemoryStateActive, record.Content, record.AppliedAt, record.Actor,
+			targetLegacy.TemporalFactID, targetLegacy.IngestedAt, targetLegacy.ValidFrom, targetLegacy.ValidTo, string(targetLegacy.ValiditySource),
 		))
 	mock.ExpectQuery("UPDATE canonical_memories").
 		WithArgs(record.SourceMemoryID, record.Scope.Tenant, record.Scope.Project, record.Scope.Namespace, memory.MemoryStateSuppressed, record.AppliedAt).
@@ -2889,6 +3201,7 @@ func TestRepositoryMergeMemorySuppressesSourceAndWritesTargetVersion(t *testing.
 			record.AppliedAt,
 			nil,
 			nil,
+			targetLegacy.TemporalFactID, targetLegacy.ValidFrom, nil,
 		).
 		WillReturnResult(pgxmock.NewResult("INSERT", 1))
 	mock.ExpectCommit()
@@ -2927,32 +3240,49 @@ func TestRepositoryReclassifyMemoryUpdatesClassAndWritesProvenance(t *testing.T)
 		AppliedAt:       time.Date(2026, 6, 7, 20, 35, 0, 0, time.UTC),
 	}
 
+	// The existing row predates the backfill (unset snapshot). The target class
+	// procedural is factual, so reclassification must give it a well-formed
+	// interval rather than letting it remain unset.
+	reclassified := memory.TemporalValidity{}.LegacyCurrentCompatible(record.AppliedAt)
+
 	mock.ExpectBegin()
 	mock.ExpectQuery("SELECT[\\s\\S]*FROM canonical_memories").
 		WithArgs(record.MemoryID, record.Scope.Tenant, record.Scope.Project, record.Scope.Namespace).
 		WillReturnRows(pgxmock.NewRows([]string{
 			"id", "tenant", "project", "namespace", "class", "state", "content", "created_at", "updated_at",
+			"temporal_fact_id", "ingested_at", "valid_from", "valid_to", "validity_source",
 		}).AddRow(
 			record.MemoryID, record.Scope.Tenant, record.Scope.Project, record.Scope.Namespace,
 			memory.MemoryClassProfile, memory.MemoryStateActive, "Respond concisely.", record.AppliedAt.Add(-2*time.Hour), record.AppliedAt.Add(-time.Hour),
+			"", nil, nil, nil, "",
 		))
 	mock.ExpectQuery("SELECT COALESCE\\(MAX\\(version\\), 0\\)").
 		WithArgs(record.MemoryID).
 		WillReturnRows(pgxmock.NewRows([]string{"coalesce"}).AddRow(int64(1)))
 	mock.ExpectQuery("UPDATE canonical_memories[\\s\\S]*embedding = NULL").
-		WithArgs(record.MemoryID, record.Scope.Tenant, record.Scope.Project, record.Scope.Namespace, record.TargetClass, record.AppliedAt).
+		WithArgs(
+			record.MemoryID, record.Scope.Tenant, record.Scope.Project, record.Scope.Namespace, record.TargetClass, record.AppliedAt,
+			reclassified.TemporalFactID, reclassified.IngestedAt, reclassified.ValidFrom, reclassified.ValidTo, string(reclassified.ValiditySource),
+		).
 		WillReturnRows(pgxmock.NewRows([]string{
 			"id", "tenant", "project", "namespace", "class", "state", "content", "created_at", "updated_at",
+			"temporal_fact_id", "ingested_at", "valid_from", "valid_to", "validity_source",
 		}).AddRow(
 			record.MemoryID, record.Scope.Tenant, record.Scope.Project, record.Scope.Namespace,
 			record.TargetClass, memory.MemoryStateActive, "Respond concisely.", record.AppliedAt.Add(-2*time.Hour), record.AppliedAt,
+			reclassified.TemporalFactID, reclassified.IngestedAt, reclassified.ValidFrom, reclassified.ValidTo, string(reclassified.ValiditySource),
 		))
 	mock.ExpectQuery("INSERT INTO memory_versions").
-		WithArgs(record.VersionID, record.MemoryID, int64(2), memory.MemoryStateActive, "Respond concisely.", record.AppliedAt, record.Actor).
+		WithArgs(
+			record.VersionID, record.MemoryID, int64(2), memory.MemoryStateActive, "Respond concisely.", record.AppliedAt, record.Actor,
+			reclassified.TemporalFactID, reclassified.IngestedAt, reclassified.ValidFrom, reclassified.ValidTo, string(reclassified.ValiditySource),
+		).
 		WillReturnRows(pgxmock.NewRows([]string{
 			"id", "memory_id", "version", "state", "content", "created_at", "modified_by",
+			"temporal_fact_id", "ingested_at", "valid_from", "valid_to", "validity_source",
 		}).AddRow(
 			record.VersionID, record.MemoryID, int64(2), memory.MemoryStateActive, "Respond concisely.", record.AppliedAt, record.Actor,
+			reclassified.TemporalFactID, reclassified.IngestedAt, reclassified.ValidFrom, reclassified.ValidTo, string(reclassified.ValiditySource),
 		))
 	mock.ExpectExec("INSERT INTO provenance_links").
 		WithArgs(
@@ -2986,6 +3316,7 @@ func TestRepositoryReclassifyMemoryUpdatesClassAndWritesProvenance(t *testing.T)
 			record.AppliedAt,
 			nil,
 			nil,
+			reclassified.TemporalFactID, reclassified.ValidFrom, nil,
 		).
 		WillReturnResult(pgxmock.NewResult("INSERT", 1))
 	mock.ExpectCommit()
@@ -3040,6 +3371,7 @@ func TestRepositoryRecordEmbeddingRebuildRequiredUpsertsEligibility(t *testing.T
 			record.RequestedAt,
 			nil,
 			nil,
+			nil, nil, nil,
 		).
 		WillReturnResult(pgxmock.NewResult("INSERT", 1))
 
@@ -3127,13 +3459,16 @@ func TestRepositoryPromoteVectorRevisionSupersedesPriorActiveRevision(t *testing
 	}
 
 	mock.ExpectBegin()
+	promotedLegacy := memory.TemporalValidity{}.LegacyCurrentCompatible(revision.GeneratedAt.Add(-time.Hour))
 	mock.ExpectQuery("SELECT[\\s\\S]*FROM canonical_memories").
 		WithArgs(revision.MemoryID, revision.Scope.Tenant, revision.Scope.Project, revision.Scope.Namespace).
 		WillReturnRows(pgxmock.NewRows([]string{
 			"id", "tenant", "project", "namespace", "class", "state", "content", "created_at", "updated_at",
+			"temporal_fact_id", "ingested_at", "valid_from", "valid_to", "validity_source",
 		}).AddRow(
 			revision.MemoryID, revision.Scope.Tenant, revision.Scope.Project, revision.Scope.Namespace,
 			memory.MemoryClassProfile, memory.MemoryStateActive, "User prefers concise answers.", revision.GeneratedAt.Add(-time.Hour), revision.GeneratedAt,
+			promotedLegacy.TemporalFactID, promotedLegacy.IngestedAt, promotedLegacy.ValidFrom, promotedLegacy.ValidTo, string(promotedLegacy.ValiditySource),
 		))
 	mock.ExpectQuery("SELECT COALESCE\\(MAX\\(version\\), 0\\)").
 		WithArgs(revision.MemoryID).
@@ -3195,9 +3530,11 @@ func TestRepositoryListEligibleEmbeddingRebuildsReturnsScopedPendingRecords(t *t
 		WillReturnRows(pgxmock.NewRows([]string{
 			"memory_id", "tenant", "project", "namespace", "source_version", "content_hash",
 			"requested_provider", "requested_model", "requested_dimensions", "status", "failure_reason", "requested_at", "last_attempted_at", "active_vector_revision",
+			"temporal_fact_id", "valid_from", "valid_to",
 		}).AddRow(
 			"mem_embed", "tenant-a", "project-a", "namespace-a", int64(3), "sha256:abc",
 			"openai", "text-embedding-3-small", 1536, memory.EmbeddingRebuildStatusPending, nil, requestedAt, nil, nil,
+			"fact-embed", requestedAt.Add(-time.Hour), nil,
 		))
 
 	repo := NewRepository(mock)
@@ -3214,6 +3551,18 @@ func TestRepositoryListEligibleEmbeddingRebuildsReturnsScopedPendingRecords(t *t
 	}
 	if records[0].RequestedDimensions != 1536 {
 		t.Fatalf("RequestedDimensions = %d, want 1536", records[0].RequestedDimensions)
+	}
+	// A queued rebuild is derived evidence: it must name the fact-valid identity
+	// of the version it will embed, so a successor version cannot reuse a vector
+	// that described a different window.
+	if records[0].TemporalValidity.TemporalFactID != "fact-embed" {
+		t.Fatalf("TemporalFactID = %q, want fact-embed", records[0].TemporalValidity.TemporalFactID)
+	}
+	if !records[0].TemporalValidity.ValidFrom.Equal(requestedAt.Add(-time.Hour)) {
+		t.Fatalf("ValidFrom = %v, want %v", records[0].TemporalValidity.ValidFrom, requestedAt.Add(-time.Hour))
+	}
+	if records[0].TemporalValidity.ValidTo != nil {
+		t.Fatalf("ValidTo = %v, want open-ended", records[0].TemporalValidity.ValidTo)
 	}
 
 	if err := mock.ExpectationsWereMet(); err != nil {
@@ -3314,6 +3663,7 @@ func TestRepositoryDispatchEmbeddingCutoverWaveQueuesNextBoundedWave(t *testing.
 			requestedAt,
 			nil,
 			"vec_old_1",
+			nil, nil, nil,
 		).
 		WillReturnResult(pgxmock.NewResult("INSERT", 1))
 	mock.ExpectExec("UPDATE embedding_cutover_items").
@@ -3344,6 +3694,7 @@ func TestRepositoryDispatchEmbeddingCutoverWaveQueuesNextBoundedWave(t *testing.
 			requestedAt,
 			nil,
 			"vec_old_2",
+			nil, nil, nil,
 		).
 		WillReturnResult(pgxmock.NewResult("INSERT", 1))
 	mock.ExpectExec("UPDATE embedding_cutover_items").
@@ -4342,10 +4693,16 @@ func TestRepositorySearchLexicalReturnsVisibleHits(t *testing.T) {
 	}
 	now := time.Date(2026, 6, 6, 14, 0, 0, 0, time.UTC)
 
+	temporalInstant := time.Date(2026, 6, 6, 14, 0, 0, 0, time.UTC)
+
+	// SearchLexical does not project the temporal columns; the temporal
+	// constraint is applied in the WHERE clause only.
 	mock.ExpectQuery("SELECT .*lexical_score.*FROM canonical_memories").
-		WithArgs(scope.Tenant, scope.Project, scope.Namespace, "concise answers", nil, nil, 3).
+		WithArgs(scope.Tenant, scope.Project, scope.Namespace, "concise answers", nil, nil, 3,
+			string(memory.TemporalSelectionCurrent), temporalInstant, nil, nil, nil).
 		WillReturnRows(pgxmock.NewRows([]string{
-			"id", "tenant", "project", "namespace", "class", "state", "content", "created_at", "updated_at", "lexical_score",
+			"id", "tenant", "project", "namespace", "class", "state", "content", "created_at", "updated_at",
+			"lexical_score",
 		}).AddRow(
 			"mem_123",
 			scope.Tenant,
@@ -4360,6 +4717,7 @@ func TestRepositorySearchLexicalReturnsVisibleHits(t *testing.T) {
 		))
 
 	repo := NewRepository(mock)
+	repo.now = func() time.Time { return temporalInstant }
 	hits, err := repo.SearchLexical(context.Background(), retrieval.SearchInput{
 		Scope: scope,
 		Query: "concise answers",
@@ -4423,10 +4781,16 @@ func TestRepositorySearchSemanticReturnsVisibleSummaryHits(t *testing.T) {
 	now := time.Date(2026, 6, 6, 14, 10, 0, 0, time.UTC)
 	queryEmbedding := []float32{0.1, 0.2, 0.3}
 
+	temporalInstant := time.Date(2026, 6, 6, 14, 10, 0, 0, time.UTC)
+
+	// SearchSemantic does not project the temporal columns either; the temporal
+	// constraint is applied in the WHERE clause only.
 	mock.ExpectQuery("SELECT[\\s\\S]*semantic_score[\\s\\S]*FROM canonical_memories cm[\\s\\S]*JOIN embedding_rebuilds er[\\s\\S]*JOIN vector_revisions vr[\\s\\S]*vr.id = er.active_vector_revision_id[\\s\\S]*vr.status = 'active'").
-		WithArgs(scope.Tenant, scope.Project, scope.Namespace, "[0.1,0.2,0.3]", nil, nil, 5).
+		WithArgs(scope.Tenant, scope.Project, scope.Namespace, "[0.1,0.2,0.3]", nil, nil, 5,
+			string(memory.TemporalSelectionCurrent), temporalInstant, nil, nil, nil).
 		WillReturnRows(pgxmock.NewRows([]string{
-			"id", "tenant", "project", "namespace", "class", "state", "content", "created_at", "updated_at", "semantic_score",
+			"id", "tenant", "project", "namespace", "class", "state", "content", "created_at", "updated_at",
+			"semantic_score",
 		}).AddRow(
 			"mem_summary",
 			scope.Tenant,
@@ -4441,6 +4805,7 @@ func TestRepositorySearchSemanticReturnsVisibleSummaryHits(t *testing.T) {
 		))
 
 	repo := NewRepository(mock)
+	repo.now = func() time.Time { return temporalInstant }
 	hits, err := repo.SearchSemantic(context.Background(), retrieval.SearchInput{
 		Scope:            scope,
 		Query:            "travel planning",
@@ -4474,13 +4839,18 @@ func TestRepositorySearchSemanticExcludesMemoriesWithoutActiveCurrentRevision(t 
 		Namespace: "namespace-a",
 	}
 
+	temporalInstant := time.Date(2026, 6, 6, 14, 15, 0, 0, time.UTC)
+
 	mock.ExpectQuery("SELECT[\\s\\S]*semantic_score[\\s\\S]*FROM canonical_memories cm[\\s\\S]*JOIN embedding_rebuilds er[\\s\\S]*JOIN vector_revisions vr[\\s\\S]*vr.id = er.active_vector_revision_id[\\s\\S]*vr.status = 'active'").
-		WithArgs(scope.Tenant, scope.Project, scope.Namespace, "[0.1,0.2,0.3]", nil, nil, 5).
+		WithArgs(scope.Tenant, scope.Project, scope.Namespace, "[0.1,0.2,0.3]", nil, nil, 5,
+			string(memory.TemporalSelectionCurrent), temporalInstant, nil, nil, nil).
 		WillReturnRows(pgxmock.NewRows([]string{
-			"id", "tenant", "project", "namespace", "class", "state", "content", "created_at", "updated_at", "semantic_score",
+			"id", "tenant", "project", "namespace", "class", "state", "content", "created_at", "updated_at",
+			"temporal_fact_id", "ingested_at", "valid_from", "valid_to", "validity_source", "semantic_score",
 		}))
 
 	repo := NewRepository(mock)
+	repo.now = func() time.Time { return temporalInstant }
 	hits, err := repo.SearchSemantic(context.Background(), retrieval.SearchInput{
 		Scope:          scope,
 		Query:          "travel planning",
@@ -4536,10 +4906,16 @@ func TestRepositorySearchRelationsReturnsRelationHitsOnlyWhenEnabled(t *testing.
 	}
 	now := time.Date(2026, 6, 6, 14, 20, 0, 0, time.UTC)
 
+	temporalInstant := time.Date(2026, 6, 6, 14, 20, 0, 0, time.UTC)
+
+	// SearchRelations does not project the temporal columns either; the temporal
+	// constraint is applied in the WHERE clause only.
 	mock.ExpectQuery("SELECT .*relation_score.*FROM relation_projections").
-		WithArgs(scope.Tenant, scope.Project, scope.Namespace, "travel", "travel", "travel", "travel", "travel", nil, nil, 4).
+		WithArgs(scope.Tenant, scope.Project, scope.Namespace, "travel", "travel", "travel", "travel", "travel", nil, nil, 4,
+			string(memory.TemporalSelectionCurrent), temporalInstant, nil, nil, nil).
 		WillReturnRows(pgxmock.NewRows([]string{
-			"id", "tenant", "project", "namespace", "class", "state", "content", "created_at", "updated_at", "relation_score",
+			"id", "tenant", "project", "namespace", "class", "state", "content", "created_at", "updated_at",
+			"relation_score",
 		}).AddRow(
 			"mem_relation",
 			scope.Tenant,
@@ -4554,6 +4930,7 @@ func TestRepositorySearchRelationsReturnsRelationHitsOnlyWhenEnabled(t *testing.
 		))
 
 	repo := NewRepository(mock)
+	repo.now = func() time.Time { return temporalInstant }
 	hits, err := repo.SearchRelations(context.Background(), retrieval.SearchInput{
 		Scope:            scope,
 		Query:            "travel",
@@ -4588,13 +4965,18 @@ func TestRepositorySearchLexicalPassesTimeWindowFilters(t *testing.T) {
 	from := time.Date(2026, 6, 6, 12, 0, 0, 0, time.UTC)
 	to := time.Date(2026, 6, 6, 15, 0, 0, 0, time.UTC)
 
+	temporalInstant := time.Date(2026, 6, 6, 14, 0, 0, 0, time.UTC)
+
 	mock.ExpectQuery("SELECT .*lexical_score.*FROM canonical_memories").
-		WithArgs(scope.Tenant, scope.Project, scope.Namespace, "travel", from, to, 2).
+		WithArgs(scope.Tenant, scope.Project, scope.Namespace, "travel", from, to, 2,
+			string(memory.TemporalSelectionCurrent), temporalInstant, nil, nil, nil).
 		WillReturnRows(pgxmock.NewRows([]string{
-			"id", "tenant", "project", "namespace", "class", "state", "content", "created_at", "updated_at", "lexical_score",
+			"id", "tenant", "project", "namespace", "class", "state", "content", "created_at", "updated_at",
+			"temporal_fact_id", "ingested_at", "valid_from", "valid_to", "validity_source", "lexical_score",
 		}))
 
 	repo := NewRepository(mock)
+	repo.now = func() time.Time { return temporalInstant }
 	_, err = repo.SearchLexical(context.Background(), retrieval.SearchInput{
 		Scope:    scope,
 		Query:    "travel",

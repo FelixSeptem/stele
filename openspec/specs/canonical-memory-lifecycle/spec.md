@@ -1,18 +1,20 @@
 # canonical-memory-lifecycle Specification
 
 ## Purpose
-TBD - created by archiving change governance-pipeline-and-memory-consolidation. Update Purpose after archive.
+Govern canonical memory consolidation, lifecycle transitions, and append-only version history.
+
 ## Requirements
+
 ### Requirement: Consolidation into canonical memory
-The service SHALL consolidate candidate memory into canonical memory using class-aware lifecycle rules.
+The service SHALL consolidate candidate memory into canonical memory using class-aware lifecycle rules and, for factual memory, explicit valid-time rules.
 
 #### Scenario: Profile candidate supersedes prior canonical memory
 - **WHEN** a candidate for mutable profile memory is accepted and conflicts with the latest active canonical version
-- **THEN** the service writes a new canonical version and marks the prior canonical representation as superseded according to lifecycle rules without erasing history
+- **THEN** the service writes a new canonical version, assigns a deterministic validity disposition, and marks the prior canonical representation as superseded according to lifecycle rules without erasing history
 
 #### Scenario: Episodic contradiction coexists
 - **WHEN** a candidate episodic memory conflicts with an earlier episodic fact but both remain valid evidence
-- **THEN** the service preserves both records and resolves visibility through lifecycle metadata rather than destructive overwrite
+- **THEN** the service preserves both records with distinct temporal identities and resolves visibility through lifecycle and valid-time metadata rather than destructive overwrite
 
 ### Requirement: Candidate suppression
 The service MUST support suppression of candidates that lose consolidation or fail governance acceptance while preserving auditability.
@@ -22,19 +24,12 @@ The service MUST support suppression of candidates that lose consolidation or fa
 - **THEN** the service records the candidate as suppressed and excludes it from default read paths while preserving provenance
 
 ### Requirement: Append-only canonical versioning
-Canonical memory updates MUST be append-only and MUST preserve material history.
-Derived context projections MUST reference canonical versions but MUST NOT mutate
-or replace canonical memory when they are materialized, rebuilt, filtered, or
-packed into context.
+Canonical memory updates MUST be append-only and MUST preserve material history. Factual versions MUST retain separate recorded time and valid-time bounds. Derived context projections MUST reference canonical versions but MUST NOT mutate or replace canonical memory when they are materialized, rebuilt, filtered, or packed into context.
 
 #### Scenario: Canonical memory receives a material update
-- **WHEN** consolidation changes the canonical content or state of a memory
-- **THEN** the service writes a new memory version instead of mutating the
-  previous version in place
+- **WHEN** consolidation changes the canonical content, state, or factual validity of a memory
+- **THEN** the service writes a new memory version instead of mutating the previous version in place
 
 #### Scenario: Projection is rebuilt from canonical memory
-- **WHEN** a projection is rebuilt after a canonical version changes
-- **THEN** the service writes a new projection version referencing the selected
-  canonical version and leaves canonical memory and prior projection history
-  unchanged
-
+- **WHEN** a projection is rebuilt after a canonical version or validity interval changes
+- **THEN** the service writes a new projection version referencing the selected canonical version and leaves canonical memory and prior projection history unchanged

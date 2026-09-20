@@ -3,6 +3,7 @@ package postgres
 import (
 	"context"
 	"crypto/sha256"
+	"database/sql"
 	"encoding/hex"
 	"encoding/json"
 	"fmt"
@@ -79,13 +80,20 @@ func (r *Repository) CreateMemoryChunks(ctx context.Context, chunks []memory.Mem
 		}
 		if _, err := tx.Exec(ctx, `
 INSERT INTO memory_chunk_derivations
- (id,tenant,project,namespace,source_kind,source_id,source_version,parent_memory_id,source_session_id,source_user_id,source_watermark,source_watermark_hash,source_content_hash,policy_version,renderer_version,counter_version,lifecycle_state,created_at)
-VALUES ($1,$2,$3,$4,$5,$6,$7,NULLIF($8,''),NULLIF($9,''),NULLIF($10,''),$11,$12,$13,$14,$15,$16,'active',$17)
+ (id,tenant,project,namespace,source_kind,source_id,source_version,parent_memory_id,source_session_id,source_user_id,source_watermark,source_watermark_hash,source_content_hash,policy_version,renderer_version,counter_version,lifecycle_state,created_at,temporal_fact_id,valid_from,valid_to)
+VALUES ($1,$2,$3,$4,$5,$6,$7,NULLIF($8,''),NULLIF($9,''),NULLIF($10,''),$11,$12,$13,$14,$15,$16,'active',$17,$18,$19,$20)
 ON CONFLICT (tenant,project,namespace,source_kind,source_id,source_version,policy_version,renderer_version,counter_version,source_content_hash) DO NOTHING`,
 			derivationID, chunk.Scope.Tenant, chunk.Scope.Project, chunk.Scope.Namespace,
 			string(chunk.Source.Kind), chunk.Source.ID, chunk.Source.Version, chunk.Source.MemoryID,
 			chunk.Source.SessionID, chunk.Source.UserID, watermark, watermarkHash, contentHash,
-			chunk.PolicyVersion, chunk.RendererVersion, counterVersion, chunk.CreatedAt); err != nil {
+			chunk.PolicyVersion, chunk.RendererVersion, counterVersion, chunk.CreatedAt,
+			// The chunk keeps the source version's validity rather than deriving
+			// one, so a successor version produces append-only derived history
+			// and a stale chunk can be excluded by the same predicate as its
+			// source.
+			nullableString(chunk.TemporalValidity.TemporalFactID),
+			nullableTime(chunk.TemporalValidity.ValidFrom),
+			nullableTimePtr(chunk.TemporalValidity.ValidTo)); err != nil {
 			return nil, fmt.Errorf("insert memory chunk derivation: %w", err)
 		}
 
@@ -152,7 +160,10 @@ func (r *Repository) ReadMemoryChunk(ctx context.Context, scope memory.Scope, ch
 	if strings.TrimSpace(chunkID) == "" {
 		return memory.MemoryChunk{}, fmt.Errorf("memory chunk id is required")
 	}
-	return scanVisibleMemoryChunk(r.db.QueryRow(ctx, visibleMemoryChunkSelect+` WHERE i.id=$1 AND i.tenant=$2 AND i.project=$3 AND i.namespace=$4 AND `+visibleChunkSourcePredicate, chunkID, scope.Tenant, scope.Project, scope.Namespace))
+	selection := r.chunkVisibilitySelection()
+	query := withTemporalPredicate(visibleMemoryChunkSelect+` WHERE i.id=$1 AND i.tenant=$2 AND i.project=$3 AND i.namespace=$4 AND `+visibleChunkSourcePredicate, selection, 5, 6, 7, 8, 9, "mv")
+	args := appendTemporalArgs([]any{chunkID, scope.Tenant, scope.Project, scope.Namespace}, selection)
+	return scanVisibleMemoryChunk(r.db.QueryRow(ctx, query, args...))
 }
 
 // ListMemoryChunksBySource returns ordinary visible chunks in exact scope.
@@ -163,7 +174,10 @@ func (r *Repository) ListMemoryChunksBySource(ctx context.Context, scope memory.
 	if source.Scope.Normalized() != scope.Normalized() || source.Kind == "" || strings.TrimSpace(source.ID) == "" || source.Version <= 0 {
 		return nil, fmt.Errorf("chunk source must be exact scoped and versioned")
 	}
-	rows, err := r.db.Query(ctx, visibleMemoryChunkSelect+` WHERE d.tenant=$1 AND d.project=$2 AND d.namespace=$3 AND d.source_kind=$4 AND d.source_id=$5 AND d.source_version=$6 AND `+visibleChunkSourcePredicate+` ORDER BY i.ordinal ASC, i.id ASC`, scope.Tenant, scope.Project, scope.Namespace, string(source.Kind), source.ID, source.Version)
+	selection := r.chunkVisibilitySelection()
+	query := withTemporalPredicate(visibleMemoryChunkSelect+` WHERE d.tenant=$1 AND d.project=$2 AND d.namespace=$3 AND d.source_kind=$4 AND d.source_id=$5 AND d.source_version=$6 AND `+visibleChunkSourcePredicate+` ORDER BY i.ordinal ASC, i.id ASC`, selection, 7, 8, 9, 10, 11, "mv")
+	args := appendTemporalArgs([]any{scope.Tenant, scope.Project, scope.Namespace, string(source.Kind), source.ID, source.Version}, selection)
+	rows, err := r.db.Query(ctx, query, args...)
 	if err != nil {
 		return nil, fmt.Errorf("list memory chunks by source: %w", err)
 	}
@@ -206,7 +220,13 @@ func (r *Repository) ListAdjacentMemoryChunks(ctx context.Context, scope memory.
 	if err != nil {
 		return nil, err
 	}
-	rows, err := r.db.Query(ctx, visibleMemoryChunkSelect+` WHERE d.id=$1 AND i.tenant=$2 AND i.project=$3 AND i.namespace=$4 AND i.id <> $5 AND i.ordinal >= $6 AND i.ordinal <= $7 AND `+visibleChunkSourcePredicate+` ORDER BY i.ordinal ASC, i.id ASC`, derivationID, scope.Tenant, scope.Project, scope.Namespace, chunkID, target.Ordinal-before, target.Ordinal+after)
+	selection := r.chunkVisibilitySelection()
+	// Adjacent expansion stays inside one derivation, but it still re-proves the
+	// source version's validity so an expired source cannot leak neighbours
+	// through the local window.
+	query := withTemporalPredicate(visibleMemoryChunkSelect+` WHERE d.id=$1 AND i.tenant=$2 AND i.project=$3 AND i.namespace=$4 AND i.id <> $5 AND i.ordinal >= $6 AND i.ordinal <= $7 AND `+visibleChunkSourcePredicate+` ORDER BY i.ordinal ASC, i.id ASC`, selection, 8, 9, 10, 11, 12, "mv")
+	args := appendTemporalArgs([]any{derivationID, scope.Tenant, scope.Project, scope.Namespace, chunkID, target.Ordinal - before, target.Ordinal + after}, selection)
+	rows, err := r.db.Query(ctx, query, args...)
 	if err != nil {
 		return nil, fmt.Errorf("list adjacent memory chunks: %w", err)
 	}
@@ -266,7 +286,10 @@ func (r *Repository) ListMemoryChunkWatermarks(ctx context.Context, scope memory
 
 func (r *Repository) visibleMemoryChunkDerivationID(ctx context.Context, scope memory.Scope, chunkID string) (string, error) {
 	var id string
-	err := r.db.QueryRow(ctx, `SELECT d.id FROM memory_chunk_items i JOIN memory_chunk_derivations d ON d.id=i.derivation_id WHERE i.id=$1 AND i.tenant=$2 AND i.project=$3 AND i.namespace=$4 AND `+visibleChunkSourcePredicate, chunkID, scope.Tenant, scope.Project, scope.Namespace).Scan(&id)
+	selection := r.chunkVisibilitySelection()
+	query := withTemporalPredicate(`SELECT d.id FROM memory_chunk_items i JOIN memory_chunk_derivations d ON d.id=i.derivation_id WHERE i.id=$1 AND i.tenant=$2 AND i.project=$3 AND i.namespace=$4 AND `+visibleChunkSourcePredicate, selection, 5, 6, 7, 8, 9, "mv")
+	args := appendTemporalArgs([]any{chunkID, scope.Tenant, scope.Project, scope.Namespace}, selection)
+	err := r.db.QueryRow(ctx, query, args...).Scan(&id)
 	if err != nil {
 		return "", fmt.Errorf("read visible memory chunk derivation: %w", err)
 	}
@@ -274,26 +297,66 @@ func (r *Repository) visibleMemoryChunkDerivationID(ctx context.Context, scope m
 }
 
 const visibleMemoryChunkSelect = `
-SELECT i.id,i.tenant,i.project,i.namespace,d.source_kind,d.source_id,d.source_version,COALESCE(d.parent_memory_id,''),COALESCE(i.source_session_id,''),COALESCE(i.source_user_id,''),i.class,i.ordinal,i.content,i.source_start,i.source_end,i.character_count,i.token_count,i.lifecycle_state,d.policy_version,d.renderer_version,i.created_at
+SELECT i.id,i.tenant,i.project,i.namespace,d.source_kind,d.source_id,d.source_version,COALESCE(d.parent_memory_id,''),COALESCE(i.source_session_id,''),COALESCE(i.source_user_id,''),i.class,i.ordinal,i.content,i.source_start,i.source_end,i.character_count,i.token_count,i.lifecycle_state,d.policy_version,d.renderer_version,i.created_at,COALESCE(d.temporal_fact_id,''),d.valid_from,d.valid_to
 FROM memory_chunk_items i
 JOIN memory_chunk_derivations d ON d.id=i.derivation_id`
 
 // Both clauses retain lifecycle safety after materialization. Raw events have
 // no mutable lifecycle in the base schema; canonical chunks must prove both
 // canonical and version state remain active.
+//
+// The canonical branch additionally proves the chunk's *source version* is still
+// fact-valid, through the same shared predicate that ordinary retrieval applies
+// to version rows. A chunk is derived evidence, so it never asserts validity of
+// its own: when its source version is superseded and closed, the chunk stops
+// being ordinary-visible rather than lingering as stale content.
+//
+// The predicate text is a placeholder so a caller can place it at whatever bind
+// position its own query ends at; see withTemporalPredicate.
 const visibleChunkSourcePredicate = `(
  (d.source_kind='raw_event' AND EXISTS (SELECT 1 FROM raw_events re WHERE re.id::text=d.source_id AND re.tenant=d.tenant AND re.project=d.project AND re.namespace=d.namespace))
  OR
- (d.source_kind='canonical_version' AND EXISTS (SELECT 1 FROM memory_versions mv JOIN canonical_memories cm ON cm.id=mv.memory_id WHERE mv.id::text=d.source_id AND mv.memory_id::text=d.parent_memory_id AND cm.tenant=d.tenant AND cm.project=d.project AND cm.namespace=d.namespace AND cm.state='active' AND mv.state='active'))
+ (d.source_kind='canonical_version' AND EXISTS (SELECT 1 FROM memory_versions mv JOIN canonical_memories cm ON cm.id=mv.memory_id WHERE mv.id::text=d.source_id AND mv.memory_id::text=d.parent_memory_id AND cm.tenant=d.tenant AND cm.project=d.project AND cm.namespace=d.namespace AND cm.state='active' AND mv.state='active' /*temporal_validity_predicate*/))
 )`
+
+// chunkVisibilitySelection is the fact-validity filter an ordinary chunk read
+// applies. Chunk reads are not search requests, so they always resolve against
+// the current instant: a chunk is visible only while the version it was
+// materialized from is still the current-valid one.
+func (r *Repository) chunkVisibilitySelection() temporalSelection {
+	// Operational rollback: with the policy off there is no valid-time
+	// filtering at all, so the query keeps its pre-temporal shape and legacy and
+	// corrected chunks alike stay visible exactly as before the migration.
+	if r.temporalPolicyDisabled {
+		return temporalSelection{Disabled: true}
+	}
+	return temporalSelection{
+		Mode:         string(memory.TemporalSelectionCurrent),
+		EvaluationAt: nullableTime(r.evaluationInstant()),
+	}
+}
 
 type memoryChunkScanner interface{ Scan(...any) error }
 
 func scanVisibleMemoryChunk(row memoryChunkScanner) (memory.MemoryChunk, error) {
 	var chunk memory.MemoryChunk
 	var kind, class, lifecycle string
-	if err := row.Scan(&chunk.ID, &chunk.Scope.Tenant, &chunk.Scope.Project, &chunk.Scope.Namespace, &kind, &chunk.Source.ID, &chunk.Source.Version, &chunk.Source.MemoryID, &chunk.Source.SessionID, &chunk.Source.UserID, &class, &chunk.Ordinal, &chunk.Content, &chunk.SourceRange.Start, &chunk.SourceRange.End, &chunk.CharacterCount, &chunk.TokenCount, &lifecycle, &chunk.PolicyVersion, &chunk.RendererVersion, &chunk.CreatedAt); err != nil {
+	var temporalFactID sql.NullString
+	var validFrom, validTo sql.NullTime
+	if err := row.Scan(&chunk.ID, &chunk.Scope.Tenant, &chunk.Scope.Project, &chunk.Scope.Namespace, &kind, &chunk.Source.ID, &chunk.Source.Version, &chunk.Source.MemoryID, &chunk.Source.SessionID, &chunk.Source.UserID, &class, &chunk.Ordinal, &chunk.Content, &chunk.SourceRange.Start, &chunk.SourceRange.End, &chunk.CharacterCount, &chunk.TokenCount, &lifecycle, &chunk.PolicyVersion, &chunk.RendererVersion, &chunk.CreatedAt, &temporalFactID, &validFrom, &validTo); err != nil {
 		return memory.MemoryChunk{}, err
+	}
+	// The returned snapshot is the identity the chunk was materialized from, not
+	// a validity claim by the chunk itself.
+	if temporalFactID.Valid {
+		chunk.TemporalValidity.TemporalFactID = temporalFactID.String
+	}
+	if validFrom.Valid {
+		chunk.TemporalValidity.ValidFrom = validFrom.Time
+	}
+	if validTo.Valid {
+		closed := validTo.Time
+		chunk.TemporalValidity.ValidTo = &closed
 	}
 	chunk.Source.Kind = memory.ChunkSourceKind(kind)
 	chunk.Source.Scope = chunk.Scope

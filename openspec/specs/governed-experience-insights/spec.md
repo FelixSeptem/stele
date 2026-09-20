@@ -1,7 +1,7 @@
 # governed-experience-insights Specification
 
 ## Purpose
-TBD - created by archiving change governed-experience-insights. Update Purpose after archive.
+Persist derived experience insights as scoped, governed, and auditable records.
 ## Requirements
 ### Requirement: Derived insights are governed records
 The service SHALL persist derived experience insights as governed records with explicit scope, insight type, lifecycle state, confidence, derivation metadata, evidence citations, and audit history.
@@ -105,4 +105,3 @@ The service SHALL NOT use replay to autonomously activate reserved `hypothesis`,
 #### Scenario: Replay request includes unsupported type
 - **WHEN** a replay request includes an insight type that is reserved but not supported for active derivation
 - **THEN** the service rejects or skips that type and records the unsupported-type reason in the replay response or report
-

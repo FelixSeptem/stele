@@ -185,6 +185,7 @@ type RetrievalPlanInput struct {
 	EmbeddingAvailable bool
 	Policy             RetrievalPlanPolicy
 	Now                time.Time
+	TemporalConstraint memory.TemporalConstraint
 }
 
 type RetrievalPlanIdentity struct {
@@ -192,10 +193,20 @@ type RetrievalPlanIdentity struct {
 	PolicyVersion             RetrievalPlanPolicyVersion
 	Family                    RetrievalQueryFamily
 	FallbackChannelCandidates map[FusionChannel]int
+	// TemporalMode makes a historical plan distinguishable from a current one
+	// in the identity string, so a replay can prove it re-ran the same
+	// fact-valid selection instead of silently falling back to current.
+	TemporalMode memory.TemporalSelectionMode
 }
 
 func (identity RetrievalPlanIdentity) String() string {
 	value := string(identity.PlannerVersion) + ":" + string(identity.PolicyVersion) + ":" + string(identity.Family)
+	// Only an explicit historical selection appears. Ordinary current plans keep
+	// their exact pre-temporal identity string, so existing fixtures and
+	// comparisons are unaffected.
+	if identity.TemporalMode != "" && identity.TemporalMode != memory.TemporalSelectionCurrent {
+		value += ":" + string(identity.TemporalMode)
+	}
 	if len(identity.FallbackChannelCandidates) == 0 {
 		return value
 	}
@@ -229,6 +240,7 @@ type RetrievalPlan struct {
 	ContextItems              int
 	FollowUp                  RetrievalPlanFollowUpRule
 	Fallback                  RetrievalPlanFallback
+	TemporalConstraint        memory.TemporalConstraint
 }
 
 func BuildRetrievalPlan(input RetrievalPlanInput) (RetrievalPlan, error) {
@@ -241,11 +253,18 @@ func BuildRetrievalPlan(input RetrievalPlanInput) (RetrievalPlan, error) {
 	if err := input.Policy.Validate(); err != nil {
 		return RetrievalPlan{}, err
 	}
+	temporalConstraint := input.TemporalConstraint
+	if temporalConstraint.Mode == "" {
+		temporalConstraint = memory.TemporalConstraint{Mode: memory.TemporalSelectionCurrent}
+	}
+	if err := temporalConstraint.Validate(); err != nil {
+		return RetrievalPlan{}, fmt.Errorf("validate retrieval-plan temporal constraint: %w", err)
+	}
 	family := classifyRetrievalQueryFamily(input.Analysis, input.EmbeddingAvailable)
 	template := input.Policy.Templates[family]
 	fallbackCandidates := cloneChannelCandidates(template.FallbackChannelCandidates)
 	plan := RetrievalPlan{
-		Identity: RetrievalPlanIdentity{PlannerVersion: input.Policy.PlannerVersion, PolicyVersion: input.Policy.Version, Family: family, FallbackChannelCandidates: cloneChannelCandidates(fallbackCandidates)},
+		Identity: RetrievalPlanIdentity{PlannerVersion: input.Policy.PlannerVersion, PolicyVersion: input.Policy.Version, Family: family, FallbackChannelCandidates: cloneChannelCandidates(fallbackCandidates), TemporalMode: temporalConstraint.Mode},
 		Family:   family, Disposition: RetrievalPlanDispositionPlanned,
 		Channels:                  append([]FusionChannel(nil), template.Channels...),
 		ChannelCandidates:         cloneChannelCandidates(template.ChannelCandidates),
@@ -256,7 +275,8 @@ func BuildRetrievalPlan(input RetrievalPlanInput) (RetrievalPlan, error) {
 		RerankerEligible:  template.RerankerEligible, RerankerHeadroom: template.RerankerHeadroom,
 		MaxPasses: template.MaxPasses, LatencyBudget: template.LatencyBudget,
 		ContextItems: template.ContextItems, FollowUp: cloneFollowUpRule(template.FollowUp),
-		Fallback: RetrievalPlanFallbackBaseline,
+		Fallback:           RetrievalPlanFallbackBaseline,
+		TemporalConstraint: temporalConstraint,
 	}
 	canonicalizeRetrievalPlan(&plan)
 	if err := plan.Validate(input.Policy.HardLimits); err != nil {
@@ -272,6 +292,12 @@ func (plan RetrievalPlan) Validate(limits RetrievalPlanHardLimits) error {
 	if plan.Identity.PlannerVersion != RetrievalPlannerVersionV1 || plan.Identity.PolicyVersion != RetrievalPlanPolicyVersionV1 || !plan.Family.valid() || plan.Identity.Family != plan.Family || !channelCandidatesEqual(plan.Identity.FallbackChannelCandidates, plan.FallbackChannelCandidates) {
 		return fmt.Errorf("invalid retrieval-plan identity")
 	}
+	// The identity must name the same selection the plan will actually apply,
+	// otherwise a replay could report a historical plan while running a current
+	// one.
+	if plan.Identity.TemporalMode != plan.TemporalConstraint.Mode {
+		return fmt.Errorf("invalid retrieval-plan identity temporal mode")
+	}
 	if plan.Disposition != RetrievalPlanDispositionPlanned && plan.Disposition != RetrievalPlanDispositionFallback {
 		return fmt.Errorf("invalid retrieval-plan disposition")
 	}
@@ -286,6 +312,9 @@ func (plan RetrievalPlan) Validate(limits RetrievalPlanHardLimits) error {
 	}
 	if plan.Fallback != RetrievalPlanFallbackBaseline {
 		return fmt.Errorf("unsupported retrieval-plan fallback %q", plan.Fallback)
+	}
+	if err := plan.TemporalConstraint.Validate(); err != nil {
+		return fmt.Errorf("validate retrieval-plan temporal constraint: %w", err)
 	}
 	return nil
 }

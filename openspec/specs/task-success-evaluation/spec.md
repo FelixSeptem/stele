@@ -1,7 +1,7 @@
 # task-success-evaluation Specification
 
 ## Purpose
-TBD - created by archiving change task-success-evaluation-and-feedback-ranking-rollout. Update Purpose after archive.
+Record durable, scoped external task-success evaluations without judging task answers.
 ## Requirements
 ### Requirement: Task success evaluations are durable and scoped
 The service SHALL allow authorized scoped callers to record durable task-success evaluations for external agent tasks without Stele executing the task or judging the answer.
@@ -114,4 +114,3 @@ The service SHALL allow workflow steps to reference task-success evaluations as 
 #### Scenario: Task evaluation evidence is out of scope
 - **WHEN** a workflow step references task evaluation evidence outside the workflow run scope
 - **THEN** the service excludes that evidence from workflow completion and does not expose target existence
-

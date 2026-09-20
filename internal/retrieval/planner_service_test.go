@@ -829,7 +829,10 @@ func TestSearchPlannerEnforcesLatencyDeadlineAndFallsBack(t *testing.T) {
 	scope := memory.Scope{Tenant: "t", Project: "p", Namespace: "planner-deadline"}
 	policy := lexicalOnlyPlannerPolicy(2)
 	for family, template := range policy.Templates {
-		template.LatencyBudget = 2 * time.Millisecond
+		// Generous enough that channel entry always happens before the budget
+		// expires; the stub itself blocks until the deadline, so the test still
+		// exercises the expired path rather than depending on a short race.
+		template.LatencyBudget = 2 * time.Second
 		policy.Templates[family] = template
 	}
 	lexical := &plannerDeadlineSearcher{fallbackHits: []ScoredMemory{plannerTestHit(scope, "baseline", memory.MemoryClassEpisodic)}}

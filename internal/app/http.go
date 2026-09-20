@@ -144,6 +144,14 @@ type MemoryQueryService interface {
 	GetMemoryProvenance(ctx context.Context, scope memory.Scope, memoryID string) ([]memory.ProvenanceRecord, error)
 }
 
+// MemoryProvenanceViewReader is an optional extension of MemoryQueryService. When
+// the configured reader implements it, the provenance response additionally
+// carries the bounded temporal summary. It is kept separate so a reader that has
+// not been updated keeps serving the original response shape.
+type MemoryProvenanceViewReader interface {
+	GetMemoryProvenanceView(ctx context.Context, scope memory.Scope, memoryID string) (memory.ProvenanceView, error)
+}
+
 type MemoryLifecycleActionService interface {
 	Apply(ctx context.Context, input memory.LifecycleActionInput) error
 }
@@ -700,6 +708,55 @@ type principalLifecycleRequest struct {
 	Reason string `json:"reason"`
 }
 
+// temporalSelectorErrorText values are the stable, low-cardinality reasons a
+// valid-time selector was refused. They name the shape of the mistake and
+// nothing else, so a rejected request never echoes caller-supplied instants or
+// content back in an error body.
+const (
+	temporalSelectorErrorUnparsable = "invalid temporal selector"
+	temporalSelectorErrorAmbiguous  = "temporal selectors are ambiguous"
+	temporalSelectorErrorPartial    = "valid_from and valid_to must be supplied together"
+	temporalSelectorErrorInterval   = "temporal validity interval is invalid"
+)
+
+// parseTemporalSelector turns the additive valid-time request fields into a
+// validated constraint. An absent selector yields the zero constraint, which the
+// retrieval layer resolves as current at the request evaluation instant.
+func parseTemporalSelector(asOf string, validFrom string, validTo string) (memory.TemporalConstraint, error) {
+	if asOf != "" && (validFrom != "" || validTo != "") {
+		return memory.TemporalConstraint{}, errors.New(temporalSelectorErrorAmbiguous)
+	}
+
+	if asOf != "" {
+		parsed, err := time.Parse(time.RFC3339, asOf)
+		if err != nil {
+			return memory.TemporalConstraint{}, errors.New(temporalSelectorErrorUnparsable)
+		}
+		return memory.TemporalConstraint{Mode: memory.TemporalSelectionAsOf, AsOf: &parsed}, nil
+	}
+
+	// A half-open historical request is a mistake, not a request for "current":
+	// guessing which bound the caller meant would silently widen the window.
+	if (validFrom == "") != (validTo == "") {
+		return memory.TemporalConstraint{}, errors.New(temporalSelectorErrorPartial)
+	}
+	if validFrom == "" {
+		return memory.TemporalConstraint{}, nil
+	}
+	from, err := time.Parse(time.RFC3339, validFrom)
+	if err != nil {
+		return memory.TemporalConstraint{}, errors.New(temporalSelectorErrorUnparsable)
+	}
+	to, err := time.Parse(time.RFC3339, validTo)
+	if err != nil {
+		return memory.TemporalConstraint{}, errors.New(temporalSelectorErrorUnparsable)
+	}
+	if !to.After(from) {
+		return memory.TemporalConstraint{}, errors.New(temporalSelectorErrorInterval)
+	}
+	return memory.TemporalConstraint{Mode: memory.TemporalSelectionDuring, ValidFrom: &from, ValidTo: &to}, nil
+}
+
 type memorySearchRequest struct {
 	Query                      string               `json:"query"`
 	QueryEmbedding             []float32            `json:"query_embedding"`
@@ -712,6 +769,13 @@ type memorySearchRequest struct {
 	IncludeFeedbackDiagnostics bool                 `json:"include_feedback_diagnostics"`
 	FeedbackAwareRanking       bool                 `json:"feedback_aware_ranking"`
 	FeedbackRankingPolicy      string               `json:"feedback_ranking_policy"`
+	// Valid-time selectors are additive and independent of time_from/time_to,
+	// which stay recorded/update-time filters. They are mutually exclusive: at
+	// most one of as_of or the valid_from/valid_to pair may be supplied. All
+	// three are absent for an ordinary current search, which is the default.
+	AsOf      string `json:"as_of,omitempty"`
+	ValidFrom string `json:"valid_from,omitempty"`
+	ValidTo   string `json:"valid_to,omitempty"`
 }
 
 type contextAssembleRequest struct {
@@ -2028,6 +2092,18 @@ func handleMemorySearch(w http.ResponseWriter, r *http.Request, searcher retriev
 		}
 		input.TimeTo = timeTo
 	}
+	// A valid-time selector is only accepted when it is explicit and internally
+	// consistent; anything else is refused rather than silently reinterpreted as
+	// a current search, so a caller can never believe history was honoured when
+	// it was not.
+	if req.AsOf != "" || req.ValidFrom != "" || req.ValidTo != "" {
+		constraint, err := parseTemporalSelector(req.AsOf, req.ValidFrom, req.ValidTo)
+		if err != nil {
+			http.Error(w, err.Error(), http.StatusBadRequest)
+			return
+		}
+		input.TemporalConstraint = constraint
+	}
 
 	result, err := searcher.Search(r.Context(), input)
 	if err != nil {
@@ -2085,7 +2161,18 @@ func handleMemoryProvenance(w http.ResponseWriter, r *http.Request, reader Memor
 		return
 	}
 
-	writeJSON(w, http.StatusOK, map[string]any{"provenance": records})
+	response := map[string]any{"provenance": records}
+	// The bounded temporal summary is additive: a caller that only reads
+	// `provenance` sees exactly the shape it saw before, while a caller that
+	// wants to distinguish asserted from inferred validity can read `temporal`.
+	if viewer, ok := reader.(MemoryProvenanceViewReader); ok {
+		view, err := viewer.GetMemoryProvenanceView(r.Context(), scope, r.PathValue("memory_id"))
+		if err == nil {
+			response["temporal"] = view.Temporal
+		}
+	}
+
+	writeJSON(w, http.StatusOK, response)
 }
 
 func handleContextAssembly(w http.ResponseWriter, r *http.Request, assembler retrieval.ContextAssembler) {

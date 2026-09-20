@@ -29,6 +29,10 @@ type RetrievalPlannerDiagnostics struct {
 	ChannelAvailability []RetrievalPlannerChannelAvailability `json:"channel_availability"`
 	ChangedRankCount    int                                   `json:"changed_rank_count"`
 	ChangedRankBucket   string                                `json:"changed_rank_bucket"`
+	// TemporalOmissions is available only through this explicitly authorized
+	// internal diagnostics path. Entries are closed-set category/count pairs;
+	// they carry neither temporal identities nor validity bounds.
+	TemporalOmissions []TemporalOmissionCount `json:"temporal_omissions,omitempty"`
 }
 
 type RetrievalPlannerChannelAvailability struct {
@@ -46,6 +50,7 @@ type RetrievalPlannerDiagnosticsInput struct {
 	ChannelAvailability []RetrievalPlannerChannelAvailability
 	ChangedRankCount    int
 	ChangedRankObserved bool
+	TemporalOmissions   TemporalOmissionReport
 }
 
 func RetrievalPlannerDiagnosticsFromExecution(input RetrievalPlannerDiagnosticsInput) (RetrievalPlannerDiagnostics, error) {
@@ -63,6 +68,10 @@ func RetrievalPlannerDiagnosticsFromExecution(input RetrievalPlannerDiagnosticsI
 	}
 	if input.Elapsed < 0 || input.Elapsed > 30*time.Second {
 		return RetrievalPlannerDiagnostics{}, fmt.Errorf("retrieval planner diagnostic elapsed is outside its bound")
+	}
+	temporalOmissions := input.TemporalOmissions.Normalize()
+	if err := validateBoundedTemporalOmissions(temporalOmissions); err != nil {
+		return RetrievalPlannerDiagnostics{}, err
 	}
 	diagnostics := RetrievalPlannerDiagnostics{
 		PlannerVersion:      input.Plan.Identity.PlannerVersion,
@@ -82,6 +91,7 @@ func RetrievalPlannerDiagnosticsFromExecution(input RetrievalPlannerDiagnosticsI
 		ChannelAvailability: append([]RetrievalPlannerChannelAvailability(nil), input.ChannelAvailability...),
 		ChangedRankCount:    input.ChangedRankCount,
 		ChangedRankBucket:   "not_evaluated",
+		TemporalOmissions:   append([]TemporalOmissionCount(nil), temporalOmissions.Categories...),
 	}
 	if len(diagnostics.ChannelAvailability) == 0 {
 		for _, channel := range input.Plan.Channels {
@@ -160,6 +170,9 @@ func (diagnostics RetrievalPlannerDiagnostics) Validate() error {
 	if diagnostics.ChangedRankBucket == "not_evaluated" && diagnostics.ChangedRankCount != 0 {
 		return fmt.Errorf("unobserved retrieval planner comparison cannot have changed ranks")
 	}
+	if err := validateBoundedTemporalOmissions(TemporalOmissionReport{Categories: diagnostics.TemporalOmissions, Total: temporalOmissionCountTotal(diagnostics.TemporalOmissions)}); err != nil {
+		return err
+	}
 	return nil
 }
 
@@ -170,11 +183,27 @@ func MarshalRetrievalPlannerDiagnostics(diagnostics RetrievalPlannerDiagnostics)
 	stable := diagnostics
 	stable.EnabledChannels = append([]FusionChannel(nil), diagnostics.EnabledChannels...)
 	stable.ChannelAvailability = append([]RetrievalPlannerChannelAvailability(nil), diagnostics.ChannelAvailability...)
+	stable.TemporalOmissions = append([]TemporalOmissionCount(nil), diagnostics.TemporalOmissions...)
 	sort.Slice(stable.EnabledChannels, func(i, j int) bool { return stable.EnabledChannels[i] < stable.EnabledChannels[j] })
 	sort.Slice(stable.ChannelAvailability, func(i, j int) bool {
 		return stable.ChannelAvailability[i].Channel < stable.ChannelAvailability[j].Channel
 	})
 	return json.Marshal(stable)
+}
+
+func validateBoundedTemporalOmissions(report TemporalOmissionReport) error {
+	if report.Total > 5000 || report.Total < 0 || report.Validate() != nil {
+		return fmt.Errorf("retrieval planner temporal omissions are invalid")
+	}
+	return nil
+}
+
+func temporalOmissionCountTotal(entries []TemporalOmissionCount) int {
+	total := 0
+	for _, entry := range entries {
+		total += entry.Count
+	}
+	return total
 }
 
 func plannerChangedRankBucket(count int) string {

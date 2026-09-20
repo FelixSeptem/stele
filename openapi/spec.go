@@ -6862,6 +6862,18 @@ components:
           type: array
           items:
             type: string
+        as_of:
+          type: string
+          format: date-time
+          description: Fact-valid time selector. Selects versions whose validity interval contains this instant. Mutually exclusive with valid_from and valid_to.
+        valid_from:
+          type: string
+          format: date-time
+          description: Inclusive start of a fact-valid interval selector. Must be supplied together with valid_to and must be strictly before it.
+        valid_to:
+          type: string
+          format: date-time
+          description: Exclusive end of a fact-valid interval selector. Must be supplied together with valid_from.
     MemoryCitation:
       type: object
       required:
@@ -6905,6 +6917,22 @@ components:
           type: array
           items:
             $ref: '#/components/schemas/MemoryCitation'
+    MemorySearchTemporalSelection:
+      type: object
+      description: Bounded record of how one search resolved fact-valid time. It reports the selector that was applied and how many candidates the valid-time predicate removed, and never intervals, identities, or content.
+      required:
+        - mode
+        - omitted
+      properties:
+        mode:
+          type: string
+          enum:
+            - current
+            - as_of
+            - valid_during
+        omitted:
+          type: integer
+          description: Number of candidates the valid-time predicate removed. It is a bare count, so a caller can see the selector bit without learning which memories were involved.
     MemorySearchResponse:
       type: object
       required:
@@ -6918,6 +6946,8 @@ components:
           type: array
           items:
             $ref: '#/components/schemas/ContextDiagnostic'
+        temporal:
+          $ref: '#/components/schemas/MemorySearchTemporalSelection'
     ContextAssembleRequest:
       type: object
       required:
@@ -7785,6 +7815,8 @@ components:
         - memory
         - versions
         - provenance
+        - temporal
+        - hidden
       properties:
         memory:
           $ref: '#/components/schemas/CanonicalMemory'
@@ -7796,6 +7828,64 @@ components:
           type: array
           items:
             $ref: '#/components/schemas/ProvenanceRecord'
+        temporal:
+          $ref: '#/components/schemas/TemporalHistoryMetadata'
+        hidden:
+          type: boolean
+          description: Whether this read was authorized to include hidden records
+    TemporalMetadata:
+      type: object
+      description: |
+        Bounded temporal summary. It reports interval shape and provenance class
+        without exposing raw recorded/valid instants. The origin field
+        distinguishes an interval asserted by a writer (explicit) from one
+        inferred by the service from recorded time (inferred), or no interval at
+        all (none).
+      required:
+        - set
+        - open_ended
+        - origin
+      properties:
+        set:
+          type: boolean
+        open_ended:
+          type: boolean
+        origin:
+          type: string
+          enum:
+            - none
+            - explicit
+            - inferred
+        validity_source:
+          type: string
+          enum:
+            - explicit
+            - legacy_current_compatible
+            - migrated
+        malformed:
+          type: boolean
+          description: Present and true when the stored snapshot failed interval validation
+    TemporalHistoryMetadata:
+      allOf:
+        - $ref: '#/components/schemas/TemporalMetadata'
+        - type: object
+          required:
+            - version_count
+            - explicit_version_count
+            - inferred_version_count
+            - corrections
+            - has_inferred_validity
+          properties:
+            version_count:
+              type: integer
+            explicit_version_count:
+              type: integer
+            inferred_version_count:
+              type: integer
+            corrections:
+              type: integer
+            has_inferred_validity:
+              type: boolean
     MemoryProvenanceResponse:
       type: object
       required:
@@ -7805,6 +7895,8 @@ components:
           type: array
           items:
             $ref: '#/components/schemas/ProvenanceRecord'
+        temporal:
+          $ref: '#/components/schemas/TemporalMetadata'
     AdminCreateMemoryRequest:
       type: object
       required:

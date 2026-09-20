@@ -1,7 +1,7 @@
 # forgetting-and-retention Specification
 
 ## Purpose
-TBD - created by archiving change governance-pipeline-and-memory-consolidation. Update Purpose after archive.
+Define auditable suppression, expiration, deletion, and retention behavior for memory.
 ## Requirements
 ### Requirement: Distinct forgetting semantics
 The service SHALL model forgetting as at least three distinct actions: `suppress`, `expire`, and `delete`.
@@ -24,4 +24,3 @@ Non-admin reads MUST exclude suppressed, forgotten, and expired memories by defa
 #### Scenario: Hidden memory is not returned by default reads
 - **WHEN** a standard internal read path loads memory for future retrieval or context assembly
 - **THEN** suppressed, forgotten, and expired records are excluded unless an explicit administrative or debug path opts in
-

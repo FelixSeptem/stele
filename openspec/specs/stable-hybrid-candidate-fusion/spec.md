@@ -1,7 +1,7 @@
 # stable-hybrid-candidate-fusion Specification
 
 ## Purpose
-TBD - created by archiving change stable-hybrid-candidate-fusion. Update Purpose after archive.
+Make hybrid retrieval candidate fusion strategies explicit, versioned, and reproducible.
 
 ## Requirements
 

@@ -1,7 +1,7 @@
 # self-hosted-product-delivery-verification Specification
 
 ## Purpose
-TBD - created by archiving change product-ready-self-hosting-foundation. Update Purpose after archive.
+Verify the supported self-hosted product stack against real PostgreSQL and pgvector.
 ## Requirements
 ### Requirement: Product verification uses real PostgreSQL and pgvector
 The repository SHALL provide a bounded automated product-verification suite
@@ -80,4 +80,3 @@ preserve diagnostics on failure.
 - **THEN** it removes only uniquely labelled containers, networks, volumes, and
   databases it created, retains or reports bounded diagnostic artifacts on
   failure, and never targets an operator's unlabelled PostgreSQL data
-

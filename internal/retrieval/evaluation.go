@@ -38,6 +38,9 @@ type EvaluationCase struct {
 	ExcludedAliases        []string                       `json:"excluded_aliases,omitempty"`
 	ExpectedAnalysis       *EvaluationAnalysisExpectation `json:"expected_analysis,omitempty"`
 	Planner                *EvaluationPlannerExpectation  `json:"planner,omitempty"`
+	// Temporal declares the fact-valid contract for a case. It is optional so
+	// existing pre-temporal fixtures keep their exact meaning.
+	Temporal *EvaluationTemporalExpectation `json:"temporal,omitempty"`
 }
 
 // EvaluationPlannerExpectation is a bounded fixture contract containing only
@@ -106,6 +109,13 @@ type EvaluationRankingMetadata struct {
 	RerankerMode                string           `json:"reranker_mode,omitempty"`
 	PlannerVersion              string           `json:"planner_version,omitempty"`
 	PlannerPolicyVersion        string           `json:"planner_policy_version,omitempty"`
+	// TemporalPolicyVersion names the fact-valid policy a replay applied. It is
+	// declared together with the coverage counts below: a report that claims a
+	// temporal policy without declaring what it measured is not reproducible.
+	TemporalPolicyVersion string `json:"temporal_policy_version,omitempty"`
+	// TemporalCoverageVersion is the fixture-side version of the temporal
+	// coverage contract, so a report can be matched to the fixture that produced it.
+	TemporalCoverageVersion string `json:"temporal_coverage_version,omitempty"`
 }
 
 // EvaluationSafetyFailureCategory is a stable non-sensitive failure reason.
@@ -116,6 +126,140 @@ const (
 	EvaluationSafetyFailureCrossScope          EvaluationSafetyFailureCategory = "cross_scope_result"
 	EvaluationSafetyFailureLifecycleVisibility EvaluationSafetyFailureCategory = "lifecycle_visibility"
 	EvaluationSafetyFailureUnsafeDiagnostics   EvaluationSafetyFailureCategory = "unsafe_diagnostics"
+	// EvaluationSafetyFailureStaleFactWin means a version outside the requested
+	// fact-valid selection was served. It is the temporal counterpart of a
+	// lifecycle leak: the result exists and is in scope, but it is not the
+	// version whose validity the caller asked about.
+	EvaluationSafetyFailureStaleFactWin EvaluationSafetyFailureCategory = "stale_fact_win"
+	// EvaluationSafetyFailureValidityAmbiguity means the fixture expected one
+	// unambiguous selected version but the case cannot distinguish versions.
+	EvaluationSafetyFailureValidityAmbiguity EvaluationSafetyFailureCategory = "validity_ambiguity"
+	// EvaluationSafetyFailureProvenanceMismatch means a derived artifact was
+	// attributed to a source version other than the one it was built from.
+	EvaluationSafetyFailureProvenanceMismatch EvaluationSafetyFailureCategory = "provenance_mismatch"
+	// EvaluationSafetyFailureHiddenVersionLeakage means a version withheld from
+	// current retrieval was nevertheless observable through a derived channel.
+	EvaluationSafetyFailureHiddenVersionLeakage EvaluationSafetyFailureCategory = "hidden_version_leakage"
+	// EvaluationSafetyFailureResourceOverflow means a temporal replay exceeded
+	// its fixed candidate envelope. It is a hard failure even when quality
+	// metrics improve, because temporal selection must remain bounded.
+	EvaluationSafetyFailureResourceOverflow EvaluationSafetyFailureCategory = "resource_overflow"
+	// EvaluationSafetyFailureAcrossValidityAmbiguity is the per-case category
+	// reported when a temporal expectation contradicts itself.
+	EvaluationSafetyFailureAcrossValidityAmbiguity EvaluationSafetyFailureCategory = "temporal_expectation_ambiguous"
+)
+
+// EvaluationTemporalCaseKind names the fact-valid scenario a temporal fixture
+// case reproduces. Each kind maps to exactly one selector shape, so a fixture
+// that declares the wrong selector for its scenario fails before seeding.
+type EvaluationTemporalCaseKind string
+
+const (
+	// EvaluationTemporalCaseCurrentValid is an ordinary current search: only
+	// versions valid at the evaluation instant may surface.
+	EvaluationTemporalCaseCurrentValid EvaluationTemporalCaseKind = "current_valid"
+	// EvaluationTemporalCaseExpired is a current search where the fact's
+	// interval already ended, so the version must not surface.
+	EvaluationTemporalCaseExpired EvaluationTemporalCaseKind = "expired"
+	// EvaluationTemporalCaseAsOf is a historical point-in-time selection.
+	EvaluationTemporalCaseAsOf EvaluationTemporalCaseKind = "as_of"
+	// EvaluationTemporalCaseInterval is a half-open valid_during selection.
+	EvaluationTemporalCaseInterval EvaluationTemporalCaseKind = "interval"
+	// EvaluationTemporalCaseRetroactiveCorrection is an authorized correction
+	// that closed a competing interval and named a successor.
+	EvaluationTemporalCaseRetroactiveCorrection EvaluationTemporalCaseKind = "retroactive_correction"
+	// EvaluationTemporalCaseLegacyCompatible is a row with no recorded validity
+	// snapshot, which must stay retrievable as current.
+	EvaluationTemporalCaseLegacyCompatible EvaluationTemporalCaseKind = "legacy_compatible"
+	// EvaluationTemporalCaseStaleSimilarity is semantically similar but not
+	// valid; similarity must not override fact-valid time.
+	EvaluationTemporalCaseStaleSimilarity EvaluationTemporalCaseKind = "stale_similarity"
+	// EvaluationTemporalCaseTemporalIsolation proves a temporal selector cannot
+	// cross a scope boundary to reach a similarly-timed foreign fact.
+	EvaluationTemporalCaseTemporalIsolation EvaluationTemporalCaseKind = "temporal_isolation"
+)
+
+var evaluationTemporalCaseKinds = []EvaluationTemporalCaseKind{
+	EvaluationTemporalCaseCurrentValid,
+	EvaluationTemporalCaseExpired,
+	EvaluationTemporalCaseAsOf,
+	EvaluationTemporalCaseInterval,
+	EvaluationTemporalCaseRetroactiveCorrection,
+	EvaluationTemporalCaseLegacyCompatible,
+	EvaluationTemporalCaseStaleSimilarity,
+	EvaluationTemporalCaseTemporalIsolation,
+}
+
+func (kind EvaluationTemporalCaseKind) valid() bool {
+	for _, candidate := range evaluationTemporalCaseKinds {
+		if kind == candidate {
+			return true
+		}
+	}
+	return false
+}
+
+// requiresSelector reports whether the scenario must carry an explicit non-current
+// selector. Current, expired, and legacy cases describe the default selection and
+// therefore must not carry one; isolation is expressed as an interval query that
+// must not reach a foreign scope.
+func (kind EvaluationTemporalCaseKind) requiresSelector() bool {
+	switch kind {
+	case EvaluationTemporalCaseAsOf, EvaluationTemporalCaseInterval,
+		EvaluationTemporalCaseRetroactiveCorrection, EvaluationTemporalCaseTemporalIsolation:
+		return true
+	default:
+		return false
+	}
+}
+
+// EvaluationTemporalExpectation is the bounded temporal contract of one fixture
+// case. It carries only the selector, an aggregate expectation, and aliases; it
+// has no field able to hold content, identifiers, or provider payloads.
+type EvaluationTemporalExpectation struct {
+	Kind EvaluationTemporalCaseKind `json:"kind"`
+	// EvaluationInstant anchors a current selection. It is required for current
+	// and legacy cases and forbidden for historical ones, whose selector already
+	// names its instant.
+	EvaluationInstant *time.Time            `json:"evaluation_instant,omitempty"`
+	Selector          *TemporalCaseSelector `json:"selector,omitempty"`
+	// MinimumSelectedVersions is the number of expected-aliases that must be
+	// selected. It is an aggregate count, never a list of identifiers.
+	MinimumSelectedVersions int `json:"minimum_selected_versions"`
+	// AllowUnselectedExpected marks a case where an expected alias is legitimately
+	// absent under a stricter selection. Only temporal_isolation may use it.
+	AllowUnselectedExpected bool `json:"allow_unselected_expected,omitempty"`
+	// AuthorizedCorrection marks a retroactive correction that was explicitly
+	// authorized, so an overlap is resolved rather than withheld.
+	AuthorizedCorrection bool `json:"authorized_correction,omitempty"`
+	// HiddenAliases name sources that must remain invisible through every
+	// channel, including derived ones. They must not also be expected evidence.
+	HiddenAliases []string `json:"hidden_aliases,omitempty"`
+}
+
+// TemporalCaseSelector is the fixture-level validity selector. It mirrors the
+// public request fields rather than the runtime constraint so fixtures stay
+// declarative and cannot smuggle an arbitrary evaluation instant.
+type TemporalCaseSelector struct {
+	Mode      memory.TemporalSelectionMode `json:"mode"`
+	AsOf      *time.Time                   `json:"as_of,omitempty"`
+	ValidFrom *time.Time                   `json:"valid_from,omitempty"`
+	ValidTo   *time.Time                   `json:"valid_to,omitempty"`
+}
+
+// Constraint converts the declarative selector into the runtime constraint,
+// rejecting a shape that the runtime would refuse anyway.
+func (selector TemporalCaseSelector) Constraint() (memory.TemporalConstraint, error) {
+	constraint := memory.TemporalConstraint{Mode: selector.Mode, AsOf: selector.AsOf, ValidFrom: selector.ValidFrom, ValidTo: selector.ValidTo}
+	if err := constraint.Validate(); err != nil {
+		return memory.TemporalConstraint{}, err
+	}
+	return constraint, nil
+}
+
+const (
+	evaluationTemporalFixtureMinimum   = 8
+	evaluationTemporalMaxHiddenAliases = 100
 )
 
 // EvaluationSafetyFailure records an aggregate safety outcome. It deliberately has
@@ -212,6 +356,43 @@ type EvaluationCaseReport struct {
 	PlannerFallbackCategory    string                         `json:"planner_fallback_category,omitempty"`
 	PlannerRerankerUsed        bool                           `json:"planner_reranker_used,omitempty"`
 	PlannerProtected           bool                           `json:"planner_protected,omitempty"`
+	// TemporalKind names the fact-valid scenario this case replayed. It is empty
+	// for pre-temporal cases, so an ordinary report is unchanged.
+	TemporalKind EvaluationTemporalCaseKind `json:"temporal_kind,omitempty"`
+	// TemporalMode and TemporalSelectorKind describe the selection that was
+	// actually applied. Only the bounded mode and the selector's coarse shape
+	// appear; the instants themselves are not reportable.
+	TemporalMode                memory.TemporalSelectionMode `json:"temporal_mode,omitempty"`
+	TemporalSelectorKind        string                       `json:"temporal_selector_kind,omitempty"`
+	TemporalSelectedVersions    int                          `json:"temporal_selected_versions,omitempty"`
+	TemporalHiddenAliasCount    int                          `json:"temporal_hidden_alias_count,omitempty"`
+	TemporalStaleVersions       int                          `json:"temporal_stale_versions,omitempty"`
+	TemporalAmbiguousVersions   int                          `json:"temporal_ambiguous_versions,omitempty"`
+	TemporalConflictDisposition string                       `json:"temporal_conflict_disposition,omitempty"`
+	TemporalProvenanceMismatch  int                          `json:"temporal_provenance_mismatch,omitempty"`
+	TemporalHiddenVersionLeak   int                          `json:"temporal_hidden_version_leak,omitempty"`
+	// TemporalFallbackCategory names the bounded reason a temporal selection was
+	// not applied in full. An empty value means the selection was honoured.
+	TemporalFallbackCategory string `json:"temporal_fallback_category,omitempty"`
+}
+
+// EvaluationTemporalCoverage aggregates the temporal evidence of a replay. It
+// carries counts and bounded categories only, so a report can prove which
+// scenarios ran without exposing instants, aliases, or identifiers.
+type EvaluationTemporalCoverage struct {
+	PolicyVersion      string         `json:"policy_version,omitempty"`
+	CoverageVersion    string         `json:"coverage_version,omitempty"`
+	Cases              int            `json:"cases,omitempty"`
+	KindCounts         map[string]int `json:"kind_counts,omitempty"`
+	ModeCounts         map[string]int `json:"mode_counts,omitempty"`
+	SelectedVersions   int            `json:"selected_versions,omitempty"`
+	StaleVersions      int            `json:"stale_versions,omitempty"`
+	AmbiguousVersions  int            `json:"ambiguous_versions,omitempty"`
+	ProvenanceMismatch int            `json:"provenance_mismatch,omitempty"`
+	HiddenVersionLeaks int            `json:"hidden_version_leaks,omitempty"`
+	FallbackCounts     map[string]int `json:"fallback_counts,omitempty"`
+	DispositionCounts  map[string]int `json:"disposition_counts,omitempty"`
+	EvaluationInstants int            `json:"evaluation_instants,omitempty"`
 }
 
 // EvaluationReport is the versioned data model rendered by local and CI replay.
@@ -229,6 +410,10 @@ type EvaluationReport struct {
 	ChangedRankCount           int                              `json:"changed_rank_count,omitempty"`
 	RerankFallbackCounts       map[string]int                   `json:"rerank_fallback_counts,omitempty"`
 	PlannerEvidence            EvaluationPlannerReleaseEvidence `json:"planner_evidence,omitempty"`
+	// TemporalCoverage reports the fact-valid scenarios this replay measured. It
+	// is omitted entirely for a report produced from a pre-temporal fixture, so
+	// the ordinary report shape is unchanged.
+	TemporalCoverage *EvaluationTemporalCoverage `json:"temporal_coverage,omitempty"`
 }
 
 type EvaluationPlannerReleaseEvidence struct {
@@ -374,6 +559,16 @@ func (m EvaluationRankingMetadata) Validate() error {
 	if (m.PlannerVersion == "") != (m.PlannerPolicyVersion == "") {
 		return fmt.Errorf("planner version and policy version must be declared together")
 	}
+	// A temporal policy claim without a coverage contract would let a report
+	// appear temporal-aware while measuring nothing about fact validity.
+	if (m.TemporalPolicyVersion == "") != (m.TemporalCoverageVersion == "") {
+		return fmt.Errorf("temporal policy version and coverage version must be declared together")
+	}
+	for name, value := range map[string]string{"temporal policy version": m.TemporalPolicyVersion, "temporal coverage version": m.TemporalCoverageVersion} {
+		if !evaluationSafeIdentity(value) {
+			return fmt.Errorf("%s identity is invalid", name)
+		}
+	}
 	for name, value := range map[string]string{"embedding provider": m.EmbeddingProvider, "embedding version": m.EmbeddingVersion} {
 		if !evaluationSafeIdentity(value) {
 			return fmt.Errorf("%s identity is invalid", name)
@@ -469,7 +664,98 @@ func (report EvaluationReport) validateSafeOutput() error {
 			return fmt.Errorf("evaluation category aggregate is invalid")
 		}
 	}
+	if err := validateEvaluationTemporalCoverage(report.TemporalCoverage); err != nil {
+		return err
+	}
+	// A case that declares a temporal kind must also be counted by the coverage
+	// aggregate, otherwise a report could claim a scenario ran while the summary
+	// silently omits it.
+	declared := 0
+	for _, item := range report.Cases {
+		if item.TemporalKind != "" {
+			declared++
+			if !item.TemporalKind.valid() {
+				return fmt.Errorf("evaluation temporal kind is invalid")
+			}
+			if item.TemporalMode != "" && !evaluationTemporalModeValid(item.TemporalMode) {
+				return fmt.Errorf("evaluation temporal mode is invalid")
+			}
+			if item.TemporalSelectorKind != "" && !evaluationSafeIdentity(item.TemporalSelectorKind) {
+				return fmt.Errorf("evaluation temporal selector kind is invalid")
+			}
+			if !evaluationSafeIdentity(item.TemporalFallbackCategory) || !evaluationSafeIdentity(item.TemporalConflictDisposition) {
+				return fmt.Errorf("evaluation temporal category is invalid")
+			}
+			for _, value := range []int{item.TemporalSelectedVersions, item.TemporalHiddenAliasCount, item.TemporalStaleVersions, item.TemporalAmbiguousVersions, item.TemporalProvenanceMismatch, item.TemporalHiddenVersionLeak} {
+				if value < 0 || value > QueryAnalysisHardMaxAggregateCandidates {
+					return fmt.Errorf("evaluation temporal count is outside its bound")
+				}
+			}
+		}
+	}
+	if declared > 0 && report.TemporalCoverage == nil {
+		return fmt.Errorf("evaluation temporal coverage is required when temporal cases are present")
+	}
+	if report.TemporalCoverage != nil && report.TemporalCoverage.Cases != declared {
+		return fmt.Errorf("evaluation temporal coverage disagrees with its cases")
+	}
 	return nil
+}
+
+// validateEvaluationTemporalCoverage keeps the aggregate bounded and free of
+// anything that could carry an instant, alias, scope, or identifier.
+func validateEvaluationTemporalCoverage(coverage *EvaluationTemporalCoverage) error {
+	if coverage == nil {
+		return nil
+	}
+	if coverage.Cases <= 0 || coverage.Cases > evaluationFixtureMaxCases {
+		return fmt.Errorf("evaluation temporal coverage case count is invalid")
+	}
+	if !evaluationSafeIdentity(coverage.PolicyVersion) || !evaluationSafeIdentity(coverage.CoverageVersion) {
+		return fmt.Errorf("evaluation temporal coverage identity is invalid")
+	}
+	for name, count := range coverage.KindCounts {
+		if !evaluationTemporalCaseKindNameValid(name) {
+			return fmt.Errorf("evaluation temporal kind is unsupported")
+		}
+		if count <= 0 || count > evaluationFixtureMaxCases {
+			return fmt.Errorf("evaluation temporal kind count is invalid")
+		}
+	}
+	for name, count := range coverage.ModeCounts {
+		if !evaluationTemporalModeValid(memory.TemporalSelectionMode(name)) || count <= 0 || count > evaluationFixtureMaxCases {
+			return fmt.Errorf("evaluation temporal mode count is invalid")
+		}
+	}
+	for name, count := range coverage.FallbackCounts {
+		if !evaluationSafeIdentity(name) || count <= 0 || count > evaluationFixtureMaxCases {
+			return fmt.Errorf("evaluation temporal fallback count is invalid")
+		}
+	}
+	for name, count := range coverage.DispositionCounts {
+		if !memory.TemporalConflictDisposition(name).Valid() || count <= 0 || count > evaluationFixtureMaxCases {
+			return fmt.Errorf("evaluation temporal disposition count is invalid")
+		}
+	}
+	for _, value := range []int{coverage.SelectedVersions, coverage.StaleVersions, coverage.AmbiguousVersions, coverage.ProvenanceMismatch, coverage.HiddenVersionLeaks, coverage.EvaluationInstants} {
+		if value < 0 || value > QueryAnalysisHardMaxAggregateCandidates {
+			return fmt.Errorf("evaluation temporal coverage count is outside its bound")
+		}
+	}
+	return nil
+}
+
+func evaluationTemporalModeValid(mode memory.TemporalSelectionMode) bool {
+	switch mode {
+	case memory.TemporalSelectionCurrent, memory.TemporalSelectionAsOf, memory.TemporalSelectionDuring:
+		return true
+	default:
+		return false
+	}
+}
+
+func evaluationTemporalCaseKindNameValid(name string) bool {
+	return EvaluationTemporalCaseKind(name).valid()
 }
 
 func validateEvaluationSafetyFailures(failures []EvaluationSafetyFailure) error {
@@ -524,6 +810,8 @@ func (f EvaluationFixture) Validate() error {
 	}
 
 	caseIDs := make(map[string]struct{}, len(f.Cases))
+	temporalKinds := make(map[EvaluationTemporalCaseKind]struct{}, len(evaluationTemporalCaseKinds))
+	temporalCases := 0
 	for _, item := range f.Cases {
 		if err := item.validate(); err != nil {
 			return err
@@ -533,6 +821,26 @@ func (f EvaluationFixture) Validate() error {
 			return fmt.Errorf("duplicate case id")
 		}
 		caseIDs[id] = struct{}{}
+		if item.Temporal != nil {
+			temporalCases++
+			if _, duplicate := temporalKinds[item.Temporal.Kind]; duplicate {
+				return fmt.Errorf("duplicate temporal fixture kind")
+			}
+			temporalKinds[item.Temporal.Kind] = struct{}{}
+		}
+	}
+	// A temporal fixture is only meaningful if it covers every safe/unsafe
+	// scenario the release gate reasons about. A partial fixture would let a
+	// release pass while an untested scenario remains unmeasured.
+	if temporalCases > 0 {
+		if temporalCases < evaluationTemporalFixtureMinimum {
+			return fmt.Errorf("temporal fixture must cover every temporal kind")
+		}
+		for _, kind := range evaluationTemporalCaseKinds {
+			if _, covered := temporalKinds[kind]; !covered {
+				return fmt.Errorf("temporal fixture is missing a required temporal kind")
+			}
+		}
 	}
 	return nil
 }
@@ -644,6 +952,90 @@ func (c EvaluationCase) validate() error {
 		if err := c.Planner.validate(); err != nil {
 			return err
 		}
+	}
+	if c.Temporal != nil {
+		if err := c.Temporal.validate(aliases, expectedAliases); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+// validate checks one temporal expectation against the aliases the case actually
+// declares. A temporal fixture that cannot be evaluated unambiguously is refused
+// before seeding, because an ambiguous fixture silently degrades into a test
+// that passes for the wrong reason.
+func (expectation EvaluationTemporalExpectation) validate(aliases map[string]struct{}, expectedAliases map[string]struct{}) error {
+	if !expectation.Kind.valid() {
+		return fmt.Errorf("temporal fixture kind is invalid")
+	}
+	if expectation.MinimumSelectedVersions <= 0 || expectation.MinimumSelectedVersions > evaluationFixtureMaxSourcesPerCase {
+		return fmt.Errorf("temporal fixture selected-version bound is invalid")
+	}
+	if expectation.MinimumSelectedVersions > len(expectedAliases) {
+		return fmt.Errorf("temporal fixture expects more selected versions than it declares evidence for")
+	}
+
+	selectorPresent := expectation.Selector != nil
+	switch {
+	case expectation.Kind.requiresSelector() && !selectorPresent:
+		return fmt.Errorf("temporal fixture kind requires an explicit selector")
+	case !expectation.Kind.requiresSelector() && selectorPresent:
+		return fmt.Errorf("temporal fixture current-class kind must not declare a selector")
+	}
+
+	if selectorPresent {
+		constraint, err := expectation.Selector.Constraint()
+		if err != nil {
+			return fmt.Errorf("temporal fixture selector is invalid: %w", err)
+		}
+		if constraint.Mode == memory.TemporalSelectionCurrent {
+			return fmt.Errorf("temporal fixture selector must not restate the current mode")
+		}
+	}
+	if expectation.Kind.requiresSelector() && expectation.EvaluationInstant != nil {
+		return fmt.Errorf("temporal fixture historical kind must not declare an evaluation instant")
+	}
+	if !expectation.Kind.requiresSelector() && expectation.EvaluationInstant == nil {
+		return fmt.Errorf("temporal fixture current-class kind requires an evaluation instant")
+	}
+	if expectation.EvaluationInstant != nil && expectation.EvaluationInstant.IsZero() {
+		return fmt.Errorf("temporal fixture evaluation instant is invalid")
+	}
+
+	// A retroactive correction is only resolved when it is authorized. Without
+	// authorization the correct outcome is a withheld fact, not a silent
+	// replacement, so the flag must match the declared scenario exactly.
+	if expectation.AuthorizedCorrection != (expectation.Kind == EvaluationTemporalCaseRetroactiveCorrection) {
+		return fmt.Errorf("temporal fixture correction authorization does not match its kind")
+	}
+	// Only an isolation case may tolerate an expected alias being absent, since
+	// the point of that scenario is that a foreign fact stays out.
+	if expectation.AllowUnselectedExpected && expectation.Kind != EvaluationTemporalCaseTemporalIsolation {
+		return fmt.Errorf("temporal fixture may only tolerate unselected evidence for an isolation case")
+	}
+
+	if len(expectation.HiddenAliases) > evaluationTemporalMaxHiddenAliases {
+		return fmt.Errorf("temporal fixture hidden alias count exceeds the safe bound")
+	}
+	hidden := make(map[string]struct{}, len(expectation.HiddenAliases))
+	for _, alias := range expectation.HiddenAliases {
+		alias = strings.TrimSpace(alias)
+		if alias == "" || !evaluationSafeIdentity(alias) {
+			return fmt.Errorf("temporal fixture hidden alias is invalid")
+		}
+		if _, duplicate := hidden[alias]; duplicate {
+			return fmt.Errorf("temporal fixture hidden alias is duplicated")
+		}
+		if _, declared := aliases[alias]; !declared {
+			return fmt.Errorf("temporal fixture hidden alias is unknown")
+		}
+		// A hidden source that is also expected evidence is a contradiction: the
+		// case would demand both that the version surface and that it not.
+		if _, expected := expectedAliases[alias]; expected {
+			return fmt.Errorf("temporal fixture hidden alias cannot also be expected evidence")
+		}
+		hidden[alias] = struct{}{}
 	}
 	return nil
 }
@@ -840,7 +1232,12 @@ func evaluationSafetyFailureCategoryValid(category EvaluationSafetyFailureCatego
 	case EvaluationSafetyFailureInvalidFixtureScope,
 		EvaluationSafetyFailureCrossScope,
 		EvaluationSafetyFailureLifecycleVisibility,
-		EvaluationSafetyFailureUnsafeDiagnostics:
+		EvaluationSafetyFailureUnsafeDiagnostics,
+		EvaluationSafetyFailureStaleFactWin,
+		EvaluationSafetyFailureValidityAmbiguity,
+		EvaluationSafetyFailureProvenanceMismatch,
+		EvaluationSafetyFailureHiddenVersionLeakage,
+		EvaluationSafetyFailureResourceOverflow:
 		return true
 	default:
 		return false

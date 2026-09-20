@@ -78,6 +78,11 @@ type CandidateMemory struct {
 	Status           CandidateStatus
 	CreatedAt        time.Time
 	UpdatedAt        time.Time
+	// TemporalValidity is the fact-valid snapshot the candidate asserts. It may
+	// be unset, in which case promotion anchors the interval on the recorded
+	// time as a legacy-compatible open interval; a partially populated snapshot
+	// is malformed and fails the promotion closed.
+	memory.TemporalValidity
 }
 
 func (c CandidateMemory) Validate() error {

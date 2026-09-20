@@ -1,7 +1,7 @@
 # agent-memory-benchmark-adapter Specification
 
 ## Purpose
-TBD - created by archiving change local-agent-memory-benchmark-suite. Update Purpose after archive.
+Normalize supported agent-memory benchmark sources into deterministic, versioned offline evaluation records.
 ## Requirements
 ### Requirement: Adapters produce a versioned normalized corpus
 Each dataset adapter SHALL convert source data into versioned `ConversationRecord`, `MemoryEventRecord`, `BenchmarkQuery`, and `QREL` records without requiring PostgreSQL access.
@@ -37,4 +37,3 @@ Adapters SHALL report unmapped evidence, duplicate ids, malformed turns, and mus
 #### Scenario: Missing supporting evidence blocks a full run
 - **WHEN** a query references an evidence id not emitted by the adapter
 - **THEN** validation fails with the query id and missing evidence id
-

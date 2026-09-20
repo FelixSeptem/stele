@@ -38,6 +38,11 @@ type MemoryResource struct {
 	Content    string      `json:"content"`
 	CreatedAt  time.Time   `json:"created_at"`
 	ModifiedAt time.Time   `json:"modified_at"`
+	// Temporal is the bounded validity summary. It reports shape and provenance
+	// only -- not the raw recorded/valid instants -- so an ordinary read learns
+	// whether the interval was asserted or inferred without exposing the
+	// timestamps that privileged reads retain.
+	Temporal TemporalMetadata `json:"temporal"`
 }
 
 type MemoryPage struct {
@@ -131,6 +136,33 @@ func (s *QueryService) GetMemoryProvenance(ctx context.Context, scope Scope, mem
 	return s.store.ReadMemoryProvenance(ctx, scope, memoryID)
 }
 
+// GetMemoryProvenanceView returns provenance together with the bounded temporal
+// summary. It exists so a caller inspecting lineage can see whether the memory's
+// validity was asserted or inferred without a second, privileged round trip.
+func (s *QueryService) GetMemoryProvenanceView(ctx context.Context, scope Scope, memoryID string) (ProvenanceView, error) {
+	if s.store == nil {
+		return ProvenanceView{}, fmt.Errorf("query store is not configured")
+	}
+
+	records, err := s.store.ReadMemoryProvenance(ctx, scope, memoryID)
+	if err != nil {
+		return ProvenanceView{}, err
+	}
+
+	// The canonical read is scoped and excludes hidden rows, so an ordinary
+	// caller cannot use this path to observe a forgotten memory's validity.
+	canonical, err := s.store.ReadCanonicalMemory(ctx, scope, memoryID, false)
+	if err != nil {
+		return ProvenanceView{}, err
+	}
+
+	return ProvenanceView{
+		MemoryID:   memoryID,
+		Provenance: records,
+		Temporal:   NewTemporalMetadata(canonical.TemporalValidity),
+	}, nil
+}
+
 func NewMemoryResource(c CanonicalMemory) MemoryResource {
 	content := c.Content
 	if c.State == MemoryStateDeleted {
@@ -145,6 +177,7 @@ func NewMemoryResource(c CanonicalMemory) MemoryResource {
 		Content:    content,
 		CreatedAt:  c.CreatedAt,
 		ModifiedAt: c.ModifiedAt,
+		Temporal:   NewTemporalMetadata(c.TemporalValidity),
 	}
 }
 

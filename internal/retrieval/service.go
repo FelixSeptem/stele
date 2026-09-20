@@ -29,14 +29,41 @@ type SearchInput struct {
 	fusionStrategyOverride                *FusionStrategy
 	TimeFrom                              time.Time
 	TimeTo                                time.Time
-	TopK                                  int
-	IncludeSummaries                      bool
-	IncludeRelations                      bool
-	IncludeFeedbackDiagnostics            bool
-	FeedbackAwareRanking                  bool
-	SessionID                             string
-	UserID                                string
-	queryAnalysis                         *QueryAnalysisResult
+	// TemporalConstraint selects fact-valid time explicitly. The zero value
+	// resolves to current-valid selection; recorded-time filters keep their
+	// existing meaning and are never reinterpreted as valid time.
+	TemporalConstraint         memory.TemporalConstraint
+	TopK                       int
+	IncludeSummaries           bool
+	IncludeRelations           bool
+	IncludeFeedbackDiagnostics bool
+	FeedbackAwareRanking       bool
+	SessionID                  string
+	UserID                     string
+	queryAnalysis              *QueryAnalysisResult
+	// temporalPolicyDisabled disables temporal-aware policy resolution and
+	// returns the approved current baseline. It is the operational rollback
+	// switch: setting it must never delete temporal history or rewrite canonical
+	// data, it only stops consulting valid-time selectors during retrieval.
+	temporalPolicyDisabled bool
+}
+
+// WithTemporalPolicyDisabled returns a copy of the input with temporal-aware
+// policy resolution disabled, which is the supported operational rollback path.
+//
+// Rollback is data-preserving by construction: the validity columns and the
+// correction ledger keep their contents and remain readable through the
+// privileged history surface; only ordinary retrieval stops filtering on them.
+func (input SearchInput) WithTemporalPolicyDisabled() SearchInput {
+	input.temporalPolicyDisabled = true
+	input.TemporalConstraint = memory.TemporalConstraint{}
+	return input
+}
+
+// TemporalPolicyDisabled reports whether temporal-aware policy resolution has
+// been disabled for this input.
+func (input SearchInput) TemporalPolicyDisabled() bool {
+	return input.temporalPolicyDisabled
 }
 
 // LexicalMatchMode selects the full-text query composition used by an internal
@@ -60,6 +87,11 @@ func (i SearchInput) Validate() error {
 	}
 	if !i.TimeFrom.IsZero() && !i.TimeTo.IsZero() && i.TimeFrom.After(i.TimeTo) {
 		return fmt.Errorf("time_from must be before or equal to time_to")
+	}
+	if i.TemporalConstraint.Mode != "" {
+		if err := i.TemporalConstraint.Validate(); err != nil {
+			return fmt.Errorf("invalid temporal constraint: %w", err)
+		}
 	}
 	if i.TopK < 0 {
 		return fmt.Errorf("top_k must be greater than or equal to zero")
@@ -123,9 +155,28 @@ type SearchHit struct {
 	Chunk *memory.MemoryChunk `json:"-"`
 }
 
+// TemporalSelection is the bounded record of how one search resolved fact-valid
+// time.
+//
+// It names the selector that was applied and how many candidates the valid-time
+// predicate removed, and nothing else: no intervals, no identities, no content,
+// and no per-hit detail. Per-hit version identity stays behind the history and
+// provenance endpoints, which are the authorized surfaces for it.
+type TemporalSelection struct {
+	Mode string `json:"mode"`
+	// Omitted counts candidates the valid-time predicate removed. It is a bare
+	// count so a caller can see the selector bit without learning which
+	// memories, or which facts, were involved.
+	Omitted int `json:"omitted"`
+}
+
 type SearchResult struct {
-	Hits               []SearchHit         `json:"hits"`
-	Diagnostics        []ContextDiagnostic `json:"diagnostics,omitempty"`
+	Hits        []SearchHit         `json:"hits"`
+	Diagnostics []ContextDiagnostic `json:"diagnostics,omitempty"`
+	// Temporal is present only when the caller supplied an explicit valid-time
+	// selector or when the predicate actually removed a candidate. An ordinary
+	// current search therefore keeps its exact pre-temporal response shape.
+	Temporal           *TemporalSelection `json:"temporal,omitempty"`
 	plannerDiagnostics []RetrievalPlannerDiagnostics
 
 	// fusionChannelAvailability and fusionStrategy are evaluation-only state.
@@ -136,6 +187,17 @@ type SearchResult struct {
 	retrievalPlan             *RetrievalPlan
 	retrievalPassObservations []RetrievalPassObservation
 	rerankerObservation       RetrievalRerankerObservation
+	// temporalOmissions reports, by bounded category, how many candidates the
+	// valid-time predicate removed. It stays unexported so ordinary responses
+	// carry no temporal detail; authorized diagnostics read it explicitly.
+	temporalOmissions TemporalOmissionReport
+}
+
+// TemporalOmissionReport exposes the bounded omission categories recorded while
+// answering one search. It is intentionally a value copy so a caller cannot
+// mutate the result's internal accounting.
+func (result SearchResult) TemporalOmissionReport() TemporalOmissionReport {
+	return result.temporalOmissions.Normalize()
 }
 
 type RetrievalPassObservation struct {
@@ -377,7 +439,17 @@ type Service struct {
 	rerankerVersion              string
 	qualityBounds                QualityAdjustmentBounds
 	retrievalPlanPolicy          RetrievalPlanPolicy
-	observer                     telemetry.Observer
+	// now supplies the evaluation clock for valid-time predicates. It defaults to
+	// UTC wall time and exists so tests can pin one instant deterministically.
+	now      func() time.Time
+	observer telemetry.Observer
+}
+
+func (s *Service) evaluationClock() time.Time {
+	if s.now != nil {
+		return s.now()
+	}
+	return time.Now().UTC()
 }
 
 func NewService(deps ServiceDependencies, observers ...telemetry.Observer) *Service {
@@ -471,6 +543,13 @@ func (s *Service) Search(ctx context.Context, input SearchInput) (result SearchR
 
 	if err := input.Validate(); err != nil {
 		return SearchResult{}, err
+	}
+	// Capture one evaluation instant per request so every valid-time predicate in
+	// this search observes the same clock, even across follow-up passes.
+	evaluationInstant := s.evaluationClock()
+	temporalConstraint := input.TemporalConstraint
+	if temporalConstraint.Mode == "" {
+		temporalConstraint = memory.TemporalConstraint{Mode: memory.TemporalSelectionCurrent}
 	}
 	surface := input.rankingSurface
 	if surface == "" {
@@ -573,6 +652,8 @@ func (s *Service) Search(ctx context.Context, input SearchInput) (result SearchR
 	aggregateCandidates := 0
 	recalledCandidates := 0
 	filteredCandidates := 0
+	expiredCandidates := 0
+	var temporalOmissions TemporalOmissionReport
 	requiredChannelUnavailable := false
 	shadowCandidates := 0
 	plannerEvidence := EvidenceAssessment{}
@@ -619,6 +700,19 @@ func (s *Service) Search(ctx context.Context, input SearchInput) (result SearchR
 				if includePlanned {
 					filteredCandidates++
 				}
+				continue
+			}
+			// Fact-valid time is evaluated before ranking so an expired version
+			// can never outrank the current one on similarity alone.
+			if !temporalConstraint.Matches(hit.Memory.TemporalValidity, evaluationInstant) {
+				if includePlanned {
+					filteredCandidates++
+				}
+				expiredCandidates++
+				// Record a bounded reason. Only the class and the shape of the
+				// validity snapshot are inspected, so the category can never
+				// carry content, identity, or interval detail.
+				temporalOmissions.Add(classifyTemporalOmission(temporalConstraint, hit.Memory.Class, hit.Memory.TemporalValidity))
 				continue
 			}
 			if !matchClassFilter(hit.Memory.Class, input.Classes) {
@@ -1102,7 +1196,7 @@ func (s *Service) Search(ctx context.Context, input SearchInput) (result SearchR
 	plannerElapsed := plannerDiagnosticElapsed(plannerExecution.startedAt, time.Now())
 	var plannerDiagnostics []RetrievalPlannerDiagnostics
 	if input.retrievalPlannerDiagnosticsAuthorized && plannerExecution.plan != nil && plannerEvidenceSet {
-		plannerDiagnostics = s.retrievalPlannerDiagnostics(ctx, RetrievalPlannerDiagnosticsInput{Plan: *plannerExecution.plan, RolloutStage: plannerExecution.stage, Evidence: plannerEvidence, PassCount: plannerPassCount, CandidateCount: plannerCandidateCount, Elapsed: plannerElapsed, ChannelAvailability: plannerChannelAvailability, ChangedRankCount: plannerChangedRankCount, ChangedRankObserved: plannerChangedRankObserved})
+		plannerDiagnostics = s.retrievalPlannerDiagnostics(ctx, RetrievalPlannerDiagnosticsInput{Plan: *plannerExecution.plan, RolloutStage: plannerExecution.stage, Evidence: plannerEvidence, PassCount: plannerPassCount, CandidateCount: plannerCandidateCount, Elapsed: plannerElapsed, ChannelAvailability: plannerChannelAvailability, ChangedRankCount: plannerChangedRankCount, ChangedRankObserved: plannerChangedRankObserved, TemporalOmissions: temporalOmissions})
 	}
 	s.recordRetrievalPlannerTelemetry(ctx, plannerExecution, plannerEvidence, plannerEvidenceSet, plannerPassCount, plannerCandidateCount, plannerElapsed, plannerChannelAvailability, plannerChangedRankCount, plannerChangedRankObserved)
 	result = SearchResult{
@@ -1119,8 +1213,27 @@ func (s *Service) Search(ctx context.Context, input SearchInput) (result SearchR
 		}(),
 		retrievalPassObservations: plannerPassObservations,
 		rerankerObservation:       rerankerObservation,
+		temporalOmissions:         temporalOmissions,
+		Temporal:                  temporalSelectionSummary(input.TemporalConstraint, temporalOmissions),
 	}
 	return result, nil
+}
+
+// temporalSelectionSummary projects the request's valid-time selection into the
+// bounded response block. It is nil for an ordinary current search that removed
+// nothing, which is what keeps the ordinary response shape unchanged: the key
+// only appears when the caller asked for history or when the selector actually
+// excluded something.
+func temporalSelectionSummary(constraint memory.TemporalConstraint, omissions TemporalOmissionReport) *TemporalSelection {
+	explicit := constraint.Mode != "" && constraint.Mode != memory.TemporalSelectionCurrent
+	if !explicit && omissions.Total == 0 {
+		return nil
+	}
+	mode := string(constraint.Mode)
+	if mode == "" {
+		mode = string(memory.TemporalSelectionCurrent)
+	}
+	return &TemporalSelection{Mode: mode, Omitted: omissions.Total}
 }
 
 func (s *Service) observeQueryAnalysisShadow(ctx context.Context, original SearchInput, inputs []SearchInput, limits QueryAnalysisLimits) int {

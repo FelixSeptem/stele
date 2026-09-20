@@ -27,9 +27,9 @@ func TestReadLatestContextProjectionUsesExactScopeAndFiltersHiddenItems(t *testi
 			AddRow(projectionID.String(), scope.Tenant, scope.Project, scope.Namespace, "always_visible", int64(1), "schema-v1", "policy-v1", "renderer-v1", []byte(`{}`), "active", now, now, nil, "fresh", "within_budget", int64(1000), int64(10), true, "cp-1", false))
 	mock.ExpectQuery(`SELECT id, source_kind, source_id`).
 		WithArgs(projectionID, scope.Tenant, scope.Project, scope.Namespace).
-		WillReturnRows(pgxmock.NewRows([]string{"id", "source_kind", "source_id", "source_version", "memory_id", "class", "lifecycle_state", "rendered_text", "sort_key", "citation"}).
-			AddRow(uuid.New().String(), "canonical_version", uuid.New().String(), int64(1), nil, "profile", "active", "visible", "01", []byte(`{}`)).
-			AddRow(uuid.New().String(), "canonical_version", uuid.New().String(), int64(2), nil, "profile", "suppressed", "secret", "02", []byte(`{}`)))
+		WillReturnRows(pgxmock.NewRows([]string{"id", "source_kind", "source_id", "source_version", "memory_id", "class", "lifecycle_state", "rendered_text", "sort_key", "citation", "temporal_fact_id", "valid_from", "valid_to"}).
+			AddRow(uuid.New().String(), "canonical_version", uuid.New().String(), int64(1), nil, "profile", "active", "visible", "01", []byte(`{}`), "fact-visible", now, nil).
+			AddRow(uuid.New().String(), "canonical_version", uuid.New().String(), int64(2), nil, "profile", "suppressed", "secret", "02", []byte(`{}`), "fact-hidden", now, nil))
 
 	projection, err := repo.ReadLatestContextProjection(context.Background(), scope, memory.ContextProjectionKindAlwaysVisible)
 	if err != nil {
@@ -37,6 +37,12 @@ func TestReadLatestContextProjectionUsesExactScopeAndFiltersHiddenItems(t *testi
 	}
 	if projection.Scope != scope || len(projection.Items) != 1 || projection.Items[0].Text != "visible" {
 		t.Fatalf("projection = %+v, want exact-scope visible item only", projection)
+	}
+	// The rendered item must carry the validity identity of the version it was
+	// rendered from, so a provenance check can tell which window the evidence
+	// described without re-reading canonical memory.
+	if projection.Items[0].TemporalValidity.TemporalFactID != "fact-visible" {
+		t.Fatalf("item temporal fact id = %q, want fact-visible", projection.Items[0].TemporalValidity.TemporalFactID)
 	}
 	if err := mock.ExpectationsWereMet(); err != nil {
 		t.Fatalf("expectations: %v", err)

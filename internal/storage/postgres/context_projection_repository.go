@@ -2,6 +2,7 @@ package postgres
 
 import (
 	"context"
+	"database/sql"
 	"encoding/json"
 	"fmt"
 	"strings"
@@ -191,10 +192,17 @@ WHERE tenant = $1 AND project = $2 AND namespace = $3 AND kind = $4
 		}
 		_, err = tx.Exec(ctx, `
 INSERT INTO context_projection_items
- (id, projection_id, tenant, project, namespace, source_kind, source_id, source_version, memory_id, class, lifecycle_state, rendered_text, sort_key, citation)
-VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14)`, uuidOrNew(item.ID), projectionID,
+ (id, projection_id, tenant, project, namespace, source_kind, source_id, source_version, memory_id, class, lifecycle_state, rendered_text, sort_key, citation, temporal_fact_id, valid_from, valid_to)
+VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17)`, uuidOrNew(item.ID), projectionID,
 			projection.Scope.Tenant, projection.Scope.Project, projection.Scope.Namespace, string(item.Source.Kind), sourceID,
-			nullableVersion(item.Source.Version), memoryID, string(item.Class), string(item.LifecycleState), item.Text, item.SortKey, citation)
+			nullableVersion(item.Source.Version), memoryID, string(item.Class), string(item.LifecycleState), item.Text, item.SortKey, citation,
+			// The item keeps its source version's validity snapshot so a rebuild
+			// can be checked against the window the evidence actually described,
+			// and a superseded source can be excluded rather than silently
+			// substituted.
+			nullableString(item.TemporalValidity.TemporalFactID),
+			nullableTime(item.TemporalValidity.ValidFrom),
+			nullableTimePtr(item.TemporalValidity.ValidTo))
 		if err != nil {
 			return memory.ContextProjection{}, fmt.Errorf("insert context projection item: %w", err)
 		}
@@ -281,7 +289,10 @@ func (r *Repository) readContextProjectionItems(ctx context.Context, projection 
 	if err != nil {
 		return nil, err
 	}
-	rows, err := r.db.Query(ctx, `SELECT id, source_kind, source_id, COALESCE(source_version, 0), COALESCE(memory_id::text, ''), class, lifecycle_state, rendered_text, sort_key, citation FROM context_projection_items WHERE projection_id=$1 AND tenant=$2 AND project=$3 AND namespace=$4 ORDER BY sort_key ASC, source_kind ASC, source_id ASC, id ASC`, id, projection.Scope.Tenant, projection.Scope.Project, projection.Scope.Namespace)
+	// sort_key ASC, then source identity, then id: the ordering is total, so a
+	// rebuild that materializes the same evidence produces byte-identical output
+	// and a reviewer can diff two projections without relying on row order.
+	rows, err := r.db.Query(ctx, `SELECT id, source_kind, source_id, COALESCE(source_version, 0), COALESCE(memory_id::text, ''), class, lifecycle_state, rendered_text, sort_key, citation, COALESCE(temporal_fact_id, ''), valid_from, valid_to FROM context_projection_items WHERE projection_id=$1 AND tenant=$2 AND project=$3 AND namespace=$4 ORDER BY sort_key ASC, source_kind ASC, source_id ASC, id ASC`, id, projection.Scope.Tenant, projection.Scope.Project, projection.Scope.Namespace)
 	if err != nil {
 		return nil, fmt.Errorf("query context projection items: %w", err)
 	}
@@ -292,13 +303,28 @@ func (r *Repository) readContextProjectionItems(ctx context.Context, projection 
 		var sourceVersion int64
 		var memoryID string
 		var citationBytes []byte
-		if err := rows.Scan(&itemID, &sourceKind, &sourceID, &sourceVersion, &memoryID, &class, &state, &text, &sortKey, &citationBytes); err != nil {
+		var temporalFactID sql.NullString
+		var validFrom, validTo sql.NullTime
+		if err := rows.Scan(&itemID, &sourceKind, &sourceID, &sourceVersion, &memoryID, &class, &state, &text, &sortKey, &citationBytes, &temporalFactID, &validFrom, &validTo); err != nil {
 			return nil, fmt.Errorf("scan context projection item: %w", err)
 		}
 		item := memory.ContextProjectionItem{ID: itemID, Class: memory.MemoryClass(class), LifecycleState: memory.MemoryState(state), Text: text, SortKey: sortKey}
 		item.Source = memory.ContextProjectionSource{Kind: memory.ContextProjectionSourceKind(sourceKind), ID: sourceID, Scope: projection.Scope}
 		item.Source.Version = sourceVersion
 		item.Source.MemoryID = memoryID
+		// The snapshot is returned so a provenance or freshness check can prove
+		// which validity window the rendered evidence described. It is not a
+		// claim by the projection itself.
+		if temporalFactID.Valid {
+			item.TemporalValidity.TemporalFactID = temporalFactID.String
+		}
+		if validFrom.Valid {
+			item.TemporalValidity.ValidFrom = validFrom.Time
+		}
+		if validTo.Valid {
+			closed := validTo.Time
+			item.TemporalValidity.ValidTo = &closed
+		}
 		if len(citationBytes) > 0 {
 			if err := json.Unmarshal(citationBytes, &item.Citation); err != nil {
 				return nil, fmt.Errorf("decode projection citation: %w", err)
