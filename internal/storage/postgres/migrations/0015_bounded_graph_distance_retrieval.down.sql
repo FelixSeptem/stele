@@ -1,0 +1,3 @@
+DROP INDEX IF EXISTS relation_projections_graph_source_currency_idx;
+DROP INDEX IF EXISTS relation_projections_graph_target_scope_idx;
+DROP INDEX IF EXISTS relation_projections_graph_source_scope_idx;

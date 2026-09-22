@@ -91,9 +91,48 @@ incompatible plan, unavailable optional channel, follow-up failure, or budget
 exhaustion must demonstrate a baseline-equivalent fallback and a tested
 rollback. Diagnostics and shadow runs must prove ordinary response equivalence.
 
+Graph-distance rollout adds a separate hard gate: the report may include only
+redacted hop aggregates, truncation/fallback rates, citation coverage, eligible
+relation-hit rate, and latency buckets. Cross-scope traversal, lifecycle or
+source-version leakage, untruncated cycles, limit overflow, citation mismatch,
+ordinary API topology leakage, and nondeterministic replay are non-pass safety
+failures even when graph quality delta is positive. A disabled or rolled-back
+exact-scope graph policy must be followed by a baseline-equivalent request.
+
 An absent owned evaluation DSN is a controlled non-pass. It produces
 `SKIP_RETRIEVAL_EVALUATION_DSN_REQUIRED`, never authorizes `active_for_scope`,
 and must not be replaced by the runtime `STELE_POSTGRES_DSN`.
+
+### Latest local gate observation
+
+On 2026-09-22 the repository-owned runner was invoked with:
+
+```powershell
+pwsh -File scripts/retrieval-evaluation.ps1
+```
+
+The runner returned exit code `2` and
+`SKIP_RETRIEVAL_EVALUATION_DSN_REQUIRED`. No runtime PostgreSQL DSN was reused,
+no database was mutated, and no release report was treated as eligible. A real
+shadow evaluation remains pending until an independently owned PostgreSQL 18 +
+pgvector DSN is supplied through `STELE_TEST_RETRIEVAL_EVALUATION_DSN`.
+
+The following repository verification commands also completed successfully on
+2026-09-22 against the bounded graph-distance retrieval worktree:
+
+```text
+go test ./internal/retrieval ./internal/storage/postgres -count=1
+go test ./... -count=1 -timeout 15m
+go test -race ./... -timeout 20m
+go vet ./...
+openspec validate --all --strict
+git diff --check
+```
+
+These checks validate the implementation and its deterministic fixtures; they
+do not change the controlled non-pass release status above. Only the missing
+owned PostgreSQL + pgvector shadow evaluation can supply the real-stack
+activation evidence.
 
 Progressive context compares short retrieval projection, medium session/context
 overview, and canonical/chunk evidence. Each level must have a source watermark,

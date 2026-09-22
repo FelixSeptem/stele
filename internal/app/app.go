@@ -532,6 +532,7 @@ func buildAPIRuntime(ctx context.Context, cfg config.Config, deps apiRuntimeDepe
 		Lexical:                      repo,
 		Semantic:                     repo,
 		Relations:                    repo,
+		GraphTraversal:               repo,
 		Citations:                    repo,
 		Insights:                     repo,
 		UsefulnessSummarizer:         repo,
@@ -540,6 +541,7 @@ func buildAPIRuntime(ctx context.Context, cfg config.Config, deps apiRuntimeDepe
 		Projections:                  repo,
 		ProjectionConsumptionEnabled: cfg.ContextProjectionConsumptionEnabled,
 		Reranker:                     buildConfiguredReranker(cfg.Reranker), RerankerMode: retrieval.RerankerMode(cfg.Reranker.Mode), RerankerProvider: cfg.Reranker.Provider, RerankerVersion: cfg.Reranker.Model,
+		GraphTraversalLimits: retrieval.GraphTraversalLimits{MaxHops: cfg.GraphTraversal.MaxHops, MaxSeeds: cfg.GraphTraversal.MaxSeeds, MaxEdgesPerHop: cfg.GraphTraversal.MaxEdgesPerHop, MaxPathsPerSeed: cfg.GraphTraversal.MaxPathsPerSeed, MaxPathsPerRequest: cfg.GraphTraversal.MaxPathsPerRequest, MaxCandidates: cfg.GraphTraversal.MaxCandidates, MaxElapsed: cfg.GraphTraversal.MaxElapsed},
 	}, deps.observer)
 	httpDeps := httpDependenciesFromConfigWithIngestor(cfg, ingestor)
 	durableAuthorizer := auth.NewPrincipalService(repo, time.Now)
@@ -756,6 +758,7 @@ func buildWorkerRuntime(ctx context.Context, cfg config.Config, deps workerRunti
 		Lexical:                      repo,
 		Semantic:                     repo,
 		Relations:                    repo,
+		GraphTraversal:               repo,
 		Citations:                    repo,
 		Insights:                     repo,
 		UsefulnessSummarizer:         repo,
@@ -764,6 +767,7 @@ func buildWorkerRuntime(ctx context.Context, cfg config.Config, deps workerRunti
 		Projections:                  repo,
 		ProjectionConsumptionEnabled: cfg.ContextProjectionConsumptionEnabled,
 		Reranker:                     buildConfiguredReranker(cfg.Reranker), RerankerMode: retrieval.RerankerMode(cfg.Reranker.Mode), RerankerProvider: cfg.Reranker.Provider, RerankerVersion: cfg.Reranker.Model,
+		GraphTraversalLimits: retrieval.GraphTraversalLimits{MaxHops: cfg.GraphTraversal.MaxHops, MaxSeeds: cfg.GraphTraversal.MaxSeeds, MaxEdgesPerHop: cfg.GraphTraversal.MaxEdgesPerHop, MaxPathsPerSeed: cfg.GraphTraversal.MaxPathsPerSeed, MaxPathsPerRequest: cfg.GraphTraversal.MaxPathsPerRequest, MaxCandidates: cfg.GraphTraversal.MaxCandidates, MaxElapsed: cfg.GraphTraversal.MaxElapsed},
 	}, deps.observer)
 
 	worker := jobs.GovernanceWorker{

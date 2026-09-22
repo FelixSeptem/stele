@@ -44,8 +44,19 @@ type Config struct {
 	Jobs                                JobConfig
 	Assurance                           AssuranceConfig
 	QueryAnalysis                       QueryAnalysisConfig
+	GraphTraversal                      GraphTraversalConfig
 	Evaluation                          EvaluationConfig
 	Provider                            ProviderConfig
+}
+
+type GraphTraversalConfig struct {
+	MaxHops            int
+	MaxSeeds           int
+	MaxEdgesPerHop     int
+	MaxPathsPerSeed    int
+	MaxPathsPerRequest int
+	MaxCandidates      int
+	MaxElapsed         time.Duration
 }
 
 type ProviderConfig struct {
@@ -182,6 +193,10 @@ func LoadFromEnv() (Config, error) {
 	}
 	contextProjectionConsumptionEnabled := loadBoolEnv("STELE_CONTEXT_PROJECTION_CONSUMPTION_ENABLED")
 	queryAnalysis, err := loadQueryAnalysisConfig()
+	if err != nil {
+		return Config{}, err
+	}
+	graphTraversal, err := loadGraphTraversalConfig()
 	if err != nil {
 		return Config{}, err
 	}
@@ -487,6 +502,7 @@ func LoadFromEnv() (Config, error) {
 		Migrations:                          MigrationConfig{Policy: migrationPolicy},
 		ContextProjectionConsumptionEnabled: contextProjectionConsumptionEnabled,
 		QueryAnalysis:                       queryAnalysis,
+		GraphTraversal:                      graphTraversal,
 		Evaluation:                          evaluationConfig,
 		Provider:                            providerConfig,
 		Auth: AuthConfig{
@@ -644,6 +660,36 @@ func loadQueryAnalysisConfig() (QueryAnalysisConfig, error) {
 		return QueryAnalysisConfig{}, fmt.Errorf("query-analysis settings are invalid")
 	}
 	return q, nil
+}
+
+func loadGraphTraversalConfig() (GraphTraversalConfig, error) {
+	g := GraphTraversalConfig{MaxHops: 3, MaxSeeds: 32, MaxEdgesPerHop: 64, MaxPathsPerSeed: 32, MaxPathsPerRequest: 256, MaxCandidates: 100, MaxElapsed: 250 * time.Millisecond}
+	var err error
+	if g.MaxHops, err = loadIntWithDefault("STELE_GRAPH_MAX_HOPS", g.MaxHops); err != nil {
+		return GraphTraversalConfig{}, err
+	}
+	if g.MaxSeeds, err = loadIntWithDefault("STELE_GRAPH_MAX_SEEDS", g.MaxSeeds); err != nil {
+		return GraphTraversalConfig{}, err
+	}
+	if g.MaxEdgesPerHop, err = loadIntWithDefault("STELE_GRAPH_MAX_EDGES_PER_HOP", g.MaxEdgesPerHop); err != nil {
+		return GraphTraversalConfig{}, err
+	}
+	if g.MaxPathsPerSeed, err = loadIntWithDefault("STELE_GRAPH_MAX_PATHS_PER_SEED", g.MaxPathsPerSeed); err != nil {
+		return GraphTraversalConfig{}, err
+	}
+	if g.MaxPathsPerRequest, err = loadIntWithDefault("STELE_GRAPH_MAX_PATHS_PER_REQUEST", g.MaxPathsPerRequest); err != nil {
+		return GraphTraversalConfig{}, err
+	}
+	if g.MaxCandidates, err = loadIntWithDefault("STELE_GRAPH_MAX_CANDIDATES", g.MaxCandidates); err != nil {
+		return GraphTraversalConfig{}, err
+	}
+	if g.MaxElapsed, err = loadDurationWithDefault("STELE_GRAPH_MAX_ELAPSED", g.MaxElapsed); err != nil {
+		return GraphTraversalConfig{}, err
+	}
+	if g.MaxHops < 1 || g.MaxHops > 3 || g.MaxSeeds < 1 || g.MaxSeeds > 1000 || g.MaxEdgesPerHop < 1 || g.MaxEdgesPerHop > 10000 || g.MaxPathsPerSeed < 1 || g.MaxPathsPerSeed > 1000 || g.MaxPathsPerRequest < 1 || g.MaxPathsPerRequest > 10000 || g.MaxCandidates < 1 || g.MaxCandidates > 5000 || g.MaxElapsed <= 0 || g.MaxElapsed > 30*time.Second {
+		return GraphTraversalConfig{}, fmt.Errorf("graph traversal settings are invalid")
+	}
+	return g, nil
 }
 
 func getEnvOrDefault(key string, fallback string) string {

@@ -144,7 +144,7 @@ func (s *Service) resolveRetrievalPlannerExecution(ctx context.Context, input Se
 	if err := policy.Validate(); err != nil {
 		return baseline
 	}
-	plan, err := BuildRetrievalPlan(RetrievalPlanInput{AcceptedQuery: input.Query, Analysis: analysis, EmbeddingAvailable: len(input.QueryEmbedding) > 0, Policy: policy, Now: now})
+	plan, err := BuildRetrievalPlan(RetrievalPlanInput{AcceptedQuery: input.Query, Analysis: analysis, EmbeddingAvailable: len(input.QueryEmbedding) > 0, Policy: policy, Now: now, GraphTraversalLimits: s.graphTraversalLimits, GraphTraversalPolicy: resolution.Policy.GraphTraversal})
 	if err != nil {
 		return baseline
 	}

@@ -67,6 +67,16 @@ limits auditable in one PostgreSQL execution boundary.
   bound.
 - Materialized one-to-three-hop paths reduce read work but introduce invalidation
   and new derived-path lifecycle state.
+- Apache AGE is a credible PostgreSQL-community option for openCypher graph
+  queries, but adopting it here would make an additional extension and image
+  packaging prerequisite, add a second query-language execution surface, and
+  make the exact scope/lifecycle/bi-temporal/source-currency predicates and
+  hard traversal budgets harder to audit in one parameterized statement. The
+  current requirement is a bounded maximum of three hops over an existing
+  projection, so AGE would add operational cost without improving the safety
+  envelope. Keep the repository interface isolated so an AGE-backed adapter can
+  be evaluated later if real workloads demonstrate that recursive CTEs are the
+  bottleneck.
 - A graph database violates the PostgreSQL-only persistence architecture and
   creates operational/source-of-truth ambiguity.
 

@@ -154,10 +154,11 @@ type RetrievalPlanTemplate struct {
 }
 
 type RetrievalPlanPolicy struct {
-	PlannerVersion RetrievalPlannerVersion
-	Version        RetrievalPlanPolicyVersion
-	HardLimits     RetrievalPlanHardLimits
-	Templates      map[RetrievalQueryFamily]RetrievalPlanTemplate
+	PlannerVersion           RetrievalPlannerVersion
+	Version                  RetrievalPlanPolicyVersion
+	HardLimits               RetrievalPlanHardLimits
+	GraphTraversalHardLimits GraphTraversalLimits
+	Templates                map[RetrievalQueryFamily]RetrievalPlanTemplate
 }
 
 func DefaultRetrievalPlanPolicy() RetrievalPlanPolicy {
@@ -182,7 +183,7 @@ func DefaultRetrievalPlanPolicy() RetrievalPlanPolicy {
 	procedural.MemoryClassQuotas = map[memory.MemoryClass]int{memory.MemoryClassProcedural: 25}
 	procedural.ContextPriorities = []memory.MemoryClass{memory.MemoryClassProcedural, memory.MemoryClassSummary, memory.MemoryClassEpisodic, memory.MemoryClassProfile, memory.MemoryClassRelation}
 	templates[RetrievalQueryFamilyProcedural] = procedural
-	return RetrievalPlanPolicy{PlannerVersion: RetrievalPlannerVersionV1, Version: RetrievalPlanPolicyVersionV1, HardLimits: limits, Templates: templates}
+	return RetrievalPlanPolicy{PlannerVersion: RetrievalPlannerVersionV1, Version: RetrievalPlanPolicyVersionV1, HardLimits: limits, GraphTraversalHardLimits: DefaultGraphTraversalLimits(), Templates: templates}
 }
 
 func (policy RetrievalPlanPolicy) Validate() error {
@@ -193,6 +194,13 @@ func (policy RetrievalPlanPolicy) Validate() error {
 		return fmt.Errorf("unsupported retrieval plan policy version %q", policy.Version)
 	}
 	if err := policy.HardLimits.Validate(); err != nil {
+		return err
+	}
+	graphLimits := policy.GraphTraversalHardLimits
+	if graphLimits == (GraphTraversalLimits{}) {
+		graphLimits = DefaultGraphTraversalLimits()
+	}
+	if err := graphLimits.ValidateEffective(); err != nil {
 		return err
 	}
 	for _, family := range retrievalQueryFamilies {
@@ -213,12 +221,14 @@ func (policy RetrievalPlanPolicy) Validate() error {
 }
 
 type RetrievalPlanInput struct {
-	AcceptedQuery      string
-	Analysis           QueryAnalysisResult
-	EmbeddingAvailable bool
-	Policy             RetrievalPlanPolicy
-	Now                time.Time
-	TemporalConstraint memory.TemporalConstraint
+	AcceptedQuery        string
+	Analysis             QueryAnalysisResult
+	EmbeddingAvailable   bool
+	Policy               RetrievalPlanPolicy
+	Now                  time.Time
+	TemporalConstraint   memory.TemporalConstraint
+	GraphTraversalPolicy *memory.GraphTraversalPolicy
+	GraphTraversalLimits GraphTraversalLimits
 }
 
 type RetrievalPlanIdentity struct {
@@ -229,7 +239,9 @@ type RetrievalPlanIdentity struct {
 	// TemporalMode makes a historical plan distinguishable from a current one
 	// in the identity string, so a replay can prove it re-ran the same
 	// fact-valid selection instead of silently falling back to current.
-	TemporalMode memory.TemporalSelectionMode
+	TemporalMode       memory.TemporalSelectionMode
+	GraphPolicyVersion string
+	GraphHops          int
 }
 
 func (identity RetrievalPlanIdentity) String() string {
@@ -239,6 +251,9 @@ func (identity RetrievalPlanIdentity) String() string {
 	// comparisons are unaffected.
 	if identity.TemporalMode != "" && identity.TemporalMode != memory.TemporalSelectionCurrent {
 		value += ":" + string(identity.TemporalMode)
+	}
+	if identity.GraphPolicyVersion != "" {
+		value += ":graph=" + identity.GraphPolicyVersion + ":hops=" + fmt.Sprint(identity.GraphHops)
 	}
 	if len(identity.FallbackChannelCandidates) == 0 {
 		return value
@@ -275,6 +290,8 @@ type RetrievalPlan struct {
 	FollowUp                  RetrievalPlanFollowUpRule
 	Fallback                  RetrievalPlanFallback
 	TemporalConstraint        memory.TemporalConstraint
+	GraphTraversalPolicy      *memory.GraphTraversalPolicy
+	GraphTraversalLimits      GraphTraversalLimits
 }
 
 func BuildRetrievalPlan(input RetrievalPlanInput) (RetrievalPlan, error) {
@@ -295,6 +312,32 @@ func BuildRetrievalPlan(input RetrievalPlanInput) (RetrievalPlan, error) {
 		return RetrievalPlan{}, fmt.Errorf("validate retrieval-plan temporal constraint: %w", err)
 	}
 	family := classifyRetrievalQueryFamily(input.Analysis, input.EmbeddingAvailable)
+	graphLimits := input.GraphTraversalLimits
+	if graphLimits == (GraphTraversalLimits{}) {
+		graphLimits = input.Policy.GraphTraversalHardLimits
+	}
+	if graphLimits == (GraphTraversalLimits{}) {
+		graphLimits = DefaultGraphTraversalLimits()
+	}
+	if err := graphLimits.Validate(); err != nil {
+		return RetrievalPlan{}, fmt.Errorf("validate input graph limits: %w", err)
+	}
+	var graphPolicy *memory.GraphTraversalPolicy
+	effectiveGraphLimits := graphLimits
+	if input.GraphTraversalPolicy != nil && input.GraphTraversalPolicy.EnablesFamily(string(family)) {
+		copyPolicy := *input.GraphTraversalPolicy
+		var err error
+		effectiveGraphLimits, err = EffectiveGraphTraversalLimits(graphLimits, copyPolicy)
+		if err != nil {
+			return RetrievalPlan{}, err
+		}
+		graphPolicy = &copyPolicy
+	}
+	if input.GraphTraversalPolicy != nil && !input.GraphTraversalPolicy.EnablesFamily(string(family)) && (family == RetrievalQueryFamilyEntityRelation || family == RetrievalQueryFamilyMultiHop) {
+		// A policy may target only the other graph family; this plan remains
+		// baseline and carries no graph disposition.
+		graphPolicy = nil
+	}
 	complexity := classifyRetrievalPlanComplexity(input.Analysis)
 	template := input.Policy.Templates[family]
 	channelCandidates := template.ChannelCandidates
@@ -314,12 +357,17 @@ func BuildRetrievalPlan(input RetrievalPlanInput) (RetrievalPlan, error) {
 		RerankerEligible:  template.RerankerEligible, RerankerHeadroom: template.RerankerHeadroom,
 		MaxPasses: template.MaxPasses, LatencyBudget: template.LatencyBudget,
 		ContextItems: template.ContextItems, FollowUp: cloneFollowUpRule(template.FollowUp),
-		Fallback:           RetrievalPlanFallbackBaseline,
-		TemporalConstraint: temporalConstraint,
+		Fallback:             RetrievalPlanFallbackBaseline,
+		TemporalConstraint:   temporalConstraint,
+		GraphTraversalPolicy: graphPolicy, GraphTraversalLimits: effectiveGraphLimits,
+	}
+	if graphPolicy != nil {
+		plan.Identity.GraphPolicyVersion = graphPolicy.PolicyVersion
+		plan.Identity.GraphHops = effectiveGraphLimits.MaxHops
 	}
 	canonicalizeRetrievalPlan(&plan)
 	if err := plan.Validate(input.Policy.HardLimits); err != nil {
-		return RetrievalPlan{}, err
+		return RetrievalPlan{}, fmt.Errorf("validate graph retrieval plan: %w", err)
 	}
 	return plan, nil
 }
@@ -357,6 +405,34 @@ func (plan RetrievalPlan) Validate(limits RetrievalPlanHardLimits) error {
 	}
 	if err := plan.TemporalConstraint.Validate(); err != nil {
 		return fmt.Errorf("validate retrieval-plan temporal constraint: %w", err)
+	}
+	graphLimits := plan.GraphTraversalLimits
+	if graphLimits == (GraphTraversalLimits{}) {
+		graphLimits = DefaultGraphTraversalLimits()
+	}
+	if err := graphLimits.ValidateEffective(); err != nil {
+		return err
+	}
+	if plan.GraphTraversalPolicy == nil {
+		if plan.Identity.GraphPolicyVersion != "" || plan.Identity.GraphHops != 0 {
+			return fmt.Errorf("retrieval-plan graph identity requires a graph policy")
+		}
+	} else {
+		if !plan.GraphTraversalPolicy.EnablesFamily(string(plan.Family)) {
+			return fmt.Errorf("retrieval-plan graph policy does not enable family")
+		}
+		if err := plan.GraphTraversalPolicy.Validate(); err != nil {
+			return err
+		}
+		if plan.GraphTraversalPolicy.HopsSet && plan.GraphTraversalPolicy.MaxHops != graphLimits.MaxHops {
+			return fmt.Errorf("retrieval-plan graph hop disposition is inconsistent")
+		}
+		if !plan.GraphTraversalPolicy.HopsSet && graphLimits.MaxHops < 1 {
+			return fmt.Errorf("retrieval-plan default graph hop disposition is invalid")
+		}
+		if plan.Identity.GraphPolicyVersion != plan.GraphTraversalPolicy.PolicyVersion || plan.Identity.GraphHops != graphLimits.MaxHops {
+			return fmt.Errorf("retrieval-plan graph identity is inconsistent")
+		}
 	}
 	return nil
 }

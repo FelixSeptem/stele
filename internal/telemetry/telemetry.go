@@ -62,17 +62,21 @@ type RetrievalEvaluationEvent struct {
 // It intentionally excludes query text, scope values, identifiers, provider
 // payloads, credentials, and raw scores.
 type RetrievalPlannerEvent struct {
-	PlannerVersion string
-	PolicyVersion  string
-	Family         string
-	Stage          string
-	Disposition    string
-	Pass           int
-	BudgetBucket   string
-	Evidence       string
-	Fallback       string
-	LatencyBucket  string
-	Reranker       string
+	PlannerVersion  string
+	PolicyVersion   string
+	Family          string
+	Stage           string
+	Disposition     string
+	Pass            int
+	BudgetBucket    string
+	Evidence        string
+	Fallback        string
+	LatencyBucket   string
+	Reranker        string
+	GraphHopBucket  string
+	GraphPathBucket string
+	GraphTruncation string
+	GraphFailure    string
 }
 
 type RetrievalPlannerChannelEvent struct {

@@ -143,7 +143,9 @@ const (
 	// EvaluationSafetyFailureResourceOverflow means a temporal replay exceeded
 	// its fixed candidate envelope. It is a hard failure even when quality
 	// metrics improve, because temporal selection must remain bounded.
-	EvaluationSafetyFailureResourceOverflow EvaluationSafetyFailureCategory = "resource_overflow"
+	EvaluationSafetyFailureResourceOverflow      EvaluationSafetyFailureCategory = "resource_overflow"
+	EvaluationSafetyFailureGraphCycle            EvaluationSafetyFailureCategory = "graph_untruncated_cycle"
+	EvaluationSafetyFailureGraphNondeterministic EvaluationSafetyFailureCategory = "graph_nondeterministic_replay"
 	// EvaluationSafetyFailureAcrossValidityAmbiguity is the per-case category
 	// reported when a temporal expectation contradicts itself.
 	EvaluationSafetyFailureAcrossValidityAmbiguity EvaluationSafetyFailureCategory = "temporal_expectation_ambiguous"
@@ -413,7 +415,38 @@ type EvaluationReport struct {
 	// TemporalCoverage reports the fact-valid scenarios this replay measured. It
 	// is omitted entirely for a report produced from a pre-temporal fixture, so
 	// the ordinary report shape is unchanged.
-	TemporalCoverage *EvaluationTemporalCoverage `json:"temporal_coverage,omitempty"`
+	TemporalCoverage       *EvaluationTemporalCoverage       `json:"temporal_coverage,omitempty"`
+	GraphTraversalEvidence *EvaluationGraphTraversalEvidence `json:"graph_traversal_evidence,omitempty"`
+}
+
+type EvaluationGraphTraversalEvidence struct {
+	CandidateCountByHop  map[string]int `json:"candidate_count_by_hop,omitempty"`
+	TruncationRate       float64        `json:"truncation_rate,omitempty"`
+	FallbackRate         float64        `json:"fallback_rate,omitempty"`
+	CitationCoverage     float64        `json:"citation_coverage,omitempty"`
+	EligibleRelationRate float64        `json:"eligible_relation_hit_rate,omitempty"`
+	LatencyBucket        string         `json:"latency_bucket,omitempty"`
+	QualityDelta         float64        `json:"quality_delta,omitempty"`
+}
+
+func (e *EvaluationGraphTraversalEvidence) validate() error {
+	if e == nil {
+		return nil
+	}
+	for hop, count := range e.CandidateCountByHop {
+		if (hop != "zero" && hop != "one" && hop != "two" && hop != "three") || count < 0 || count > QueryAnalysisHardMaxAggregateCandidates {
+			return fmt.Errorf("graph traversal candidate aggregate is invalid")
+		}
+	}
+	for _, value := range []float64{e.TruncationRate, e.FallbackRate, e.CitationCoverage, e.EligibleRelationRate} {
+		if !boundedRate(value) {
+			return fmt.Errorf("graph traversal evidence rate is invalid")
+		}
+	}
+	if e.QualityDelta < -1 || e.QualityDelta > 1 || !evaluationSafeIdentity(e.LatencyBucket) {
+		return fmt.Errorf("graph traversal evidence identity is invalid")
+	}
+	return nil
 }
 
 type EvaluationPlannerReleaseEvidence struct {
@@ -591,6 +624,9 @@ func evaluationRolloutDispositionValid(disposition string) bool {
 
 func (report EvaluationReport) validateSafeOutput() error {
 	if err := validateEvaluationSafetyFailures(report.SafetyFailures); err != nil {
+		return err
+	}
+	if err := report.GraphTraversalEvidence.validate(); err != nil {
 		return err
 	}
 	if report.PlannerEvidence.SafetyFailures < 0 || report.PlannerEvidence.SafetyFailures > QueryAnalysisHardMaxDiagnosticCount ||
@@ -1237,7 +1273,9 @@ func evaluationSafetyFailureCategoryValid(category EvaluationSafetyFailureCatego
 		EvaluationSafetyFailureValidityAmbiguity,
 		EvaluationSafetyFailureProvenanceMismatch,
 		EvaluationSafetyFailureHiddenVersionLeakage,
-		EvaluationSafetyFailureResourceOverflow:
+		EvaluationSafetyFailureResourceOverflow,
+		EvaluationSafetyFailureGraphCycle,
+		EvaluationSafetyFailureGraphNondeterministic:
 		return true
 	default:
 		return false

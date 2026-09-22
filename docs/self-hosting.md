@@ -2121,6 +2121,38 @@ categories and counts. If `STELE_TEST_RETRIEVAL_EVALUATION_DSN` is absent,
 `SKIP_RETRIEVAL_EVALUATION_DSN_REQUIRED` (exit `2`) and activation remains
 blocked; it never falls back to `STELE_POSTGRES_DSN`.
 
+### Optional bounded graph traversal configuration
+
+Graph traversal is a derived PostgreSQL relation-projection enhancement, not a
+graph database or a second source of truth. It is disabled for ordinary result
+changes until an administrator attaches a compatible, versioned graph policy to
+an exact-scope active retrieval-planner rollout. The deployment environment
+defines an absolute envelope; a scope policy can only lower it. An enabled
+policy runs one hop when it does not explicitly select a depth. The deployment
+maximum defaults to three hops and may never be raised by a policy. To disable
+expansion while retaining the scoped plan, set `hops_set=true` and
+`max_hops=0`; an omitted `max_hops` is intentionally different and keeps the
+safe one-hop default. Valid explicit depths are therefore zero through three.
+
+```text
+STELE_GRAPH_MAX_HOPS=3
+STELE_GRAPH_MAX_SEEDS=32
+STELE_GRAPH_MAX_EDGES_PER_HOP=64
+STELE_GRAPH_MAX_PATHS_PER_SEED=32
+STELE_GRAPH_MAX_PATHS_PER_REQUEST=256
+STELE_GRAPH_MAX_CANDIDATES=100
+STELE_GRAPH_MAX_ELAPSED=250ms
+```
+
+Every hop remains within the caller's exact tenant/project/namespace,
+authorization, lifecycle, valid-time, and source-version constraints. Paths
+are transient internal proofs only: ordinary search/context responses never
+include paths, nodes, edges, identifiers, hop count, distance, raw score, or
+policy values. Diagnostics and shadow runs retain the baseline public response.
+Disable or roll back the exact-scope planner policy to stop traversal
+immediately; no canonical memory, projection, fact version, provenance, or
+audit history is rewritten.
+
 For OpenAI-compatible embedding services that reject the optional
 `dimensions` request field (for example, some SiliconFlow deployments), set
 `STELE_EMBEDDING_OPENAI_SEND_DIMENSIONS=false`. Stele will still validate and

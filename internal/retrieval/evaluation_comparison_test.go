@@ -95,6 +95,39 @@ func TestCompareEvaluationReportsSafetyFailuresOverrideAggregateGains(t *testing
 	}
 }
 
+func TestGraphHardSafetyFailureOverridesQualityGain(t *testing.T) {
+	baseline := compatibleAnalysisComparisonReport("original_only")
+	candidate := compatibleAnalysisComparisonReport("active_for_scope")
+	baseline.Metrics.RecallAt10 = 0.5
+	candidate.Metrics.RecallAt10 = 1
+	candidate.SafetyFailures = []EvaluationSafetyFailure{{Category: EvaluationSafetyFailureGraphNondeterministic, Count: 1}}
+	comparison, err := CompareEvaluationReports(baseline, candidate, nil)
+	if err != nil {
+		t.Fatalf("CompareEvaluationReports() error = %v", err)
+	}
+	if comparison.SafetyGatePassed || len(comparison.SafetyFailures) != 1 || comparison.SafetyFailures[0].Category != EvaluationSafetyFailureGraphNondeterministic {
+		t.Fatalf("graph safety comparison = %+v", comparison)
+	}
+}
+
+func TestGraphTraversalEvidenceIsBoundedAndRedacted(t *testing.T) {
+	report := compatibleAnalysisComparisonReport("active_for_scope")
+	report.GraphTraversalEvidence = &EvaluationGraphTraversalEvidence{CandidateCountByHop: map[string]int{"one": 3, "two": 1}, TruncationRate: 0.25, FallbackRate: 0.1, CitationCoverage: 1, EligibleRelationRate: 0.8, LatencyBucket: "p95_250ms", QualityDelta: 0.2}
+	encoded, err := MarshalEvaluationReport(report)
+	if err != nil {
+		t.Fatalf("MarshalEvaluationReport() error = %v", err)
+	}
+	for _, forbidden := range []string{"query_text", "tenant", "memory_id", "raw_score", "edge_id"} {
+		if strings.Contains(string(encoded), forbidden) {
+			t.Fatalf("graph evidence leaked %q: %s", forbidden, encoded)
+		}
+	}
+	report.GraphTraversalEvidence.CandidateCountByHop["four"] = 1
+	if _, err := MarshalEvaluationReport(report); err == nil {
+		t.Fatal("expected invalid graph hop bucket to be rejected")
+	}
+}
+
 func TestCompareEvaluationReportsValidatesPlannerIdentityCompatibility(t *testing.T) {
 	baseline := compatibleAnalysisComparisonReport("original_only")
 	candidate := compatibleAnalysisComparisonReport("active_for_scope")

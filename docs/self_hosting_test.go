@@ -122,6 +122,8 @@ func TestDeploymentContractSupportsSharedLocalProviderEnvironment(t *testing.T) 
 		"STELE_RERANK_ENABLED",
 		"STELE_RERANK_ENDPOINT",
 		"STELE_RERANK_API_KEY",
+		"STELE_GRAPH_MAX_HOPS",
+		"STELE_GRAPH_MAX_ELAPSED",
 	} {
 		if !strings.Contains(string(template), required) {
 			t.Fatalf("local environment template missing provider variable %q", required)

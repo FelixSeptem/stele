@@ -168,24 +168,24 @@ type RankingRolloutPolicy struct {
 	RerankerMode              string                        `json:"reranker_mode,omitempty"`
 	// Diversity fields are optional as a complete bundle. When configured, all
 	// identity and bounded selection parameters must be present and valid.
-	DiversityPolicyName               string                       `json:"diversity_policy_name,omitempty"`
-	DiversityPolicyVersion            string                       `json:"diversity_policy_version,omitempty"`
-	DiversityMMRLambda                float64                      `json:"diversity_mmr_lambda,omitempty"`
-	DiversitySemanticThreshold        float64                      `json:"diversity_semantic_threshold,omitempty"`
-	DiversityMaxCandidates            int                          `json:"diversity_max_candidates,omitempty"`
-	DiversityMaxPairwiseComparisons   int                          `json:"diversity_max_pairwise_comparisons,omitempty"`
-	DiversityMaxEmbeddingDimensions   int                          `json:"diversity_max_embedding_dimensions,omitempty"`
-	DiversityMaxCitationsPerCandidate int                          `json:"diversity_max_citations_per_candidate,omitempty"`
-	DiversityCoverageWeights          map[string]float64           `json:"diversity_coverage_weights,omitempty"`
-	QueryAnalysisSelector             QueryAnalysisRolloutSelector `json:"query_analysis_selector,omitempty"`
-	QueryAnalysis                     *QueryAnalysisRolloutPolicy  `json:"query_analysis,omitempty"`
+	DiversityPolicyName               string                          `json:"diversity_policy_name,omitempty"`
+	DiversityPolicyVersion            string                          `json:"diversity_policy_version,omitempty"`
+	DiversityMMRLambda                float64                         `json:"diversity_mmr_lambda,omitempty"`
+	DiversitySemanticThreshold        float64                         `json:"diversity_semantic_threshold,omitempty"`
+	DiversityMaxCandidates            int                             `json:"diversity_max_candidates,omitempty"`
+	DiversityMaxPairwiseComparisons   int                             `json:"diversity_max_pairwise_comparisons,omitempty"`
+	DiversityMaxEmbeddingDimensions   int                             `json:"diversity_max_embedding_dimensions,omitempty"`
+	DiversityMaxCitationsPerCandidate int                             `json:"diversity_max_citations_per_candidate,omitempty"`
+	DiversityCoverageWeights          map[string]float64              `json:"diversity_coverage_weights,omitempty"`
+	QueryAnalysisSelector             QueryAnalysisRolloutSelector    `json:"query_analysis_selector,omitempty"`
+	QueryAnalysis                     *QueryAnalysisRolloutPolicy     `json:"query_analysis,omitempty"`
 	RetrievalPlannerSelector          RetrievalPlannerRolloutSelector `json:"retrieval_planner_selector,omitempty"`
 	RetrievalPlanner                  *RetrievalPlannerRolloutPolicy  `json:"retrieval_planner,omitempty"`
-	ActivatedAt                       time.Time                    `json:"activated_at,omitempty"`
-	DisabledAt                        time.Time                    `json:"disabled_at,omitempty"`
-	RolledBackAt                      time.Time                    `json:"rolled_back_at,omitempty"`
-	CreatedAt                         time.Time                    `json:"created_at"`
-	UpdatedAt                         time.Time                    `json:"updated_at"`
+	ActivatedAt                       time.Time                       `json:"activated_at,omitempty"`
+	DisabledAt                        time.Time                       `json:"disabled_at,omitempty"`
+	RolledBackAt                      time.Time                       `json:"rolled_back_at,omitempty"`
+	CreatedAt                         time.Time                       `json:"created_at"`
+	UpdatedAt                         time.Time                       `json:"updated_at"`
 }
 
 func (p RankingRolloutPolicy) Validate() error {
@@ -414,20 +414,79 @@ func (selector RetrievalPlannerRolloutSelector) Normalized() RetrievalPlannerRol
 }
 
 type RetrievalPlannerRolloutPolicy struct {
-	SchemaVersion         string        `json:"schema_version"`
-	PlannerVersion        string        `json:"planner_version"`
-	PolicyVersion         string        `json:"policy_version"`
-	AnalysisPolicyVersion string        `json:"analysis_policy_version"`
-	FusionVersion         string        `json:"fusion_version"`
-	RankingVersion        string        `json:"ranking_version"`
-	RendererVersion       string        `json:"renderer_version"`
-	MaxCandidates         int           `json:"max_candidates"`
-	MaxCandidatesPerChannel int         `json:"max_candidates_per_channel"`
-	MaxPasses             int           `json:"max_passes"`
-	MaxLatency            time.Duration `json:"max_latency_ns"`
-	MaxContextItems       int           `json:"max_context_items"`
-	MaxRerankerHeadroom   int           `json:"max_reranker_headroom"`
-	ExpiresAt             time.Time     `json:"expires_at"`
+	SchemaVersion           string                `json:"schema_version"`
+	PlannerVersion          string                `json:"planner_version"`
+	PolicyVersion           string                `json:"policy_version"`
+	AnalysisPolicyVersion   string                `json:"analysis_policy_version"`
+	FusionVersion           string                `json:"fusion_version"`
+	RankingVersion          string                `json:"ranking_version"`
+	RendererVersion         string                `json:"renderer_version"`
+	MaxCandidates           int                   `json:"max_candidates"`
+	MaxCandidatesPerChannel int                   `json:"max_candidates_per_channel"`
+	MaxPasses               int                   `json:"max_passes"`
+	MaxLatency              time.Duration         `json:"max_latency_ns"`
+	MaxContextItems         int                   `json:"max_context_items"`
+	MaxRerankerHeadroom     int                   `json:"max_reranker_headroom"`
+	GraphTraversal          *GraphTraversalPolicy `json:"graph_traversal,omitempty"`
+	ExpiresAt               time.Time             `json:"expires_at"`
+}
+
+// GraphTraversalPolicy is an optional exact-scope traversal bundle nested in
+// the versioned retrieval-planner rollout. Zero budget fields mean "use the
+// deployment hard limit"; a policy may only narrow those limits.
+type GraphTraversalPolicy struct {
+	SchemaVersion      string        `json:"schema_version"`
+	PolicyVersion      string        `json:"policy_version"`
+	EnabledFamilies    []string      `json:"enabled_families,omitempty"`
+	HopsSet            bool          `json:"hops_set,omitempty"`
+	MaxHops            int           `json:"max_hops,omitempty"`
+	MaxSeeds           int           `json:"max_seeds,omitempty"`
+	MaxEdgesPerHop     int           `json:"max_edges_per_hop,omitempty"`
+	MaxPathsPerSeed    int           `json:"max_paths_per_seed,omitempty"`
+	MaxPathsPerRequest int           `json:"max_paths_per_request,omitempty"`
+	MaxCandidates      int           `json:"max_candidates,omitempty"`
+	MaxElapsed         time.Duration `json:"max_elapsed_ns,omitempty"`
+}
+
+const GraphTraversalPolicySchemaVersionV1 = "graph-traversal-policy-v1"
+
+func (policy GraphTraversalPolicy) Validate() error {
+	if policy.SchemaVersion != GraphTraversalPolicySchemaVersionV1 {
+		return fmt.Errorf("unsupported graph traversal schema version %q", policy.SchemaVersion)
+	}
+	if strings.TrimSpace(policy.PolicyVersion) == "" || len(policy.PolicyVersion) > 64 {
+		return fmt.Errorf("graph traversal policy version is required and must not exceed 64 characters")
+	}
+	if len(policy.EnabledFamilies) == 0 {
+		return fmt.Errorf("graph traversal policy must enable at least one query family")
+	}
+	seen := make(map[string]struct{}, len(policy.EnabledFamilies))
+	for _, family := range policy.EnabledFamilies {
+		family = strings.TrimSpace(family)
+		if family != "entity_relation" && family != "multi_hop" {
+			return fmt.Errorf("unsupported graph traversal query family %q", family)
+		}
+		if _, ok := seen[family]; ok {
+			return fmt.Errorf("duplicate graph traversal query family %q", family)
+		}
+		seen[family] = struct{}{}
+	}
+	if policy.MaxHops < 0 || policy.MaxHops > 3 || policy.MaxSeeds < 0 || policy.MaxEdgesPerHop < 0 || policy.MaxPathsPerSeed < 0 || policy.MaxPathsPerRequest < 0 || policy.MaxCandidates < 0 || policy.MaxElapsed < 0 {
+		return fmt.Errorf("graph traversal policy limits cannot be negative or exceed the hard hop cap")
+	}
+	if policy.MaxElapsed > 30*time.Second {
+		return fmt.Errorf("graph traversal policy elapsed limit exceeds hard limit")
+	}
+	return nil
+}
+
+func (policy GraphTraversalPolicy) EnablesFamily(family string) bool {
+	for _, configured := range policy.EnabledFamilies {
+		if strings.TrimSpace(configured) == family {
+			return true
+		}
+	}
+	return false
 }
 
 func (policy RetrievalPlannerRolloutPolicy) Validate() error {
@@ -455,6 +514,11 @@ func (policy RetrievalPlannerRolloutPolicy) Validate() error {
 	if policy.ExpiresAt.IsZero() {
 		return fmt.Errorf("retrieval-planner rollout expiry is required")
 	}
+	if policy.GraphTraversal != nil {
+		if err := policy.GraphTraversal.Validate(); err != nil {
+			return err
+		}
+	}
 	return nil
 }
 
@@ -474,26 +538,26 @@ type RetrievalPlannerRolloutStage string
 const (
 	RetrievalPlannerRolloutStageBaseline        RetrievalPlannerRolloutStage = "baseline"
 	RetrievalPlannerRolloutStageDiagnosticsOnly RetrievalPlannerRolloutStage = "diagnostics_only"
-	RetrievalPlannerRolloutStageShadow           RetrievalPlannerRolloutStage = "shadow"
-	RetrievalPlannerRolloutStageActive           RetrievalPlannerRolloutStage = "active_for_scope"
+	RetrievalPlannerRolloutStageShadow          RetrievalPlannerRolloutStage = "shadow"
+	RetrievalPlannerRolloutStageActive          RetrievalPlannerRolloutStage = "active_for_scope"
 )
 
 type ResolveRetrievalPlannerRolloutInput struct {
-	Scope Scope
-	Surface RankingRolloutSurface
-	SessionID string
-	UserID string
-	Now time.Time
+	Scope                 Scope
+	Surface               RankingRolloutSurface
+	SessionID             string
+	UserID                string
+	Now                   time.Time
 	AnalysisPolicyVersion string
-	FusionVersion string
-	RankingVersion string
-	RendererVersion string
+	FusionVersion         string
+	RankingVersion        string
+	RendererVersion       string
 }
 
 type RetrievalPlannerRolloutResolution struct {
-	Stage RetrievalPlannerRolloutStage
+	Stage          RetrievalPlannerRolloutStage
 	AffectsResults bool
-	Policy *RetrievalPlannerRolloutPolicy
+	Policy         *RetrievalPlannerRolloutPolicy
 }
 
 func ResolveRetrievalPlannerRollout(policy *RankingRolloutPolicy, input ResolveRetrievalPlannerRolloutInput) RetrievalPlannerRolloutResolution {
@@ -718,15 +782,19 @@ type ReadEffectiveQueryAnalysisRolloutPolicyInput struct {
 }
 
 type ReadEffectiveRetrievalPlannerRolloutPolicyInput struct {
-	Scope Scope
-	Surface RankingRolloutSurface
+	Scope     Scope
+	Surface   RankingRolloutSurface
 	SessionID string
-	UserID string
+	UserID    string
 }
 
 func (input ReadEffectiveRetrievalPlannerRolloutPolicyInput) Validate() error {
-	if err := input.Scope.Validate(); err != nil { return err }
-	if !input.Surface.Valid() { return fmt.Errorf("ranking rollout surface %q is invalid", input.Surface) }
+	if err := input.Scope.Validate(); err != nil {
+		return err
+	}
+	if !input.Surface.Valid() {
+		return fmt.Errorf("ranking rollout surface %q is invalid", input.Surface)
+	}
 	return nil
 }
 

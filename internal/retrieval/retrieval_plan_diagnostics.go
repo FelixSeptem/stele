@@ -33,6 +33,30 @@ type RetrievalPlannerDiagnostics struct {
 	// internal diagnostics path. Entries are closed-set category/count pairs;
 	// they carry neither temporal identities nor validity bounds.
 	TemporalOmissions []TemporalOmissionCount `json:"temporal_omissions,omitempty"`
+	// GraphTraversal is present only for authorized planner diagnostics. It
+	// contains closed-set aggregate buckets and no path, scope, query, or ID.
+	GraphTraversal *GraphTraversalDiagnostics `json:"graph_traversal,omitempty"`
+}
+
+type GraphTraversalDiagnostics struct {
+	PolicyVersion string `json:"policy_version"`
+	HopBucket     string `json:"hop_bucket"`
+	PathBucket    string `json:"path_bucket"`
+	Truncation    string `json:"truncation"`
+	Failure       string `json:"failure"`
+}
+
+func (diagnostics GraphTraversalDiagnostics) Validate() error {
+	if !safeDiagnosticVersion(diagnostics.PolicyVersion) {
+		return fmt.Errorf("invalid graph traversal policy diagnostic version")
+	}
+	if !validPlannerBucket(diagnostics.HopBucket, []string{"zero", "one", "two", "three"}) ||
+		!validPlannerBucket(diagnostics.PathBucket, []string{"0", "1_10", "11_50", "51_plus"}) ||
+		!validPlannerBucket(diagnostics.Truncation, []string{"none", "cycle", "per_hop_budget", "per_seed_budget", "request_budget", "candidate_budget"}) ||
+		!validPlannerBucket(diagnostics.Failure, []string{"none", "policy_rejected", "unavailable", "authorization", "timeout", "repository"}) {
+		return fmt.Errorf("invalid graph traversal diagnostic aggregate")
+	}
+	return nil
 }
 
 type RetrievalPlannerChannelAvailability struct {
@@ -51,6 +75,7 @@ type RetrievalPlannerDiagnosticsInput struct {
 	ChangedRankCount    int
 	ChangedRankObserved bool
 	TemporalOmissions   TemporalOmissionReport
+	GraphTraversal      *GraphTraversalDiagnostics
 }
 
 func RetrievalPlannerDiagnosticsFromExecution(input RetrievalPlannerDiagnosticsInput) (RetrievalPlannerDiagnostics, error) {
@@ -92,6 +117,7 @@ func RetrievalPlannerDiagnosticsFromExecution(input RetrievalPlannerDiagnosticsI
 		ChangedRankCount:    input.ChangedRankCount,
 		ChangedRankBucket:   "not_evaluated",
 		TemporalOmissions:   append([]TemporalOmissionCount(nil), temporalOmissions.Categories...),
+		GraphTraversal:      input.GraphTraversal,
 	}
 	if len(diagnostics.ChannelAvailability) == 0 {
 		for _, channel := range input.Plan.Channels {
@@ -173,6 +199,11 @@ func (diagnostics RetrievalPlannerDiagnostics) Validate() error {
 	if err := validateBoundedTemporalOmissions(TemporalOmissionReport{Categories: diagnostics.TemporalOmissions, Total: temporalOmissionCountTotal(diagnostics.TemporalOmissions)}); err != nil {
 		return err
 	}
+	if diagnostics.GraphTraversal != nil {
+		if err := diagnostics.GraphTraversal.Validate(); err != nil {
+			return err
+		}
+	}
 	return nil
 }
 
@@ -184,11 +215,28 @@ func MarshalRetrievalPlannerDiagnostics(diagnostics RetrievalPlannerDiagnostics)
 	stable.EnabledChannels = append([]FusionChannel(nil), diagnostics.EnabledChannels...)
 	stable.ChannelAvailability = append([]RetrievalPlannerChannelAvailability(nil), diagnostics.ChannelAvailability...)
 	stable.TemporalOmissions = append([]TemporalOmissionCount(nil), diagnostics.TemporalOmissions...)
+	if diagnostics.GraphTraversal != nil {
+		copyGraph := *diagnostics.GraphTraversal
+		stable.GraphTraversal = &copyGraph
+	}
 	sort.Slice(stable.EnabledChannels, func(i, j int) bool { return stable.EnabledChannels[i] < stable.EnabledChannels[j] })
 	sort.Slice(stable.ChannelAvailability, func(i, j int) bool {
 		return stable.ChannelAvailability[i].Channel < stable.ChannelAvailability[j].Channel
 	})
 	return json.Marshal(stable)
+}
+
+func safeDiagnosticVersion(value string) bool {
+	if len(value) == 0 || len(value) > 64 {
+		return false
+	}
+	for _, r := range value {
+		if (r >= 'a' && r <= 'z') || (r >= 'A' && r <= 'Z') || (r >= '0' && r <= '9') || r == '-' || r == '_' || r == '.' {
+			continue
+		}
+		return false
+	}
+	return true
 }
 
 func validateBoundedTemporalOmissions(report TemporalOmissionReport) error {

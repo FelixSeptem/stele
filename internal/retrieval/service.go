@@ -377,6 +377,7 @@ type ServiceDependencies struct {
 	Lexical                      LexicalSearcher
 	Semantic                     SemanticSearcher
 	Relations                    RelationSearcher
+	GraphTraversal               GraphTraversalSearcher
 	Citations                    CitationLister
 	Insights                     DerivedInsightLister
 	UsefulnessSummarizer         UsefulnessSummarizer
@@ -389,15 +390,16 @@ type ServiceDependencies struct {
 	FusionStrategy FusionStrategy
 	// ChunkRollout defaults to default_off. Shadow evaluates chunk candidates
 	// only for authorized diagnostics; Active permits them to influence results.
-	ChunkRollout        memory.ChunkRolloutMode
-	QueryAnalyzer       QueryAnalyzer
-	QueryAnalysisLimits QueryAnalysisLimits
-	Reranker            Reranker
-	RerankerMode        RerankerMode
-	RerankerProvider    string
-	RerankerVersion     string
-	QualityBounds       QualityAdjustmentBounds
-	RetrievalPlanPolicy RetrievalPlanPolicy
+	ChunkRollout         memory.ChunkRolloutMode
+	QueryAnalyzer        QueryAnalyzer
+	QueryAnalysisLimits  QueryAnalysisLimits
+	Reranker             Reranker
+	RerankerMode         RerankerMode
+	RerankerProvider     string
+	RerankerVersion      string
+	QualityBounds        QualityAdjustmentBounds
+	RetrievalPlanPolicy  RetrievalPlanPolicy
+	GraphTraversalLimits GraphTraversalLimits
 }
 
 type QueryAnalyzer interface {
@@ -421,6 +423,7 @@ type Service struct {
 	lexical                      LexicalSearcher
 	semantic                     SemanticSearcher
 	relations                    RelationSearcher
+	graphTraversal               GraphTraversalSearcher
 	citations                    CitationLister
 	insights                     DerivedInsightLister
 	usefulnessSummarizer         UsefulnessSummarizer
@@ -439,6 +442,7 @@ type Service struct {
 	rerankerVersion              string
 	qualityBounds                QualityAdjustmentBounds
 	retrievalPlanPolicy          RetrievalPlanPolicy
+	graphTraversalLimits         GraphTraversalLimits
 	// now supplies the evaluation clock for valid-time predicates. It defaults to
 	// UTC wall time and exists so tests can pin one instant deterministically.
 	now      func() time.Time
@@ -487,10 +491,18 @@ func NewService(deps ServiceDependencies, observers ...telemetry.Observer) *Serv
 	if retrievalPlanPolicy.PlannerVersion == "" && retrievalPlanPolicy.Version == "" && retrievalPlanPolicy.Templates == nil {
 		retrievalPlanPolicy = DefaultRetrievalPlanPolicy()
 	}
+	graphTraversalLimits := deps.GraphTraversalLimits
+	if graphTraversalLimits == (GraphTraversalLimits{}) {
+		graphTraversalLimits = DefaultGraphTraversalLimits()
+	}
+	if graphTraversalLimits.Validate() != nil {
+		graphTraversalLimits = DefaultGraphTraversalLimits()
+	}
 	return &Service{
 		lexical:                      deps.Lexical,
 		semantic:                     deps.Semantic,
 		relations:                    deps.Relations,
+		graphTraversal:               deps.GraphTraversal,
 		citations:                    deps.Citations,
 		insights:                     deps.Insights,
 		usefulnessSummarizer:         deps.UsefulnessSummarizer,
@@ -509,6 +521,7 @@ func NewService(deps ServiceDependencies, observers ...telemetry.Observer) *Serv
 		rerankerVersion:              strings.TrimSpace(deps.RerankerVersion),
 		qualityBounds:                qualityBounds,
 		retrievalPlanPolicy:          retrievalPlanPolicy,
+		graphTraversalLimits:         graphTraversalLimits,
 		observer:                     observer,
 	}
 }
@@ -654,6 +667,7 @@ func (s *Service) Search(ctx context.Context, input SearchInput) (result SearchR
 	filteredCandidates := 0
 	expiredCandidates := 0
 	var temporalOmissions TemporalOmissionReport
+	var graphTraversalDiagnostics *GraphTraversalDiagnostics
 	requiredChannelUnavailable := false
 	shadowCandidates := 0
 	plannerEvidence := EvidenceAssessment{}
@@ -884,6 +898,49 @@ func (s *Service) Search(ctx context.Context, input SearchInput) (result SearchR
 					}
 				} else {
 					channelAvailability[FusionChannelRelation] = fusionChannelAvailable
+					// Graph traversal is an optional relation-channel enrichment. It
+					// is gated by an active exact-scope plan; any failure omits only
+					// graph evidence and retains the already-approved relation hits.
+					if (plannerExecution.active() || plannerExecution.shadow() || plannerExecution.stage == memory.RetrievalPlannerRolloutStageDiagnosticsOnly) && plannerExecution.plan.GraphTraversalPolicy != nil && plannerExecution.plan.GraphTraversalLimits.MaxHops > 0 && s.graphTraversal != nil {
+						seedIDs := make([]string, 0, len(hits))
+						for _, hit := range hits {
+							if hit.Memory.Scope.Normalized() == input.Scope.Normalized() && hit.Memory.State == memory.MemoryStateActive && temporalConstraint.Matches(hit.Memory.TemporalValidity, evaluationInstant) {
+								seedIDs = append(seedIDs, hit.Memory.ID)
+							}
+						}
+						if len(seedIDs) > plannerExecution.plan.GraphTraversalLimits.MaxSeeds {
+							seedIDs = seedIDs[:plannerExecution.plan.GraphTraversalLimits.MaxSeeds]
+						}
+						if len(seedIDs) > 0 {
+							graphCtx, graphCancel := context.WithTimeout(ctx, plannerExecution.plan.GraphTraversalLimits.MaxElapsed)
+							graphInput := GraphTraversalInput{Scope: input.Scope, SeedMemoryIDs: seedIDs, TemporalConstraint: temporalConstraint, TimeFrom: input.TimeFrom, TimeTo: input.TimeTo, TopK: callInput.TopK, Limits: plannerExecution.plan.GraphTraversalLimits}
+							var graphResult GraphTraversalResult
+							var graphErr error
+							if outcomeSearcher, ok := s.graphTraversal.(GraphTraversalOutcomeSearcher); ok {
+								graphResult, graphErr = outcomeSearcher.ExpandGraphResult(graphCtx, graphInput)
+							} else {
+								graphResult.Candidates, graphErr = s.graphTraversal.ExpandGraph(graphCtx, graphInput)
+								graphResult = graphResult.Normalize()
+							}
+							graphCancel()
+							if graphErr == nil {
+								graphTraversalDiagnostics = &GraphTraversalDiagnostics{PolicyVersion: plannerExecution.plan.GraphTraversalPolicy.PolicyVersion, HopBucket: graphHopBucket(plannerExecution.plan.GraphTraversalLimits.MaxHops), PathBucket: graphPathBucket(len(graphResult.Candidates), plannerExecution.plan.GraphTraversalLimits), Truncation: string(graphResult.Truncation), Failure: "none"}
+							}
+							if graphErr == nil && plannerExecution.active() {
+								for _, path := range graphResult.Candidates {
+									path.Proof.PolicyVersion = plannerExecution.plan.GraphTraversalPolicy.PolicyVersion
+									if path.Proof.Validate() != nil {
+										continue
+									}
+									candidate := ScoredMemory{Memory: path.Memory, RelationScore: path.RelationConfidence}
+									hits = append(hits, candidate)
+								}
+							}
+							if graphErr != nil {
+								graphTraversalDiagnostics = &GraphTraversalDiagnostics{PolicyVersion: plannerExecution.plan.GraphTraversalPolicy.PolicyVersion, HopBucket: graphHopBucket(plannerExecution.plan.GraphTraversalLimits.MaxHops), PathBucket: "0", Truncation: string(graphResult.Truncation), Failure: graphFailureCategory(graphErr)}
+							}
+						}
+					}
 					if filterErr := filterChannel(1, FusionChannelRelation, hits, plannedChannel, plannerExecution.active()); filterErr != nil {
 						plannerFailed = plannerExecution.active()
 					}
@@ -1196,9 +1253,9 @@ func (s *Service) Search(ctx context.Context, input SearchInput) (result SearchR
 	plannerElapsed := plannerDiagnosticElapsed(plannerExecution.startedAt, time.Now())
 	var plannerDiagnostics []RetrievalPlannerDiagnostics
 	if input.retrievalPlannerDiagnosticsAuthorized && plannerExecution.plan != nil && plannerEvidenceSet {
-		plannerDiagnostics = s.retrievalPlannerDiagnostics(ctx, RetrievalPlannerDiagnosticsInput{Plan: *plannerExecution.plan, RolloutStage: plannerExecution.stage, Evidence: plannerEvidence, PassCount: plannerPassCount, CandidateCount: plannerCandidateCount, Elapsed: plannerElapsed, ChannelAvailability: plannerChannelAvailability, ChangedRankCount: plannerChangedRankCount, ChangedRankObserved: plannerChangedRankObserved, TemporalOmissions: temporalOmissions})
+		plannerDiagnostics = s.retrievalPlannerDiagnostics(ctx, RetrievalPlannerDiagnosticsInput{Plan: *plannerExecution.plan, RolloutStage: plannerExecution.stage, Evidence: plannerEvidence, PassCount: plannerPassCount, CandidateCount: plannerCandidateCount, Elapsed: plannerElapsed, ChannelAvailability: plannerChannelAvailability, ChangedRankCount: plannerChangedRankCount, ChangedRankObserved: plannerChangedRankObserved, TemporalOmissions: temporalOmissions, GraphTraversal: graphTraversalDiagnostics})
 	}
-	s.recordRetrievalPlannerTelemetry(ctx, plannerExecution, plannerEvidence, plannerEvidenceSet, plannerPassCount, plannerCandidateCount, plannerElapsed, plannerChannelAvailability, plannerChangedRankCount, plannerChangedRankObserved)
+	s.recordRetrievalPlannerTelemetry(ctx, plannerExecution, plannerEvidence, plannerEvidenceSet, plannerPassCount, plannerCandidateCount, plannerElapsed, plannerChannelAvailability, plannerChangedRankCount, plannerChangedRankObserved, graphTraversalDiagnostics)
 	result = SearchResult{
 		Hits:                      scored,
 		Diagnostics:               diagnostics,
@@ -1217,6 +1274,51 @@ func (s *Service) Search(ctx context.Context, input SearchInput) (result SearchR
 		Temporal:                  temporalSelectionSummary(input.TemporalConstraint, temporalOmissions),
 	}
 	return result, nil
+}
+
+func graphHopBucket(hops int) string {
+	switch hops {
+	case 0:
+		return "zero"
+	case 1:
+		return "one"
+	case 2:
+		return "two"
+	default:
+		return "three"
+	}
+}
+
+func graphPathBucket(count int, limits GraphTraversalLimits) string {
+	if count <= 0 {
+		return "0"
+	}
+	if count <= 10 {
+		return "1_10"
+	}
+	if count <= 50 {
+		return "11_50"
+	}
+	return "51_plus"
+}
+
+func graphFailureCategory(err error) string {
+	if err == nil {
+		return "none"
+	}
+	message := strings.ToLower(err.Error())
+	switch {
+	case strings.Contains(message, "authorization"):
+		return "authorization"
+	case strings.Contains(message, "timeout"), strings.Contains(message, "deadline"):
+		return "timeout"
+	case strings.Contains(message, "policy"):
+		return "policy_rejected"
+	case strings.Contains(message, "unavailable"), strings.Contains(message, "no rows"):
+		return "unavailable"
+	default:
+		return "repository"
+	}
 }
 
 // temporalSelectionSummary projects the request's valid-time selection into the
@@ -1326,7 +1428,7 @@ type retrievalPlannerDiagnosticMetricObserver interface {
 	RecordRetrievalPlannerDiagnostic(context.Context, telemetry.RetrievalPlannerDiagnosticEvent)
 }
 
-func (s *Service) recordRetrievalPlannerTelemetry(ctx context.Context, execution retrievalPlannerExecution, evidence EvidenceAssessment, evidenceSet bool, pass, recalled int, elapsed time.Duration, channels []RetrievalPlannerChannelAvailability, changedRanks int, changedRankObserved bool) {
+func (s *Service) recordRetrievalPlannerTelemetry(ctx context.Context, execution retrievalPlannerExecution, evidence EvidenceAssessment, evidenceSet bool, pass, recalled int, elapsed time.Duration, channels []RetrievalPlannerChannelAvailability, changedRanks int, changedRankObserved bool, graph *GraphTraversalDiagnostics) {
 	observer, ok := s.observer.(retrievalPlannerMetricObserver)
 	if !ok || observer == nil || execution.plan == nil || !evidenceSet {
 		return
@@ -1339,12 +1441,19 @@ func (s *Service) recordRetrievalPlannerTelemetry(ctx context.Context, execution
 	policyVersion := string(execution.plan.Identity.PolicyVersion)
 	family := string(execution.plan.Family)
 	stage := string(execution.stage)
-	observer.RecordRetrievalPlanner(ctx, telemetry.RetrievalPlannerEvent{
+	event := telemetry.RetrievalPlannerEvent{
 		PlannerVersion: plannerVersion, PolicyVersion: policyVersion,
 		Family: family, Stage: stage, Disposition: string(execution.plan.Disposition), Pass: pass,
 		BudgetBucket: plannerCandidateBucket(recalled), Evidence: string(evidence.Disposition), Fallback: string(execution.plan.Fallback),
 		LatencyBucket: plannerLatencyBucket(elapsed), Reranker: reranker,
-	})
+	}
+	if graph != nil {
+		event.GraphHopBucket = graph.HopBucket
+		event.GraphPathBucket = graph.PathBucket
+		event.GraphTruncation = graph.Truncation
+		event.GraphFailure = graph.Failure
+	}
+	observer.RecordRetrievalPlanner(ctx, event)
 	if channelObserver, ok := s.observer.(retrievalPlannerChannelMetricObserver); ok {
 		for _, channel := range channels {
 			channelObserver.RecordRetrievalPlannerChannel(ctx, telemetry.RetrievalPlannerChannelEvent{

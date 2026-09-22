@@ -509,6 +509,14 @@ func (o *MetricsObserver) RecordRetrievalPlanner(ctx context.Context, event Retr
 		"latency_bucket":  plannerLabel(event.LatencyBucket, []string{"lt_100ms", "100ms_500ms", "500ms_1s", "gt_1s"}),
 		"reranker":        plannerLabel(event.Reranker, []string{"eligible", "ineligible", "skipped", "applied", "fallback"}),
 	}, 1)
+	if event.GraphHopBucket != "" || event.GraphPathBucket != "" || event.GraphTruncation != "" || event.GraphFailure != "" {
+		o.addCounter("stele_retrieval_graph_traversal_total", map[string]string{
+			"hop_bucket":  plannerLabel(event.GraphHopBucket, []string{"zero", "one", "two", "three"}),
+			"path_bucket": plannerLabel(event.GraphPathBucket, []string{"0", "1_10", "11_50", "51_plus"}),
+			"truncation":  plannerLabel(event.GraphTruncation, []string{"none", "cycle", "per_hop_budget", "per_seed_budget", "request_budget"}),
+			"failure":     plannerLabel(event.GraphFailure, []string{"none", "policy_rejected", "unavailable", "authorization", "timeout", "repository"}),
+		}, 1)
+	}
 }
 
 func (o *MetricsObserver) RecordRetrievalPlannerChannel(ctx context.Context, event RetrievalPlannerChannelEvent) {

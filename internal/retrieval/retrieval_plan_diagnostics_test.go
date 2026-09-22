@@ -78,6 +78,27 @@ func TestRetrievalPlannerDiagnosticsAreBoundedAndRedacted(t *testing.T) {
 	}
 }
 
+func TestRetrievalPlannerDiagnosticsAllowOnlyBoundedGraphAggregates(t *testing.T) {
+	diagnostics := validPlannerDiagnosticsForTest(t)
+	diagnostics.GraphTraversal = &GraphTraversalDiagnostics{
+		PolicyVersion: "graph-policy-v1", HopBucket: "one", PathBucket: "1_10",
+		Truncation: "cycle", Failure: "none",
+	}
+	payload, err := MarshalRetrievalPlannerDiagnostics(diagnostics)
+	if err != nil {
+		t.Fatalf("MarshalRetrievalPlannerDiagnostics() error = %v", err)
+	}
+	for _, forbidden := range []string{"tenant", "memory_id", "edge-", "private-query", "raw_score", "content"} {
+		if strings.Contains(string(payload), forbidden) {
+			t.Fatalf("graph diagnostics leaked %q: %s", forbidden, payload)
+		}
+	}
+	diagnostics.GraphTraversal.Failure = "database error with private query"
+	if _, err := MarshalRetrievalPlannerDiagnostics(diagnostics); err == nil {
+		t.Fatal("expected unbounded graph diagnostic category rejection")
+	}
+}
+
 func TestRetrievalPlannerDiagnosticsCarryOnlyBoundedTemporalOmissions(t *testing.T) {
 	plan := diagnosticTestPlan(t, "private query tenant-a memory-id-1")
 	var omissions TemporalOmissionReport

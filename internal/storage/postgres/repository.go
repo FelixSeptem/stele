@@ -4665,6 +4665,168 @@ LIMIT $11
 	return hits, nil
 }
 
+// ExpandGraph performs bounded request-time expansion over relation projections.
+// Paths are returned as transient proofs; no graph path is persisted.
+func (r *Repository) ExpandGraph(ctx context.Context, input retrieval.GraphTraversalInput) ([]retrieval.GraphPathCandidate, error) {
+	result, err := r.ExpandGraphResult(ctx, input)
+	return result.Candidates, err
+}
+
+func (r *Repository) ExpandGraphResult(ctx context.Context, input retrieval.GraphTraversalInput) (retrieval.GraphTraversalResult, error) {
+	if err := input.Validate(); err != nil {
+		return retrieval.GraphTraversalResult{}, err
+	}
+	if input.Limits.MaxHops == 0 {
+		return retrieval.GraphTraversalResult{Truncation: retrieval.GraphTraversalTruncationNone}.Normalize(), nil
+	}
+	selection := temporalSelectionFor(retrieval.SearchInput{Scope: input.Scope, Query: "graph", TemporalConstraint: input.TemporalConstraint, TimeFrom: input.TimeFrom, TimeTo: input.TimeTo}, r.evaluationInstant())
+	const queryTemplate = `
+WITH RECURSIVE graph AS (
+    SELECT rp.memory_id::text AS edge_id,
+           rp.memory_id::text AS endpoint_id,
+           rp.memory_id::text AS root_seed,
+           rp.source_entity,
+           rp.target_entity,
+           rp.relation_type,
+           1 AS depth,
+           ARRAY[rp.memory_id::text] AS edge_ids,
+           ARRAY[rp.source_entity, rp.target_entity] AS node_ids,
+           ARRAY[COALESCE(rp.source_version::text, '')] AS source_versions,
+           ARRAY[rp.relation_type] AS relation_types,
+           rp.updated_at,
+           1.0::double precision AS confidence,
+           false AS cycle_detected
+    FROM relation_projections rp
+    JOIN canonical_memories cm ON cm.id = rp.memory_id
+    WHERE rp.tenant = $1 AND rp.project = $2 AND rp.namespace = $3
+      AND rp.memory_id::text = ANY($4::text[])
+      AND cm.state NOT IN ('suppressed', 'forgotten', 'deleted')
+      AND ($7::timestamptz IS NULL OR cm.updated_at >= $7)
+      AND ($8::timestamptz IS NULL OR cm.updated_at <= $8)
+      /*base_source_currency*/
+      /*base_temporal*/
+    UNION ALL
+    SELECT next_rp.memory_id::text,
+           next_rp.memory_id::text,
+           graph.root_seed,
+           next_rp.source_entity,
+           next_rp.target_entity,
+           next_rp.relation_type,
+           graph.depth + 1,
+           graph.edge_ids || next_rp.memory_id::text,
+           graph.node_ids || next_rp.target_entity,
+           graph.source_versions || COALESCE(next_rp.source_version::text, ''),
+           graph.relation_types || next_rp.relation_type,
+           next_rp.updated_at,
+           graph.confidence * 0.8,
+           (next_rp.memory_id::text = ANY(graph.edge_ids) OR next_rp.target_entity = ANY(graph.node_ids)) AS cycle_detected
+    FROM graph
+    JOIN relation_projections next_rp
+      ON next_rp.tenant = $1 AND next_rp.project = $2 AND next_rp.namespace = $3
+     AND next_rp.source_entity = graph.target_entity
+    JOIN canonical_memories cm2 ON cm2.id = next_rp.memory_id
+    WHERE graph.depth < $5
+      AND NOT graph.cycle_detected
+      AND cm2.state NOT IN ('suppressed', 'forgotten', 'deleted')
+      AND ($7::timestamptz IS NULL OR cm2.updated_at >= $7)
+      AND ($8::timestamptz IS NULL OR cm2.updated_at <= $8)
+      /*recursive_source_currency*/
+      /*recursive_temporal*/
+)
+SELECT cm_end.id, cm_end.tenant, cm_end.project, cm_end.namespace, cm_end.class,
+       cm_end.state, cm_end.content, cm_end.created_at, cm_end.updated_at,
+       graph.root_seed, graph.depth, graph.edge_ids,
+       graph.source_versions, graph.relation_types, graph.confidence,
+       graph.updated_at,
+       1.0::double precision AS source_reliability,
+       graph.cycle_detected
+FROM graph
+JOIN canonical_memories cm_end ON cm_end.id::text = graph.endpoint_id
+ORDER BY graph.depth ASC, graph.confidence DESC, graph.updated_at DESC,
+         graph.endpoint_id ASC, graph.edge_ids ASC
+LIMIT $6`
+
+	baseTemporal := temporalSQLPredicate("cm", selection, 9, 10, 11, 12, 13)
+	recursiveTemporal := temporalSQLPredicate("cm2", selection, 9, 10, 11, 12, 13)
+	query := strings.Replace(queryTemplate, "/*base_temporal*/", baseTemporal, 1)
+	query = strings.Replace(query, "/*recursive_temporal*/", recursiveTemporal, 1)
+	baseCurrency := relationSourceCurrencyPredicate(selection)
+	recursiveCurrency := strings.Replace(strings.Replace(baseCurrency, "rp.", "next_rp.", -1), "cm.", "cm2.", -1)
+	query = strings.Replace(query, "/*base_source_currency*/", baseCurrency, 1)
+	query = strings.Replace(query, "/*recursive_source_currency*/", recursiveCurrency, 1)
+	args := []any{input.Scope.Tenant, input.Scope.Project, input.Scope.Namespace, input.SeedMemoryIDs, input.Limits.MaxHops, input.Limits.MaxPathsPerRequest, nullableTime(input.TimeFrom), nullableTime(input.TimeTo)}
+	if !selection.IsDisabled() {
+		args = append(args, selection.Mode, selection.EvaluationAt, selection.AsOf, selection.ValidFrom, selection.ValidTo)
+	}
+	rows, err := r.db.Query(ctx, query, args...)
+	if err != nil {
+		return retrieval.GraphTraversalResult{}, fmt.Errorf("expand relation graph: %w", err)
+	}
+	defer rows.Close()
+	paths := make([]retrieval.GraphPathCandidate, 0)
+	perSeed := make(map[string]int)
+	perHop := make(map[int]int)
+	truncation := retrieval.GraphTraversalTruncationNone
+	pathsSeen := 0
+	cyclesSeen := 0
+	for rows.Next() {
+		pathsSeen++
+		var endpoint retrieval.ScoredMemory
+		var seedID string
+		var depth int
+		var edgeIDs, sourceVersions, relationTypes []string
+		var confidence float64
+		var updatedAt time.Time
+		var sourceReliability float64
+		var cycleDetected bool
+		if err := rows.Scan(&endpoint.Memory.ID, &endpoint.Memory.Scope.Tenant, &endpoint.Memory.Scope.Project, &endpoint.Memory.Scope.Namespace, &endpoint.Memory.Class, &endpoint.Memory.State, &endpoint.Memory.Content, &endpoint.Memory.CreatedAt, &endpoint.Memory.ModifiedAt, &seedID, &depth, &edgeIDs, &sourceVersions, &relationTypes, &confidence, &updatedAt, &sourceReliability, &cycleDetected); err != nil {
+			return retrieval.GraphTraversalResult{}, fmt.Errorf("scan relation graph path: %w", err)
+		}
+		if cycleDetected {
+			cyclesSeen++
+			if truncation == retrieval.GraphTraversalTruncationNone {
+				truncation = retrieval.GraphTraversalTruncationCycle
+			}
+			continue
+		}
+		if depth <= 0 || depth > input.Limits.MaxHops {
+			continue
+		}
+		if perSeed[seedID] >= input.Limits.MaxPathsPerSeed {
+			if truncation == retrieval.GraphTraversalTruncationNone {
+				truncation = retrieval.GraphTraversalTruncationPerSeedBudget
+			}
+			continue
+		}
+		if perHop[depth] >= input.Limits.MaxEdgesPerHop {
+			if truncation == retrieval.GraphTraversalTruncationNone {
+				truncation = retrieval.GraphTraversalTruncationPerHopBudget
+			}
+			continue
+		}
+		proof := retrieval.GraphPathProof{SeedID: seedID, EdgeIDs: edgeIDs, SourceVersionIDs: sourceVersions, RelationCategories: relationTypes, Hop: depth}
+		if err := proof.Validate(); err != nil {
+			continue
+		}
+		paths = append(paths, retrieval.GraphPathCandidate{Memory: endpoint.Memory, Proof: proof, RelationConfidence: confidence, SourceReliability: sourceReliability, Freshness: updatedAt})
+		perSeed[seedID]++
+		perHop[depth]++
+		if len(paths) >= input.Limits.MaxPathsPerRequest {
+			truncation = retrieval.GraphTraversalTruncationRequestBudget
+			break
+		}
+	}
+	if err := rows.Err(); err != nil {
+		return retrieval.GraphTraversalResult{}, fmt.Errorf("iterate relation graph paths: %w", err)
+	}
+	retrieval.SortGraphPathCandidates(paths)
+	if input.Limits.MaxCandidates > 0 && len(paths) > input.Limits.MaxCandidates {
+		paths = paths[:input.Limits.MaxCandidates]
+		truncation = retrieval.GraphTraversalTruncationCandidate
+	}
+	return retrieval.GraphTraversalResult{Candidates: paths, Truncation: truncation, PathsSeen: pathsSeen, CyclesSeen: cyclesSeen}.Normalize(), nil
+}
+
 func (r *Repository) ListCitations(ctx context.Context, scope memory.Scope, memoryIDs []string) (map[string][]retrieval.Citation, error) {
 	if err := scope.Validate(); err != nil {
 		return nil, err
