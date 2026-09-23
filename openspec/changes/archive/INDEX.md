@@ -1,6 +1,6 @@
 # Archive Index
 
-Updated: 2026-09-22 22:22:20
+Updated: 2026-09-23 22:09:54
 
 - 001 -> bootstrap-foundation-and-event-ingestion
 - 002 -> governance-pipeline-and-memory-consolidation
@@ -44,3 +44,4 @@ Updated: 2026-09-22 22:22:20
 - 040 -> query-adaptive-retrieval-planning
 - 041 -> bi-temporal-fact-validity
 - 042 -> bounded-graph-distance-retrieval
+- 043 -> context-efficiency-feedback-calibration

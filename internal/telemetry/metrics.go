@@ -75,6 +75,16 @@ type RankingRolloutEvent struct {
 	ReasonCode      string
 }
 
+type ContextCalibrationEvent struct {
+	Stage            string
+	SummaryFreshness string
+	MetricBucket     string
+	OmissionCategory string
+	EvidenceCategory string
+	PolicyVersion    string
+	AggregateCount   int
+}
+
 // RetrievalFusionEvent carries bounded retrieval-fusion health telemetry only.
 // It intentionally excludes scope, query, candidate identity, and raw scores.
 type RetrievalFusionEvent struct {
@@ -454,6 +464,21 @@ func (o *MetricsObserver) RecordRankingRollout(ctx context.Context, event Rankin
 		"threshold_status": labelOrUnknown(event.ThresholdStatus),
 		"policy_status":    labelOrUnknown(event.PolicyStatus),
 		"reason_code":      labelOrUnknown(event.ReasonCode),
+	}, 1)
+}
+
+func (o *MetricsObserver) RecordContextCalibration(ctx context.Context, event ContextCalibrationEvent) {
+	if o == nil {
+		return
+	}
+	o.addCounter("stele_context_calibration_total", map[string]string{
+		"stage":             labelOrUnknown(event.Stage),
+		"summary_freshness": labelOrUnknown(event.SummaryFreshness),
+		"metric_bucket":     labelOrUnknown(event.MetricBucket),
+		"omission_category": labelOrUnknown(event.OmissionCategory),
+		"evidence_category": labelOrUnknown(event.EvidenceCategory),
+		"policy_version":    labelOrUnknown(event.PolicyVersion),
+		"aggregate_count":   retrievalFusionCandidateCountBucket(event.AggregateCount),
 	}, 1)
 }
 

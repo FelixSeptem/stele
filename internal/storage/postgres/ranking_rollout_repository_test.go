@@ -50,7 +50,9 @@ func TestRepositoryReadsExactQueryAnalysisRolloutSelectorsAndRoundTripsPayload(t
 
 func TestRepositoryReadsExactRetrievalPlannerRolloutSelectorsAndPayload(t *testing.T) {
 	mock, err := pgxmock.NewPool()
-	if err != nil { t.Fatal(err) }
+	if err != nil {
+		t.Fatal(err)
+	}
 	defer mock.Close()
 	scope := memory.Scope{Tenant: "tenant-a", Project: "project-a", Namespace: "namespace-a"}
 	now := time.Date(2026, 9, 17, 12, 0, 0, 0, time.UTC)
@@ -60,20 +62,30 @@ func TestRepositoryReadsExactRetrievalPlannerRolloutSelectorsAndPayload(t *testi
 		WillReturnRows(pgxmock.NewRows([]string{"id", "tenant", "project", "namespace", "status", "mode", "surfaces", "retrieval_planner_session_id", "retrieval_planner_user_id", "retrieval_planner_policy", "activated_at", "disabled_at", "rolled_back_at", "created_at", "updated_at"}).AddRow("planner", scope.Tenant, scope.Project, scope.Namespace, memory.RankingRolloutPolicyStatusDryRun, memory.RankingRolloutModeDryRun, []string{"search"}, "session-a", "user-a", payload, nil, nil, nil, now, now))
 
 	policy, err := NewRepository(mock).ReadEffectiveRetrievalPlannerRolloutPolicy(context.Background(), memory.ReadEffectiveRetrievalPlannerRolloutPolicyInput{Scope: scope, Surface: memory.RankingRolloutSurfaceSearch, SessionID: "session-a", UserID: "user-a"})
-	if err != nil { t.Fatalf("ReadEffectiveRetrievalPlannerRolloutPolicy() error = %v", err) }
-	if policy.RetrievalPlanner == nil || policy.RetrievalPlanner.MaxPasses != 2 || policy.RetrievalPlannerSelector.SessionID != "session-a" { t.Fatalf("policy = %+v", policy) }
-	if err := mock.ExpectationsWereMet(); err != nil { t.Fatal(err) }
+	if err != nil {
+		t.Fatalf("ReadEffectiveRetrievalPlannerRolloutPolicy() error = %v", err)
+	}
+	if policy.RetrievalPlanner == nil || policy.RetrievalPlanner.MaxPasses != 2 || policy.RetrievalPlannerSelector.SessionID != "session-a" {
+		t.Fatalf("policy = %+v", policy)
+	}
+	if err := mock.ExpectationsWereMet(); err != nil {
+		t.Fatal(err)
+	}
 }
 
 func TestRepositoryRetrievalPlannerPayloadUnknownFieldFailsClosed(t *testing.T) {
 	mock, err := pgxmock.NewPool()
-	if err != nil { t.Fatal(err) }
+	if err != nil {
+		t.Fatal(err)
+	}
 	defer mock.Close()
 	scope := memory.Scope{Tenant: "tenant-a", Project: "project-a", Namespace: "namespace-a"}
 	now := time.Now()
 	mock.ExpectQuery("SELECT[\\s\\S]*FROM ranking_rollout_policies").WithArgs(scope.Tenant, scope.Project, scope.Namespace, string(memory.RankingRolloutSurfaceSearch), nil, nil).
 		WillReturnRows(pgxmock.NewRows([]string{"id", "tenant", "project", "namespace", "status", "mode", "surfaces", "retrieval_planner_session_id", "retrieval_planner_user_id", "retrieval_planner_policy", "activated_at", "disabled_at", "rolled_back_at", "created_at", "updated_at"}).AddRow("planner", scope.Tenant, scope.Project, scope.Namespace, memory.RankingRolloutPolicyStatusDryRun, memory.RankingRolloutModeDryRun, []string{"search"}, nil, nil, []byte(`{"schema_version":"retrieval-planner-rollout-v1","unknown":true}`), nil, nil, nil, now, now))
-	if _, err := NewRepository(mock).ReadEffectiveRetrievalPlannerRolloutPolicy(context.Background(), memory.ReadEffectiveRetrievalPlannerRolloutPolicyInput{Scope: scope, Surface: memory.RankingRolloutSurfaceSearch}); err == nil { t.Fatal("error = nil, want malformed payload rejection") }
+	if _, err := NewRepository(mock).ReadEffectiveRetrievalPlannerRolloutPolicy(context.Background(), memory.ReadEffectiveRetrievalPlannerRolloutPolicyInput{Scope: scope, Surface: memory.RankingRolloutSurfaceSearch}); err == nil {
+		t.Fatal("error = nil, want malformed payload rejection")
+	}
 }
 
 func TestRepositoryQueryAnalysisPayloadUnknownFieldsAndVersionsFailClosed(t *testing.T) {
@@ -135,7 +147,9 @@ func TestRepositoryCreateQueryAnalysisPolicyPreservesRankingBundles(t *testing.T
 
 func TestRepositoryCreateRetrievalPlannerPolicyPersistsBundleInSameTransaction(t *testing.T) {
 	mock, err := pgxmock.NewPool()
-	if err != nil { t.Fatal(err) }
+	if err != nil {
+		t.Fatal(err)
+	}
 	defer mock.Close()
 	scope := memory.Scope{Tenant: "tenant-a", Project: "project-a", Namespace: "namespace-a"}
 	now := time.Date(2026, 9, 17, 12, 0, 0, 0, time.UTC)
@@ -144,7 +158,7 @@ func TestRepositoryCreateRetrievalPlannerPolicyPersistsBundleInSameTransaction(t
 		Surfaces: []memory.RankingRolloutSurface{memory.RankingRolloutSurfaceSearch}, SignalSources: []memory.RankingRolloutSignalSource{memory.RankingRolloutSignalSourceTaskEvaluations},
 		ThresholdStatus: memory.RankingRolloutThresholdStatusSatisfied, Actor: "operator", Reason: "planner rollout", CreatedAt: now, UpdatedAt: now,
 		RetrievalPlannerSelector: memory.RetrievalPlannerRolloutSelector{SessionID: "session-a", UserID: "user-a"},
-		RetrievalPlanner: &memory.RetrievalPlannerRolloutPolicy{SchemaVersion: memory.RetrievalPlannerRolloutSchemaVersionV1, PlannerVersion: memory.RetrievalPlannerVersionV1, PolicyVersion: memory.RetrievalPlanPolicyVersionV1, AnalysisPolicyVersion: memory.QueryAnalysisPolicyVersionV1, FusionVersion: "rrf-v1", RankingVersion: "quality-feature-v1", RendererVersion: "context-renderer-v1", MaxCandidates: 200, MaxCandidatesPerChannel: 100, MaxPasses: 2, MaxLatency: 5 * time.Second, MaxContextItems: 100, MaxRerankerHeadroom: 100, ExpiresAt: now.Add(time.Hour)},
+		RetrievalPlanner:         &memory.RetrievalPlannerRolloutPolicy{SchemaVersion: memory.RetrievalPlannerRolloutSchemaVersionV1, PlannerVersion: memory.RetrievalPlannerVersionV1, PolicyVersion: memory.RetrievalPlanPolicyVersionV1, AnalysisPolicyVersion: memory.QueryAnalysisPolicyVersionV1, FusionVersion: "rrf-v1", RankingVersion: "quality-feature-v1", RendererVersion: "context-renderer-v1", MaxCandidates: 200, MaxCandidatesPerChannel: 100, MaxPasses: 2, MaxLatency: 5 * time.Second, MaxContextItems: 100, MaxRerankerHeadroom: 100, ExpiresAt: now.Add(time.Hour)},
 	}
 	row := rankingRolloutPolicyRow(policy.ID, scope, policy.Status, policy.Mode, policy.ThresholdStatus, 0, policy.Actor, policy.Reason, nil, nil, nil, nil, nil, now, now)
 	mock.ExpectBegin()
@@ -153,9 +167,63 @@ func TestRepositoryCreateRetrievalPlannerPolicyPersistsBundleInSameTransaction(t
 	mock.ExpectExec("INSERT INTO ranking_rollout_policy_states").WithArgs(anyRankingRolloutArgs(11)...).WillReturnResult(pgxmock.NewResult("INSERT", 1))
 	mock.ExpectCommit()
 	created, err := NewRepository(mock).CreateRankingRolloutPolicy(context.Background(), policy)
-	if err != nil { t.Fatalf("CreateRankingRolloutPolicy() error = %v", err) }
-	if created.RetrievalPlanner == nil || created.RetrievalPlanner.PolicyVersion != memory.RetrievalPlanPolicyVersionV1 || created.RetrievalPlannerSelector.SessionID != "session-a" { t.Fatalf("created policy = %+v", created) }
-	if err := mock.ExpectationsWereMet(); err != nil { t.Fatal(err) }
+	if err != nil {
+		t.Fatalf("CreateRankingRolloutPolicy() error = %v", err)
+	}
+	if created.RetrievalPlanner == nil || created.RetrievalPlanner.PolicyVersion != memory.RetrievalPlanPolicyVersionV1 || created.RetrievalPlannerSelector.SessionID != "session-a" {
+		t.Fatalf("created policy = %+v", created)
+	}
+	if err := mock.ExpectationsWereMet(); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestRepositoryPersistsAndLoadsContextCalibrationRolloutByExactScope(t *testing.T) {
+	mock, err := pgxmock.NewPool()
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer mock.Close()
+	scope := memory.Scope{Tenant: "tenant-a", Project: "project-a", Namespace: "namespace-a"}
+	now := time.Date(2026, 9, 23, 12, 0, 0, 0, time.UTC)
+	calibration := &memory.ContextCalibrationRolloutPolicy{
+		SchemaVersion: memory.ContextCalibrationRolloutSchemaVersionV1, PolicyVersion: memory.ContextCalibrationPolicyVersionV1,
+		SummaryVersion: "summary-v1", MinimumEvidence: 2, ConfidenceThreshold: .5, DecayWindow: time.Hour,
+		ContributionCap: .25, MaxCandidates: 10, MaxContextItems: 10, MaxElapsed: time.Millisecond, ExpiresAt: now.Add(time.Hour),
+	}
+	policy := memory.RankingRolloutPolicy{
+		ID: "context-policy", Scope: scope, Status: memory.RankingRolloutPolicyStatusActiveForScope, Mode: memory.RankingRolloutModeActiveForScope,
+		Surfaces: []memory.RankingRolloutSurface{memory.RankingRolloutSurfaceContext}, SignalSources: []memory.RankingRolloutSignalSource{memory.RankingRolloutSignalSourceUsefulnessFeedback},
+		ThresholdStatus: memory.RankingRolloutThresholdStatusSatisfied, Actor: "operator", Reason: "context calibration", CreatedAt: now, UpdatedAt: now,
+		ContextCalibrationSelector: memory.RetrievalPlannerRolloutSelector{SessionID: "session-a", UserID: "user-a"}, ContextCalibration: calibration,
+	}
+	row := rankingRolloutPolicyRow(policy.ID, scope, policy.Status, policy.Mode, policy.ThresholdStatus, 0, policy.Actor, policy.Reason, nil, nil, nil, nil, nil, now, now)
+	row[6] = []string{"context"}
+	mock.ExpectBegin()
+	mock.ExpectQuery("INSERT INTO ranking_rollout_policies").WithArgs(anyRankingRolloutArgs(37)...).WillReturnRows(pgxmock.NewRows(rankingRolloutPolicyColumns()).AddRow(row...))
+	mock.ExpectExec("INSERT INTO context_calibration_rollout_policies").WithArgs("context-policy", scope.Tenant, scope.Project, scope.Namespace, "session-a", "user-a", pgxmock.AnyArg(), now, now).WillReturnResult(pgxmock.NewResult("INSERT", 1))
+	mock.ExpectExec("INSERT INTO ranking_rollout_policy_states").WithArgs(anyRankingRolloutArgs(11)...).WillReturnResult(pgxmock.NewResult("INSERT", 1))
+	mock.ExpectCommit()
+	created, err := NewRepository(mock).CreateRankingRolloutPolicy(context.Background(), policy)
+	if err != nil {
+		t.Fatalf("CreateRankingRolloutPolicy() error = %v", err)
+	}
+	if created.ContextCalibration == nil || created.ContextCalibration.SummaryVersion != "summary-v1" {
+		t.Fatalf("created calibration = %+v", created.ContextCalibration)
+	}
+
+	mock.ExpectQuery("SELECT[\\s\\S]*FROM ranking_rollout_policies").WithArgs(scope.Tenant, scope.Project, scope.Namespace, memory.RankingRolloutPolicyStatusActiveForScope, string(memory.RankingRolloutSurfaceContext)).WillReturnRows(pgxmock.NewRows(rankingRolloutPolicyColumns()).AddRow(row...))
+	mock.ExpectQuery("SELECT session_id, user_id, payload[\\s\\S]*FROM context_calibration_rollout_policies").WithArgs(policy.ID, scope.Tenant, scope.Project, scope.Namespace).WillReturnRows(pgxmock.NewRows([]string{"session_id", "user_id", "payload"}).AddRow("session-a", "user-a", []byte(`{"schema_version":"context-calibration-rollout-v1","policy_version":"context-calibration-v1","summary_version":"summary-v1","minimum_evidence":2,"confidence_threshold":0.5,"decay_window_ns":3600000000000,"contribution_cap":0.25,"max_candidates":10,"max_context_items":10,"max_elapsed_ns":1000000,"expires_at":"2026-09-23T13:00:00Z"}`)))
+	loaded, err := NewRepository(mock).ReadActiveRankingRolloutPolicy(context.Background(), memory.ReadActiveRankingRolloutPolicyInput{Scope: scope, Surface: memory.RankingRolloutSurfaceContext})
+	if err != nil {
+		t.Fatalf("ReadActiveRankingRolloutPolicy() error = %v", err)
+	}
+	if loaded.ContextCalibration == nil || loaded.ContextCalibrationSelector.SessionID != "session-a" {
+		t.Fatalf("loaded calibration = %+v selector=%+v", loaded.ContextCalibration, loaded.ContextCalibrationSelector)
+	}
+	if err := mock.ExpectationsWereMet(); err != nil {
+		t.Fatal(err)
+	}
 }
 
 func TestRepositoryQueryAnalysisRolloutDoesNotFallbackToSameNameForeignPolicy(t *testing.T) {

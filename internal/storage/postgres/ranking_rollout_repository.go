@@ -5,6 +5,7 @@ import (
 	"context"
 	"database/sql"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"sort"
@@ -106,6 +107,11 @@ RETURNING id, tenant, project, namespace, status, mode, surfaces, signal_sources
 		}
 		created.RetrievalPlanner = policy.RetrievalPlanner
 		created.RetrievalPlannerSelector = policy.RetrievalPlannerSelector
+		if err := persistContextCalibrationRollout(ctx, tx, policy); err != nil {
+			return memory.RankingRolloutPolicy{}, err
+		}
+		created.ContextCalibration = policy.ContextCalibration
+		created.ContextCalibrationSelector = policy.ContextCalibrationSelector
 		if err := upsertRankingRolloutPolicyState(ctx, tx, created, created.Status, created.Actor, created.Reason, created.UpdatedAt); err != nil {
 			return memory.RankingRolloutPolicy{}, err
 		}
@@ -154,6 +160,11 @@ RETURNING id, tenant, project, namespace, status, mode, surfaces, signal_sources
 	}
 	created.RetrievalPlanner = policy.RetrievalPlanner
 	created.RetrievalPlannerSelector = policy.RetrievalPlannerSelector
+	if err := persistContextCalibrationRollout(ctx, tx, policy); err != nil {
+		return memory.RankingRolloutPolicy{}, err
+	}
+	created.ContextCalibration = policy.ContextCalibration
+	created.ContextCalibrationSelector = policy.ContextCalibrationSelector
 	if err := upsertRankingRolloutPolicyState(ctx, tx, created, created.Status, created.Actor, created.Reason, created.UpdatedAt); err != nil {
 		return memory.RankingRolloutPolicy{}, err
 	}
@@ -188,6 +199,77 @@ WHERE id = $4 AND tenant = $5 AND project = $6 AND namespace = $7`
 	return nil
 }
 
+// persistContextCalibrationRollout keeps the optional calibration payload in
+// its own additive table. The base ranking policy remains compatible with
+// pre-calibration rows, while the payload retains exact scope and selector
+// identity for the hot-path policy read.
+func persistContextCalibrationRollout(ctx context.Context, q queryRower, policy memory.RankingRolloutPolicy) error {
+	if policy.ContextCalibration == nil {
+		return nil
+	}
+	payload, err := json.Marshal(policy.ContextCalibration)
+	if err != nil {
+		return fmt.Errorf("marshal context-calibration rollout policy: %w", err)
+	}
+	const query = `
+INSERT INTO context_calibration_rollout_policies
+ (policy_id, tenant, project, namespace, session_id, user_id, payload, created_at, updated_at)
+VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9)
+ON CONFLICT (policy_id) DO UPDATE SET tenant=EXCLUDED.tenant, project=EXCLUDED.project,
+ namespace=EXCLUDED.namespace, session_id=EXCLUDED.session_id, user_id=EXCLUDED.user_id,
+ payload=EXCLUDED.payload, updated_at=EXCLUDED.updated_at`
+	if _, err := q.Exec(ctx, query, policy.ID, policy.Scope.Tenant, policy.Scope.Project, policy.Scope.Namespace,
+		nullableString(policy.ContextCalibrationSelector.SessionID), nullableString(policy.ContextCalibrationSelector.UserID), payload, policy.CreatedAt, policy.UpdatedAt); err != nil {
+		return fmt.Errorf("persist context-calibration rollout policy: %w", err)
+	}
+	return nil
+}
+
+// attachContextCalibrationRollout loads calibration only for a context policy.
+// A missing row is a normal pre-calibration baseline; malformed payloads are
+// rejected so they cannot accidentally activate a partial policy.
+func attachContextCalibrationRollout(ctx context.Context, q queryRower, policy *memory.RankingRolloutPolicy) error {
+	if policy == nil || !rankingRolloutPolicyIncludesSurface(*policy, memory.RankingRolloutSurfaceContext) {
+		return nil
+	}
+	const query = `
+SELECT session_id, user_id, payload
+FROM context_calibration_rollout_policies
+WHERE policy_id = $1 AND tenant = $2 AND project = $3 AND namespace = $4`
+	var sessionID, userID sql.NullString
+	var payload []byte
+	if err := q.QueryRow(ctx, query, policy.ID, policy.Scope.Tenant, policy.Scope.Project, policy.Scope.Namespace).Scan(&sessionID, &userID, &payload); err != nil {
+		if errors.Is(err, pgx.ErrNoRows) || errors.Is(err, sql.ErrNoRows) {
+			return nil
+		}
+		return fmt.Errorf("read context-calibration rollout policy: %w", err)
+	}
+	decoder := json.NewDecoder(bytes.NewReader(payload))
+	decoder.DisallowUnknownFields()
+	var calibration memory.ContextCalibrationRolloutPolicy
+	if err := decoder.Decode(&calibration); err != nil {
+		return fmt.Errorf("decode context-calibration rollout payload: %w", err)
+	}
+	var trailing any
+	if err := decoder.Decode(&trailing); err != io.EOF {
+		if err == nil {
+			return fmt.Errorf("decode context-calibration rollout payload: trailing JSON value")
+		}
+		return fmt.Errorf("decode context-calibration rollout payload: trailing data: %w", err)
+	}
+	if err := calibration.Validate(); err != nil {
+		return fmt.Errorf("validate context-calibration rollout payload: %w", err)
+	}
+	policy.ContextCalibration = &calibration
+	if sessionID.Valid {
+		policy.ContextCalibrationSelector.SessionID = sessionID.String
+	}
+	if userID.Valid {
+		policy.ContextCalibrationSelector.UserID = userID.String
+	}
+	return nil
+}
+
 func (r *Repository) ReadRankingRolloutPolicy(ctx context.Context, input memory.ReadRankingRolloutPolicyInput) (memory.RankingRolloutPolicy, error) {
 	if err := input.Validate(); err != nil {
 		return memory.RankingRolloutPolicy{}, err
@@ -209,6 +291,9 @@ WHERE tenant = $1 AND project = $2 AND namespace = $3 AND id = $4
 	policy, err := scanRankingRolloutPolicy(r.db.QueryRow(ctx, query, input.Scope.Tenant, input.Scope.Project, input.Scope.Namespace, input.PolicyID))
 	if err != nil {
 		return memory.RankingRolloutPolicy{}, fmt.Errorf("read ranking rollout policy: %w", err)
+	}
+	if err := attachContextCalibrationRollout(ctx, r.db, &policy); err != nil {
+		return memory.RankingRolloutPolicy{}, err
 	}
 	return policy, nil
 }
@@ -240,6 +325,11 @@ LIMIT 1
 	policy, err := scanRankingRolloutPolicy(r.db.QueryRow(ctx, query, input.Scope.Tenant, input.Scope.Project, input.Scope.Namespace, memory.RankingRolloutPolicyStatusActiveForScope, string(input.Surface)))
 	if err != nil {
 		return memory.RankingRolloutPolicy{}, fmt.Errorf("read active ranking rollout policy: %w", err)
+	}
+	if input.Surface == memory.RankingRolloutSurfaceContext {
+		if err := attachContextCalibrationRollout(ctx, r.db, &policy); err != nil {
+			return memory.RankingRolloutPolicy{}, err
+		}
 	}
 	return policy, nil
 }
@@ -321,7 +411,9 @@ LIMIT 1`
 }
 
 func (r *Repository) ReadEffectiveRetrievalPlannerRolloutPolicy(ctx context.Context, input memory.ReadEffectiveRetrievalPlannerRolloutPolicyInput) (memory.RankingRolloutPolicy, error) {
-	if err := input.Validate(); err != nil { return memory.RankingRolloutPolicy{}, err }
+	if err := input.Validate(); err != nil {
+		return memory.RankingRolloutPolicy{}, err
+	}
 	scope := input.Scope.Normalized()
 	const query = `
 SELECT id, tenant, project, namespace, status, mode, surfaces,
@@ -343,27 +435,51 @@ LIMIT 1`
 	if err := r.db.QueryRow(ctx, query, scope.Tenant, scope.Project, scope.Namespace, string(input.Surface), nullableString(strings.TrimSpace(input.SessionID)), nullableString(strings.TrimSpace(input.UserID))).Scan(
 		&policy.ID, &policy.Scope.Tenant, &policy.Scope.Project, &policy.Scope.Namespace, &policy.Status, &policy.Mode, &surfaces,
 		&sessionID, &userID, &payload, &activated, &disabled, &rolledBack, &created, &updated,
-	); err != nil { return memory.RankingRolloutPolicy{}, fmt.Errorf("read effective retrieval-planner rollout policy: %w", err) }
+	); err != nil {
+		return memory.RankingRolloutPolicy{}, fmt.Errorf("read effective retrieval-planner rollout policy: %w", err)
+	}
 	policy.Surfaces = rankingRolloutSurfaces(surfaces)
-	if sessionID.Valid { policy.RetrievalPlannerSelector.SessionID = sessionID.String }
-	if userID.Valid { policy.RetrievalPlannerSelector.UserID = userID.String }
-	if len(payload) == 0 { return memory.RankingRolloutPolicy{}, fmt.Errorf("retrieval-planner rollout payload is empty") }
+	if sessionID.Valid {
+		policy.RetrievalPlannerSelector.SessionID = sessionID.String
+	}
+	if userID.Valid {
+		policy.RetrievalPlannerSelector.UserID = userID.String
+	}
+	if len(payload) == 0 {
+		return memory.RankingRolloutPolicy{}, fmt.Errorf("retrieval-planner rollout payload is empty")
+	}
 	decoder := json.NewDecoder(bytes.NewReader(payload))
 	decoder.DisallowUnknownFields()
 	var planner memory.RetrievalPlannerRolloutPolicy
-	if err := decoder.Decode(&planner); err != nil { return memory.RankingRolloutPolicy{}, fmt.Errorf("decode retrieval-planner rollout payload: %w", err) }
+	if err := decoder.Decode(&planner); err != nil {
+		return memory.RankingRolloutPolicy{}, fmt.Errorf("decode retrieval-planner rollout payload: %w", err)
+	}
 	var trailing any
 	if err := decoder.Decode(&trailing); err != io.EOF {
-		if err == nil { return memory.RankingRolloutPolicy{}, fmt.Errorf("decode retrieval-planner rollout payload: trailing JSON value") }
+		if err == nil {
+			return memory.RankingRolloutPolicy{}, fmt.Errorf("decode retrieval-planner rollout payload: trailing JSON value")
+		}
 		return memory.RankingRolloutPolicy{}, fmt.Errorf("decode retrieval-planner rollout payload: trailing data: %w", err)
 	}
-	if err := planner.Validate(); err != nil { return memory.RankingRolloutPolicy{}, fmt.Errorf("validate retrieval-planner rollout payload: %w", err) }
+	if err := planner.Validate(); err != nil {
+		return memory.RankingRolloutPolicy{}, fmt.Errorf("validate retrieval-planner rollout payload: %w", err)
+	}
 	policy.RetrievalPlanner = &planner
-	if activated.Valid { policy.ActivatedAt = activated.Time }
-	if disabled.Valid { policy.DisabledAt = disabled.Time }
-	if rolledBack.Valid { policy.RolledBackAt = rolledBack.Time }
-	if created.Valid { policy.CreatedAt = created.Time }
-	if updated.Valid { policy.UpdatedAt = updated.Time }
+	if activated.Valid {
+		policy.ActivatedAt = activated.Time
+	}
+	if disabled.Valid {
+		policy.DisabledAt = disabled.Time
+	}
+	if rolledBack.Valid {
+		policy.RolledBackAt = rolledBack.Time
+	}
+	if created.Valid {
+		policy.CreatedAt = created.Time
+	}
+	if updated.Valid {
+		policy.UpdatedAt = updated.Time
+	}
 	return policy, nil
 }
 
@@ -396,6 +512,9 @@ ORDER BY created_at DESC, id DESC
 	for rows.Next() {
 		policy, err := scanRankingRolloutPolicy(rows)
 		if err != nil {
+			return nil, err
+		}
+		if err := attachContextCalibrationRollout(ctx, r.db, &policy); err != nil {
 			return nil, err
 		}
 		policies = append(policies, policy)

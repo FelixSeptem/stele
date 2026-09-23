@@ -442,6 +442,24 @@ func TestAggregateEvaluationReplaySamplesUsesDeterministicMedianLatency(t *testi
 	}
 }
 
+func TestAggregateEvaluationReplaySamplesIgnoresAnalysisElapsedVariance(t *testing.T) {
+	diagnostic := &QueryAnalysisDiagnostics{PolicyVersion: QueryAnalysisPolicyVersionV1, LimitsVersion: QueryAnalysisLimitsVersionV1, Disposition: QueryAnalysisDispositionComplete, Fallback: QueryAnalysisFallbackNone, OriginalRetained: true, SignalCount: 1, Elapsed: 2 * time.Millisecond, RolloutStage: "active"}
+	base := EvaluationReplay{
+		Metadata: EvaluationRankingMetadata{FixtureVersion: "fixture-v1", RepresentationVersion: "repr-v1", RankingVersion: "rank-v1", CompatibleEmbeddingRevision: "embed-v1", PolicyVersion: "policy-v1"},
+		Cases:    []EvaluationReplayCase{{CaseID: "case", AnalysisDiagnostics: diagnostic}},
+	}
+	second := base
+	second.Cases = append([]EvaluationReplayCase(nil), base.Cases...)
+	second.Cases[0].AnalysisDiagnostics = &QueryAnalysisDiagnostics{PolicyVersion: QueryAnalysisPolicyVersionV1, LimitsVersion: QueryAnalysisLimitsVersionV1, Disposition: QueryAnalysisDispositionComplete, Fallback: QueryAnalysisFallbackNone, OriginalRetained: true, SignalCount: 1, Elapsed: 7 * time.Millisecond, RolloutStage: "active"}
+	aggregated, err := AggregateEvaluationReplaySamples([]EvaluationReplay{base, second})
+	if err != nil {
+		t.Fatalf("AggregateEvaluationReplaySamples() error = %v", err)
+	}
+	if aggregated.Cases[0].AnalysisDiagnostics == nil || aggregated.Cases[0].AnalysisDiagnostics.Elapsed != 2*time.Millisecond {
+		t.Fatalf("aggregated analysis elapsed = %+v, want lower median 2ms", aggregated.Cases[0].AnalysisDiagnostics)
+	}
+}
+
 func TestOwnedRunnerRequiresExplicitOwnedPostgresDSN(t *testing.T) {
 	if _, err := RunOwnedPlannerEvaluation("", "postgres://runtime", true); err == nil || !strings.Contains(err.Error(), RetrievalEvaluationDSNSkip) {
 		t.Fatalf("err=%v", err)

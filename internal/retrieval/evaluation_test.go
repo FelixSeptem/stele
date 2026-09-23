@@ -563,6 +563,31 @@ func TestEvaluateReleasePolicyRejectsCoverageBudgetAndLatencyRegressions(t *test
 	}
 }
 
+func TestEvaluationReportRejectsUnboundedContextEfficiencyEvidence(t *testing.T) {
+	report := EvaluationReport{Metadata: EvaluationRankingMetadata{FixtureVersion: "fixture-v1", RepresentationVersion: "representation-v1", RankingVersion: "ranking-v1", CompatibleEmbeddingRevision: "embedding-v1", PolicyVersion: "policy-v1"}, Metrics: EvaluationMetricReport{ContextEfficiency: &ContextEfficiencyMetrics{RelevantTokenRatio: 1.1}}}
+	if _, err := MarshalEvaluationReport(report); err == nil {
+		t.Fatal("MarshalEvaluationReport() error = nil, want bounded efficiency rejection")
+	}
+}
+
+func TestEvaluateReleasePolicyRejectsEfficiencyHardFailures(t *testing.T) {
+	policy := EvaluationReleasePolicy{Version: "quality-policy-v1", ProtectedCutoffs: []int{1}, MaxP95LatencyMS: 500}
+	policy.MaxDuplicateTokenRate = .2
+	policy.MaxStaleTokenRate = .2
+	metadata := EvaluationRankingMetadata{FixtureVersion: "fixture-v1", RepresentationVersion: "representation-v1", RankingVersion: "ranking-v1", CompatibleEmbeddingRevision: "embedding-v1", PolicyVersion: policy.Version}
+	baseline := EvaluationReport{Metadata: metadata, Metrics: EvaluationMetricReport{ContextEfficiency: &ContextEfficiencyMetrics{DuplicateTokenRate: .1, StaleTokenRate: .1}}}
+	candidate := baseline
+	candidate.Metrics.ContextEfficiency = &ContextEfficiencyMetrics{DuplicateTokenRate: .4, StaleTokenRate: .3}
+	candidate.Metadata.PolicyVersion = policy.Version
+	decision, err := EvaluateReleasePolicy(policy, baseline, candidate)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if decision.Eligible || len(decision.HardFailures) == 0 {
+		t.Fatalf("decision = %+v, want efficiency hard failure", decision)
+	}
+}
+
 func TestEvaluateReleasePolicyRejectsCrossScopeAndLifecycleFailures(t *testing.T) {
 	policy := EvaluationReleasePolicy{Version: "quality-policy-v1", ProtectedCutoffs: []int{1}, MaxP95LatencyMS: 500}
 	baseline := evaluationComparisonReport("retrieval-fixture-v1", "baseline-v1", 0.5)

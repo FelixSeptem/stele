@@ -86,6 +86,88 @@ func (s RankingRolloutSignalSource) Valid() bool {
 	}
 }
 
+const (
+	ContextCalibrationRolloutSchemaVersionV1 = "context-calibration-rollout-v1"
+	ContextCalibrationPolicyVersionV1        = "context-calibration-v1"
+)
+
+type ContextCalibrationRolloutPolicy struct {
+	SchemaVersion       string        `json:"schema_version"`
+	PolicyVersion       string        `json:"policy_version"`
+	SummaryVersion      string        `json:"summary_version"`
+	MinimumEvidence     int           `json:"minimum_evidence"`
+	ConfidenceThreshold float64       `json:"confidence_threshold"`
+	DecayWindow         time.Duration `json:"decay_window_ns"`
+	ContributionCap     float64       `json:"contribution_cap"`
+	MaxCandidates       int           `json:"max_candidates"`
+	MaxContextItems     int           `json:"max_context_items"`
+	MaxElapsed          time.Duration `json:"max_elapsed_ns"`
+	ExpiresAt           time.Time     `json:"expires_at"`
+}
+
+type ContextCalibrationRolloutStage string
+
+const (
+	ContextCalibrationRolloutStageBaseline    ContextCalibrationRolloutStage = "baseline"
+	ContextCalibrationRolloutStageDiagnostics ContextCalibrationRolloutStage = "diagnostics_only"
+	ContextCalibrationRolloutStageShadow      ContextCalibrationRolloutStage = "shadow"
+	ContextCalibrationRolloutStageActive      ContextCalibrationRolloutStage = "active"
+)
+
+type ResolveContextCalibrationRolloutInput struct {
+	Scope          Scope
+	Surface        RankingRolloutSurface
+	SessionID      string
+	UserID         string
+	SummaryVersion string
+	Now            time.Time
+}
+
+type ContextCalibrationRolloutResolution struct {
+	Stage          ContextCalibrationRolloutStage
+	AffectsResults bool
+	Policy         *ContextCalibrationRolloutPolicy
+}
+
+func ResolveContextCalibrationRollout(policy *RankingRolloutPolicy, input ResolveContextCalibrationRolloutInput) ContextCalibrationRolloutResolution {
+	fallback := ContextCalibrationRolloutResolution{Stage: ContextCalibrationRolloutStageBaseline}
+	if policy == nil || input.Scope.Validate() != nil || !input.Surface.Valid() || policy.ContextCalibration == nil || policy.ContextCalibration.Validate() != nil || input.Now.IsZero() || !input.Now.Before(policy.ContextCalibration.ExpiresAt) {
+		return fallback
+	}
+	if policy.Scope.Normalized() != input.Scope.Normalized() || policy.ContextCalibrationSelector.Normalized() != (RetrievalPlannerRolloutSelector{SessionID: input.SessionID, UserID: input.UserID}).Normalized() || input.SummaryVersion != policy.ContextCalibration.SummaryVersion {
+		return fallback
+	}
+	if policy.Status == RankingRolloutPolicyStatusDiagnosticsOnly && policy.Mode != RankingRolloutModeDiagnosticsOnly || policy.Status == RankingRolloutPolicyStatusDryRun && policy.Mode != RankingRolloutModeDryRun || policy.Status == RankingRolloutPolicyStatusActiveForScope && policy.Mode != RankingRolloutModeActiveForScope {
+		return fallback
+	}
+	result := ContextCalibrationRolloutResolution{Policy: policy.ContextCalibration, Stage: ContextCalibrationRolloutStageDiagnostics}
+	switch policy.Status {
+	case RankingRolloutPolicyStatusDiagnosticsOnly:
+		result.Stage = ContextCalibrationRolloutStageDiagnostics
+	case RankingRolloutPolicyStatusDryRun:
+		result.Stage = ContextCalibrationRolloutStageShadow
+	case RankingRolloutPolicyStatusActiveForScope:
+		result.Stage = ContextCalibrationRolloutStageActive
+		result.AffectsResults = true
+	default:
+		return fallback
+	}
+	return result
+}
+
+func (p ContextCalibrationRolloutPolicy) Validate() error {
+	if p.SchemaVersion != ContextCalibrationRolloutSchemaVersionV1 || p.PolicyVersion != ContextCalibrationPolicyVersionV1 || strings.TrimSpace(p.SummaryVersion) == "" {
+		return fmt.Errorf("context calibration rollout contains an unsupported version")
+	}
+	if p.MinimumEvidence < 1 || p.MinimumEvidence > 10000 || p.ConfidenceThreshold < 0 || p.ConfidenceThreshold > 1 || p.DecayWindow <= 0 || p.DecayWindow > 365*24*time.Hour || p.ContributionCap <= 0 || p.ContributionCap > 1 || p.MaxCandidates < 1 || p.MaxCandidates > 1000 || p.MaxContextItems < 1 || p.MaxContextItems > 1000 || p.MaxElapsed <= 0 || p.MaxElapsed > time.Second {
+		return fmt.Errorf("context calibration rollout limits are invalid")
+	}
+	if p.ExpiresAt.IsZero() {
+		return fmt.Errorf("context calibration rollout expiry is required")
+	}
+	return nil
+}
+
 type RankingRolloutThresholdStatus string
 
 const (
@@ -168,24 +250,26 @@ type RankingRolloutPolicy struct {
 	RerankerMode              string                        `json:"reranker_mode,omitempty"`
 	// Diversity fields are optional as a complete bundle. When configured, all
 	// identity and bounded selection parameters must be present and valid.
-	DiversityPolicyName               string                          `json:"diversity_policy_name,omitempty"`
-	DiversityPolicyVersion            string                          `json:"diversity_policy_version,omitempty"`
-	DiversityMMRLambda                float64                         `json:"diversity_mmr_lambda,omitempty"`
-	DiversitySemanticThreshold        float64                         `json:"diversity_semantic_threshold,omitempty"`
-	DiversityMaxCandidates            int                             `json:"diversity_max_candidates,omitempty"`
-	DiversityMaxPairwiseComparisons   int                             `json:"diversity_max_pairwise_comparisons,omitempty"`
-	DiversityMaxEmbeddingDimensions   int                             `json:"diversity_max_embedding_dimensions,omitempty"`
-	DiversityMaxCitationsPerCandidate int                             `json:"diversity_max_citations_per_candidate,omitempty"`
-	DiversityCoverageWeights          map[string]float64              `json:"diversity_coverage_weights,omitempty"`
-	QueryAnalysisSelector             QueryAnalysisRolloutSelector    `json:"query_analysis_selector,omitempty"`
-	QueryAnalysis                     *QueryAnalysisRolloutPolicy     `json:"query_analysis,omitempty"`
-	RetrievalPlannerSelector          RetrievalPlannerRolloutSelector `json:"retrieval_planner_selector,omitempty"`
-	RetrievalPlanner                  *RetrievalPlannerRolloutPolicy  `json:"retrieval_planner,omitempty"`
-	ActivatedAt                       time.Time                       `json:"activated_at,omitempty"`
-	DisabledAt                        time.Time                       `json:"disabled_at,omitempty"`
-	RolledBackAt                      time.Time                       `json:"rolled_back_at,omitempty"`
-	CreatedAt                         time.Time                       `json:"created_at"`
-	UpdatedAt                         time.Time                       `json:"updated_at"`
+	DiversityPolicyName               string                           `json:"diversity_policy_name,omitempty"`
+	DiversityPolicyVersion            string                           `json:"diversity_policy_version,omitempty"`
+	DiversityMMRLambda                float64                          `json:"diversity_mmr_lambda,omitempty"`
+	DiversitySemanticThreshold        float64                          `json:"diversity_semantic_threshold,omitempty"`
+	DiversityMaxCandidates            int                              `json:"diversity_max_candidates,omitempty"`
+	DiversityMaxPairwiseComparisons   int                              `json:"diversity_max_pairwise_comparisons,omitempty"`
+	DiversityMaxEmbeddingDimensions   int                              `json:"diversity_max_embedding_dimensions,omitempty"`
+	DiversityMaxCitationsPerCandidate int                              `json:"diversity_max_citations_per_candidate,omitempty"`
+	DiversityCoverageWeights          map[string]float64               `json:"diversity_coverage_weights,omitempty"`
+	QueryAnalysisSelector             QueryAnalysisRolloutSelector     `json:"query_analysis_selector,omitempty"`
+	QueryAnalysis                     *QueryAnalysisRolloutPolicy      `json:"query_analysis,omitempty"`
+	RetrievalPlannerSelector          RetrievalPlannerRolloutSelector  `json:"retrieval_planner_selector,omitempty"`
+	RetrievalPlanner                  *RetrievalPlannerRolloutPolicy   `json:"retrieval_planner,omitempty"`
+	ContextCalibrationSelector        RetrievalPlannerRolloutSelector  `json:"context_calibration_selector,omitempty"`
+	ContextCalibration                *ContextCalibrationRolloutPolicy `json:"context_calibration,omitempty"`
+	ActivatedAt                       time.Time                        `json:"activated_at,omitempty"`
+	DisabledAt                        time.Time                        `json:"disabled_at,omitempty"`
+	RolledBackAt                      time.Time                        `json:"rolled_back_at,omitempty"`
+	CreatedAt                         time.Time                        `json:"created_at"`
+	UpdatedAt                         time.Time                        `json:"updated_at"`
 }
 
 func (p RankingRolloutPolicy) Validate() error {
@@ -250,7 +334,21 @@ func (p RankingRolloutPolicy) Validate() error {
 	if err := validateRetrievalPlannerRollout(p); err != nil {
 		return err
 	}
+	if err := validateContextCalibrationRollout(p); err != nil {
+		return err
+	}
 	return nil
+}
+
+func validateContextCalibrationRollout(policy RankingRolloutPolicy) error {
+	selector := policy.ContextCalibrationSelector.Normalized()
+	if policy.ContextCalibration == nil {
+		if selector.SessionID != "" || selector.UserID != "" {
+			return fmt.Errorf("context calibration selector requires a context calibration policy")
+		}
+		return nil
+	}
+	return policy.ContextCalibration.Validate()
 }
 
 const (

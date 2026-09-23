@@ -21,6 +21,12 @@ const (
 	evaluationDecisionPlannerFallback      = "planner_fallback_failure"
 	evaluationDecisionPlannerReranker      = "planner_reranker_failure"
 	evaluationDecisionPlannerRollback      = "planner_rollback_failure"
+	evaluationDecisionEfficiencyMissing    = "efficiency_evidence_missing"
+	evaluationDecisionDuplicateOverflow    = "duplicate_token_rate_overflow"
+	evaluationDecisionStaleOverflow        = "stale_token_rate_overflow"
+	evaluationDecisionEfficiencyRegression = "quality_per_budget_regression"
+	evaluationDecisionReplayFailure        = "nondeterministic_replay"
+	evaluationDecisionRollbackFailure      = "rollback_failure"
 	evaluationDecisionProtectedFamily      = "protected_family_regression"
 	evaluationDecisionProtectedCategory    = "protected_category_regression"
 )
@@ -109,6 +115,33 @@ func EvaluateReleasePolicy(policy EvaluationReleasePolicy, baseline, candidate E
 		decision.Eligible = false
 		decision.HardFailures = append(decision.HardFailures, evaluationDecisionProtectedCategory)
 		decision.Advisories = append(decision.Advisories, "protected_category_regression_observed")
+	}
+	if policy.MaxDuplicateTokenRate > 0 || policy.MaxStaleTokenRate > 0 || policy.MaxQualityPerBudgetRegression > 0 {
+		if candidate.Metrics.ContextEfficiency == nil {
+			decision.Eligible = false
+			decision.HardFailures = append(decision.HardFailures, evaluationDecisionEfficiencyMissing)
+		} else {
+			if policy.MaxDuplicateTokenRate > 0 && candidate.Metrics.ContextEfficiency.DuplicateTokenRate > policy.MaxDuplicateTokenRate {
+				decision.Eligible = false
+				decision.HardFailures = append(decision.HardFailures, evaluationDecisionDuplicateOverflow)
+			}
+			if policy.MaxStaleTokenRate > 0 && candidate.Metrics.ContextEfficiency.StaleTokenRate > policy.MaxStaleTokenRate {
+				decision.Eligible = false
+				decision.HardFailures = append(decision.HardFailures, evaluationDecisionStaleOverflow)
+			}
+			if baseline.Metrics.ContextEfficiency != nil && candidate.Metrics.ContextEfficiency.QualityPerBudget < baseline.Metrics.ContextEfficiency.QualityPerBudget-policy.MaxQualityPerBudgetRegression {
+				decision.Eligible = false
+				decision.HardFailures = append(decision.HardFailures, evaluationDecisionEfficiencyRegression)
+			}
+		}
+	}
+	if policy.RequireDeterministicReplay && !candidate.DeterministicReplay {
+		decision.Eligible = false
+		decision.HardFailures = append(decision.HardFailures, evaluationDecisionReplayFailure)
+	}
+	if policy.Rollback.Enabled && !candidate.RollbackTested {
+		decision.Eligible = false
+		decision.HardFailures = append(decision.HardFailures, evaluationDecisionRollbackFailure)
 	}
 	protectedFamilies := append([]RetrievalQueryFamily(nil), policy.ProtectedFamilies...)
 	for _, item := range candidate.Cases {

@@ -115,7 +115,10 @@ type EvaluationRankingMetadata struct {
 	TemporalPolicyVersion string `json:"temporal_policy_version,omitempty"`
 	// TemporalCoverageVersion is the fixture-side version of the temporal
 	// coverage contract, so a report can be matched to the fixture that produced it.
-	TemporalCoverageVersion string `json:"temporal_coverage_version,omitempty"`
+	TemporalCoverageVersion   string `json:"temporal_coverage_version,omitempty"`
+	ContextEfficiencyVersion  string `json:"context_efficiency_version,omitempty"`
+	CalibrationPolicyVersion  string `json:"calibration_policy_version,omitempty"`
+	CalibrationSummaryVersion string `json:"calibration_summary_version,omitempty"`
 }
 
 // EvaluationSafetyFailureCategory is a stable non-sensitive failure reason.
@@ -294,33 +297,34 @@ func NewEvaluationFailure(category EvaluationSafetyFailureCategory, cause string
 // EvaluationMetricReport holds quality measurements calculated from visible,
 // in-scope results only.
 type EvaluationMetricReport struct {
-	RecallAt1                  float64 `json:"recall_at_1"`
-	RecallAt5                  float64 `json:"recall_at_5"`
-	RecallAt10                 float64 `json:"recall_at_10"`
-	MRR                        float64 `json:"mrr"`
-	NDCGAt1                    float64 `json:"ndcg_at_1"`
-	NDCGAt5                    float64 `json:"ndcg_at_5"`
-	NDCGAt10                   float64 `json:"ndcg_at_10"`
-	MultiHopEvidenceCoverage   float64 `json:"multi_hop_evidence_coverage"`
-	DuplicateRate              float64 `json:"duplicate_rate"`
-	CandidatePoolSize          int     `json:"candidate_pool_size"`
-	P50LatencyMS               float64 `json:"p50_latency_ms"`
-	P95LatencyMS               float64 `json:"p95_latency_ms"`
-	ProtectedRecall            float64 `json:"protected_recall"`
-	EvidenceCoverage           float64 `json:"evidence_coverage"`
-	BudgetOmissionRate         float64 `json:"budget_omission_rate"`
-	TemporalEvidenceCoverage   float64 `json:"temporal_evidence_coverage"`
-	AnalysisSignalCount        int     `json:"analysis_signal_count"`
-	AnalysisSubqueryCount      int     `json:"analysis_subquery_count"`
-	AnalysisCandidateCount     int     `json:"analysis_candidate_count"`
-	FirstPassEvidenceCoverage  float64 `json:"first_pass_evidence_coverage,omitempty"`
-	SecondPassEvidenceCoverage float64 `json:"second_pass_evidence_coverage,omitempty"`
-	SecondPassEvidenceGain     float64 `json:"second_pass_evidence_gain,omitempty"`
-	SecondPassCount            int     `json:"second_pass_count,omitempty"`
-	MaxPassesObserved          int     `json:"max_passes_observed,omitempty"`
-	MaxPlannerCandidates       int     `json:"max_planner_candidates,omitempty"`
-	PlannerFallbackRate        float64 `json:"planner_fallback_rate,omitempty"`
-	PlannerRerankerUseRate     float64 `json:"planner_reranker_use_rate,omitempty"`
+	RecallAt1                  float64                   `json:"recall_at_1"`
+	RecallAt5                  float64                   `json:"recall_at_5"`
+	RecallAt10                 float64                   `json:"recall_at_10"`
+	MRR                        float64                   `json:"mrr"`
+	NDCGAt1                    float64                   `json:"ndcg_at_1"`
+	NDCGAt5                    float64                   `json:"ndcg_at_5"`
+	NDCGAt10                   float64                   `json:"ndcg_at_10"`
+	MultiHopEvidenceCoverage   float64                   `json:"multi_hop_evidence_coverage"`
+	DuplicateRate              float64                   `json:"duplicate_rate"`
+	CandidatePoolSize          int                       `json:"candidate_pool_size"`
+	P50LatencyMS               float64                   `json:"p50_latency_ms"`
+	P95LatencyMS               float64                   `json:"p95_latency_ms"`
+	ProtectedRecall            float64                   `json:"protected_recall"`
+	EvidenceCoverage           float64                   `json:"evidence_coverage"`
+	BudgetOmissionRate         float64                   `json:"budget_omission_rate"`
+	TemporalEvidenceCoverage   float64                   `json:"temporal_evidence_coverage"`
+	AnalysisSignalCount        int                       `json:"analysis_signal_count"`
+	AnalysisSubqueryCount      int                       `json:"analysis_subquery_count"`
+	AnalysisCandidateCount     int                       `json:"analysis_candidate_count"`
+	FirstPassEvidenceCoverage  float64                   `json:"first_pass_evidence_coverage,omitempty"`
+	SecondPassEvidenceCoverage float64                   `json:"second_pass_evidence_coverage,omitempty"`
+	SecondPassEvidenceGain     float64                   `json:"second_pass_evidence_gain,omitempty"`
+	SecondPassCount            int                       `json:"second_pass_count,omitempty"`
+	MaxPassesObserved          int                       `json:"max_passes_observed,omitempty"`
+	MaxPlannerCandidates       int                       `json:"max_planner_candidates,omitempty"`
+	PlannerFallbackRate        float64                   `json:"planner_fallback_rate,omitempty"`
+	PlannerRerankerUseRate     float64                   `json:"planner_reranker_use_rate,omitempty"`
+	ContextEfficiency          *ContextEfficiencyMetrics `json:"context_efficiency,omitempty"`
 }
 
 // EvaluationCaseReport is a bounded per-case contribution to an evaluation report.
@@ -409,6 +413,8 @@ type EvaluationReport struct {
 	GeneratedAt                time.Time                        `json:"generated_at"`
 	RealStack                  bool                             `json:"real_stack"`
 	ReleaseEligible            bool                             `json:"release_eligible"`
+	DeterministicReplay        bool                             `json:"deterministic_replay,omitempty"`
+	RollbackTested             bool                             `json:"rollback_tested,omitempty"`
 	ChangedRankCount           int                              `json:"changed_rank_count,omitempty"`
 	RerankFallbackCounts       map[string]int                   `json:"rerank_fallback_counts,omitempty"`
 	PlannerEvidence            EvaluationPlannerReleaseEvidence `json:"planner_evidence,omitempty"`
@@ -495,6 +501,10 @@ type EvaluationReleasePolicy struct {
 	Rollback                      EvaluationRollbackContract     `json:"rollback,omitempty"`
 	Retention                     EvaluationRetentionContract    `json:"retention,omitempty"`
 	Planner                       EvaluationPlannerReleasePolicy `json:"planner,omitempty"`
+	MaxDuplicateTokenRate         float64                        `json:"max_duplicate_token_rate,omitempty"`
+	MaxStaleTokenRate             float64                        `json:"max_stale_token_rate,omitempty"`
+	MaxQualityPerBudgetRegression float64                        `json:"max_quality_per_budget_regression,omitempty"`
+	RequireDeterministicReplay    bool                           `json:"require_deterministic_replay,omitempty"`
 }
 
 type EvaluationPlannerReleasePolicy struct {
@@ -602,6 +612,11 @@ func (m EvaluationRankingMetadata) Validate() error {
 			return fmt.Errorf("%s identity is invalid", name)
 		}
 	}
+	for name, value := range map[string]string{"context efficiency version": m.ContextEfficiencyVersion, "calibration policy version": m.CalibrationPolicyVersion, "calibration summary version": m.CalibrationSummaryVersion} {
+		if !evaluationSafeIdentity(value) {
+			return fmt.Errorf("%s identity is invalid", name)
+		}
+	}
 	for name, value := range map[string]string{"embedding provider": m.EmbeddingProvider, "embedding version": m.EmbeddingVersion} {
 		if !evaluationSafeIdentity(value) {
 			return fmt.Errorf("%s identity is invalid", name)
@@ -625,6 +640,11 @@ func evaluationRolloutDispositionValid(disposition string) bool {
 func (report EvaluationReport) validateSafeOutput() error {
 	if err := validateEvaluationSafetyFailures(report.SafetyFailures); err != nil {
 		return err
+	}
+	if report.Metrics.ContextEfficiency != nil {
+		if err := report.Metrics.ContextEfficiency.Validate(); err != nil {
+			return err
+		}
 	}
 	if err := report.GraphTraversalEvidence.validate(); err != nil {
 		return err
@@ -1209,7 +1229,7 @@ func (p EvaluationReleasePolicy) Validate() error {
 	if p.MaxP95LatencyMS <= 0 {
 		return fmt.Errorf("max p95 latency must be greater than zero")
 	}
-	if p.MaxRecallRegression < 0 || p.MaxMultiHopCoverageRegression < 0 || p.MaxEvidenceCoverageRegression < 0 || p.MaxBudgetOmissionIncrease < 0 || p.MaxP95LatencyRegressionMS < 0 {
+	if p.MaxRecallRegression < 0 || p.MaxMultiHopCoverageRegression < 0 || p.MaxEvidenceCoverageRegression < 0 || p.MaxBudgetOmissionIncrease < 0 || p.MaxP95LatencyRegressionMS < 0 || p.MaxDuplicateTokenRate < 0 || p.MaxDuplicateTokenRate > 1 || p.MaxStaleTokenRate < 0 || p.MaxStaleTokenRate > 1 || p.MaxQualityPerBudgetRegression < 0 || p.MaxQualityPerBudgetRegression > 1 {
 		return fmt.Errorf("quality regression tolerances must be greater than or equal to zero")
 	}
 	if p.ResourceBudget.MaxCases < 0 || p.ResourceBudget.MaxCandidates < 0 || p.ResourceBudget.MaxElapsedMS < 0 {

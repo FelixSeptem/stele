@@ -64,6 +64,7 @@ type ProgressiveContextLevelReport struct {
 	CitationCoverage, EvidenceCoverage float64
 	RebuildIdentity                    string                            `json:"rebuild_identity"`
 	FailureReasons                     []ProgressiveContextFailureReason `json:"failure_reasons,omitempty"`
+	Efficiency                         *ContextEfficiencyMetrics         `json:"efficiency,omitempty"`
 }
 type ProgressiveContextEvaluationInput struct {
 	Scope            memory.Scope
@@ -162,7 +163,24 @@ func evaluateProgressiveLevel(scope memory.Scope, now time.Time, in ProgressiveC
 	if in.ExpectedEvidence > 0 && r.CitationCoverage < 1 {
 		addProgressiveFailure(&r, ProgressiveContextFailureCitation)
 	}
+	selected := r.TokenCount
+	budget := in.TokenBudget
+	if budget <= 0 {
+		budget = selected
+	}
+	relevant := r.EvidenceCoverage
+	if in.ExpectedEvidence > 0 {
+		relevant = minFloat(relevant, 1)
+	}
+	r.Efficiency = &ContextEfficiencyMetrics{RelevantTokenRatio: relevant, EvidenceDensity: relevant / float64(maxInt(selected, 1)), SelectedContextTokens: selected, ContextBudgetTokens: budget, DuplicateTokenRate: 0, StaleTokenRate: 0, QualityPerBudget: relevant / float64(maxInt(budget, 1)), CandidateCount: int(r.EvidenceCoverage), ElapsedMS: 0}
 	return r
+}
+
+func minFloat(left, right float64) float64 {
+	if left < right {
+		return left
+	}
+	return right
 }
 func addProgressiveFailure(r *ProgressiveContextLevelReport, f ProgressiveContextFailureReason) {
 	for _, x := range r.FailureReasons {

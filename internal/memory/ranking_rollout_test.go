@@ -63,6 +63,53 @@ func TestRankingRolloutPolicyValidateAcceptsExplicitFusionStrategy(t *testing.T)
 	}
 }
 
+func TestRankingRolloutPolicyValidateAcceptsBoundedContextCalibration(t *testing.T) {
+	policy := validRankingRolloutPolicyForTest()
+	policy.ContextCalibration = &ContextCalibrationRolloutPolicy{
+		SchemaVersion: "context-calibration-rollout-v1", PolicyVersion: "context-calibration-v1", SummaryVersion: "summary-v1",
+		MinimumEvidence: 5, ConfidenceThreshold: .5, DecayWindow: 24 * time.Hour, ContributionCap: .25,
+		MaxCandidates: 100, MaxContextItems: 50, MaxElapsed: 100 * time.Millisecond, ExpiresAt: time.Now().Add(time.Hour),
+	}
+	if err := policy.Validate(); err != nil {
+		t.Fatalf("Validate() error = %v", err)
+	}
+}
+
+func TestRankingRolloutPolicyValidateRejectsUnboundedContextCalibration(t *testing.T) {
+	policy := validRankingRolloutPolicyForTest()
+	policy.ContextCalibration = &ContextCalibrationRolloutPolicy{
+		SchemaVersion: "context-calibration-rollout-v1", PolicyVersion: "context-calibration-v1", SummaryVersion: "summary-v1",
+		MinimumEvidence: 0, ConfidenceThreshold: .5, DecayWindow: time.Hour, ContributionCap: .25,
+		MaxCandidates: 100, MaxContextItems: 50, MaxElapsed: time.Second, ExpiresAt: time.Now().Add(time.Hour),
+	}
+	if err := policy.Validate(); err == nil {
+		t.Fatal("Validate() error = nil, want context calibration bound rejection")
+	}
+}
+
+func TestResolveContextCalibrationRolloutIsExactScopeAndFailClosed(t *testing.T) {
+	now := time.Date(2026, 9, 22, 12, 0, 0, 0, time.UTC)
+	scope := Scope{Tenant: "tenant-a", Project: "project-a", Namespace: "namespace-a"}
+	base := validRankingRolloutPolicyForTest()
+	base.Status = RankingRolloutPolicyStatusActiveForScope
+	base.Mode = RankingRolloutModeActiveForScope
+	base.Scope = scope
+	base.ContextCalibrationSelector = RetrievalPlannerRolloutSelector{SessionID: "session-a", UserID: "user-a"}
+	base.ContextCalibration = &ContextCalibrationRolloutPolicy{SchemaVersion: ContextCalibrationRolloutSchemaVersionV1, PolicyVersion: ContextCalibrationPolicyVersionV1, SummaryVersion: "summary-v1", MinimumEvidence: 2, ConfidenceThreshold: .5, DecayWindow: time.Hour, ContributionCap: .25, MaxCandidates: 10, MaxContextItems: 10, MaxElapsed: time.Millisecond, ExpiresAt: now.Add(time.Hour)}
+	resolved := ResolveContextCalibrationRollout(&base, ResolveContextCalibrationRolloutInput{Scope: scope, Surface: RankingRolloutSurfaceContext, SessionID: "session-a", UserID: "user-a", SummaryVersion: "summary-v1", Now: now})
+	if resolved.Stage != ContextCalibrationRolloutStageActive || !resolved.AffectsResults {
+		t.Fatalf("active resolution = %+v", resolved)
+	}
+	foreign := ResolveContextCalibrationRollout(&base, ResolveContextCalibrationRolloutInput{Scope: scope, Surface: RankingRolloutSurfaceContext, SessionID: "session-b", UserID: "user-a", SummaryVersion: "summary-v1", Now: now})
+	if foreign.Stage != ContextCalibrationRolloutStageBaseline || foreign.AffectsResults {
+		t.Fatalf("foreign selector resolution = %+v", foreign)
+	}
+	stale := ResolveContextCalibrationRollout(&base, ResolveContextCalibrationRolloutInput{Scope: scope, Surface: RankingRolloutSurfaceContext, SessionID: "session-a", UserID: "user-a", SummaryVersion: "old-summary", Now: now})
+	if stale.Stage != ContextCalibrationRolloutStageBaseline || stale.AffectsResults {
+		t.Fatalf("stale summary resolution = %+v", stale)
+	}
+}
+
 func TestRankingRolloutPolicyValidateRejectsInvalidFusionStrategy(t *testing.T) {
 	policy := validRankingRolloutPolicyForTest()
 	policy.FusionStrategy = "rrf"
@@ -240,7 +287,12 @@ func TestResolveRetrievalPlannerRolloutLifecycleAndCompatibility(t *testing.T) {
 		}
 		return policy
 	}
-	tests := []struct{ name string; policy *RankingRolloutPolicy; want RetrievalPlannerRolloutStage; affects bool }{
+	tests := []struct {
+		name    string
+		policy  *RankingRolloutPolicy
+		want    RetrievalPlannerRolloutStage
+		affects bool
+	}{
 		{name: "missing", want: RetrievalPlannerRolloutStageBaseline},
 		{name: "diagnostics", policy: ptrRankingRolloutPolicy(valid(RankingRolloutPolicyStatusDiagnosticsOnly, RankingRolloutModeDiagnosticsOnly)), want: RetrievalPlannerRolloutStageDiagnosticsOnly},
 		{name: "shadow", policy: ptrRankingRolloutPolicy(valid(RankingRolloutPolicyStatusDryRun, RankingRolloutModeDryRun)), want: RetrievalPlannerRolloutStageShadow},
@@ -250,7 +302,9 @@ func TestResolveRetrievalPlannerRolloutLifecycleAndCompatibility(t *testing.T) {
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
 			got := ResolveRetrievalPlannerRollout(test.policy, ResolveRetrievalPlannerRolloutInput{Scope: scope, Surface: RankingRolloutSurfaceSearch, SessionID: "session-a", UserID: "user-a", Now: now, AnalysisPolicyVersion: QueryAnalysisPolicyVersionV1, FusionVersion: "rrf-v1", RankingVersion: "quality-feature-v1", RendererVersion: "context-renderer-v1"})
-			if got.Stage != test.want || got.AffectsResults != test.affects { t.Fatalf("resolution = %+v", got) }
+			if got.Stage != test.want || got.AffectsResults != test.affects {
+				t.Fatalf("resolution = %+v", got)
+			}
 		})
 	}
 }
@@ -277,7 +331,9 @@ func TestResolveRetrievalPlannerRolloutFailsClosed(t *testing.T) {
 		policy.RetrievalPlanner = &copyPlanner
 		mutate(&policy)
 		got := ResolveRetrievalPlannerRollout(&policy, ResolveRetrievalPlannerRolloutInput{Scope: scope, Surface: RankingRolloutSurfaceSearch, SessionID: "session-a", UserID: "user-a", Now: now, AnalysisPolicyVersion: QueryAnalysisPolicyVersionV1, FusionVersion: "rrf-v1", RankingVersion: "quality-feature-v1", RendererVersion: "context-renderer-v1"})
-		if got.Stage != RetrievalPlannerRolloutStageBaseline || got.AffectsResults { t.Fatalf("mutation %d resolution = %+v", index, got) }
+		if got.Stage != RetrievalPlannerRolloutStageBaseline || got.AffectsResults {
+			t.Fatalf("mutation %d resolution = %+v", index, got)
+		}
 	}
 }
 

@@ -47,6 +47,19 @@ type Config struct {
 	GraphTraversal                      GraphTraversalConfig
 	Evaluation                          EvaluationConfig
 	Provider                            ProviderConfig
+	ContextCalibration                  ContextCalibrationConfig
+}
+
+type ContextCalibrationConfig struct {
+	Enabled             bool
+	MaxSummaryAge       time.Duration
+	MinimumEvidence     int
+	ConfidenceThreshold float64
+	DecayWindow         time.Duration
+	ContributionCap     float64
+	MaxCandidates       int
+	MaxContextItems     int
+	MaxElapsed          time.Duration
 }
 
 type GraphTraversalConfig struct {
@@ -197,6 +210,10 @@ func LoadFromEnv() (Config, error) {
 		return Config{}, err
 	}
 	graphTraversal, err := loadGraphTraversalConfig()
+	if err != nil {
+		return Config{}, err
+	}
+	contextCalibration, err := loadContextCalibrationConfig()
 	if err != nil {
 		return Config{}, err
 	}
@@ -503,6 +520,7 @@ func LoadFromEnv() (Config, error) {
 		ContextProjectionConsumptionEnabled: contextProjectionConsumptionEnabled,
 		QueryAnalysis:                       queryAnalysis,
 		GraphTraversal:                      graphTraversal,
+		ContextCalibration:                  contextCalibration,
 		Evaluation:                          evaluationConfig,
 		Provider:                            providerConfig,
 		Auth: AuthConfig{
@@ -692,6 +710,40 @@ func loadGraphTraversalConfig() (GraphTraversalConfig, error) {
 	return g, nil
 }
 
+func loadContextCalibrationConfig() (ContextCalibrationConfig, error) {
+	c := ContextCalibrationConfig{MaxSummaryAge: 24 * time.Hour, MinimumEvidence: 5, ConfidenceThreshold: 0.5, DecayWindow: 30 * 24 * time.Hour, ContributionCap: 0.25, MaxCandidates: 100, MaxContextItems: 100, MaxElapsed: 100 * time.Millisecond}
+	c.Enabled = loadBoolEnv("STELE_CONTEXT_CALIBRATION_ENABLED")
+	var err error
+	if c.MaxSummaryAge, err = loadDurationWithDefault("STELE_CONTEXT_CALIBRATION_MAX_SUMMARY_AGE", c.MaxSummaryAge); err != nil {
+		return ContextCalibrationConfig{}, err
+	}
+	if c.MinimumEvidence, err = loadIntWithDefault("STELE_CONTEXT_CALIBRATION_MINIMUM_EVIDENCE", c.MinimumEvidence); err != nil {
+		return ContextCalibrationConfig{}, err
+	}
+	if c.ConfidenceThreshold, err = loadFloatWithDefault("STELE_CONTEXT_CALIBRATION_CONFIDENCE_THRESHOLD", c.ConfidenceThreshold); err != nil {
+		return ContextCalibrationConfig{}, err
+	}
+	if c.DecayWindow, err = loadDurationWithDefault("STELE_CONTEXT_CALIBRATION_DECAY_WINDOW", c.DecayWindow); err != nil {
+		return ContextCalibrationConfig{}, err
+	}
+	if c.ContributionCap, err = loadFloatWithDefault("STELE_CONTEXT_CALIBRATION_CONTRIBUTION_CAP", c.ContributionCap); err != nil {
+		return ContextCalibrationConfig{}, err
+	}
+	if c.MaxCandidates, err = loadIntWithDefault("STELE_CONTEXT_CALIBRATION_MAX_CANDIDATES", c.MaxCandidates); err != nil {
+		return ContextCalibrationConfig{}, err
+	}
+	if c.MaxContextItems, err = loadIntWithDefault("STELE_CONTEXT_CALIBRATION_MAX_CONTEXT_ITEMS", c.MaxContextItems); err != nil {
+		return ContextCalibrationConfig{}, err
+	}
+	if c.MaxElapsed, err = loadDurationWithDefault("STELE_CONTEXT_CALIBRATION_MAX_ELAPSED", c.MaxElapsed); err != nil {
+		return ContextCalibrationConfig{}, err
+	}
+	if c.MaxSummaryAge <= 0 || c.MaxSummaryAge > 7*24*time.Hour || c.MinimumEvidence < 1 || c.MinimumEvidence > 10000 || c.ConfidenceThreshold < 0 || c.ConfidenceThreshold > 1 || c.DecayWindow <= 0 || c.DecayWindow > 365*24*time.Hour || c.ContributionCap <= 0 || c.ContributionCap > 1 || c.MaxCandidates < 1 || c.MaxCandidates > 1000 || c.MaxContextItems < 1 || c.MaxContextItems > 1000 || c.MaxElapsed <= 0 || c.MaxElapsed > time.Second {
+		return ContextCalibrationConfig{}, fmt.Errorf("context calibration settings are invalid")
+	}
+	return c, nil
+}
+
 func getEnvOrDefault(key string, fallback string) string {
 	if value := os.Getenv(key); value != "" {
 		return value
@@ -767,6 +819,18 @@ func loadIntWithDefault(key string, fallback int) (int, error) {
 		return 0, fmt.Errorf("%s is invalid: %w", key, err)
 	}
 
+	return value, nil
+}
+
+func loadFloatWithDefault(key string, fallback float64) (float64, error) {
+	raw := strings.TrimSpace(os.Getenv(key))
+	if raw == "" {
+		return fallback, nil
+	}
+	value, err := strconv.ParseFloat(raw, 64)
+	if err != nil {
+		return 0, fmt.Errorf("%s is invalid: %w", key, err)
+	}
 	return value, nil
 }
 

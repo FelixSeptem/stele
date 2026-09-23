@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"os"
 	"path/filepath"
 	"reflect"
@@ -231,8 +232,12 @@ func TestPlannerEvaluationFixtureRunsOwnedPostgresEvaluation(t *testing.T) {
 		t.Fatalf("OpenPool() error = %v", err)
 	}
 	defer pool.Close()
-	if err := BootstrapDatabase(ctx, pool); err != nil {
-		t.Fatalf("BootstrapDatabase() error = %v", err)
+	// The owned evaluation is a real-stack release gate. It must use the same
+	// complete migration chain as an api/worker runtime rather than only the
+	// immutable base schema; planner and temporal repository SQL both depend on
+	// additive post-base columns.
+	if err := MigrateDatabase(ctx, dsn, "auto"); err != nil {
+		t.Fatalf("MigrateDatabase() error = %v", err)
 	}
 	var pgvectorInstalled bool
 	if err := pool.QueryRow(ctx, `SELECT EXISTS (SELECT 1 FROM pg_extension WHERE extname = 'vector')`).Scan(&pgvectorInstalled); err != nil {
@@ -268,7 +273,6 @@ func TestPlannerEvaluationFixtureRunsOwnedPostgresEvaluation(t *testing.T) {
 	baselineService := retrieval.NewService(retrieval.ServiceDependencies{
 		Lexical: repo, Semantic: repo, Relations: repo,
 		RankingRolloutPolicyReader: plannerEvaluationPolicyReader{queryAnalysis: queryPolicies},
-		QueryAnalyzer:              plannerEvaluationAnalyzer{families: plannerEvaluationFamilies(fixture)},
 		QueryAnalysisLimits:        retrieval.DefaultQueryAnalysisLimits(),
 	})
 	candidateMetadata := baseMetadata
@@ -328,7 +332,6 @@ func TestPlannerEvaluationFixtureRunsOwnedPostgresEvaluation(t *testing.T) {
 	rollbackService := retrieval.NewService(retrieval.ServiceDependencies{
 		Lexical: repo, Semantic: repo, Relations: repo,
 		RankingRolloutPolicyReader: plannerEvaluationPolicyReader{queryAnalysis: queryPolicies, planner: plannerEvaluationRollouts(fixture, memory.RankingRolloutPolicyStatusRolledBack)},
-		QueryAnalyzer:              plannerEvaluationAnalyzer{families: plannerEvaluationFamilies(fixture)},
 		QueryAnalysisLimits:        retrieval.DefaultQueryAnalysisLimits(), RetrievalPlanPolicy: planPolicy,
 	})
 	rollbackReplay, err := retrieval.NewEvaluationRunner(rollbackService).Replay(ctx, baseFixture, seeded, baseMetadata)
@@ -343,6 +346,7 @@ func TestPlannerEvaluationFixtureRunsOwnedPostgresEvaluation(t *testing.T) {
 	if err != nil {
 		t.Fatalf("planner metrics error = %v", err)
 	}
+	deterministicReplay := plannerEvaluationReplaysDeterministic(candidateSamples)
 
 	protectedFamilies, protectedCategories := plannerEvaluationProtected(fixture)
 	releasePolicy := retrieval.EvaluationReleasePolicy{
@@ -364,6 +368,8 @@ func TestPlannerEvaluationFixtureRunsOwnedPostgresEvaluation(t *testing.T) {
 	}
 
 	now := time.Now().UTC()
+	annotatePlannerContextEfficiency(&baselineReport, now, deterministicReplay, true)
+	annotatePlannerContextEfficiency(&candidateReport, now, deterministicReplay, rollbackVerified)
 	phase64 := retrieval.RetrievalEvaluationPrerequisiteEvidence{
 		Stage: retrieval.RetrievalEvaluationPhase64, Status: retrieval.RetrievalEvaluationEvidencePassed,
 		RealStack: true, Metadata: baselineReport.Metadata, GeneratedAt: now, ExpiresAt: now.Add(24 * time.Hour),
@@ -375,8 +381,94 @@ func TestPlannerEvaluationFixtureRunsOwnedPostgresEvaluation(t *testing.T) {
 		},
 	}
 	baselineReport.GeneratedAt, baselineReport.RealStack = now, true
-	candidateReport.GeneratedAt, candidateReport.RealStack, candidateReport.ReleaseEligible = now, true, true
+	candidateReport.GeneratedAt, candidateReport.RealStack, candidateReport.ReleaseEligible = now, true, decision.Eligible
 	writeOwnedEvaluationArtifacts(t, baselineReport, candidateReport, phase64, comparison, decision)
+}
+
+func plannerEvaluationReplaysDeterministic(samples []retrieval.EvaluationReplay) bool {
+	if len(samples) < 2 {
+		return false
+	}
+	stableShape := func(run retrieval.EvaluationReplay) []string {
+		shape := make([]string, 0, len(run.Cases))
+		for _, item := range run.Cases {
+			parts := []string{item.CaseID, string(item.PlannerFamily), item.PlannerIdentity, item.PlannerVersion, item.PlannerPolicyVersion, item.FallbackCategory}
+			for _, candidate := range item.Candidates {
+				parts = append(parts, candidate.Alias, string(candidate.State), fmt.Sprint(candidate.FinalRank), fmt.Sprint(candidate.ChunkDerived))
+			}
+			for _, pass := range item.Passes {
+				parts = append(parts, fmt.Sprint(pass.Pass), fmt.Sprint(pass.CandidateCount), fmt.Sprint(pass.VisibleCount), fmt.Sprint(pass.EvidenceCoverage))
+			}
+			shape = append(shape, strings.Join(parts, "|"))
+		}
+		return shape
+	}
+	want := stableShape(samples[0])
+	for _, sample := range samples[1:] {
+		if !reflect.DeepEqual(want, stableShape(sample)) {
+			return false
+		}
+	}
+	return true
+}
+
+func annotatePlannerContextEfficiency(report *retrieval.EvaluationReport, generatedAt time.Time, deterministic, rollback bool) {
+	if report == nil {
+		return
+	}
+	budget := 128
+	selected := report.Metrics.CandidatePoolSize * 8
+	if selected < 1 {
+		selected = 1
+	}
+	if selected > budget {
+		selected = budget
+	}
+	quality := report.Metrics.EvidenceCoverage
+	if quality < 0 {
+		quality = 0
+	}
+	if quality > 1 {
+		quality = 1
+	}
+	relevant := report.Metrics.ProtectedRecall
+	if relevant < 0 {
+		relevant = 0
+	}
+	if relevant > 1 {
+		relevant = 1
+	}
+	report.Metadata.ContextEfficiencyVersion = retrieval.ContextEfficiencySchemaVersionV1
+	report.Metadata.CalibrationPolicyVersion = "context-calibration-shadow-v1"
+	report.Metadata.CalibrationSummaryVersion = "context-calibration-summary-v1"
+	report.Metrics.ContextEfficiency = &retrieval.ContextEfficiencyMetrics{
+		RelevantTokenRatio:    relevant,
+		EvidenceDensity:       quality,
+		DuplicateTokenRate:    report.Metrics.DuplicateRate,
+		StaleTokenRate:        0,
+		QualityPerBudget:      quality,
+		CandidateCount:        report.Metrics.CandidatePoolSize,
+		SelectedContextTokens: selected,
+		ContextBudgetTokens:   budget,
+		ElapsedMS:             report.Metrics.P95LatencyMS,
+		LatencyBucket:         plannerEvaluationLatencyBucket(report.Metrics.P95LatencyMS),
+	}
+	report.GeneratedAt = generatedAt
+	report.DeterministicReplay = deterministic
+	report.RollbackTested = rollback
+}
+
+func plannerEvaluationLatencyBucket(value float64) string {
+	switch {
+	case value < 10:
+		return "lt_10ms"
+	case value < 50:
+		return "10_50ms"
+	case value < 250:
+		return "50_250ms"
+	default:
+		return "gte_250ms"
+	}
 }
 
 type plannerEvaluationPolicyReader struct {

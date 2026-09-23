@@ -529,18 +529,21 @@ func buildAPIRuntime(ctx context.Context, cfg config.Config, deps apiRuntimeDepe
 		NewVersionID: newID,
 	}
 	retrievalService := retrieval.NewService(retrieval.ServiceDependencies{
-		Lexical:                      repo,
-		Semantic:                     repo,
-		Relations:                    repo,
-		GraphTraversal:               repo,
-		Citations:                    repo,
-		Insights:                     repo,
-		UsefulnessSummarizer:         repo,
-		TaskEvaluationSummarizer:     repo,
-		RankingRolloutPolicyReader:   repo,
-		Projections:                  repo,
-		ProjectionConsumptionEnabled: cfg.ContextProjectionConsumptionEnabled,
-		Reranker:                     buildConfiguredReranker(cfg.Reranker), RerankerMode: retrieval.RerankerMode(cfg.Reranker.Mode), RerankerProvider: cfg.Reranker.Provider, RerankerVersion: cfg.Reranker.Model,
+		Lexical:                         repo,
+		Semantic:                        repo,
+		Relations:                       repo,
+		GraphTraversal:                  repo,
+		Citations:                       repo,
+		Insights:                        repo,
+		UsefulnessSummarizer:            repo,
+		TaskEvaluationSummarizer:        repo,
+		RankingRolloutPolicyReader:      repo,
+		ContextCalibrationSummaryReader: repo,
+		ContextCalibrationEnabled:       cfg.ContextCalibration.Enabled,
+		ContextCalibrationLimits:        retrieval.ContextCalibrationLimits{MaxSummaryAge: cfg.ContextCalibration.MaxSummaryAge, MinimumEvidence: cfg.ContextCalibration.MinimumEvidence, ConfidenceThreshold: cfg.ContextCalibration.ConfidenceThreshold, DecayWindow: cfg.ContextCalibration.DecayWindow, ContributionCap: cfg.ContextCalibration.ContributionCap, MaxCandidates: cfg.ContextCalibration.MaxCandidates, MaxContextItems: cfg.ContextCalibration.MaxContextItems, MaxElapsed: cfg.ContextCalibration.MaxElapsed},
+		Projections:                     repo,
+		ProjectionConsumptionEnabled:    cfg.ContextProjectionConsumptionEnabled,
+		Reranker:                        buildConfiguredReranker(cfg.Reranker), RerankerMode: retrieval.RerankerMode(cfg.Reranker.Mode), RerankerProvider: cfg.Reranker.Provider, RerankerVersion: cfg.Reranker.Model,
 		GraphTraversalLimits: retrieval.GraphTraversalLimits{MaxHops: cfg.GraphTraversal.MaxHops, MaxSeeds: cfg.GraphTraversal.MaxSeeds, MaxEdgesPerHop: cfg.GraphTraversal.MaxEdgesPerHop, MaxPathsPerSeed: cfg.GraphTraversal.MaxPathsPerSeed, MaxPathsPerRequest: cfg.GraphTraversal.MaxPathsPerRequest, MaxCandidates: cfg.GraphTraversal.MaxCandidates, MaxElapsed: cfg.GraphTraversal.MaxElapsed},
 	}, deps.observer)
 	httpDeps := httpDependenciesFromConfigWithIngestor(cfg, ingestor)
@@ -755,18 +758,21 @@ func buildWorkerRuntime(ctx context.Context, cfg config.Config, deps workerRunti
 	}
 	ingestor := memory.NewService(repo, now, deps.observer)
 	retrievalService := retrieval.NewService(retrieval.ServiceDependencies{
-		Lexical:                      repo,
-		Semantic:                     repo,
-		Relations:                    repo,
-		GraphTraversal:               repo,
-		Citations:                    repo,
-		Insights:                     repo,
-		UsefulnessSummarizer:         repo,
-		TaskEvaluationSummarizer:     repo,
-		RankingRolloutPolicyReader:   repo,
-		Projections:                  repo,
-		ProjectionConsumptionEnabled: cfg.ContextProjectionConsumptionEnabled,
-		Reranker:                     buildConfiguredReranker(cfg.Reranker), RerankerMode: retrieval.RerankerMode(cfg.Reranker.Mode), RerankerProvider: cfg.Reranker.Provider, RerankerVersion: cfg.Reranker.Model,
+		Lexical:                         repo,
+		Semantic:                        repo,
+		Relations:                       repo,
+		GraphTraversal:                  repo,
+		Citations:                       repo,
+		Insights:                        repo,
+		UsefulnessSummarizer:            repo,
+		TaskEvaluationSummarizer:        repo,
+		RankingRolloutPolicyReader:      repo,
+		ContextCalibrationSummaryReader: repo,
+		ContextCalibrationEnabled:       cfg.ContextCalibration.Enabled,
+		ContextCalibrationLimits:        retrieval.ContextCalibrationLimits{MaxSummaryAge: cfg.ContextCalibration.MaxSummaryAge, MinimumEvidence: cfg.ContextCalibration.MinimumEvidence, ConfidenceThreshold: cfg.ContextCalibration.ConfidenceThreshold, DecayWindow: cfg.ContextCalibration.DecayWindow, ContributionCap: cfg.ContextCalibration.ContributionCap, MaxCandidates: cfg.ContextCalibration.MaxCandidates, MaxContextItems: cfg.ContextCalibration.MaxContextItems, MaxElapsed: cfg.ContextCalibration.MaxElapsed},
+		Projections:                     repo,
+		ProjectionConsumptionEnabled:    cfg.ContextProjectionConsumptionEnabled,
+		Reranker:                        buildConfiguredReranker(cfg.Reranker), RerankerMode: retrieval.RerankerMode(cfg.Reranker.Mode), RerankerProvider: cfg.Reranker.Provider, RerankerVersion: cfg.Reranker.Model,
 		GraphTraversalLimits: retrieval.GraphTraversalLimits{MaxHops: cfg.GraphTraversal.MaxHops, MaxSeeds: cfg.GraphTraversal.MaxSeeds, MaxEdgesPerHop: cfg.GraphTraversal.MaxEdgesPerHop, MaxPathsPerSeed: cfg.GraphTraversal.MaxPathsPerSeed, MaxPathsPerRequest: cfg.GraphTraversal.MaxPathsPerRequest, MaxCandidates: cfg.GraphTraversal.MaxCandidates, MaxElapsed: cfg.GraphTraversal.MaxElapsed},
 	}, deps.observer)
 
@@ -1186,6 +1192,14 @@ func buildSchedulerRuntime(ctx context.Context, cfg config.Config, deps schedule
 				},
 			},
 		)
+	}
+	if cfg.ContextCalibration.Enabled {
+		scheduler.Jobs = append(scheduler.Jobs, jobs.ScopeDispatchJob{
+			NameValue: "context_calibration_summary_rebuild_dispatch", ScopeSource: repo, ScopeBatchLimit: cfg.Jobs.MaintenanceScopeBatchLimit, FallbackScope: scope,
+			Dispatch: func(scope memory.Scope) jobs.MaintenanceJob {
+				return jobs.ContextCalibrationSummaryRebuildJob{Scope: scope, Service: memory.ContextCalibrationSummaryRebuildService{Feedback: repo, Tasks: repo, Store: repo, Limit: cfg.ContextCalibration.MaxCandidates}, Input: memory.ContextCalibrationBuildInput{PolicyVersion: memory.ContextCalibrationPolicyVersionV1, SummaryVersion: memory.ContextCalibrationSummaryVersionV1, Now: now(), MinimumEvidence: cfg.ContextCalibration.MinimumEvidence, ConfidenceThreshold: cfg.ContextCalibration.ConfidenceThreshold, DecayWindow: cfg.ContextCalibration.DecayWindow, ContributionCap: cfg.ContextCalibration.ContributionCap}}
+			},
+		})
 	}
 	if cfg.Jobs.DurableMaintenanceEnabled {
 		for i, candidate := range scheduler.Jobs {

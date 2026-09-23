@@ -14,8 +14,8 @@ func TestMigrationManifestIsDeterministicAndChecksummed(t *testing.T) {
 	if err != nil {
 		t.Fatalf("MigrationManifest() second call error = %v", err)
 	}
-	if len(first) != 15 {
-		t.Fatalf("manifest length = %d, want 15: %+v", len(first), first)
+	if len(first) != 17 {
+		t.Fatalf("manifest length = %d, want 17: %+v", len(first), first)
 	}
 	if first[0] != second[0] {
 		t.Fatalf("manifest is not deterministic: first=%+v second=%+v", first[0], second[0])
@@ -64,6 +64,12 @@ func TestMigrationManifestIsDeterministicAndChecksummed(t *testing.T) {
 	}
 	if first[14].Version != 15 || first[14].Name != "0015_bounded_graph_distance_retrieval.up.sql" {
 		t.Fatalf("manifest entry = %+v, want version 15 bounded graph retrieval", first[14])
+	}
+	if first[15].Version != 16 || first[15].Name != "0016_context_calibration_summaries.up.sql" {
+		t.Fatalf("manifest entry = %+v, want version 16 context calibration summaries", first[15])
+	}
+	if first[16].Version != 17 || first[16].Name != "0017_context_calibration_rollout.up.sql" {
+		t.Fatalf("manifest entry = %+v, want version 17 context calibration rollout", first[16])
 	}
 	if len(first[0].ChecksumSHA256) != 64 {
 		t.Fatalf("checksum length = %d, want 64", len(first[0].ChecksumSHA256))

@@ -62,9 +62,9 @@ not be conflated:
   specifications. Active rollout remains unauthorized without fresh owned
   PostgreSQL + pgvector release evidence.
 - **Proposed / pending implementation**: OpenSpec artifacts exist, but the task
-  checklist and release evidence are not complete. RQ2 is the current proposal
-  target; RQ3–RQ4 remain pending. It no longer describes the archived P0–P7 or
-  RQ1 baselines.
+  checklist and release evidence are not complete. RQ4 is the current proposal
+  target; RQ2 and RQ3 are archived baselines. It no longer describes the
+  archived P0–P7 or RQ1–RQ3 baselines.
 - **Candidate expansion**: useful post-v1 ideas that must wait until the provider
   contract and quality gates are stable. This includes MCP adapters, namespace
   subtree conventions, agent self-model conventions, and autonomous reasoning
@@ -88,6 +88,9 @@ change an archived baseline.
 | P6 maintenance/observability | Archived change 037 | Implemented and archived; future work is regression and SLO evidence only. |
 | P7 provider contract | Archived change 038 | Implemented and archived; adapter remains outside the retrieval-quality critical path. |
 | RQ1 adaptive retrieval planning | Archived change 040, 35/35 tasks | Implemented and archived; active rollout still requires fresh owned PostgreSQL + pgvector release evidence. |
+| RQ2 bi-temporal fact validity | Archived change 041 | Implemented and archived; active rollout still requires fresh owned PostgreSQL + pgvector release evidence. |
+| RQ3 bounded graph-distance retrieval | Archived change 042 | Implemented and archived; active rollout still requires fresh owned PostgreSQL + pgvector release evidence. |
+| RQ4 context efficiency and feedback calibration | Archived change 043, 23/23 tasks | Implemented and archived with owned PostgreSQL + pgvector shadow evidence; calibration remains disabled by default and shadow-only unless a fresh compatible exact-scope summary and separately governed activation are present. |
 
 ### Global priority order
 
@@ -1666,13 +1669,11 @@ Before moving between phases, verify:
 
 ## Immediate Next Step
 
-P0–P7 and RQ1 are archived baselines through change 040. RQ1 completed 35/35
-tasks and passed focused/full Go tests, race tests, vet, and strict/all OpenSpec
-validation; its active rollout remains capped at diagnostics/shadow until an
-explicitly owned PostgreSQL + pgvector release run passes.
-
-The active next step is to propose and implement RQ2
-`bi-temporal-fact-validity`: distinguish recorded time from fact-valid time,
-preserve append-only canonical versions and provenance, make current retrieval
-exclude expired evidence by default, and require an explicit temporal plan for
-historical retrieval. RQ3–RQ4 remain pending and must not be folded into RQ2.
+P0–P7 and RQ1–RQ4 are archived baselines through change 043. RQ4 completed
+23/23 tasks and passed focused/full Go tests, race tests, vet, strict/all
+OpenSpec validation, and an explicitly owned PostgreSQL + pgvector shadow run.
+Calibration remains disabled by default: a missing or stale summary falls back
+to the baseline, and active calibration still requires a fresh compatible
+exact-scope summary plus separately governed activation. The next proposal
+should be selected from the roadmap without reopening the archived RQ2/RQ3/RQ4
+visibility, temporal, graph, or calibration contracts.

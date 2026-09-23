@@ -105,17 +105,25 @@ and must not be replaced by the runtime `STELE_POSTGRES_DSN`.
 
 ### Latest local gate observation
 
-On 2026-09-22 the repository-owned runner was invoked with:
+On 2026-09-23 the repository-owned runner was invoked with an explicitly
+owned disposable PostgreSQL 18 + pgvector container through:
 
 ```powershell
 pwsh -File scripts/retrieval-evaluation.ps1
 ```
 
-The runner returned exit code `2` and
-`SKIP_RETRIEVAL_EVALUATION_DSN_REQUIRED`. No runtime PostgreSQL DSN was reused,
-no database was mutated, and no release report was treated as eligible. A real
-shadow evaluation remains pending until an independently owned PostgreSQL 18 +
-pgvector DSN is supplied through `STELE_TEST_RETRIEVAL_EVALUATION_DSN`.
+The runner returned exit code `0`. It used only
+`STELE_TEST_RETRIEVAL_EVALUATION_DSN` (never `STELE_POSTGRES_DSN`) and retained
+redacted baseline, candidate, gate, and RQ4 shadow artifacts. The exact-scope
+shadow evidence recorded protected recall and citation coverage of `1`, no
+safety failures, bounded context work, deterministic replay, and a tested
+rollback. The calibration summary remained unavailable with zero evidence, so
+the evaluation explicitly recorded `unavailable_baseline_fallback`; it does
+not authorize active calibration.
+
+When the owned DSN is absent, the runner still returns the controlled
+non-pass `SKIP_RETRIEVAL_EVALUATION_DSN_REQUIRED` (exit code `2`). No runtime
+PostgreSQL DSN is reused, no database is mutated, and no report is eligible.
 
 The following repository verification commands also completed successfully on
 2026-09-22 against the bounded graph-distance retrieval worktree:
@@ -129,10 +137,10 @@ openspec validate --all --strict
 git diff --check
 ```
 
-These checks validate the implementation and its deterministic fixtures; they
-do not change the controlled non-pass release status above. Only the missing
-owned PostgreSQL + pgvector shadow evaluation can supply the real-stack
-activation evidence.
+These checks validate the implementation and its deterministic fixtures. The
+owned shadow result supplies real-stack evidence, but active calibration still
+requires a fresh compatible exact-scope summary and separately governed rollout
+authorization.
 
 Progressive context compares short retrieval projection, medium session/context
 overview, and canonical/chunk evidence. Each level must have a source watermark,
@@ -169,3 +177,35 @@ projection freshness/rebuild evidence, retention safety, telemetry redaction,
 and evidence completeness. The durable maintenance path remains disabled until
 that evidence is green; disabling it is the rollback path and does not mutate
 canonical memory.
+
+## Context-efficiency calibration (RQ4)
+
+RQ4 adds bounded, redacted evidence for relevant-token ratio, evidence density,
+duplicate/stale token rates, quality per context budget, candidate/context work,
+and latency buckets. Reports are comparable only when fixture, renderer,
+retrieval-plan, temporal, graph, feedback-summary, calibration-policy, and
+release-policy identities match. Exact counts, query text, content, IDs, scope,
+raw scores, feedback text, and DSNs are never emitted.
+
+Feedback calibration is disabled by default. A policy may run in diagnostics-only
+or shadow mode while returning the approved baseline. Active behavior requires a
+fresh exact-scope summary with minimum evidence, confidence threshold, decay,
+and contribution caps. Calibration runs only after lifecycle, valid-time,
+scope, deduplication, and diversity checks; it cannot add candidates, expand
+graph traversal, change citations, create a context section, or exceed the
+caller budget. Disablement and rollback return to the baseline on the next
+matching request and preserve all source history.
+
+The following are hard failures even when quality-per-budget improves:
+
+- protected recall or evidence-group loss;
+- scope, lifecycle, temporal, citation, or ordinary API leakage;
+- stale/duplicate overflow, budget overflow, or unbounded work;
+- missing or stale calibration summary;
+- nondeterministic fixed-clock replay;
+- failed rollback or unavailable release evidence.
+
+The deployment limits are configured with `STELE_CONTEXT_CALIBRATION_*` values.
+The owned PostgreSQL + pgvector shadow DSN must remain distinct from
+`STELE_POSTGRES_DSN`; a missing owned DSN is a controlled non-pass, never an
+implicit activation.

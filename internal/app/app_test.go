@@ -781,6 +781,59 @@ func TestBuildSchedulerRuntimeAddsWorkflowMaintenanceOnlyWhenEnabled(t *testing.
 	}
 }
 
+func TestBuildSchedulerRuntimeAddsContextCalibrationRebuildOnlyWhenDeploymentEnabled(t *testing.T) {
+	newRuntime := func(enabled bool) jobs.MaintenanceScheduler {
+		t.Helper()
+		mock, err := pgxmock.NewPool()
+		if err != nil {
+			t.Fatal(err)
+		}
+		t.Cleanup(func() { mock.Close() })
+		cfg := config.Config{
+			Mode: config.ModeScheduler, PostgresDSN: "postgres://runtime",
+			Auth:               config.AuthConfig{DefaultTenant: "tenant-a", DefaultProject: "project-a", DefaultNamespace: "namespace-a"},
+			Jobs:               config.JobConfig{MaintenanceInterval: time.Minute, SchedulerErrorBackoff: time.Minute},
+			ContextCalibration: config.ContextCalibrationConfig{Enabled: enabled, MaxSummaryAge: time.Hour, MinimumEvidence: 2, ConfidenceThreshold: .5, DecayWindow: 24 * time.Hour, ContributionCap: .25, MaxCandidates: 10, MaxContextItems: 10, MaxElapsed: time.Millisecond},
+		}
+		runtime, err := buildSchedulerRuntime(context.Background(), cfg, schedulerRuntimeDependencies{
+			openPool:          func(context.Context, string) (postgresRuntimeStore, error) { return mock, nil },
+			bootstrapDatabase: func(context.Context, postgresRuntimeStore) error { return nil },
+			now:               func() time.Time { return time.Date(2026, 9, 23, 12, 0, 0, 0, time.UTC) },
+		})
+		if err != nil {
+			t.Fatalf("buildSchedulerRuntime() error = %v", err)
+		}
+		scheduler, ok := runtime.scheduler.(jobs.MaintenanceScheduler)
+		if !ok {
+			t.Fatalf("runtime scheduler type = %T", runtime.scheduler)
+		}
+		return scheduler
+	}
+	for _, job := range newRuntime(false).Jobs {
+		if job.Name() == "context_calibration_summary_rebuild_dispatch" {
+			t.Fatal("disabled deployment unexpectedly schedules calibration rebuild")
+		}
+	}
+	var dispatch jobs.ScopeDispatchJob
+	found := false
+	for _, job := range newRuntime(true).Jobs {
+		if job.Name() == "context_calibration_summary_rebuild_dispatch" {
+			var ok bool
+			dispatch, ok = job.(jobs.ScopeDispatchJob)
+			if !ok {
+				t.Fatalf("calibration scheduler job type = %T", job)
+			}
+			found = true
+		}
+	}
+	if !found {
+		t.Fatal("enabled deployment did not schedule calibration rebuild")
+	}
+	if _, ok := dispatch.Dispatch(dispatch.FallbackScope).(jobs.ContextCalibrationSummaryRebuildJob); !ok {
+		t.Fatalf("calibration dispatch type = %T", dispatch.Dispatch(dispatch.FallbackScope))
+	}
+}
+
 func TestBuildSchedulerRuntimeAssemblesScopeDispatchJobs(t *testing.T) {
 	mock, err := pgxmock.NewPool()
 	if err != nil {

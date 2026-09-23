@@ -2038,6 +2038,31 @@ the evaluator emits `SKIP_RETRIEVAL_EVALUATION_DSN_REQUIRED` and exits `2`—a
 controlled non-pass skip, never a pass—and never falls back to
 `STELE_POSTGRES_DSN` or another ambient database.
 
+### RQ4 context-efficiency calibration operations
+
+Context-efficiency calibration is disabled by default. Configure only bounded
+`STELE_CONTEXT_CALIBRATION_*` values: summary age, minimum evidence,
+confidence threshold, decay window, contribution cap, candidate/context limits,
+and elapsed-time limit. Enabling deployment configuration does not activate a
+policy; an exact-scope rollout must still provide a compatible fresh summary.
+
+Use `diagnostics_only` or `dry_run`/shadow first. These modes calculate only
+redacted aggregate efficiency evidence and return the byte-equivalent approved
+baseline. Active calibration is allowed only when the summary is exact-scope,
+non-stale, non-superseded, and above the configured evidence threshold. It can
+adjust ordering only after eligibility, temporal filtering, deduplication, and
+diversity. It cannot add candidates, expand graph traversal, change citations,
+create response sections, or exceed context budgets.
+
+Disable or roll back the ranking rollout to restore baseline behavior on the
+next matching request. The derived summary is rebuildable and source feedback,
+task evaluations, canonical memory, provenance, and audit history are never
+overwritten. Protected recall, isolation/lifecycle/citation checks, stale or
+duplicate overflow, budget overflow, nondeterministic replay, stale summaries,
+and rollback failure are hard release failures even when quality-per-budget
+improves. Ordinary OpenAPI/MCP responses do not expose calibration weights,
+feedback history, candidate pools, raw metrics, IDs, scopes, or policy fields.
+
 - `api` logs request completion and panic recovery in structured key-value style.
 - `GET /livez`, `GET /readyz`, and `GET /metrics` provide process liveness, mode-aware readiness, and Prometheus-style runtime metrics for self-hosted orchestration.
 - `worker` logs polling loop failures and successful batch execution.

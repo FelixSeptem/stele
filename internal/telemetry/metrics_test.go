@@ -245,6 +245,15 @@ func TestMetricsObserverExportsTaskEvaluationAndRankingRolloutSignalsWithoutHigh
 	}
 }
 
+func TestMetricsObserverExportsContextCalibrationWithAllowlistedBuckets(t *testing.T) {
+	observer := NewMetricsObserver()
+	observer.RecordContextCalibration(context.Background(), ContextCalibrationEvent{Stage: "active", SummaryFreshness: "fresh", MetricBucket: "0_1", OmissionCategory: "none", EvidenceCategory: "sufficient", PolicyVersion: "policy-v1", AggregateCount: 4})
+	metrics := observer.RenderPrometheus()
+	if !strings.Contains(metrics, `stele_context_calibration_total{aggregate_count="1_10",evidence_category="sufficient",metric_bucket="0_1",omission_category="none",policy_version="policy-v1",stage="active",summary_freshness="fresh"} 1`) {
+		t.Fatalf("context calibration counter missing or malformed: %s", metrics)
+	}
+}
+
 func TestMetricsObserverExportsFusionSignalsWithoutHighCardinalityLabels(t *testing.T) {
 	observer := NewMetricsObserver()
 	observer.RecordRetrievalFusion(context.Background(), RetrievalFusionEvent{

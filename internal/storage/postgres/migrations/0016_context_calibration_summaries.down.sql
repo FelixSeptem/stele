@@ -1,0 +1,3 @@
+DROP INDEX IF EXISTS context_calibration_summaries_scope_watermark_idx;
+DROP INDEX IF EXISTS context_calibration_summaries_scope_updated_at_idx;
+DROP TABLE IF EXISTS context_calibration_summaries;

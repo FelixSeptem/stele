@@ -1,0 +1,2 @@
+DROP INDEX IF EXISTS context_calibration_rollout_policies_scope_selector_idx;
+DROP TABLE IF EXISTS context_calibration_rollout_policies;

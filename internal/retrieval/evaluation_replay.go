@@ -170,9 +170,14 @@ func AggregateEvaluationReplaySamples(samples []EvaluationReplay) (EvaluationRep
 	aggregated.Cases = append([]EvaluationReplayCase(nil), samples[0].Cases...)
 	caseLatencies := make([][]time.Duration, len(aggregated.Cases))
 	passLatencies := make([][][]time.Duration, len(aggregated.Cases))
+	analysisLatencies := make([][]time.Duration, len(aggregated.Cases))
 	for caseIndex := range aggregated.Cases {
 		aggregated.Cases[caseIndex].Candidates = append([]EvaluationReplayCandidate(nil), samples[0].Cases[caseIndex].Candidates...)
 		aggregated.Cases[caseIndex].Passes = append([]EvaluationReplayPass(nil), samples[0].Cases[caseIndex].Passes...)
+		if aggregated.Cases[caseIndex].AnalysisDiagnostics != nil {
+			diagnostic := *aggregated.Cases[caseIndex].AnalysisDiagnostics
+			aggregated.Cases[caseIndex].AnalysisDiagnostics = &diagnostic
+		}
 		passLatencies[caseIndex] = make([][]time.Duration, len(aggregated.Cases[caseIndex].Passes))
 	}
 	for _, sample := range samples {
@@ -183,6 +188,15 @@ func AggregateEvaluationReplaySamples(samples []EvaluationReplay) (EvaluationRep
 			expected, current := samples[0].Cases[caseIndex], sample.Cases[caseIndex]
 			caseLatencies[caseIndex] = append(caseLatencies[caseIndex], current.Latency)
 			expected.Latency, current.Latency = 0, 0
+			if (expected.AnalysisDiagnostics == nil) != (current.AnalysisDiagnostics == nil) {
+				return EvaluationReplay{}, fmt.Errorf("evaluation replay analysis diagnostics shape changed")
+			}
+			if expected.AnalysisDiagnostics != nil {
+				analysisLatencies[caseIndex] = append(analysisLatencies[caseIndex], current.AnalysisDiagnostics.Elapsed)
+				expectedDiagnostic, currentDiagnostic := *expected.AnalysisDiagnostics, *current.AnalysisDiagnostics
+				expectedDiagnostic.Elapsed, currentDiagnostic.Elapsed = 0, 0
+				expected.AnalysisDiagnostics, current.AnalysisDiagnostics = &expectedDiagnostic, &currentDiagnostic
+			}
 			if len(expected.Passes) != len(current.Passes) {
 				return EvaluationReplay{}, fmt.Errorf("evaluation replay pass shape changed")
 			}
@@ -200,6 +214,9 @@ func AggregateEvaluationReplaySamples(samples []EvaluationReplay) (EvaluationRep
 	}
 	for caseIndex := range aggregated.Cases {
 		aggregated.Cases[caseIndex].Latency = medianEvaluationDuration(caseLatencies[caseIndex])
+		if aggregated.Cases[caseIndex].AnalysisDiagnostics != nil {
+			aggregated.Cases[caseIndex].AnalysisDiagnostics.Elapsed = medianEvaluationDuration(analysisLatencies[caseIndex])
+		}
 		for passIndex := range aggregated.Cases[caseIndex].Passes {
 			aggregated.Cases[caseIndex].Passes[passIndex].Latency = medianEvaluationDuration(passLatencies[caseIndex][passIndex])
 		}

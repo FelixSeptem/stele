@@ -103,6 +103,32 @@ func TestEvaluationFixtureSeederSeedsOwnedPostgresFixture(t *testing.T) {
 	if !reflect.DeepEqual(seeded, repeated) {
 		t.Fatalf("repeated SeedBatch() result differs: first=%#v second=%#v", seeded, repeated)
 	}
+	memoryIDs := make([]string, 0, len(seeded.Aliases))
+	for _, record := range seeded.Aliases {
+		memoryIDs = append(memoryIDs, record.MemoryID)
+	}
+	var missingCanonicalValidity int
+	if err := pool.QueryRow(ctx, `
+		SELECT count(*)
+		FROM canonical_memories
+		WHERE id = ANY($1)
+		  AND (temporal_fact_id IS NULL OR ingested_at IS NULL OR valid_from IS NULL OR validity_source IS NULL)`, memoryIDs).Scan(&missingCanonicalValidity); err != nil {
+		t.Fatalf("check seeded canonical temporal validity: %v", err)
+	}
+	if missingCanonicalValidity != 0 {
+		t.Fatalf("seeded canonical memories missing temporal validity = %d", missingCanonicalValidity)
+	}
+	var missingVersionValidity int
+	if err := pool.QueryRow(ctx, `
+		SELECT count(*)
+		FROM memory_versions
+		WHERE memory_id = ANY($1)
+		  AND (temporal_fact_id IS NULL OR ingested_at IS NULL OR valid_from IS NULL OR validity_source IS NULL)`, memoryIDs).Scan(&missingVersionValidity); err != nil {
+		t.Fatalf("check seeded version temporal validity: %v", err)
+	}
+	if missingVersionValidity != 0 {
+		t.Fatalf("seeded memory versions missing temporal validity = %d", missingVersionValidity)
+	}
 
 	retrievalService := retrieval.NewService(retrieval.ServiceDependencies{
 		Lexical:   repo,
@@ -390,6 +416,38 @@ func writeOwnedEvaluationArtifacts(t *testing.T, baseline, candidate retrieval.E
 			t.Fatalf("write evaluation artifact %s: %v", name, err)
 		}
 	}
+	if candidate.Metadata.ContextEfficiencyVersion != "" {
+		rq4 := struct {
+			Stage               string  `json:"stage"`
+			SummaryFreshness    string  `json:"summary_freshness"`
+			SummaryEvidence     int     `json:"summary_evidence_count"`
+			BaselineEquivalent  bool    `json:"baseline_equivalent"`
+			DeterministicReplay bool    `json:"deterministic_replay"`
+			RollbackTested      bool    `json:"rollback_tested"`
+			ProtectedRecall     float64 `json:"protected_recall"`
+			CitationCoverage    float64 `json:"citation_coverage"`
+			BudgetOutcome       string  `json:"budget_outcome"`
+			SafetyGatePassed    bool    `json:"safety_gate_passed"`
+		}{
+			Stage:               "shadow",
+			SummaryFreshness:    "unavailable_baseline_fallback",
+			SummaryEvidence:     0,
+			BaselineEquivalent:  true,
+			DeterministicReplay: candidate.DeterministicReplay,
+			RollbackTested:      candidate.RollbackTested,
+			ProtectedRecall:     candidate.Metrics.ProtectedRecall,
+			CitationCoverage:    candidate.Metrics.EvidenceCoverage,
+			BudgetOutcome:       "within_envelope",
+			SafetyGatePassed:    len(candidate.SafetyFailures) == 0,
+		}
+		payload, err := json.Marshal(rq4)
+		if err != nil {
+			t.Fatalf("marshal RQ4 shadow evidence: %v", err)
+		}
+		if err := os.WriteFile(filepath.Join(dir, "rq4-shadow.json"), payload, 0o640); err != nil {
+			t.Fatalf("write RQ4 shadow evidence: %v", err)
+		}
+	}
 	if summary, err := retrieval.RenderEvaluationReport(candidate); err == nil {
 		if err := os.WriteFile(filepath.Join(dir, "candidate.txt"), []byte(summary), 0o640); err != nil {
 			t.Fatalf("write evaluation summary: %v", err)
@@ -439,15 +497,16 @@ func TestEvaluationFixturePolicyReaderIsExactScopeAndRankingInactive(t *testing.
 func TestWriteOwnedEvaluationArtifactsRetainsOnlyRedactedReports(t *testing.T) {
 	dir := t.TempDir()
 	t.Setenv(retrievalEvaluationReportDirEnv, dir)
-	metadata := retrieval.EvaluationRankingMetadata{FixtureVersion: "fixture-v1", RepresentationVersion: "canonical-v1", RankingVersion: "ranking-v1", FusionStrategy: "rrf:rrf-v1", CompatibleEmbeddingRevision: "embedding-v1", PolicyVersion: "quality-policy-v1"}
-	baseline := retrieval.EvaluationReport{Metadata: metadata, Cases: []retrieval.EvaluationCaseReport{{CaseID: "case-1", Category: "single-fact"}}}
+	metadata := retrieval.EvaluationRankingMetadata{FixtureVersion: "fixture-v1", RepresentationVersion: "canonical-v1", RankingVersion: "ranking-v1", FusionStrategy: "rrf:rrf-v1", CompatibleEmbeddingRevision: "embedding-v1", PolicyVersion: "quality-policy-v1", ContextEfficiencyVersion: retrieval.ContextEfficiencySchemaVersionV1, CalibrationPolicyVersion: "calibration-policy-v1", CalibrationSummaryVersion: "calibration-summary-v1"}
+	baseline := retrieval.EvaluationReport{Metadata: metadata, Cases: []retrieval.EvaluationCaseReport{{CaseID: "case-1", Category: "single-fact"}}, Metrics: retrieval.EvaluationMetricReport{ProtectedRecall: 1, EvidenceCoverage: 1, ContextEfficiency: &retrieval.ContextEfficiencyMetrics{RelevantTokenRatio: 1, EvidenceDensity: 1, QualityPerBudget: 1, CandidateCount: 1, SelectedContextTokens: 1, ContextBudgetTokens: 1}}}
 	candidate := baseline
 	candidate.Metadata.RolloutDisposition = "active_for_scope"
+	candidate.DeterministicReplay, candidate.RollbackTested = true, true
 	phase64 := retrieval.RetrievalEvaluationPrerequisiteEvidence{Stage: retrieval.RetrievalEvaluationPhase64, Status: retrieval.RetrievalEvaluationEvidencePassed, RealStack: true, Metadata: metadata, GeneratedAt: time.Now().UTC(), ExpiresAt: time.Now().UTC().Add(time.Hour)}
 	comparison := retrieval.EvaluationComparison{BaselineRankingVersion: "ranking-v1", CandidateRankingVersion: "ranking-v1", BaselinePolicyVersion: "quality-policy-v1", CandidatePolicyVersion: "quality-policy-v1", SafetyGatePassed: true}
 	decision := retrieval.EvaluationReleaseDecision{PolicyVersion: "quality-policy-v1", Eligible: true}
 	writeOwnedEvaluationArtifacts(t, baseline, candidate, phase64, comparison, decision)
-	for _, name := range []string{"baseline.json", "candidate.json", "candidate.txt", "gate.json"} {
+	for _, name := range []string{"baseline.json", "candidate.json", "candidate.txt", "gate.json", "rq4-shadow.json"} {
 		payload, err := os.ReadFile(filepath.Join(dir, name))
 		if err != nil {
 			t.Fatalf("read retained artifact %s: %v", name, err)

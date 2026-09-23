@@ -45,6 +45,9 @@ go.work.sum
 .gocache/
 .gocache-*/
 
+# Local owned PostgreSQL/pgvector shadow-evaluation artifacts
+.evaluation-artifacts/
+
 # Local agent/tooling scratch state
 .workbuddy/
 .omo/

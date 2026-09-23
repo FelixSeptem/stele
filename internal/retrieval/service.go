@@ -351,6 +351,29 @@ type RankingRolloutPolicyReader interface {
 	ReadActiveRankingRolloutPolicy(ctx context.Context, input memory.ReadActiveRankingRolloutPolicyInput) (memory.RankingRolloutPolicy, error)
 }
 
+type ContextCalibrationSummaryReader interface {
+	ReadContextCalibrationSummary(ctx context.Context, input memory.ReadContextCalibrationSummaryInput) (memory.ContextCalibrationSummary, error)
+}
+
+// ContextCalibrationLimits are deployment-owned ceilings and floors. A rollout
+// payload is deliberately not allowed to make calibration broader than these
+// values; invalid or absent limits fail closed at the request boundary.
+type ContextCalibrationLimits struct {
+	MaxSummaryAge       time.Duration
+	MinimumEvidence     int
+	ConfidenceThreshold float64
+	DecayWindow         time.Duration
+	ContributionCap     float64
+	MaxCandidates       int
+	MaxContextItems     int
+	MaxElapsed          time.Duration
+}
+
+func (l ContextCalibrationLimits) valid() bool {
+	return l.MaxSummaryAge > 0 && l.MinimumEvidence > 0 && l.ConfidenceThreshold >= 0 && l.ConfidenceThreshold <= 1 &&
+		l.DecayWindow > 0 && l.ContributionCap > 0 && l.ContributionCap <= 1 && l.MaxCandidates > 0 && l.MaxContextItems > 0 && l.MaxElapsed > 0
+}
+
 // ContextProjectionReader is optional so existing deployments can roll back
 // projection consumption without changing the live retrieval path.
 type ContextProjectionReader interface {
@@ -374,15 +397,21 @@ type ContextAssembler interface {
 }
 
 type ServiceDependencies struct {
-	Lexical                      LexicalSearcher
-	Semantic                     SemanticSearcher
-	Relations                    RelationSearcher
-	GraphTraversal               GraphTraversalSearcher
-	Citations                    CitationLister
-	Insights                     DerivedInsightLister
-	UsefulnessSummarizer         UsefulnessSummarizer
-	TaskEvaluationSummarizer     TaskEvaluationSummarizer
-	RankingRolloutPolicyReader   RankingRolloutPolicyReader
+	Lexical                         LexicalSearcher
+	Semantic                        SemanticSearcher
+	Relations                       RelationSearcher
+	GraphTraversal                  GraphTraversalSearcher
+	Citations                       CitationLister
+	Insights                        DerivedInsightLister
+	UsefulnessSummarizer            UsefulnessSummarizer
+	TaskEvaluationSummarizer        TaskEvaluationSummarizer
+	RankingRolloutPolicyReader      RankingRolloutPolicyReader
+	ContextCalibrationSummaryReader ContextCalibrationSummaryReader
+	// ContextCalibrationEnabled is an operational hard gate. An exact-scope
+	// rollout policy can narrow deployment limits but cannot bypass a disabled
+	// deployment.
+	ContextCalibrationEnabled    bool
+	ContextCalibrationLimits     ContextCalibrationLimits
 	Projections                  ContextProjectionReader
 	ProjectionConsumptionEnabled bool
 	Chunks                       ChunkCandidateSearcher
@@ -420,29 +449,32 @@ const (
 )
 
 type Service struct {
-	lexical                      LexicalSearcher
-	semantic                     SemanticSearcher
-	relations                    RelationSearcher
-	graphTraversal               GraphTraversalSearcher
-	citations                    CitationLister
-	insights                     DerivedInsightLister
-	usefulnessSummarizer         UsefulnessSummarizer
-	taskEvaluationSummarizer     TaskEvaluationSummarizer
-	rankingRolloutPolicyReader   RankingRolloutPolicyReader
-	projections                  ContextProjectionReader
-	projectionConsumptionEnabled bool
-	chunks                       ChunkCandidateSearcher
-	fusionStrategy               FusionStrategy
-	chunkRollout                 memory.ChunkRolloutMode
-	queryAnalyzer                QueryAnalyzer
-	queryAnalysisLimits          QueryAnalysisLimits
-	reranker                     Reranker
-	rerankerMode                 RerankerMode
-	rerankerProvider             string
-	rerankerVersion              string
-	qualityBounds                QualityAdjustmentBounds
-	retrievalPlanPolicy          RetrievalPlanPolicy
-	graphTraversalLimits         GraphTraversalLimits
+	lexical                         LexicalSearcher
+	semantic                        SemanticSearcher
+	relations                       RelationSearcher
+	graphTraversal                  GraphTraversalSearcher
+	citations                       CitationLister
+	insights                        DerivedInsightLister
+	usefulnessSummarizer            UsefulnessSummarizer
+	taskEvaluationSummarizer        TaskEvaluationSummarizer
+	rankingRolloutPolicyReader      RankingRolloutPolicyReader
+	contextCalibrationSummaryReader ContextCalibrationSummaryReader
+	contextCalibrationEnabled       bool
+	contextCalibrationLimits        ContextCalibrationLimits
+	projections                     ContextProjectionReader
+	projectionConsumptionEnabled    bool
+	chunks                          ChunkCandidateSearcher
+	fusionStrategy                  FusionStrategy
+	chunkRollout                    memory.ChunkRolloutMode
+	queryAnalyzer                   QueryAnalyzer
+	queryAnalysisLimits             QueryAnalysisLimits
+	reranker                        Reranker
+	rerankerMode                    RerankerMode
+	rerankerProvider                string
+	rerankerVersion                 string
+	qualityBounds                   QualityAdjustmentBounds
+	retrievalPlanPolicy             RetrievalPlanPolicy
+	graphTraversalLimits            GraphTraversalLimits
 	// now supplies the evaluation clock for valid-time predicates. It defaults to
 	// UTC wall time and exists so tests can pin one instant deterministically.
 	now      func() time.Time
@@ -499,30 +531,33 @@ func NewService(deps ServiceDependencies, observers ...telemetry.Observer) *Serv
 		graphTraversalLimits = DefaultGraphTraversalLimits()
 	}
 	return &Service{
-		lexical:                      deps.Lexical,
-		semantic:                     deps.Semantic,
-		relations:                    deps.Relations,
-		graphTraversal:               deps.GraphTraversal,
-		citations:                    deps.Citations,
-		insights:                     deps.Insights,
-		usefulnessSummarizer:         deps.UsefulnessSummarizer,
-		taskEvaluationSummarizer:     deps.TaskEvaluationSummarizer,
-		rankingRolloutPolicyReader:   deps.RankingRolloutPolicyReader,
-		projections:                  deps.Projections,
-		projectionConsumptionEnabled: deps.ProjectionConsumptionEnabled,
-		chunks:                       deps.Chunks,
-		fusionStrategy:               fusionStrategy,
-		chunkRollout:                 chunkRollout,
-		queryAnalyzer:                deps.QueryAnalyzer,
-		queryAnalysisLimits:          deps.QueryAnalysisLimits,
-		reranker:                     deps.Reranker,
-		rerankerMode:                 rerankerMode,
-		rerankerProvider:             strings.TrimSpace(deps.RerankerProvider),
-		rerankerVersion:              strings.TrimSpace(deps.RerankerVersion),
-		qualityBounds:                qualityBounds,
-		retrievalPlanPolicy:          retrievalPlanPolicy,
-		graphTraversalLimits:         graphTraversalLimits,
-		observer:                     observer,
+		lexical:                         deps.Lexical,
+		semantic:                        deps.Semantic,
+		relations:                       deps.Relations,
+		graphTraversal:                  deps.GraphTraversal,
+		citations:                       deps.Citations,
+		insights:                        deps.Insights,
+		usefulnessSummarizer:            deps.UsefulnessSummarizer,
+		taskEvaluationSummarizer:        deps.TaskEvaluationSummarizer,
+		rankingRolloutPolicyReader:      deps.RankingRolloutPolicyReader,
+		contextCalibrationSummaryReader: deps.ContextCalibrationSummaryReader,
+		contextCalibrationEnabled:       deps.ContextCalibrationEnabled,
+		contextCalibrationLimits:        deps.ContextCalibrationLimits,
+		projections:                     deps.Projections,
+		projectionConsumptionEnabled:    deps.ProjectionConsumptionEnabled,
+		chunks:                          deps.Chunks,
+		fusionStrategy:                  fusionStrategy,
+		chunkRollout:                    chunkRollout,
+		queryAnalyzer:                   deps.QueryAnalyzer,
+		queryAnalysisLimits:             deps.QueryAnalysisLimits,
+		reranker:                        deps.Reranker,
+		rerankerMode:                    rerankerMode,
+		rerankerProvider:                strings.TrimSpace(deps.RerankerProvider),
+		rerankerVersion:                 strings.TrimSpace(deps.RerankerVersion),
+		qualityBounds:                   qualityBounds,
+		retrievalPlanPolicy:             retrievalPlanPolicy,
+		graphTraversalLimits:            graphTraversalLimits,
+		observer:                        observer,
 	}
 }
 
@@ -2691,6 +2726,7 @@ func (s *Service) AssembleContext(ctx context.Context, input AssembleContextInpu
 		output.Diagnostics = append(output.Diagnostics, projectionDiagnostics...)
 		output.Diagnostics = append(output.Diagnostics, chunkContextDiagnostics...)
 	}
+	calibrationDiagnostics := []ContextDiagnostic(nil)
 
 	profiles := make([]SearchHit, 0)
 	summaries := make([]SearchHit, 0)
@@ -2729,6 +2765,27 @@ func (s *Service) AssembleContext(ctx context.Context, input AssembleContextInpu
 		if input.IncludeDiagnostics && omitted > 0 {
 			output.Diagnostics = append(output.Diagnostics, ContextDiagnostic{Section: "diversity", Status: "section_selection_applied", Omitted: omitted})
 		}
+	}
+	calibrationCandidates := make([]SearchHit, 0, len(profiles)+len(summaries)+len(relations)+len(episodes)+len(others))
+	calibrationCandidates = append(calibrationCandidates, profiles...)
+	calibrationCandidates = append(calibrationCandidates, summaries...)
+	calibrationCandidates = append(calibrationCandidates, relations...)
+	calibrationCandidates = append(calibrationCandidates, episodes...)
+	calibrationCandidates = append(calibrationCandidates, others...)
+	calibrated, calibrationDiagnostics := s.applyContextCalibrationRollout(ctx, input, calibrationCandidates, contextPolicy)
+	if len(calibrationDiagnostics) > 0 {
+		rank := make(map[string]int, len(calibrated))
+		for index, hit := range calibrated {
+			rank[hit.Memory.ID] = index
+		}
+		reorder := func(section []SearchHit) []SearchHit {
+			sort.SliceStable(section, func(i, j int) bool { return rank[section[i].Memory.ID] < rank[section[j].Memory.ID] })
+			return section
+		}
+		profiles, summaries, relations, episodes, others = reorder(filterCalibratedHits(profiles, rank)), reorder(filterCalibratedHits(summaries, rank)), reorder(filterCalibratedHits(relations, rank)), reorder(filterCalibratedHits(episodes, rank)), reorder(filterCalibratedHits(others, rank))
+	}
+	if input.IncludeDiagnostics {
+		output.Diagnostics = append(output.Diagnostics, calibrationDiagnostics...)
 	}
 	for _, section := range [][]SearchHit{profiles, summaries, relations, episodes, others} {
 		for _, hit := range section {

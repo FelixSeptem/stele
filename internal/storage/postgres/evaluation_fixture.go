@@ -245,10 +245,10 @@ func (s *EvaluationFixtureSeeder) SeedBatch(ctx context.Context, fixture retriev
 			if class == "" {
 				class = memory.MemoryClassEpisodic
 			}
-			batch.Queue(`INSERT INTO canonical_memories (id,tenant,project,namespace,class,state,retention_class,content,search_text,created_at,updated_at) VALUES ($1,$2,$3,$4,$5,'active',$6,$7,to_tsvector('simple',$7),$8,$8) ON CONFLICT (id) DO NOTHING`, current.alias.MemoryID, current.scope.Tenant, current.scope.Project, current.scope.Namespace, class, policy.RetentionClassPermanent, current.source.Content, current.createdAt)
+			batch.Queue(`INSERT INTO canonical_memories (id,tenant,project,namespace,class,state,retention_class,content,search_text,created_at,updated_at,temporal_fact_id,ingested_at,valid_from,valid_to,validity_source) VALUES ($1,$2,$3,$4,$5,'active',$6,$7,to_tsvector('simple',$7),$8,$8,$9,$8,$8,NULL,$10) ON CONFLICT (id) DO NOTHING`, current.alias.MemoryID, current.scope.Tenant, current.scope.Project, current.scope.Namespace, class, policy.RetentionClassPermanent, current.source.Content, current.createdAt, current.alias.MemoryID, string(memory.TemporalValiditySourceLegacyCompatible))
 		}
 		for _, current := range items[start:end] {
-			batch.Queue(`INSERT INTO memory_versions (id,memory_id,version,state,content,created_at,modified_by) VALUES ($1,$2,1,'active',$3,$4,$5) ON CONFLICT (id) DO NOTHING`, evaluationFixtureID(current.key+":version"), current.alias.MemoryID, current.source.Content, current.createdAt, current.candidateID)
+			batch.Queue(`INSERT INTO memory_versions (id,memory_id,version,state,content,created_at,modified_by,temporal_fact_id,ingested_at,valid_from,valid_to,validity_source) VALUES ($1,$2,1,'active',$3,$4,$5,$6,$4,$4,NULL,$7) ON CONFLICT (id) DO NOTHING`, evaluationFixtureID(current.key+":version"), current.alias.MemoryID, current.source.Content, current.createdAt, current.candidateID, current.alias.MemoryID, string(memory.TemporalValiditySourceLegacyCompatible))
 		}
 		for _, current := range items[start:end] {
 			batch.Queue(`INSERT INTO provenance_links (id,raw_event_id,tenant,project,namespace,operation,actor,source_context,created_at) VALUES ($1,$2,$3,$4,$5,'evaluation_fixture_ingest','retrieval-evaluation-fixture','{}'::jsonb,$6) ON CONFLICT (id) DO NOTHING`, evaluationFixtureID(current.key+":event-provenance"), current.alias.RawEventID, current.scope.Tenant, current.scope.Project, current.scope.Namespace, current.createdAt)
