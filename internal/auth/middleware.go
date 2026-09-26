@@ -91,6 +91,12 @@ func PrincipalFromContext(ctx context.Context) (Principal, bool) {
 	return principal, ok
 }
 
+// ContextWithPrincipal attaches an already-authenticated principal to ctx for
+// downstream service adapters that enforce authorization from request context.
+func ContextWithPrincipal(ctx context.Context, principal Principal) context.Context {
+	return context.WithValue(ctx, principalContextKey{}, principal)
+}
+
 func PrincipalMiddleware(authorizer PrincipalAuthorizer, requiredRole PrincipalRole) func(http.Handler) http.Handler {
 	return PrincipalMiddlewareWithObserver(authorizer, requiredRole, nil)
 }

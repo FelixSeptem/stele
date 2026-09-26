@@ -15,6 +15,7 @@ import (
 
 	"github.com/FelixSeptem/stele/internal/assurance"
 	"github.com/FelixSeptem/stele/internal/auth"
+	"github.com/FelixSeptem/stele/internal/config"
 	"github.com/FelixSeptem/stele/internal/diagnostics"
 	"github.com/FelixSeptem/stele/internal/governance"
 	"github.com/FelixSeptem/stele/internal/jobs"
@@ -1302,6 +1303,20 @@ func TestNewHTTPHandlerServesRuntimeOpenAPIWithCacheValidator(t *testing.T) {
 	handler.ServeHTTP(conditionalRec, conditional)
 	if conditionalRec.Code != http.StatusNotModified {
 		t.Fatalf("conditional status = %d, want %d", conditionalRec.Code, http.StatusNotModified)
+	}
+}
+
+func TestRuntimeOpenAPIPublishesConfiguredMCPPath(t *testing.T) {
+	handler := NewHTTPHandler(HTTPDependencies{MCP: config.MCPConfig{Enabled: true, Path: "/v1/mcp"}, MCPAdapter: http.NotFoundHandler()})
+	req := httptest.NewRequest(http.MethodGet, "/openapi.yaml", nil)
+	rec := httptest.NewRecorder()
+	handler.ServeHTTP(rec, req)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("GET /openapi.yaml status = %d, want 200", rec.Code)
+	}
+	body := rec.Body.String()
+	if !strings.Contains(body, "  /v1/mcp:\n") || strings.Contains(body, "  /mcp:\n") {
+		t.Fatal("runtime OpenAPI MCP path does not match configured route")
 	}
 }
 

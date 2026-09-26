@@ -60,3 +60,11 @@ func (a *BootstrapAuthorizer) AuthorizeScope(ctx context.Context, principalID st
 	}
 	return scope.Normalized() == a.defaultScope, nil
 }
+
+func (a *BootstrapAuthorizer) AuthorizeScopeAccess(ctx context.Context, principalID string, scope memory.Scope) (ScopeGrantAccessMode, error) {
+	granted, err := a.AuthorizeScope(ctx, principalID, scope)
+	if err != nil || !granted {
+		return "", err
+	}
+	return ScopeGrantAccessReadWrite, nil
+}

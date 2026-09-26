@@ -140,6 +140,7 @@ type LifecycleClaimResult struct {
 type LifecycleIdempotencyStore interface {
 	ClaimLifecycle(context.Context, LifecycleClaim) (LifecycleClaimResult, error)
 	CompleteLifecycle(context.Context, LifecycleClaim, OperationOutcome) error
+	ReleaseLifecycle(context.Context, LifecycleClaim) error
 }
 type SessionAdapter interface {
 	CreateTurn(context.Context, memory.CreateMemorySessionTurnInput) (memory.MemorySessionTurn, error)
@@ -366,11 +367,15 @@ func (a *Adapter) ApplyLifecycle(ctx context.Context, binding RuntimeBinding, me
 	}
 	err := a.deps.Lifecycle.Apply(ctx, memory.LifecycleActionInput{Scope: binding.Scope, MemoryID: strings.TrimSpace(memoryID), Action: action, Reason: strings.TrimSpace(reason), Actor: strings.TrimSpace(actor), RequestID: meta.RequestID})
 	if err != nil {
+		if a.deps.LifecycleStore != nil {
+			_ = a.deps.LifecycleStore.ReleaseLifecycle(context.WithoutCancel(ctx), claim)
+		}
 		return OperationOutcome{Metadata: meta}, err
 	}
 	out := OperationOutcome{Metadata: meta, Citations: []Citation{{SourceKind: "lifecycle", Reference: strings.TrimSpace(memoryID), Availability: "available"}}}
 	if a.deps.LifecycleStore != nil {
 		if err := a.deps.LifecycleStore.CompleteLifecycle(ctx, claim, out); err != nil {
+			_ = a.deps.LifecycleStore.ReleaseLifecycle(context.WithoutCancel(ctx), claim)
 			return OperationOutcome{Metadata: meta}, fmt.Errorf("lifecycle completion retryable: %w", err)
 		}
 	}

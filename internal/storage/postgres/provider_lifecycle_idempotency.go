@@ -40,3 +40,14 @@ func (r *Repository) CompleteLifecycle(ctx context.Context, c provider.Lifecycle
 	}
 	return nil
 }
+
+func (r *Repository) ReleaseLifecycle(ctx context.Context, c provider.LifecycleClaim) error {
+	tag, err := r.db.Exec(ctx, `DELETE FROM provider_lifecycle_operations WHERE tenant=$1 AND project=$2 AND namespace=$3 AND principal_id=$4 AND idempotency_key=$5 AND request_fingerprint=$6 AND status='pending'`, c.Scope.Tenant, c.Scope.Project, c.Scope.Namespace, c.PrincipalID, c.IdempotencyKey, c.RequestFingerprint)
+	if err != nil {
+		return fmt.Errorf("release lifecycle claim: %w", err)
+	}
+	if tag.RowsAffected() > 1 {
+		return fmt.Errorf("released unexpected lifecycle claims")
+	}
+	return nil
+}

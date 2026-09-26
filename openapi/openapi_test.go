@@ -740,3 +740,26 @@ func TestSpecYAMLIsValidOpenAPI(t *testing.T) {
 		t.Fatalf("Validate() error = %v", err)
 	}
 }
+
+func TestMCPRoutePublishesOptionalAuthenticatedToolDiscoveryContract(t *testing.T) {
+	loader := openapi3.NewLoader()
+	doc, err := loader.LoadFromData([]byte(SpecYAML()))
+	if err != nil {
+		t.Fatalf("LoadFromData() error = %v", err)
+	}
+	path := doc.Paths.Value("/mcp")
+	if path == nil || path.Post == nil {
+		t.Fatal("optional MCP POST route is missing from OpenAPI")
+	}
+	if path.Post.OperationID != "mcpStreamableHTTP" || path.Post.Security == nil || len(*path.Post.Security) == 0 {
+		t.Fatalf("MCP operation contract = operationID %q, security %v; want authenticated mcpStreamableHTTP", path.Post.OperationID, path.Post.Security)
+	}
+	for _, status := range []string{"200", "401", "404", "413", "415", "422"} {
+		if path.Post.Responses.Value(status) == nil {
+			t.Errorf("MCP OpenAPI response %s is missing", status)
+		}
+	}
+	if !strings.Contains(path.Post.RequestBody.Value.Content.Get("application/json").Schema.Value.Description, "tools/list") {
+		t.Fatal("MCP OpenAPI request contract must direct clients to MCP tool discovery")
+	}
+}

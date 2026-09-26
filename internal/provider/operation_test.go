@@ -155,6 +155,31 @@ func TestProviderAdapterLifecycleCompletionFailureIsRetryableWithoutReapplying(t
 	if lifecycle.calls != 1 {
 		t.Fatalf("lifecycle calls=%d, want one mutation", lifecycle.calls)
 	}
+	store.completeErr = nil
+	if _, err := a.ApplyLifecycle(context.Background(), b, meta, "mem-1", policy.ForgettingActionSuppress, "privacy", "principal"); err != nil {
+		t.Fatalf("retry after completion failure: %v", err)
+	}
+	if lifecycle.calls != 2 || store.releases != 1 {
+		t.Fatalf("retry lifecycle calls=%d releases=%d, want 2 and 1", lifecycle.calls, store.releases)
+	}
+}
+
+func TestProviderAdapterReleasesLifecycleClaimAfterMutationFailure(t *testing.T) {
+	lifecycle := &adapterLifecycleStub{err: errors.New("mutation failed")}
+	store := &adapterLifecycleStore{}
+	a := NewAdapter(AdapterDependencies{Lifecycle: lifecycle, LifecycleStore: store, AllowLifecycle: func(context.Context, RuntimeBinding) bool { return true }})
+	b := RuntimeBinding{BindingID: "b", PrincipalID: "principal", Scope: memory.Scope{Tenant: "t", Project: "p", Namespace: "n"}, AgentID: "a", SessionID: "s", ProviderInstanceID: "pi"}
+	meta := OperationMetadata{RequestID: "r", OperationID: "o", IdempotencyKey: "k", SchemaVersion: "schema-v1"}
+	if _, err := a.ApplyLifecycle(context.Background(), b, meta, "mem-1", policy.ForgettingActionSuppress, "privacy", "principal"); err == nil {
+		t.Fatal("expected mutation failure")
+	}
+	if store.releases != 1 {
+		t.Fatalf("release calls=%d, want 1", store.releases)
+	}
+	lifecycle.err = nil
+	if _, err := a.ApplyLifecycle(context.Background(), b, meta, "mem-1", policy.ForgettingActionSuppress, "privacy", "principal"); err != nil {
+		t.Fatalf("retry after mutation failure: %v", err)
+	}
 }
 
 func TestShapeSearchCitationsWithLimit(t *testing.T) {
@@ -186,18 +211,21 @@ func (s *adapterIngestor) Ingest(_ context.Context, in memory.IngestEventInput) 
 
 type adapterIntentService struct{ got memory.MemoryIntentInput }
 
-type adapterLifecycleStub struct{ calls int }
+type adapterLifecycleStub struct {
+	calls int
+	err   error
+}
 
 func (s *adapterLifecycleStub) Apply(context.Context, memory.LifecycleActionInput) error {
 	s.calls++
-	return nil
+	return s.err
 }
 
 type adapterLifecycleStore struct {
-	claims, completes int
-	replayed          bool
-	replay            OperationOutcome
-	completeErr       error
+	claims, completes, releases int
+	replayed                    bool
+	replay                      OperationOutcome
+	completeErr                 error
 }
 
 func (s *adapterLifecycleStore) ClaimLifecycle(context.Context, LifecycleClaim) (LifecycleClaimResult, error) {
@@ -210,7 +238,16 @@ func (s *adapterLifecycleStore) ClaimLifecycle(context.Context, LifecycleClaim) 
 
 func (s *adapterLifecycleStore) CompleteLifecycle(context.Context, LifecycleClaim, OperationOutcome) error {
 	s.completes++
+	if s.completeErr == nil {
+		s.replayed = true
+	}
 	return s.completeErr
+}
+
+func (s *adapterLifecycleStore) ReleaseLifecycle(context.Context, LifecycleClaim) error {
+	s.releases++
+	s.replayed = false
+	return nil
 }
 
 type adapterSearcher struct{ got retrieval.SearchInput }

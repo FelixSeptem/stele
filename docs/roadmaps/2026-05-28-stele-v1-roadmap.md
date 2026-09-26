@@ -104,7 +104,7 @@ change an archived baseline.
 | P5 | Benchmark expansion and retrieval release evidence | Archived changes 025, 026, 035, and 039 | Implemented baseline; owned real-stack evidence remains a prerequisite for activation. |
 | P6 | Durable multi-scope maintenance and observability | Archived change 037 | Implemented baseline; retain regression, freshness, and SLO evidence. |
 | P7 | Agent runtime memory-provider contract | Archived change 038 | Implemented baseline; integration remains optional to the retrieval path. |
-| P8 | Optional adapters and governed experience insights | Governed insight baseline in changes 013/014; MCP/conventions remain candidates | Keep outside the critical path until provider and quality gates are stable. |
+| P8 | Optional adapters and governed experience insights | Governed insight baseline in changes 013/014; `openapi-backed-mcp-scope-and-profile-context` is the preferred next proposal | Keep MCP as an optional OpenAPI adapter and reuse projections/intents rather than creating a second memory system. |
 
 ### Critical path to provider readiness
 
@@ -1359,22 +1359,46 @@ Rollback:
 
 Goal: add ecosystem ergonomics only after the core provider contract is stable.
 
-Candidate tasks:
+Preferred next proposal: `openapi-backed-mcp-scope-and-profile-context`.
 
-- build an OpenAPI-backed MCP adapter that preserves principal, grant, scope,
-  lifecycle, idempotency, and audit behavior;
+Candidate tasks for that bounded proposal:
+
+- build an optional OpenAPI-backed MCP adapter that preserves principal, grant,
+  exact `tenant`/`project`/`namespace` scope, lifecycle, idempotency, and audit
+  behavior; MCP remains a transport adapter rather than an authorization or
+  persistence boundary;
+- expose separate, bounded tool contracts for server-resolved runtime identity
+  and grants, query-relevant memory search, and already-authorized assembled
+  context/profile projections; ordinary retrieval must not expose raw scores,
+  candidate pools, feedback, calibration state, hidden IDs, or diagnostic
+  trajectories;
+- route `remember`, update, and forget requests through existing governed
+  memory intents; a semantic bulk forget must preview candidates first and
+  apply only the caller-reviewed, exact bounded ID set in an auditable batch;
+- allow a runtime/session "active scope" only as a server-resolved default for
+  a request. An explicit authorized scope takes precedence, and active-scope
+  state must never widen grants or become a second canonical memory store;
+- derive profile-like stable/recent context from existing profile memories,
+  valid temporal evidence, and context projections. Do not create an
+  independently mutable profile database or new canonical memory class.
+
+Later P8 candidates:
+
 - add optional namespace/topic path conventions inside an existing scope without
   subtree-based cross-scope expansion;
 - define scoped agent self-model conventions as ordinary governed memories;
-- implement `failure_pattern` and evidence-backed `lesson` insights as derived
-  records with provenance and optional context sections;
+- extend the archived governed-insight baseline only where a new insight type
+  has its own provenance, lifecycle, replay, feedback, and context-evidence
+  contract;
 - define a provider-independent reasoning boundary before considering hypothesis,
   causal-link, contradiction, or goal inference.
 
 Exit signal:
 
-- each adapter or insight type has its own conformance/evaluation evidence and
-  can be disabled without affecting the P0–P7 critical path.
+- each MCP tool and any later insight type has its own OpenAPI/MCP conformance,
+  exact-scope isolation, lifecycle/forgetting, rollback, and redacted-output
+  evidence; the adapter can be disabled without affecting the P0–P7 critical
+  path or PostgreSQL canonical state.
 
 ### Stage Sequencing
 
@@ -1388,9 +1412,9 @@ Exit signal:
 8. Phase 6 Task 6.7 retrieval release gate and progressive context evaluation (P5b, archived)
 9. Stage 8 durable multi-scope maintenance and retrieval observability (P6, archived)
 10. Stage 9 agent runtime memory-provider contract and adapter (P7, archived)
-11. RQ1 query-adaptive retrieval planning (current implementation)
-12. RQ2–RQ4 retrieval-quality frontier (pending in order)
-13. Stage 10 optional adapters and governed experience insights (P8 candidates)
+11. RQ1–RQ4 retrieval-quality frontier (archived changes 040–043)
+12. Stage 10 optional adapters and governed experience insights (P8 candidates),
+    beginning with the OpenAPI-backed MCP scope/profile-context adapter
 
 Reasoning:
 
@@ -1412,7 +1436,7 @@ Reasoning:
 
 ## Reference-Informed Expansion Backlog
 
-This section captures external reference findings that should inform post-v1 planning without changing the current v1 execution order. The immediate reference is `alash3al/stash`, a Go, PostgreSQL, pgvector, and MCP-oriented agent memory project that emphasizes continuous agent experience memory. Treat this section as a research backlog, not as an approved implementation plan.
+This section captures external reference findings that should inform post-v1 planning without changing the current execution order. The immediate references are `alash3al/stash`, a Go, PostgreSQL, pgvector, and MCP-oriented agent memory project, and `supermemoryai/supermemory`, whose public repository supplies MCP/SDK contracts and documentation rather than its core memory engine. Treat this section as a research backlog, not as an approved implementation plan.
 
 ### Stash Reference Summary
 
@@ -1513,7 +1537,47 @@ Stele constraints that remain non-negotiable:
 - Do not let LLM-style consolidation overwrite canonical memory in place. New insight records must remain derived, evidence-backed, versioned, and lifecycle-governed.
 - Do not add SDK, UI, hosted-product, or end-user product logic to this repository.
 
-### Candidate Expansion Track: Governed Experience Insights
+### Supermemory Reference Summary
+
+The Supermemory public repository was reviewed at commit
+`0e12f0b3a65af1cf7b03f48561f20ddf4369bc3f` on 2026-09-23. Its public code is
+principally SDK, MCP adapter, documentation, and graph-visualization code; the
+core memory engine is not present. It is therefore a source of protocol and
+operational-interface patterns, not a backend implementation to copy.
+
+Useful patterns to adapt:
+
+- separate query-relevant recall from always-on profile/context retrieval;
+  profile-like context complements search instead of changing search ranking;
+- expose small MCP tools with distinct contracts for current identity/access,
+  search, context/profile, explicit write, and browse/review flows;
+- resolve an explicit space before a persisted active-space default, and test
+  that read-only or narrowed grants cannot become writable through the adapter;
+- treat a guided save as a reviewable draft/intent rather than a direct
+  canonical write;
+- make semantic bulk forgetting a two-step operation: preview the bounded
+  in-scope candidate set, then execute exactly the reviewed IDs with a batch
+  audit record;
+- offer topic-oriented profile slices only as bounded, versioned context
+  projection policies. They must cite eligible sources and remain rebuildable,
+  not become arbitrary new memory classes or opaque mutable profiles.
+
+Patterns explicitly not adopted from Supermemory:
+
+- no direct copy of its TypeScript/Cloudflare/hosted adapter code, SDKs, OAuth
+  flow, UI widgets, connectors, local binary, or graph visualization;
+- no replacement of Stele's explicit three-part scope with a single client
+  `containerTag`, and no client-held active scope that can widen a server grant;
+- no direct semantic-text deletion fallback. Stele must use governed intents,
+  exact scope proof, preview-to-fixed-ID execution, lifecycle history, and
+  audit evidence;
+- no graph-first or separately mutable profile store. PostgreSQL remains the
+  only system of record, and graph/projection data remains derived and
+  rebuildable;
+- no adoption of benchmark, latency, or quality claims without Stele-owned
+  PostgreSQL + pgvector evaluation evidence.
+
+### Archived Baseline: Governed Experience Insights
 
 Goal:
 
@@ -1528,17 +1592,20 @@ Possible insight vocabulary:
 - `contradiction`: evidence that two active or historical claims conflict and need scoped interpretation.
 - `causal_link`: a bounded relationship between an action, condition, and observed outcome.
 
-Recommended next proposal boundary:
+Implemented baseline boundary (changes 013/014):
 
-- Build the derived insight substrate first: insight identity, scope, type, lifecycle, confidence, evidence citations, derivation metadata, provenance, and admin inspection.
-- Implement only `failure_pattern` as an active derived insight in the first slice because it has concrete existing evidence sources.
-- Allow `lesson` as a derived output when it is evidence-backed by a `failure_pattern`, but do not introduce free-form wisdom generation.
+- The derived-insight substrate has scoped identity, type, lifecycle, confidence,
+  evidence citations, derivation metadata, provenance, feedback, replay, and
+  admin inspection.
+- `failure_pattern` is the active derived-insight slice; `lesson` remains
+  evidence-backed by a failure pattern rather than free-form wisdom generation.
 - Keep `hypothesis`, `goal`, `contradiction`, and `causal_link` as reserved vocabulary or design extension points until Stele has a reasoning-provider boundary and clearer evaluation tests.
 - Derive insights asynchronously from existing raw events, canonical memory, procedural memory, summaries, relations, recovery history, job execution records, and embedding failure records.
 - Expose `failure_pattern` and `lesson` through optional context assembly sections such as `known_failures` and `experience_lessons`.
 - Add admin inspection for insight provenance and lifecycle decisions before adding any MCP adapter or agent-facing convenience tool.
 
-Non-goals for the first slice:
+Non-goals for governed-insight extensions (these do not rule out the separately
+scoped P8.1 MCP adapter):
 
 - No direct MCP server implementation.
 - No graph database or non-PostgreSQL store.
@@ -1551,8 +1618,10 @@ Non-goals for the first slice:
 
 ### Candidate Follow-up Tracks
 
-1. OpenAPI-backed MCP adapter:
-   Add an optional MCP surface that maps to existing Stele APIs and preserves API key, scope, lifecycle, and audit behavior.
+1. OpenAPI-backed MCP scope and profile-context adapter (preferred next proposal):
+   Add an optional MCP surface that maps to existing Stele APIs, separates
+   identity/scope, search, and assembled context, and routes mutable operations
+   through governed intents with preview-to-fixed-ID forgetting.
 
 2. Namespace path conventions inside existing scopes:
    Add an optional `memory_path` or `topic_path` convention inside one `tenant/project/namespace`, with bounded subtree retrieval and no cross-scope expansion.
@@ -1589,11 +1658,12 @@ Recommended execution order for the current product baseline and next frontier:
 6. P5: benchmark/release evidence and progressive-context baseline (archived)
 7. P6: durable multi-scope maintenance and observability baseline (archived)
 8. P7: agent runtime memory-provider contract baseline (archived)
-9. RQ1: query-adaptive retrieval planning (archived change 040)
-10. RQ2: bi-temporal fact validity (current proposal target)
-11. RQ3: bounded graph-distance retrieval and evidence paths
-12. RQ4: context efficiency and feedback calibration
-13. P8: optional MCP, shared-memory conventions, and governed experience insights
+9. RQ1–RQ4: retrieval-quality frontier (archived changes 040–043)
+10. P8.1: OpenAPI-backed MCP scope and profile-context adapter (preferred next proposal)
+11. P8.2: namespace/topic-path conventions, agent self-model conventions, and
+    later governed insight extensions
+12. P8.3: reasoning-provider boundary and offline/shadow progressive-context
+    experiments
 
 The original Phase 1–5 order remains the build order for a fresh repository;
 the P0–P7 sequence is the archived baseline and RQ1–RQ4 are the next
@@ -1674,6 +1744,16 @@ P0–P7 and RQ1–RQ4 are archived baselines through change 043. RQ4 completed
 OpenSpec validation, and an explicitly owned PostgreSQL + pgvector shadow run.
 Calibration remains disabled by default: a missing or stale summary falls back
 to the baseline, and active calibration still requires a fresh compatible
-exact-scope summary plus separately governed activation. The next proposal
-should be selected from the roadmap without reopening the archived RQ2/RQ3/RQ4
-visibility, temporal, graph, or calibration contracts.
+exact-scope summary plus separately governed activation.
+
+The preferred next proposal is P8.1
+`openapi-backed-mcp-scope-and-profile-context`. It should expose only a thin,
+optional adapter over existing OpenAPI/service contracts: server-resolved
+identity and exact scope, query-relevant retrieval, already-authorized assembled
+context/profile projections, and governed remember/update/forget intents.
+It must prove that explicit scope overrides any active-scope default without
+widening grants; preserve lifecycle and temporal filtering; use preview-to-fixed
+ID audit batches for semantic forgetting; redact ordinary outputs; and remain
+independently disableable. It must not reopen archived RQ2/RQ3/RQ4 visibility,
+temporal, graph, or calibration contracts, nor introduce an SDK, UI, OAuth,
+connector, graph store, or second profile/canonical store.

@@ -87,7 +87,7 @@ func (s *PrincipalAdminService) CreatePrincipal(ctx context.Context, input Creat
 	}
 	grants := make([]ScopeGrant, 0, len(input.Grants))
 	for _, scope := range input.Grants {
-		grant := ScopeGrant{ID: s.newID(), PrincipalID: principal.ID, Scope: scope.Normalized(), Status: ScopeGrantStatusActive, CreatedAt: now}
+		grant := ScopeGrant{ID: s.newID(), PrincipalID: principal.ID, Scope: scope.Normalized(), Status: ScopeGrantStatusActive, AccessMode: ScopeGrantAccessReadWrite, CreatedAt: now}
 		if err := grant.Validate(); err != nil {
 			return IssuedPrincipal{}, err
 		}
@@ -223,7 +223,7 @@ func (s *PrincipalAdminService) ExpirePrincipal(ctx context.Context, scope memor
 	return s.store.ExpirePrincipal(ctx, scope.Normalized(), principalID, expiresAt, audit)
 }
 
-func (s *PrincipalAdminService) CreateScopeGrant(ctx context.Context, scope memory.Scope, principalID string, grantScope memory.Scope, actor, reason string) error {
+func (s *PrincipalAdminService) CreateScopeGrant(ctx context.Context, scope memory.Scope, principalID string, grantScope memory.Scope, accessMode ScopeGrantAccessMode, actor, reason string) error {
 	if err := s.ensureStore(); err != nil {
 		return err
 	}
@@ -240,7 +240,10 @@ func (s *PrincipalAdminService) CreateScopeGrant(ctx context.Context, scope memo
 		return err
 	}
 	now := s.now().UTC()
-	grant := ScopeGrant{ID: s.newID(), PrincipalID: principalID, Scope: grantScope.Normalized(), Status: ScopeGrantStatusActive, CreatedAt: now}
+	if accessMode == "" {
+		accessMode = ScopeGrantAccessReadWrite
+	}
+	grant := ScopeGrant{ID: s.newID(), PrincipalID: principalID, Scope: grantScope.Normalized(), Status: ScopeGrantStatusActive, AccessMode: accessMode, CreatedAt: now}
 	return s.store.CreateScopeGrant(ctx, scope.Normalized(), grant, AuditRecord{ID: s.newID(), PrincipalID: principalID, Scope: scope.Normalized(), Action: "scope_grant_created", Result: "success", CreatedAt: now})
 }
 

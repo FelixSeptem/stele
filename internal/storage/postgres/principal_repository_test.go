@@ -158,12 +158,12 @@ func TestRepositoryCreatesPrincipalCredentialGrantAndAuditAtomically(t *testing.
 	now := time.Date(2026, 8, 13, 12, 0, 0, 0, time.UTC)
 	principal := auth.Principal{ID: "principal_1", Role: auth.PrincipalRoleAdmin, Status: auth.PrincipalStatusActive, Label: "bootstrap", CreatedAt: now, UpdatedAt: now}
 	credential := auth.Credential{ID: "credential_1", PrincipalID: principal.ID, Status: auth.CredentialStatusActive, CredentialID: "stl_credential_1", Salt: []byte("salt"), Digest: []byte("digest"), CreatedAt: now}
-	grant := auth.ScopeGrant{ID: "grant_1", PrincipalID: principal.ID, Scope: memory.Scope{Tenant: "tenant-a", Project: "project-a", Namespace: "namespace-a"}, Status: auth.ScopeGrantStatusActive, CreatedAt: now}
+	grant := auth.ScopeGrant{ID: "grant_1", PrincipalID: principal.ID, Scope: memory.Scope{Tenant: "tenant-a", Project: "project-a", Namespace: "namespace-a"}, Status: auth.ScopeGrantStatusActive, AccessMode: auth.ScopeGrantAccessReadOnly, CreatedAt: now}
 	audit := auth.AuditRecord{ID: "audit_1", PrincipalID: principal.ID, CredentialID: credential.ID, Action: "principal_created", Result: "success", CreatedAt: now}
 	mock.ExpectBegin()
 	mock.ExpectExec("INSERT INTO access_principals").WithArgs(principal.ID, string(principal.Role), string(principal.Status), principal.Label, nil, principal.CreatedAt, principal.UpdatedAt).WillReturnResult(pgxmock.NewResult("INSERT", 1))
 	mock.ExpectExec("INSERT INTO access_credentials").WithArgs(credential.ID, credential.PrincipalID, string(credential.Status), credential.CredentialID, credential.Salt, credential.Digest, nil, credential.CreatedAt, nil).WillReturnResult(pgxmock.NewResult("INSERT", 1))
-	mock.ExpectExec("INSERT INTO access_scope_grants").WithArgs(grant.ID, grant.PrincipalID, grant.Scope.Tenant, grant.Scope.Project, grant.Scope.Namespace, string(grant.Status), grant.CreatedAt).WillReturnResult(pgxmock.NewResult("INSERT", 1))
+	mock.ExpectExec("INSERT INTO access_scope_grants").WithArgs(grant.ID, grant.PrincipalID, grant.Scope.Tenant, grant.Scope.Project, grant.Scope.Namespace, string(grant.Status), string(grant.AccessMode), grant.CreatedAt).WillReturnResult(pgxmock.NewResult("INSERT", 1))
 	mock.ExpectExec("INSERT INTO access_audit_records").WithArgs(audit.ID, audit.PrincipalID, audit.CredentialID, nil, nil, nil, audit.Action, audit.Result, audit.CreatedAt).WillReturnResult(pgxmock.NewResult("INSERT", 1))
 	mock.ExpectCommit()
 	if err := NewRepository(mock).CreatePrincipal(context.Background(), principal, credential, []auth.ScopeGrant{grant}, audit); err != nil {
@@ -171,6 +171,24 @@ func TestRepositoryCreatesPrincipalCredentialGrantAndAuditAtomically(t *testing.
 	}
 	if err := mock.ExpectationsWereMet(); err != nil {
 		t.Fatalf("ExpectationsWereMet() error = %v", err)
+	}
+}
+
+func TestRepositoryReadsScopeGrantAccessMode(t *testing.T) {
+	mock, err := pgxmock.NewPool()
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer mock.Close()
+	scope := memory.Scope{Tenant: "tenant-a", Project: "project-a", Namespace: "namespace-a"}
+	now := time.Date(2026, 8, 13, 12, 0, 0, 0, time.UTC)
+	mock.ExpectQuery("FROM access_scope_grants").WithArgs("principal_1", scope.Tenant, scope.Project, scope.Namespace).WillReturnRows(pgxmock.NewRows([]string{"id", "principal_id", "tenant", "project", "namespace", "status", "access_mode", "created_at", "revoked_at"}).AddRow("grant_1", "principal_1", scope.Tenant, scope.Project, scope.Namespace, "active", "read_only", now, nil))
+	grants, err := NewRepository(mock).ListScopeGrants(context.Background(), scope, "principal_1")
+	if err != nil || len(grants) != 1 || grants[0].AccessMode != auth.ScopeGrantAccessReadOnly {
+		t.Fatalf("ListScopeGrants() = %+v, %v", grants, err)
+	}
+	if err := mock.ExpectationsWereMet(); err != nil {
+		t.Fatal(err)
 	}
 }
 

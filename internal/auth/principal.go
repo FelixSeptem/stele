@@ -69,6 +69,17 @@ func (s ScopeGrantStatus) Valid() bool {
 	return s == ScopeGrantStatusActive || s == ScopeGrantStatusRevoked
 }
 
+type ScopeGrantAccessMode string
+
+const (
+	ScopeGrantAccessReadOnly  ScopeGrantAccessMode = "read_only"
+	ScopeGrantAccessReadWrite ScopeGrantAccessMode = "read_write"
+)
+
+func (m ScopeGrantAccessMode) Valid() bool {
+	return m == ScopeGrantAccessReadOnly || m == ScopeGrantAccessReadWrite
+}
+
 type Principal struct {
 	ID        string          `json:"id"`
 	Role      PrincipalRole   `json:"role"`
@@ -147,12 +158,13 @@ func (c Credential) SafeProjection() CredentialProjection {
 }
 
 type ScopeGrant struct {
-	ID          string           `json:"id"`
-	PrincipalID string           `json:"principal_id"`
-	Scope       memory.Scope     `json:"scope"`
-	Status      ScopeGrantStatus `json:"status"`
-	CreatedAt   time.Time        `json:"created_at"`
-	RevokedAt   time.Time        `json:"revoked_at,omitempty"`
+	ID          string               `json:"id"`
+	PrincipalID string               `json:"principal_id"`
+	Scope       memory.Scope         `json:"scope"`
+	Status      ScopeGrantStatus     `json:"status"`
+	AccessMode  ScopeGrantAccessMode `json:"access_mode"`
+	CreatedAt   time.Time            `json:"created_at"`
+	RevokedAt   time.Time            `json:"revoked_at,omitempty"`
 }
 
 type AuditRecord struct {
@@ -177,6 +189,12 @@ func (g ScopeGrant) Validate() error {
 	}
 	if !g.Status.Valid() {
 		return fmt.Errorf("scope grant status %q is invalid", g.Status)
+	}
+	if g.AccessMode == "" {
+		g.AccessMode = ScopeGrantAccessReadWrite
+	}
+	if !g.AccessMode.Valid() {
+		return fmt.Errorf("scope grant access mode %q is invalid", g.AccessMode)
 	}
 	if g.CreatedAt.IsZero() {
 		return fmt.Errorf("scope grant created at is required")

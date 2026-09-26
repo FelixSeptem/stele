@@ -44,3 +44,19 @@ func (r *PrincipalResolver) AuthorizeScope(ctx context.Context, principalID stri
 	}
 	return r.durable.AuthorizeScope(ctx, principalID, scope)
 }
+
+func (r *PrincipalResolver) AuthorizeScopeAccess(ctx context.Context, principalID string, scope memory.Scope) (ScopeGrantAccessMode, error) {
+	if r == nil {
+		return "", fmt.Errorf("principal authorization is not configured")
+	}
+	if principalID == bootstrapPrincipalID {
+		if access, ok := r.bootstrap.(ScopeAccessAuthorizer); ok {
+			return access.AuthorizeScopeAccess(ctx, principalID, scope)
+		}
+		return ScopeGrantAccessReadWrite, nil
+	}
+	if access, ok := r.durable.(ScopeAccessAuthorizer); ok {
+		return access.AuthorizeScopeAccess(ctx, principalID, scope)
+	}
+	return "", fmt.Errorf("scope access authorization is not configured")
+}

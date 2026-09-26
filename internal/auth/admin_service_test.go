@@ -114,7 +114,7 @@ func TestPrincipalAdminServiceDisablesAndRevokesScopedAccess(t *testing.T) {
 		t.Fatalf("RevokeScopeGrant() error = %v", err)
 	}
 
-	if err := service.CreateScopeGrant(context.Background(), scope, "principal_1", scope, "operator_1", "grant"); err != nil {
+	if err := service.CreateScopeGrant(context.Background(), scope, "principal_1", scope, ScopeGrantAccessReadOnly, "operator_1", "grant"); err != nil {
 		t.Fatalf("CreateScopeGrant() error = %v", err)
 	}
 	if store.disabled != "principal_1" || store.revokedGrant != "grant_1" {
@@ -122,6 +122,9 @@ func TestPrincipalAdminServiceDisablesAndRevokesScopedAccess(t *testing.T) {
 	}
 	if len(store.createdGrants) != 1 {
 		t.Fatalf("created grants = %+v", store.createdGrants)
+	}
+	if store.createdGrants[0].AccessMode != ScopeGrantAccessReadOnly {
+		t.Fatalf("created grant access mode = %q", store.createdGrants[0].AccessMode)
 	}
 }
 
@@ -139,5 +142,8 @@ func TestPrincipalAdminServiceIssuesOneTimeCredentialAndSafeInspection(t *testin
 	}
 	if issued.Credential.CredentialID == "" {
 		t.Fatalf("credential projection = %+v, want safe lookup identifier", issued.Credential)
+	}
+	if issued.Grants[0].AccessMode != ScopeGrantAccessReadWrite {
+		t.Fatalf("new principal grant access mode = %q, want backwards-compatible read_write", issued.Grants[0].AccessMode)
 	}
 }

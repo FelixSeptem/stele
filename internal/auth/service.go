@@ -13,6 +13,10 @@ type PrincipalStore interface {
 	HasActiveScopeGrant(ctx context.Context, principalID string, scope memory.Scope) (bool, error)
 }
 
+type ScopeAccessAuthorizer interface {
+	AuthorizeScopeAccess(context.Context, string, memory.Scope) (ScopeGrantAccessMode, error)
+}
+
 type PrincipalService struct {
 	store PrincipalStore
 	now   func() time.Time
@@ -45,4 +49,20 @@ func (s *PrincipalService) AuthorizeScope(ctx context.Context, principalID strin
 		return false, fmt.Errorf("principal store is not configured")
 	}
 	return s.store.HasActiveScopeGrant(ctx, principalID, scope)
+}
+
+func (s *PrincipalService) AuthorizeScopeAccess(ctx context.Context, principalID string, scope memory.Scope) (ScopeGrantAccessMode, error) {
+	if s == nil || s.store == nil {
+		return "", fmt.Errorf("principal store is not configured")
+	}
+	if accessStore, ok := s.store.(interface {
+		ScopeGrantAccess(context.Context, string, memory.Scope) (ScopeGrantAccessMode, error)
+	}); ok {
+		return accessStore.ScopeGrantAccess(ctx, principalID, scope)
+	}
+	granted, err := s.store.HasActiveScopeGrant(ctx, principalID, scope)
+	if err != nil || !granted {
+		return "", err
+	}
+	return ScopeGrantAccessReadWrite, nil
 }

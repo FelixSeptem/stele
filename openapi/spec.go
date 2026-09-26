@@ -1,7 +1,17 @@
 package openapi
 
+import "strings"
+
 func SpecYAML() string {
-	return `openapi: 3.1.0
+	return SpecYAMLWithMCPPath("/mcp")
+}
+
+func SpecYAMLWithMCPPath(mcpPath string) string {
+	mcpPath = "/" + strings.Trim(strings.TrimSpace(mcpPath), "/")
+	if mcpPath == "/" {
+		mcpPath = "/mcp"
+	}
+	spec := `openapi: 3.1.0
 info:
   title: Stele API
   version: 0.1.0
@@ -28,6 +38,33 @@ paths:
             application/json:
               schema:
                 type: object
+  /mcp:
+    post:
+      operationId: mcpStreamableHTTP
+      summary: Optional OpenAPI-backed MCP Streamable HTTP adapter
+      description: >-
+        Available only when STELE_MCP_ENABLED=true in API mode. The adapter
+        resolves the authenticated principal and exact grant before dispatching
+        bounded tools; PostgreSQL and the OpenAPI service interfaces remain the
+        authoritative storage and authorization boundary.
+      security:
+        - PublicAPIKey: []
+      parameters:
+        - $ref: '#/components/parameters/RuntimeBindingHeader'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              description: MCP JSON-RPC request; tool schemas are discovered through MCP initialize/tools/list.
+      responses:
+        '200': {description: MCP JSON or streamable response}
+        '401': {description: Authentication failed}
+        '404': {description: MCP adapter disabled}
+        '413': {description: Request exceeds configured MCP payload bound}
+        '415': {description: Unsupported MCP content type}
+        '422': {description: Bounded tool validation or scope error}
   /v1/provider/capabilities:
     get:
       operationId: getProviderCapabilities
@@ -4174,7 +4211,7 @@ components:
         disabled_at: {type: string, format: date-time}
     ScopeGrant:
       type: object
-      required: [id, principal_id, scope, status, created_at]
+      required: [id, principal_id, scope, status, access_mode, created_at]
       properties:
         id: {type: string}
         principal_id: {type: string}
@@ -4186,6 +4223,7 @@ components:
             project: {type: string}
             namespace: {type: string}
         status: {type: string, enum: [active, revoked]}
+        access_mode: {type: string, enum: [read_only, read_write]}
         created_at: {type: string, format: date-time}
         revoked_at: {type: string, format: date-time}
     AuditRecord:
@@ -4225,6 +4263,7 @@ components:
         tenant: {type: string}
         project: {type: string}
         namespace: {type: string}
+        access_mode: {type: string, enum: [read_only, read_write], default: read_write}
         actor: {type: string, maxLength: 128}
         reason: {type: string, maxLength: 256}
     IssuedCredential:
@@ -8208,4 +8247,5 @@ components:
           items:
             $ref: '#/components/schemas/RankingRolloutPolicy'
 `
+	return strings.Replace(spec, "  /mcp:\n", "  "+mcpPath+":\n", 1)
 }

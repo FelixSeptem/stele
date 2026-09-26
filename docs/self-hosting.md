@@ -2194,3 +2194,67 @@ without failing ordinary retrieval. Admin/evaluation diagnostics and
 `stele_retrieval_rerank_total` are low-cardinality and redact query text,
 scope values, memory IDs, raw scores, endpoint URLs, API keys, DSNs, and raw
 provider payloads.
+
+### Optional OpenAPI-backed MCP adapter
+
+The MCP surface is disabled by default and is available only in `api` mode.
+When enabled it mounts a Streamable HTTP endpoint over the existing OpenAPI and
+service contracts; PostgreSQL remains the only source of record and the adapter
+does not create a second authentication, profile, or storage boundary.
+
+```text
+STELE_MCP_ENABLED=false
+STELE_MCP_PATH=/mcp
+STELE_MCP_MAX_QUERY_BYTES=4096
+STELE_MCP_MAX_PAYLOAD_BYTES=65536
+STELE_MCP_MAX_RESULTS=50
+STELE_MCP_MAX_IDS=100
+```
+
+Use the same `X-API-Key` principal credential as the OpenAPI routes. A tool may
+select an exact `tenant`/`project`/`namespace` grant in its bounded arguments;
+otherwise it must provide the server-owned runtime binding header
+`X-Stele-Runtime-Binding`. Explicit scope always wins, and neither path can
+expand the principal's durable grants. `who_am_i` returns only role, access
+mode, whether a server-owned active scope was verified for the request, and an
+opaque digest of a verified exact scope; it does not claim to enumerate all
+principal grants. Credentials and raw scope values are never returned.
+
+The first tools are intentionally separate: `who_am_i`, `memory_search`,
+`memory_context`, `memory_browse`, `memory_remember`,
+`memory_forget`, `memory_forget_preview`, and `memory_forget_apply`.
+Search/context delegate to the existing temporal, lifecycle-safe retrieval and
+projection services and return citations without raw ranking diagnostics.
+Remember/update requests are governed memory intents. `memory_forget` accepts
+one explicit memory ID and requires the existing privileged lifecycle surface.
+Semantic bulk forgetting is always preview → caller-reviewed fixed IDs → apply;
+apply never reruns an unconstrained semantic query.
+
+The SDK contract tests run without external agents. The durable review-manifest
+and batch-replay conformance test can additionally run only against a dedicated,
+disposable PostgreSQL + pgvector database; it applies repository migrations and
+uses a unique fixture scope without creating or dropping the database. The
+caller owns database creation and removal, and the command must never point at
+an operator, shared, or production database:
+
+```powershell
+$env:STELE_TEST_POSTGRES_MCP_DSN = 'postgres://stele:...@localhost:5432/stele_mcp_test?sslmode=disable'
+go test ./internal/storage/postgres -run '^TestMCPForgetLedgerPostgresPersistsReviewAndReplayAcrossRepositories$' -count=1
+Remove-Item Env:STELE_TEST_POSTGRES_MCP_DSN
+```
+
+The fixture checks the pgvector extension, preview persistence across repository
+recreation, exact scope separation, durable apply replay, conflicting-key
+rejection, and an actual Streamable HTTP search delegation. It writes bounded
+preview/claim metadata and seeds three uniquely identified canonical records in
+one disposable fixture scope to prove exact-scope and hidden-lifecycle filtering.
+It performs targeted cleanup for every record it creates, but migrations remain
+and failed-process cleanup cannot be assumed; keep the database disposable. The
+broader adapter delegation, principal/grant, redaction, temporal, and lifecycle
+contracts are covered by the MCP SDK/service tests and the existing
+owned-database retrieval and provider lifecycle suites.
+
+To disable the adapter, set `STELE_MCP_ENABLED=false` and restart API replicas.
+The `/mcp` endpoint then returns not-found while ordinary OpenAPI/provider
+routes and canonical PostgreSQL state remain unchanged. Do not expose the MCP
+listener without the same network controls used for the API surface.

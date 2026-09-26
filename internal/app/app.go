@@ -17,6 +17,7 @@ import (
 	"github.com/FelixSeptem/stele/internal/governance"
 	"github.com/FelixSeptem/stele/internal/insights"
 	"github.com/FelixSeptem/stele/internal/jobs"
+	stelemcp "github.com/FelixSeptem/stele/internal/mcp"
 	"github.com/FelixSeptem/stele/internal/memory"
 	"github.com/FelixSeptem/stele/internal/policy"
 	"github.com/FelixSeptem/stele/internal/provider"
@@ -428,6 +429,7 @@ func principalAuthorizerForRuntime(cfg config.Config, store principalRuntimeStor
 
 func httpDependenciesFromConfig(cfg config.Config) HTTPDependencies {
 	return HTTPDependencies{
+		MCP: cfg.MCP,
 		Contract: RuntimeContract{
 			ServiceVersion: BuildVersion,
 			BuildID:        BuildID,
@@ -570,12 +572,17 @@ func buildAPIRuntime(ctx context.Context, cfg config.Config, deps apiRuntimeDepe
 		Now:                  time.Now,
 		NewID:                newQualityID,
 	})
-	if cfg.Provider.Enabled && httpDeps.PrincipalAuthorizer != nil {
-		httpDeps.ProviderCapabilities = provider.Discover(provider.CapabilityInput{ProviderVersion: "provider-v1", SchemaVersion: cfg.Provider.SchemaVersions[0], ServiceVersion: BuildVersion, BuildID: BuildID})
-		httpDeps.ProviderCapabilities.Limits = cfg.Provider.Limits
+	intentService := memory.MemoryIntentService{Processor: repo, Now: time.Now}
+	httpDeps.MemoryIntent = intentService
+	if (cfg.Provider.Enabled || cfg.MCP.Enabled) && httpDeps.PrincipalAuthorizer != nil {
+		if cfg.Provider.Enabled {
+			httpDeps.ProviderCapabilities = provider.Discover(provider.CapabilityInput{ProviderVersion: "provider-v1", SchemaVersion: cfg.Provider.SchemaVersions[0], ServiceVersion: BuildVersion, BuildID: BuildID})
+			httpDeps.ProviderCapabilities.Limits = cfg.Provider.Limits
+		}
 		httpDeps.ProviderBindings = repo
-		httpDeps.ProviderInitializer = provider.NewRuntimeInitializer(provider.RuntimeInitializerOptions{Authorizer: httpDeps.PrincipalAuthorizer, Bindings: repo, BindingTTL: cfg.Provider.BindingLifetime, Now: time.Now})
-		intentService := memory.MemoryIntentService{Processor: repo, Now: time.Now}
+		if cfg.Provider.Enabled {
+			httpDeps.ProviderInitializer = provider.NewRuntimeInitializer(provider.RuntimeInitializerOptions{Authorizer: httpDeps.PrincipalAuthorizer, Bindings: repo, BindingTTL: cfg.Provider.BindingLifetime, Now: time.Now})
+		}
 		httpDeps.ProviderAdapter = provider.NewAdapter(provider.AdapterDependencies{
 			Ingestor: ingestor, IdempotentIngestor: ingestor, Intent: intentService,
 			Searcher: retrievalService, Assembler: retrievalService, Lifecycle: lifecycleService,
@@ -608,6 +615,13 @@ func buildAPIRuntime(ctx context.Context, cfg config.Config, deps apiRuntimeDepe
 	httpDeps.EmbeddingAdminRead = memory.NewEmbeddingAdminQueryService(repo, embeddingRuntime.Status)
 	httpDeps.MemorySearcher = retrievalService
 	httpDeps.ContextAssembler = retrievalService
+	if cfg.MCP.Enabled {
+		httpDeps.MCPAdapter = stelemcp.NewAdapter(stelemcp.AdapterOptions{
+			Enabled: cfg.MCP.Enabled, Authorizer: httpDeps.PrincipalAuthorizer, Bindings: repo,
+			Limits: stelemcp.Limits{MaxQueryBytes: cfg.MCP.MaxQueryBytes, MaxPayloadBytes: cfg.MCP.MaxPayloadBytes, MaxResults: cfg.MCP.MaxResults, MaxIDs: cfg.MCP.MaxIDs},
+			Now:    time.Now, Searcher: httpDeps.MemorySearcher, Assembler: httpDeps.ContextAssembler, MemoryQuery: httpDeps.MemoryQuery, Intent: httpDeps.MemoryIntent, Lifecycle: httpDeps.MemoryLifecycleAction, LifecycleAdapter: httpDeps.ProviderAdapter, PreviewStore: repo, ForgetApplyStore: repo,
+		})
+	}
 	httpDeps.GovernanceStatusRead = observedGovernanceStatusReader{
 		reader: governanceStatusReaderFunc(func(ctx context.Context) (GovernanceStatus, error) {
 			return repo.ReadGovernanceStatus(ctx, time.Now().UTC())

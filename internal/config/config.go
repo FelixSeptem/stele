@@ -48,6 +48,18 @@ type Config struct {
 	Evaluation                          EvaluationConfig
 	Provider                            ProviderConfig
 	ContextCalibration                  ContextCalibrationConfig
+	MCP                                 MCPConfig
+}
+
+// MCPConfig contains the optional API-mode MCP adapter guard and protocol
+// safety limits. MCP is deliberately disabled unless explicitly enabled.
+type MCPConfig struct {
+	Enabled         bool
+	Path            string
+	MaxQueryBytes   int
+	MaxPayloadBytes int
+	MaxResults      int
+	MaxIDs          int
 }
 
 type ContextCalibrationConfig struct {
@@ -222,6 +234,10 @@ func LoadFromEnv() (Config, error) {
 		return Config{}, err
 	}
 	providerConfig, err := loadProviderConfig()
+	if err != nil {
+		return Config{}, err
+	}
+	mcpConfig, err := loadMCPConfig(mode)
 	if err != nil {
 		return Config{}, err
 	}
@@ -521,6 +537,7 @@ func LoadFromEnv() (Config, error) {
 		QueryAnalysis:                       queryAnalysis,
 		GraphTraversal:                      graphTraversal,
 		ContextCalibration:                  contextCalibration,
+		MCP:                                 mcpConfig,
 		Evaluation:                          evaluationConfig,
 		Provider:                            providerConfig,
 		Auth: AuthConfig{
@@ -635,6 +652,40 @@ func loadProviderConfig() (ProviderConfig, error) {
 		return ProviderConfig{}, fmt.Errorf("provider binding lifetime must be between 1m and 24h")
 	}
 	return ProviderConfig{Enabled: loadBoolEnv("STELE_PROVIDER_ENABLED"), SchemaVersions: versions, Limits: limits, BindingLifetime: lifetime}, nil
+}
+
+func loadMCPConfig(mode Mode) (MCPConfig, error) {
+	path := "/mcp"
+	if raw, ok := os.LookupEnv("STELE_MCP_PATH"); ok {
+		path = strings.TrimSpace(raw)
+	}
+	maxQueryBytes, err := loadIntWithDefault("STELE_MCP_MAX_QUERY_BYTES", 4096)
+	if err != nil {
+		return MCPConfig{}, err
+	}
+	maxPayloadBytes, err := loadIntWithDefault("STELE_MCP_MAX_PAYLOAD_BYTES", 64<<10)
+	if err != nil {
+		return MCPConfig{}, err
+	}
+	maxResults, err := loadIntWithDefault("STELE_MCP_MAX_RESULTS", 50)
+	if err != nil {
+		return MCPConfig{}, err
+	}
+	maxIDs, err := loadIntWithDefault("STELE_MCP_MAX_IDS", 100)
+	if err != nil {
+		return MCPConfig{}, err
+	}
+	enabled := loadBoolEnv("STELE_MCP_ENABLED")
+	if enabled && mode != ModeAPI {
+		return MCPConfig{}, fmt.Errorf("STELE_MCP_ENABLED requires STELE_MODE=api")
+	}
+	if path == "" || len(path) > 128 || !strings.HasPrefix(path, "/") || strings.ContainsAny(path, "?#\r\n") {
+		return MCPConfig{}, fmt.Errorf("STELE_MCP_PATH must be a non-empty absolute path without query or fragment")
+	}
+	if maxQueryBytes < 1 || maxQueryBytes > 16<<10 || maxPayloadBytes < 1 || maxPayloadBytes > 1<<20 || maxResults < 1 || maxResults > 100 || maxIDs < 1 || maxIDs > 1000 {
+		return MCPConfig{}, fmt.Errorf("MCP safety limits are invalid")
+	}
+	return MCPConfig{Enabled: enabled, Path: path, MaxQueryBytes: maxQueryBytes, MaxPayloadBytes: maxPayloadBytes, MaxResults: maxResults, MaxIDs: maxIDs}, nil
 }
 
 func loadQueryAnalysisConfig() (QueryAnalysisConfig, error) {

@@ -211,6 +211,14 @@ func TestHTTPDependenciesFromConfigPassesRuntimeLimits(t *testing.T) {
 	}
 }
 
+func TestHTTPDependenciesFromConfigCarriesMCPConfiguration(t *testing.T) {
+	cfg := config.Config{MCP: config.MCPConfig{Enabled: true, Path: "/mcp", MaxPayloadBytes: 1024}}
+	deps := httpDependenciesFromConfig(cfg)
+	if !deps.MCP.Enabled || deps.MCP.Path != "/mcp" || deps.MCP.MaxPayloadBytes != 1024 {
+		t.Fatalf("MCP dependencies = %+v, want configured MCP values", deps.MCP)
+	}
+}
+
 func TestNewHTTPHandlerUsesConfiguredAPIKeys(t *testing.T) {
 	handler := NewHTTPHandler(HTTPDependencies{
 		APIKeys: map[string]struct{}{"test-key": {}},
@@ -401,6 +409,37 @@ func TestBuildAPIRuntimeUsesConfiguredDependencies(t *testing.T) {
 
 	if !bootstrapCalled {
 		t.Fatal("bootstrap function was not called")
+	}
+}
+
+func TestBuildAPIRuntimeConstructsLifecycleAdapterForMCPOnly(t *testing.T) {
+	mock, err := pgxmock.NewPool()
+	if err != nil {
+		t.Fatalf("pgxmock.NewPool() error = %v", err)
+	}
+	defer mock.Close()
+	cfg := config.Config{
+		Mode: config.ModeAPI, HTTPAddr: ":9090", PostgresDSN: "postgres://runtime",
+		MCP:  config.MCPConfig{Enabled: true, Path: "/mcp", MaxQueryBytes: 1024, MaxPayloadBytes: 4096, MaxResults: 10, MaxIDs: 10},
+		Auth: config.AuthConfig{BootstrapAdminKey: "admin-key", DefaultTenant: "tenant", DefaultProject: "project", DefaultNamespace: "namespace"},
+	}
+	var got HTTPDependencies
+	_, err = buildAPIRuntime(context.Background(), cfg, apiRuntimeDependencies{
+		openPool:          func(context.Context, string) (postgresRuntimeStore, error) { return mock, nil },
+		bootstrapDatabase: func(context.Context, postgresRuntimeStore) error { return nil },
+		newServer: func(_ string, deps HTTPDependencies) httpServer {
+			got = deps
+			return &stubAPIServer{err: http.ErrServerClosed}
+		},
+	})
+	if err != nil {
+		t.Fatalf("buildAPIRuntime() error = %v", err)
+	}
+	if got.ProviderEnabled || got.ProviderInitializer != nil {
+		t.Fatalf("provider route state enabled=%v initializer=%T; want disabled", got.ProviderEnabled, got.ProviderInitializer)
+	}
+	if got.MCPAdapter == nil || got.ProviderAdapter == nil {
+		t.Fatalf("MCP adapter=%T provider lifecycle adapter=%T; want both adapters", got.MCPAdapter, got.ProviderAdapter)
 	}
 }
 

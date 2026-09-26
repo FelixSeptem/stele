@@ -1,6 +1,6 @@
 # Archive Index
 
-Updated: 2026-09-23 22:09:54
+Updated: 2026-09-26 20:14:21
 
 - 001 -> bootstrap-foundation-and-event-ingestion
 - 002 -> governance-pipeline-and-memory-consolidation
@@ -45,3 +45,5 @@ Updated: 2026-09-23 22:09:54
 - 041 -> bi-temporal-fact-validity
 - 042 -> bounded-graph-distance-retrieval
 - 043 -> context-efficiency-feedback-calibration
+- 044 -> openapi-backed-mcp-scope-and-profile-context
+- 045 -> agent-runtime-memory-provider-contract

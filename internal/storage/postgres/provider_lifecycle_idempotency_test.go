@@ -62,3 +62,19 @@ func TestRepositoryCompleteLifecycleUpdatesClaim(t *testing.T) {
 		t.Fatal(err)
 	}
 }
+
+func TestRepositoryReleaseLifecycleDeletesMatchingPendingClaim(t *testing.T) {
+	mock, err := pgxmock.NewPool()
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer mock.Close()
+	c := provider.LifecycleClaim{Scope: memory.Scope{Tenant: "t", Project: "p", Namespace: "n"}, PrincipalID: "principal", IdempotencyKey: "key", RequestFingerprint: "fp"}
+	mock.ExpectExec("DELETE FROM provider_lifecycle_operations").WithArgs("t", "p", "n", "principal", "key", "fp").WillReturnResult(pgxmock.NewResult("DELETE", 1))
+	if err := NewRepository(mock).ReleaseLifecycle(context.Background(), c); err != nil {
+		t.Fatal(err)
+	}
+	if err := mock.ExpectationsWereMet(); err != nil {
+		t.Fatal(err)
+	}
+}

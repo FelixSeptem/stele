@@ -15,6 +15,7 @@ import (
 
 	"github.com/FelixSeptem/stele/internal/assurance"
 	"github.com/FelixSeptem/stele/internal/auth"
+	"github.com/FelixSeptem/stele/internal/config"
 	"github.com/FelixSeptem/stele/internal/governance"
 	"github.com/FelixSeptem/stele/internal/jobs"
 	"github.com/FelixSeptem/stele/internal/memory"
@@ -33,6 +34,8 @@ type ReadinessChecker interface {
 
 type HTTPDependencies struct {
 	HTTP                      HTTPRuntimeLimits
+	MCP                       config.MCPConfig
+	MCPAdapter                http.Handler
 	Contract                  RuntimeContract
 	Readiness                 ReadinessChecker
 	APIKeys                   auth.StaticAPIKeys
@@ -132,7 +135,7 @@ type PrincipalAdministrationService interface {
 	RotateCredential(ctx context.Context, scope memory.Scope, principalID, actor, reason string) (auth.IssuedCredential, error)
 	DisablePrincipal(ctx context.Context, scope memory.Scope, principalID, actor, reason string) error
 	ExpirePrincipal(ctx context.Context, scope memory.Scope, principalID string, expiresAt time.Time, actor, reason string) error
-	CreateScopeGrant(ctx context.Context, scope memory.Scope, principalID string, grantScope memory.Scope, actor, reason string) error
+	CreateScopeGrant(ctx context.Context, scope memory.Scope, principalID string, grantScope memory.Scope, accessMode auth.ScopeGrantAccessMode, actor, reason string) error
 	RevokeScopeGrant(ctx context.Context, scope memory.Scope, grantID, actor, reason string) error
 	ListAccessAudit(ctx context.Context, scope memory.Scope, principalID string, limit int) ([]auth.AuditRecord, error)
 }
@@ -524,21 +527,21 @@ type publicWorkflowStepRecord struct {
 }
 
 type rankingRolloutPolicyCreateRequest struct {
-	ID                        string                               `json:"id"`
-	Status                    memory.RankingRolloutPolicyStatus    `json:"status"`
-	Mode                      memory.RankingRolloutMode            `json:"mode"`
-	Surfaces                  []memory.RankingRolloutSurface       `json:"surfaces"`
-	SignalSources             []memory.RankingRolloutSignalSource  `json:"signal_sources"`
-	ThresholdStatus           memory.RankingRolloutThresholdStatus `json:"threshold_status"`
-	EvidenceMinimum           int                                  `json:"evidence_minimum"`
-	Actor                     string                               `json:"actor"`
-	Reason                    string                               `json:"reason"`
-	FusionStrategy            string                               `json:"fusion_strategy,omitempty"`
-	FusionVersion             string                               `json:"fusion_version,omitempty"`
-	FusionRankConstant        int                                  `json:"fusion_rank_constant,omitempty"`
-	FusionChannelWeights      map[string]float64                   `json:"fusion_channel_weights,omitempty"`
-	FusionPerChannelCandidate int                                  `json:"fusion_per_channel_candidate,omitempty"`
-	FusionTotalCandidates     int                                  `json:"fusion_total_candidates,omitempty"`
+	ID                        string                                 `json:"id"`
+	Status                    memory.RankingRolloutPolicyStatus      `json:"status"`
+	Mode                      memory.RankingRolloutMode              `json:"mode"`
+	Surfaces                  []memory.RankingRolloutSurface         `json:"surfaces"`
+	SignalSources             []memory.RankingRolloutSignalSource    `json:"signal_sources"`
+	ThresholdStatus           memory.RankingRolloutThresholdStatus   `json:"threshold_status"`
+	EvidenceMinimum           int                                    `json:"evidence_minimum"`
+	Actor                     string                                 `json:"actor"`
+	Reason                    string                                 `json:"reason"`
+	FusionStrategy            string                                 `json:"fusion_strategy,omitempty"`
+	FusionVersion             string                                 `json:"fusion_version,omitempty"`
+	FusionRankConstant        int                                    `json:"fusion_rank_constant,omitempty"`
+	FusionChannelWeights      map[string]float64                     `json:"fusion_channel_weights,omitempty"`
+	FusionPerChannelCandidate int                                    `json:"fusion_per_channel_candidate,omitempty"`
+	FusionTotalCandidates     int                                    `json:"fusion_total_candidates,omitempty"`
 	RetrievalPlannerSelector  memory.RetrievalPlannerRolloutSelector `json:"retrieval_planner_selector,omitempty"`
 	RetrievalPlanner          *memory.RetrievalPlannerRolloutPolicy  `json:"retrieval_planner,omitempty"`
 }
@@ -696,11 +699,12 @@ type principalCreateRequest struct {
 }
 
 type principalGrantRequest struct {
-	Tenant    string `json:"tenant"`
-	Project   string `json:"project"`
-	Namespace string `json:"namespace"`
-	Actor     string `json:"actor"`
-	Reason    string `json:"reason"`
+	Tenant     string                    `json:"tenant"`
+	Project    string                    `json:"project"`
+	Namespace  string                    `json:"namespace"`
+	AccessMode auth.ScopeGrantAccessMode `json:"access_mode"`
+	Actor      string                    `json:"actor"`
+	Reason     string                    `json:"reason"`
 }
 
 type principalLifecycleRequest struct {
@@ -791,11 +795,14 @@ type contextAssembleRequest struct {
 
 func NewHTTPHandler(deps HTTPDependencies) http.Handler {
 	mux := http.NewServeMux()
+	if deps.MCP.Enabled && deps.MCPAdapter != nil {
+		mux.Handle(deps.MCP.Path, deps.MCPAdapter)
+	}
 	if deps.ProviderEnabled {
 		registerProviderRoutes(mux, deps)
 	}
 	mux.HandleFunc("GET /openapi.yaml", func(w http.ResponseWriter, r *http.Request) {
-		body := []byte(openapi.SpecYAML())
+		body := []byte(openapi.SpecYAMLWithMCPPath(deps.MCP.Path))
 		etag := fmt.Sprintf(`"%x"`, sha256.Sum256(body))
 		w.Header().Set("ETag", etag)
 		if r.Header.Get("If-None-Match") == etag {
@@ -807,7 +814,7 @@ func NewHTTPHandler(deps HTTPDependencies) http.Handler {
 		_, _ = w.Write(body)
 	})
 	mux.HandleFunc("GET /version", func(w http.ResponseWriter, r *http.Request) {
-		body := []byte(openapi.SpecYAML())
+		body := []byte(openapi.SpecYAMLWithMCPPath(deps.MCP.Path))
 		contract := deps.Contract
 		contract.Normalize()
 		writeJSON(w, http.StatusOK, map[string]any{
@@ -1903,7 +1910,7 @@ func handleAdminGrantCreate(w http.ResponseWriter, r *http.Request, service Prin
 		return
 	}
 	grantScope := memory.Scope{Tenant: request.Tenant, Project: request.Project, Namespace: request.Namespace}
-	if err := service.CreateScopeGrant(r.Context(), scope, r.PathValue("principal_id"), grantScope, request.Actor, request.Reason); err != nil {
+	if err := service.CreateScopeGrant(r.Context(), scope, r.PathValue("principal_id"), grantScope, request.AccessMode, request.Actor, request.Reason); err != nil {
 		http.Error(w, "failed to create scope grant", http.StatusBadRequest)
 		return
 	}

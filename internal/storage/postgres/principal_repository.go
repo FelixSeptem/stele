@@ -64,6 +64,26 @@ SELECT EXISTS(
 	return authorized, nil
 }
 
+func (r *Repository) ScopeGrantAccess(ctx context.Context, principalID string, scope memory.Scope) (auth.ScopeGrantAccessMode, error) {
+	if err := scope.Validate(); err != nil {
+		return "", err
+	}
+	var mode string
+	const query = `
+SELECT access_mode FROM access_scope_grants
+WHERE principal_id = $1 AND tenant = $2 AND project = $3 AND namespace = $4 AND status = 'active'
+LIMIT 1
+`
+	if err := r.db.QueryRow(ctx, query, principalID, scope.Tenant, scope.Project, scope.Namespace).Scan(&mode); err != nil {
+		return "", fmt.Errorf("read principal scope grant access: %w", err)
+	}
+	access := auth.ScopeGrantAccessMode(mode)
+	if !access.Valid() {
+		return "", fmt.Errorf("scope grant access mode is invalid")
+	}
+	return access, nil
+}
+
 func (r *Repository) HasActiveAdminPrincipal(ctx context.Context) (bool, error) {
 	const query = `
 SELECT EXISTS(
@@ -208,12 +228,15 @@ func (r *Repository) CreatePrincipal(ctx context.Context, principal auth.Princip
 	if _, err := tx.Exec(ctx, credentialQuery, credential.ID, credential.PrincipalID, string(credential.Status), credential.CredentialID, credential.Salt, credential.Digest, nullableTime(credential.ExpiresAt), credential.CreatedAt, nullableTime(credential.DisabledAt)); err != nil {
 		return fmt.Errorf("insert credential: %w", err)
 	}
-	const grantQuery = `INSERT INTO access_scope_grants (id, principal_id, tenant, project, namespace, status, created_at) VALUES ($1, $2, $3, $4, $5, $6, $7)`
+	const grantQuery = `INSERT INTO access_scope_grants (id, principal_id, tenant, project, namespace, status, access_mode, created_at) VALUES ($1, $2, $3, $4, $5, $6, $7, $8)`
 	for _, grant := range grants {
+		if grant.AccessMode == "" {
+			grant.AccessMode = auth.ScopeGrantAccessReadWrite
+		}
 		if err := grant.Validate(); err != nil {
 			return err
 		}
-		if _, err := tx.Exec(ctx, grantQuery, grant.ID, grant.PrincipalID, grant.Scope.Tenant, grant.Scope.Project, grant.Scope.Namespace, string(grant.Status), grant.CreatedAt); err != nil {
+		if _, err := tx.Exec(ctx, grantQuery, grant.ID, grant.PrincipalID, grant.Scope.Tenant, grant.Scope.Project, grant.Scope.Namespace, string(grant.Status), string(grant.AccessMode), grant.CreatedAt); err != nil {
 			return fmt.Errorf("insert scope grant: %w", err)
 		}
 	}
@@ -393,7 +416,7 @@ func (r *Repository) ListScopeGrants(ctx context.Context, scope memory.Scope, pr
 		return nil, err
 	}
 	const query = `
-SELECT id, principal_id, tenant, project, namespace, status, created_at, revoked_at
+SELECT id, principal_id, tenant, project, namespace, status, access_mode, created_at, revoked_at
 FROM access_scope_grants
 WHERE principal_id = $1 AND tenant = $2 AND project = $3 AND namespace = $4
 ORDER BY created_at DESC, id DESC
@@ -435,8 +458,11 @@ func (r *Repository) CreateScopeGrant(ctx context.Context, scope memory.Scope, g
 	if err := ensureActivePrincipalGrant(ctx, tx, grant.PrincipalID, scope); err != nil {
 		return err
 	}
-	const query = `INSERT INTO access_scope_grants (id, principal_id, tenant, project, namespace, status, created_at) VALUES ($1, $2, $3, $4, $5, $6, $7)`
-	if _, err := tx.Exec(ctx, query, grant.ID, grant.PrincipalID, grant.Scope.Tenant, grant.Scope.Project, grant.Scope.Namespace, string(grant.Status), grant.CreatedAt); err != nil {
+	const query = `INSERT INTO access_scope_grants (id, principal_id, tenant, project, namespace, status, access_mode, created_at) VALUES ($1, $2, $3, $4, $5, $6, $7, $8)`
+	if grant.AccessMode == "" {
+		grant.AccessMode = auth.ScopeGrantAccessReadWrite
+	}
+	if _, err := tx.Exec(ctx, query, grant.ID, grant.PrincipalID, grant.Scope.Tenant, grant.Scope.Project, grant.Scope.Namespace, string(grant.Status), string(grant.AccessMode), grant.CreatedAt); err != nil {
 		return fmt.Errorf("insert scope grant: %w", err)
 	}
 	if err := writeAccessAudit(ctx, tx, audit); err != nil {
@@ -561,7 +587,7 @@ func scanAccessPrincipal(row interface{ Scan(dest ...any) error }) (auth.Princip
 func scanAccessScopeGrant(row interface{ Scan(dest ...any) error }) (auth.ScopeGrant, error) {
 	var grant auth.ScopeGrant
 	var revokedAt sql.NullTime
-	if err := row.Scan(&grant.ID, &grant.PrincipalID, &grant.Scope.Tenant, &grant.Scope.Project, &grant.Scope.Namespace, &grant.Status, &grant.CreatedAt, &revokedAt); err != nil {
+	if err := row.Scan(&grant.ID, &grant.PrincipalID, &grant.Scope.Tenant, &grant.Scope.Project, &grant.Scope.Namespace, &grant.Status, &grant.AccessMode, &grant.CreatedAt, &revokedAt); err != nil {
 		return auth.ScopeGrant{}, fmt.Errorf("scan scope grant: %w", err)
 	}
 	if revokedAt.Valid {
