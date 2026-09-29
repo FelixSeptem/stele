@@ -1,6 +1,6 @@
 # Archive Index
 
-Updated: 2026-09-29 20:14:13
+Updated: 2026-09-30 07:34:21
 
 - 001 -> bootstrap-foundation-and-event-ingestion
 - 002 -> governance-pipeline-and-memory-consolidation
@@ -48,3 +48,4 @@ Updated: 2026-09-29 20:14:13
 - 044 -> openapi-backed-mcp-scope-and-profile-context
 - 045 -> agent-runtime-memory-provider-contract
 - 046 -> scoped-memory-path-conventions
+- 047 -> scoped-agent-self-model-conventions

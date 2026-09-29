@@ -140,6 +140,64 @@ memory browse accept an exact `path` selector. Descendants require an explicit
 are mutually exclusive and are bounded by the shared path grammar documented
 in the OpenAPI schema.
 
+### Agent self-model memory convention
+
+Integrations that need durable, caller-managed information about an agent may
+optionally use `agents/{agent-id}/self/{category}` as `memory_path` within the
+already authorized exact tenant/project/namespace scope. The initial categories
+are `capabilities`, `preferences`, `limitations`, and `lessons`. The agent-id is
+path data only: it does not select a scope, identify an authenticated
+principal, or grant access. Shared memory-path validation and the request's
+exact scope headers continue to apply.
+
+Use the existing `profile` memory class for descriptive capabilities,
+preferences, and limitations. Use `procedural` for reusable operational lessons
+or procedures. Category placement does not bypass governed intents, admission,
+version history, provenance, forgetting, or lifecycle visibility. Remembered
+capabilities and limits can be stale; server-published capabilities, grants,
+configuration, and runtime-enforced limits remain authoritative. This convention
+does not add a new API or MCP tool and does not automatically inject these
+memories into ordinary context.
+
+For example, write a preference through the existing governed event flow using
+an already granted exact scope:
+
+```bash
+curl -X POST http://localhost:8080/v1/events \
+  -H 'X-API-Key: <authorized-api-key>' \
+  -H 'X-Stele-Tenant: tenant-a' -H 'X-Stele-Project: project-a' \
+  -H 'X-Stele-Namespace: namespace-a' \
+  -H 'Idempotency-Key: <stable-request-key>' \
+  -H 'Content-Type: application/json' \
+  -d '{"event_type":"agent.preference","content":"Prefers concise answers","memory_path":"agents/agent-a/self/preferences"}'
+```
+
+Request only that exact category when targeted recall is needed:
+
+```bash
+curl -X POST http://localhost:8080/v1/memories/search \
+  -H 'X-API-Key: <authorized-api-key>' \
+  -H 'X-Stele-Tenant: tenant-a' -H 'X-Stele-Project: project-a' \
+  -H 'X-Stele-Namespace: namespace-a' -H 'Content-Type: application/json' \
+  -d '{"query":"response style","top_k":10,"path":"agents/agent-a/self/preferences"}'
+```
+
+For an intentional bounded subtree request, use the existing segment-boundary
+`path_prefix` selector instead of `path`; all results remain subject to the
+same exact scope, lifecycle visibility, and caller-supplied result/context
+budgets. For example, context assembly can request the subtree explicitly:
+
+```bash
+curl -X POST http://localhost:8080/v1/context/assemble \
+  -H 'X-API-Key: <authorized-api-key>' \
+  -H 'X-Stele-Tenant: tenant-a' -H 'X-Stele-Project: project-a' \
+  -H 'X-Stele-Namespace: namespace-a' -H 'Content-Type: application/json' \
+  -d '{"query":"agent operating preferences and lessons","budget":2048,"path_prefix":"agents/agent-a/self"}'
+```
+
+Omitting either selector does not turn self-model memories into an always-on
+context section.
+
 The optional agent-runtime memory-provider surface is disabled by default. Its
 scope handshake, bounded metadata/citation contract, configuration, conformance,
 and rollback procedure are documented in

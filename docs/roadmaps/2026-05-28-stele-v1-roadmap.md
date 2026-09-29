@@ -104,7 +104,7 @@ change an archived baseline.
 | P5 | Benchmark expansion and retrieval release evidence | Archived changes 025, 026, 035, and 039 | Implemented baseline; owned real-stack evidence remains a prerequisite for activation. |
 | P6 | Durable multi-scope maintenance and observability | Archived change 037 | Implemented baseline; retain regression, freshness, and SLO evidence. |
 | P7 | Agent runtime memory-provider contract | Archived change 038 | Implemented baseline; integration remains optional to the retrieval path. |
-| P8 | Optional adapters and governed experience insights | Governed insight baseline in changes 013/014; OpenAPI-backed MCP scope/profile adapter archived as change 044; scoped memory paths are the active next proposal | Keep MCP as an optional OpenAPI adapter and reuse projections/intents rather than creating a second memory system. |
+| P8 | Optional adapters and governed experience insights | Governed insight baseline in changes 013/014; OpenAPI-backed MCP scope/profile adapter archived as change 044; scoped memory paths archived as change 046; agent self-model conventions are the active proposal | Keep MCP as an optional OpenAPI adapter and reuse projections/intents rather than creating a second memory system. |
 
 ### Critical path to provider readiness
 
@@ -1360,7 +1360,8 @@ Rollback:
 Goal: add ecosystem ergonomics only after the core provider contract is stable.
 
 The OpenAPI-backed MCP scope/profile adapter is complete and archived as change
-044. The active proposal is `scoped-memory-path-conventions` (P8.2).
+044. Scoped memory path conventions are complete and archived as change 046.
+The active proposal is `scoped-agent-self-model-conventions` (P8.2b).
 
 Candidate tasks for that bounded proposal:
 
@@ -1622,12 +1623,12 @@ scoped P8.1 MCP adapter):
    identity/scope, search, and assembled context, and routes mutable operations
    through governed intents with preview-to-fixed-ID forgetting.
 
-2. Scoped memory path conventions (active proposal):
+2. Scoped memory path conventions (archived change 046):
    Add an optional normalized `memory_path` convention inside one
    `tenant/project/namespace`, with exact matching by default and explicit,
    bounded prefix retrieval that cannot cross scope boundaries.
 
-3. Agent self-model conventions (later P8.2b):
+3. Agent self-model conventions (active proposal, P8.2b):
    Standardize scoped memory conventions for capabilities, limits, preferences, and lessons learned while keeping them ordinary governed memories.
 
 4. Self-hosting first-ten-minutes smoke path:
@@ -1661,8 +1662,8 @@ Recommended execution order for the current product baseline and next frontier:
 8. P7: agent runtime memory-provider contract baseline (archived)
 9. RQ1–RQ4: retrieval-quality frontier (archived changes 040–043)
 10. P8.1: OpenAPI-backed MCP scope and profile-context adapter (archived change 044)
-11. P8.2: scoped memory path conventions (active proposal)
-12. P8.2b: agent self-model conventions and later governed insight extensions
+11. P8.2: scoped memory path conventions (archived change 046)
+12. P8.2b: agent self-model conventions (active proposal) and later governed insight extensions
 13. P8.3: reasoning-provider boundary and offline/shadow progressive-context
     experiments
 
@@ -1748,11 +1749,10 @@ to the baseline, and active calibration still requires a fresh compatible
 exact-scope summary plus separately governed activation.
 
 Change 044, `openapi-backed-mcp-scope-and-profile-context`, is complete and
-archived. The immediate next proposal is P8.2
-`scoped-memory-path-conventions`: an optional normalized path within one exact
-tenant/project/namespace, exact matching by default, and explicit bounded
-`path_prefix` retrieval that cannot widen authorization. It should propagate
-consistently through ingestion, search, canonical reads, context assembly, and
-the OpenAPI-backed MCP adapter while preserving lifecycle, temporal, budget,
-pagination, citation, and idempotency contracts. Agent self-model conventions
-and reasoning-provider boundaries remain separate follow-up proposals.
+archived. Change 046, `scoped-memory-path-conventions`, is complete and
+archived. The immediate next proposal is P8.2b
+`scoped-agent-self-model-conventions`: an optional `agents/{agent-id}/self/{category}`
+convention inside one exact tenant/project/namespace. It reuses ordinary
+governed `profile` and `procedural` memories, explicit exact/prefix retrieval,
+and existing lifecycle and authority boundaries. The later reasoning-provider
+boundary remains a separate follow-up proposal.
