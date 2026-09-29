@@ -7,11 +7,13 @@ import (
 )
 
 type ListMemoriesInput struct {
-	Scope    Scope
-	Classes  []MemoryClass
-	TimeFrom time.Time
-	TimeTo   time.Time
-	Limit    int
+	Scope      Scope
+	Path       string
+	PathPrefix string
+	Classes    []MemoryClass
+	TimeFrom   time.Time
+	TimeTo     time.Time
+	Limit      int
 }
 
 func (i ListMemoriesInput) Validate() error {
@@ -26,6 +28,9 @@ func (i ListMemoriesInput) Validate() error {
 	if i.Limit < 0 {
 		return fmt.Errorf("limit must be greater than or equal to zero")
 	}
+	if _, err := NewMemoryPathSelector(i.Path, i.PathPrefix); err != nil {
+		return err
+	}
 
 	return nil
 }
@@ -33,6 +38,7 @@ func (i ListMemoriesInput) Validate() error {
 type MemoryResource struct {
 	ID         string      `json:"id"`
 	Scope      Scope       `json:"scope"`
+	MemoryPath string      `json:"memory_path"`
 	Class      MemoryClass `json:"class"`
 	State      MemoryState `json:"state"`
 	Content    string      `json:"content"`
@@ -79,6 +85,10 @@ func (s *QueryService) ListMemories(ctx context.Context, input ListMemoriesInput
 
 	items := make([]MemoryResource, 0, len(memories))
 	for _, canonical := range memories {
+		selector, _ := NewMemoryPathSelector(input.Path, input.PathPrefix)
+		if !selector.Matches(canonical.MemoryPath) {
+			continue
+		}
 		if !matchesMemoryClasses(canonical.Class, input.Classes) {
 			continue
 		}
@@ -169,9 +179,11 @@ func NewMemoryResource(c CanonicalMemory) MemoryResource {
 		content = ""
 	}
 
+	path, _ := NormalizeMemoryPath(c.MemoryPath)
 	return MemoryResource{
 		ID:         c.ID,
 		Scope:      c.Scope,
+		MemoryPath: path,
 		Class:      c.Class,
 		State:      c.State,
 		Content:    content,

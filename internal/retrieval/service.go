@@ -16,6 +16,8 @@ import (
 type SearchInput struct {
 	Scope                                 memory.Scope
 	Query                                 string
+	Path                                  string
+	PathPrefix                            string
 	QueryEmbedding                        []float32
 	LexicalMatchMode                      LexicalMatchMode
 	Classes                               []memory.MemoryClass
@@ -82,6 +84,9 @@ func (i SearchInput) Validate() error {
 	if strings.TrimSpace(i.Query) == "" {
 		return fmt.Errorf("query is required")
 	}
+	if _, err := memory.NewMemoryPathSelector(i.Path, i.PathPrefix); err != nil {
+		return err
+	}
 	if i.LexicalMatchMode != "" && i.LexicalMatchMode != LexicalMatchAllTerms && i.LexicalMatchMode != LexicalMatchAnyTerms {
 		return fmt.Errorf("unsupported lexical match mode %q", i.LexicalMatchMode)
 	}
@@ -102,6 +107,8 @@ func (i SearchInput) Validate() error {
 type AssembleContextInput struct {
 	Scope                                 memory.Scope
 	Query                                 string
+	Path                                  string
+	PathPrefix                            string
 	SessionID                             string
 	UserID                                string
 	Budget                                int
@@ -121,6 +128,9 @@ func (i AssembleContextInput) Validate() error {
 	}
 	if strings.TrimSpace(i.Query) == "" {
 		return fmt.Errorf("query is required")
+	}
+	if _, err := memory.NewMemoryPathSelector(i.Path, i.PathPrefix); err != nil {
+		return err
 	}
 	if i.Budget <= 0 {
 		return fmt.Errorf("budget must be greater than zero")
@@ -191,6 +201,19 @@ type SearchResult struct {
 	// valid-time predicate removed. It stays unexported so ordinary responses
 	// carry no temporal detail; authorized diagnostics read it explicitly.
 	temporalOmissions TemporalOmissionReport
+}
+
+func filterMemoryPathHits(hits []SearchHit, selector memory.MemoryPathSelector) []SearchHit {
+	if selector.Kind == memory.MemoryPathSelectorNone {
+		return hits
+	}
+	filtered := make([]SearchHit, 0, len(hits))
+	for _, hit := range hits {
+		if selector.Matches(hit.Memory.MemoryPath) {
+			filtered = append(filtered, hit)
+		}
+	}
+	return filtered
 }
 
 // TemporalOmissionReport exposes the bounded omission categories recorded while
@@ -590,6 +613,10 @@ func (s *Service) Search(ctx context.Context, input SearchInput) (result SearchR
 	}()
 
 	if err := input.Validate(); err != nil {
+		return SearchResult{}, err
+	}
+	pathSelector, err := memory.NewMemoryPathSelector(input.Path, input.PathPrefix)
+	if err != nil {
 		return SearchResult{}, err
 	}
 	// Capture one evaluation instant per request so every valid-time predicate in
@@ -1196,6 +1223,7 @@ func (s *Service) Search(ctx context.Context, input SearchInput) (result SearchR
 		scored = append(scored, searchHit)
 	}
 
+	scored = filterMemoryPathHits(scored, pathSelector)
 	diagnostics, err := s.applyUsefulnessFeedbackSignals(ctx, input, scored)
 	if err != nil {
 		return SearchResult{}, err
@@ -2677,6 +2705,8 @@ func (s *Service) AssembleContext(ctx context.Context, input AssembleContextInpu
 	result, err := s.Search(ctx, SearchInput{
 		Scope:                      input.Scope,
 		Query:                      input.Query,
+		Path:                       input.Path,
+		PathPrefix:                 input.PathPrefix,
 		SessionID:                  input.SessionID,
 		UserID:                     input.UserID,
 		TopK:                       maxInt(input.Budget*3, input.Budget),
@@ -2693,7 +2723,11 @@ func (s *Service) AssembleContext(ctx context.Context, input AssembleContextInpu
 	}
 	projectionHits, projectionDiagnostics := s.readProjectionHits(ctx, input)
 	if len(projectionHits) > 0 {
-		result.Hits = append(projectionHits, result.Hits...)
+		selector, selectorErr := memory.NewMemoryPathSelector(input.Path, input.PathPrefix)
+		if selectorErr != nil {
+			return AssembledContext{}, selectorErr
+		}
+		result.Hits = append(filterMemoryPathHits(projectionHits, selector), result.Hits...)
 	}
 	chunkContextDiagnostics := []ContextDiagnostic(nil)
 	result.Hits, chunkContextDiagnostics = s.boundChunkContextEvidence(input, result.Hits)

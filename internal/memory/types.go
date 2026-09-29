@@ -71,6 +71,7 @@ func (s Scope) Validate() error {
 type RawEvent struct {
 	ID              string                   `json:"id"`
 	Scope           Scope                    `json:"scope"`
+	MemoryPath      string                   `json:"memory_path"`
 	EventType       string                   `json:"event_type"`
 	Content         string                   `json:"content"`
 	Metadata        map[string]any           `json:"metadata"`
@@ -82,6 +83,7 @@ type RawEvent struct {
 type CanonicalMemory struct {
 	ID         string      `json:"id"`
 	Scope      Scope       `json:"scope"`
+	MemoryPath string      `json:"memory_path"`
 	Class      MemoryClass `json:"class"`
 	State      MemoryState `json:"state"`
 	Content    string      `json:"content"`
@@ -93,6 +95,7 @@ type CanonicalMemory struct {
 type MemoryVersion struct {
 	ID         string      `json:"id"`
 	MemoryID   string      `json:"memory_id"`
+	MemoryPath string      `json:"memory_path"`
 	Version    int64       `json:"version"`
 	State      MemoryState `json:"state"`
 	Content    string      `json:"content"`
@@ -239,6 +242,7 @@ type TemporalHistoryMetadata struct {
 
 type IngestEventInput struct {
 	Scope           Scope
+	MemoryPath      string
 	EventType       string
 	Content         string
 	Metadata        map[string]any
@@ -256,6 +260,9 @@ func (i IngestEventInput) Validate() error {
 
 	if strings.TrimSpace(i.Content) == "" {
 		return fmt.Errorf("content is required")
+	}
+	if _, err := NormalizeMemoryPath(i.MemoryPath); err != nil {
+		return fmt.Errorf("memory path: %w", err)
 	}
 
 	return nil
@@ -300,12 +307,14 @@ type IdempotentEventIngestor interface {
 
 func EventRequestFingerprint(input IngestEventInput) (string, error) {
 	payload := struct {
+		MemoryPath      string         `json:"memory_path"`
 		EventType       string         `json:"event_type"`
 		Content         string         `json:"content"`
 		Metadata        map[string]any `json:"metadata,omitempty"`
 		SourceTimestamp string         `json:"source_timestamp,omitempty"`
 	}{
-		EventType: strings.TrimSpace(input.EventType), Content: input.Content, Metadata: input.Metadata,
+		MemoryPath: func() string { p, _ := NormalizeMemoryPath(input.MemoryPath); return p }(),
+		EventType:  strings.TrimSpace(input.EventType), Content: input.Content, Metadata: input.Metadata,
 	}
 	if !input.SourceTimestamp.IsZero() {
 		payload.SourceTimestamp = input.SourceTimestamp.UTC().Format(time.RFC3339Nano)

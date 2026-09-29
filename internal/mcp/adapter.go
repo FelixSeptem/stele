@@ -198,7 +198,7 @@ func (a *Adapter) serverForRequest(r *http.Request) *protocolmcp.Server {
 		if err != nil {
 			return nil, SearchResponse{}, safeValidationError(err)
 		}
-		result, err := a.searcher.Search(ctx, retrieval.SearchInput{Scope: dispatch.Scope, Query: input.Query, TopK: effectiveResultLimit(input.Limit, a.limits.MaxResults), TemporalConstraint: constraint})
+		result, err := a.searcher.Search(ctx, retrieval.SearchInput{Scope: dispatch.Scope, Query: input.Query, Path: input.Path, PathPrefix: input.PathPrefix, TopK: effectiveResultLimit(input.Limit, a.limits.MaxResults), TemporalConstraint: constraint})
 		if err != nil {
 			return nil, SearchResponse{}, mcpError(ErrorDependency, "search_failed")
 		}
@@ -222,7 +222,7 @@ func (a *Adapter) serverForRequest(r *http.Request) *protocolmcp.Server {
 		if a.assembler == nil {
 			return nil, ContextResponse{}, mcpError(ErrorDependency, "context_unavailable")
 		}
-		result, err := a.assembler.AssembleContext(ctx, retrieval.AssembleContextInput{Scope: dispatch.Scope, Query: input.Query, Budget: a.limits.MaxResults, CharacterBudget: input.BudgetBytes})
+		result, err := a.assembler.AssembleContext(ctx, retrieval.AssembleContextInput{Scope: dispatch.Scope, Query: input.Query, Path: input.Path, PathPrefix: input.PathPrefix, Budget: a.limits.MaxResults, CharacterBudget: input.BudgetBytes})
 		if err != nil {
 			return nil, ContextResponse{}, mcpError(ErrorDependency, "context_failed")
 		}
@@ -247,7 +247,7 @@ func (a *Adapter) serverForRequest(r *http.Request) *protocolmcp.Server {
 			effectiveLimit = a.limits.MaxResults
 		}
 		fetchLimit := input.Offset + effectiveLimit
-		page, err := a.memoryQuery.ListMemories(ctx, memory.ListMemoriesInput{Scope: dispatch.Scope, Limit: fetchLimit})
+		page, err := a.memoryQuery.ListMemories(ctx, memory.ListMemoriesInput{Scope: dispatch.Scope, Path: input.Path, PathPrefix: input.PathPrefix, Limit: fetchLimit})
 		if err != nil {
 			return nil, BrowseResponse{}, mcpError(ErrorDependency, "browse_failed")
 		}
@@ -274,7 +274,7 @@ func (a *Adapter) serverForRequest(r *http.Request) *protocolmcp.Server {
 		if strings.TrimSpace(input.TargetMemoryID) != "" {
 			intentType = memory.MemoryIntentUpdate
 		}
-		record, err := a.intent.Submit(ctx, memory.MemoryIntentInput{Scope: dispatch.Scope, Type: intentType, TargetMemoryID: input.TargetMemoryID, TargetVersion: input.TargetVersion, Content: input.Content, Actor: state.principal.ID, Reason: input.Reason, Provenance: map[string]any{"transport": "mcp", "tool": ToolRemember}, RequestID: input.IdempotencyKey, OperationID: input.IdempotencyKey, IdempotencyKey: input.IdempotencyKey})
+		record, err := a.intent.Submit(ctx, memory.MemoryIntentInput{Scope: dispatch.Scope, MemoryPath: input.MemoryPath, Type: intentType, TargetMemoryID: input.TargetMemoryID, TargetVersion: input.TargetVersion, Content: input.Content, Actor: state.principal.ID, Reason: input.Reason, Provenance: map[string]any{"transport": "mcp", "tool": ToolRemember}, RequestID: input.IdempotencyKey, OperationID: input.IdempotencyKey, IdempotencyKey: input.IdempotencyKey})
 		if err != nil {
 			return nil, MutationResponse{}, safeMutationError(err)
 		}
@@ -312,7 +312,7 @@ func (a *Adapter) serverForRequest(r *http.Request) *protocolmcp.Server {
 		}
 		_, err = a.applyForgetLifecycle(ctx, state.principal, binding, ForgetApplyRequest{
 			PreviewID: "single-" + input.IdempotencyKey, MemoryIDs: []string{strings.TrimSpace(input.MemoryID)},
-			Action: action, Reason: input.Reason, IdempotencyKey: input.IdempotencyKey,
+			Path: input.Path, Action: action, Reason: input.Reason, IdempotencyKey: input.IdempotencyKey,
 		})
 		if err != nil {
 			return nil, ForgetResponse{}, err
@@ -335,7 +335,7 @@ func (a *Adapter) serverForRequest(r *http.Request) *protocolmcp.Server {
 		}
 		previewLimit := effectiveResultLimit(input.Limit, a.limits.MaxResults)
 		previewLimit = effectiveResultLimit(previewLimit, a.limits.MaxIDs)
-		result, err := a.searcher.Search(ctx, retrieval.SearchInput{Scope: dispatch.Scope, Query: input.Query, TopK: previewLimit})
+		result, err := a.searcher.Search(ctx, retrieval.SearchInput{Scope: dispatch.Scope, Query: input.Query, Path: input.Path, PathPrefix: input.PathPrefix, TopK: previewLimit})
 		if err != nil {
 			return nil, ForgetPreviewResponse{}, mcpError(ErrorDependency, "forget_failed")
 		}
@@ -485,10 +485,18 @@ func (a *Adapter) applyForgetLifecycle(ctx context.Context, principal auth.Princ
 	if err := action.Validate(); err != nil {
 		return ForgetApplyResponse{}, safeValidationError(err)
 	}
+	memoryPath := ""
+	if strings.TrimSpace(input.Path) != "" {
+		var err error
+		memoryPath, err = memory.NormalizeMemoryPath(input.Path)
+		if err != nil {
+			return ForgetApplyResponse{}, safeValidationError(err)
+		}
+	}
 	ctx = auth.ContextWithPrincipal(ctx, principal)
 	for _, id := range input.MemoryIDs {
 		derivedKey := lifecycleIdempotencyKey(input.IdempotencyKey, id)
-		metadata := provider.OperationMetadata{RequestID: lifecycleOperationToken("request", input.PreviewID), OperationID: lifecycleOperationToken(input.PreviewID, id), IdempotencyKey: derivedKey, SchemaVersion: "provider-v1"}
+		metadata := provider.OperationMetadata{RequestID: lifecycleOperationToken("request", input.PreviewID), OperationID: lifecycleOperationToken(input.PreviewID, id), IdempotencyKey: derivedKey, SchemaVersion: "provider-v1", MemoryPath: memoryPath}
 		if _, err := a.lifecycleAdapter.ApplyLifecycle(ctx, binding, metadata, id, action, input.Reason, principal.ID); err != nil {
 			message := strings.ToLower(err.Error())
 			if strings.Contains(message, "idempotency conflict") {

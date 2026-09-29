@@ -75,6 +75,7 @@ func (s *Service) Ingest(ctx context.Context, input IngestEventInput) (event Raw
 	if err := input.Validate(); err != nil {
 		return RawEvent{}, err
 	}
+	input.MemoryPath, _ = NormalizeMemoryPath(input.MemoryPath)
 
 	if s.store == nil {
 		return RawEvent{}, fmt.Errorf("ingest store is not configured")
@@ -146,6 +147,7 @@ func (s *Service) IngestIdempotent(ctx context.Context, input IngestEventInput, 
 	if err := input.Validate(); err != nil {
 		return IdempotentEventIngestResult{}, setErr(err)
 	}
+	input.MemoryPath, _ = NormalizeMemoryPath(input.MemoryPath)
 	if s == nil || s.store == nil {
 		return IdempotentEventIngestResult{}, setErr(fmt.Errorf("ingest store is not configured"))
 	}

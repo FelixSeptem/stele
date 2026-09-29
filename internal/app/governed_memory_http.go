@@ -10,6 +10,7 @@ import (
 
 type memoryIntentRequest struct {
 	Type           memory.MemoryIntentType `json:"type"`
+	MemoryPath     string                  `json:"memory_path,omitempty"`
 	TargetMemoryID string                  `json:"target_memory_id,omitempty"`
 	TargetVersion  int64                   `json:"target_version,omitempty"`
 	Content        string                  `json:"content,omitempty"`
@@ -34,7 +35,7 @@ func handleMemoryIntentCreate(w http.ResponseWriter, r *http.Request, service Me
 		return
 	}
 	input := memory.MemoryIntentInput{
-		Scope: scope, Type: req.Type, TargetMemoryID: strings.TrimSpace(req.TargetMemoryID), TargetVersion: req.TargetVersion,
+		Scope: scope, Type: req.Type, MemoryPath: req.MemoryPath, TargetMemoryID: strings.TrimSpace(req.TargetMemoryID), TargetVersion: req.TargetVersion,
 		Content: req.Content, Actor: strings.TrimSpace(r.Header.Get("X-Stele-Actor")), Reason: req.Reason,
 		Provenance: req.Provenance, RequestID: strings.TrimSpace(r.Header.Get("X-Request-ID")), OperationID: req.OperationID,
 		IdempotencyKey: req.IdempotencyKey,

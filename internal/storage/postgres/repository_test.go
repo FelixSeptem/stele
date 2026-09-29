@@ -159,10 +159,10 @@ func TestRepositoryReadCanonicalMemoryReturnsVisibleScopedRecord(t *testing.T) {
 	mock.ExpectQuery("SELECT[\\s\\S]*FROM canonical_memories").
 		WithArgs("mem_123", scope.Tenant, scope.Project, scope.Namespace, false).
 		WillReturnRows(pgxmock.NewRows([]string{
-			"id", "tenant", "project", "namespace", "class", "state", "content", "created_at", "updated_at",
+			"id", "tenant", "project", "namespace", "memory_path", "class", "state", "content", "created_at", "updated_at",
 			"temporal_fact_id", "ingested_at", "valid_from", "valid_to", "validity_source",
 		}).AddRow(
-			"mem_123", scope.Tenant, scope.Project, scope.Namespace,
+			"mem_123", scope.Tenant, scope.Project, scope.Namespace, memory.MemoryPathRoot,
 			memory.MemoryClassProfile, memory.MemoryStateActive, "User prefers concise answers.", now.Add(-time.Hour), now,
 			"mem_123", now.Add(-time.Hour), now.Add(-time.Hour), nil, string(memory.TemporalValiditySourceLegacyCompatible),
 		))
@@ -642,11 +642,11 @@ func TestRepositoryReadGovernanceRawEventReturnsScopedDetail(t *testing.T) {
 	mock.ExpectQuery("SELECT[\\s\\S]*FROM raw_events").
 		WithArgs(input.RawEventID, input.Scope.Tenant, input.Scope.Project, input.Scope.Namespace).
 		WillReturnRows(pgxmock.NewRows([]string{
-			"id", "tenant", "project", "namespace", "event_type", "content", "source_timestamp", "created_at",
+			"id", "tenant", "project", "namespace", "memory_path", "event_type", "content", "source_timestamp", "created_at",
 			"governance_attempt", "governance_worker_id", "governance_claimed_at", "governance_lease_until",
 			"governance_last_failed_at", "governance_last_error", "governance_next_attempt_at", "governance_exhausted_at", "governance_processed_at",
 		}).AddRow(
-			input.RawEventID, input.Scope.Tenant, input.Scope.Project, input.Scope.Namespace, "conversation.message", "hello", now.Add(-2*time.Minute), now.Add(-time.Minute),
+			input.RawEventID, input.Scope.Tenant, input.Scope.Project, input.Scope.Namespace, memory.MemoryPathRoot, "conversation.message", "hello", now.Add(-2*time.Minute), now.Add(-time.Minute),
 			3, "worker-a", now.Add(-30*time.Second), now.Add(time.Minute), now.Add(-time.Minute), "extractor timeout", now.Add(5*time.Minute), nil, nil,
 		))
 
@@ -767,11 +767,11 @@ func TestRepositoryApplyGovernanceRecoveryRetryWritesLedgerAndReturnsUpdatedStat
 	mock.ExpectQuery("SELECT[\\s\\S]*FROM raw_events[\\s\\S]*FOR UPDATE").
 		WithArgs(input.RawEventID, input.Scope.Tenant, input.Scope.Project, input.Scope.Namespace).
 		WillReturnRows(pgxmock.NewRows([]string{
-			"id", "tenant", "project", "namespace", "event_type", "content", "source_timestamp", "created_at",
+			"id", "tenant", "project", "namespace", "memory_path", "event_type", "content", "source_timestamp", "created_at",
 			"governance_attempt", "governance_worker_id", "governance_claimed_at", "governance_lease_until",
 			"governance_last_failed_at", "governance_last_error", "governance_next_attempt_at", "governance_exhausted_at", "governance_processed_at",
 		}).AddRow(
-			input.RawEventID, input.Scope.Tenant, input.Scope.Project, input.Scope.Namespace, "conversation.message", "hello", now.Add(-2*time.Minute), now.Add(-time.Minute),
+			input.RawEventID, input.Scope.Tenant, input.Scope.Project, input.Scope.Namespace, memory.MemoryPathRoot, "conversation.message", "hello", now.Add(-2*time.Minute), now.Add(-time.Minute),
 			2, nil, nil, nil, now.Add(-time.Minute), "extractor timeout", now.Add(20*time.Minute), nil, nil,
 		))
 	mock.ExpectQuery("UPDATE raw_events").
@@ -791,11 +791,11 @@ func TestRepositoryApplyGovernanceRecoveryRetryWritesLedgerAndReturnsUpdatedStat
 			nil,
 		).
 		WillReturnRows(pgxmock.NewRows([]string{
-			"id", "tenant", "project", "namespace", "event_type", "content", "source_timestamp", "created_at",
+			"id", "tenant", "project", "namespace", "memory_path", "event_type", "content", "source_timestamp", "created_at",
 			"governance_attempt", "governance_worker_id", "governance_claimed_at", "governance_lease_until",
 			"governance_last_failed_at", "governance_last_error", "governance_next_attempt_at", "governance_exhausted_at", "governance_processed_at",
 		}).AddRow(
-			input.RawEventID, input.Scope.Tenant, input.Scope.Project, input.Scope.Namespace, "conversation.message", "hello", now.Add(-2*time.Minute), now.Add(-time.Minute),
+			input.RawEventID, input.Scope.Tenant, input.Scope.Project, input.Scope.Namespace, memory.MemoryPathRoot, "conversation.message", "hello", now.Add(-2*time.Minute), now.Add(-time.Minute),
 			2, nil, nil, nil, now.Add(-time.Minute), "extractor timeout", now, nil, nil,
 		))
 	mock.ExpectExec("INSERT INTO governance_recovery_ledger").
@@ -855,11 +855,11 @@ func TestRepositoryApplyGovernanceRecoveryReschedulePreservesAttemptAndWritesLed
 	mock.ExpectQuery("SELECT[\\s\\S]*FROM raw_events[\\s\\S]*FOR UPDATE").
 		WithArgs(input.RawEventID, input.Scope.Tenant, input.Scope.Project, input.Scope.Namespace).
 		WillReturnRows(pgxmock.NewRows([]string{
-			"id", "tenant", "project", "namespace", "event_type", "content", "source_timestamp", "created_at",
+			"id", "tenant", "project", "namespace", "memory_path", "event_type", "content", "source_timestamp", "created_at",
 			"governance_attempt", "governance_worker_id", "governance_claimed_at", "governance_lease_until",
 			"governance_last_failed_at", "governance_last_error", "governance_next_attempt_at", "governance_exhausted_at", "governance_processed_at",
 		}).AddRow(
-			input.RawEventID, input.Scope.Tenant, input.Scope.Project, input.Scope.Namespace, "conversation.message", "hello", now.Add(-2*time.Minute), now.Add(-time.Minute),
+			input.RawEventID, input.Scope.Tenant, input.Scope.Project, input.Scope.Namespace, memory.MemoryPathRoot, "conversation.message", "hello", now.Add(-2*time.Minute), now.Add(-time.Minute),
 			2, nil, nil, nil, now.Add(-3*time.Minute), "extractor timeout", now.Add(10*time.Minute), nil, nil,
 		))
 	mock.ExpectQuery("UPDATE raw_events").
@@ -879,11 +879,11 @@ func TestRepositoryApplyGovernanceRecoveryReschedulePreservesAttemptAndWritesLed
 			nil,
 		).
 		WillReturnRows(pgxmock.NewRows([]string{
-			"id", "tenant", "project", "namespace", "event_type", "content", "source_timestamp", "created_at",
+			"id", "tenant", "project", "namespace", "memory_path", "event_type", "content", "source_timestamp", "created_at",
 			"governance_attempt", "governance_worker_id", "governance_claimed_at", "governance_lease_until",
 			"governance_last_failed_at", "governance_last_error", "governance_next_attempt_at", "governance_exhausted_at", "governance_processed_at",
 		}).AddRow(
-			input.RawEventID, input.Scope.Tenant, input.Scope.Project, input.Scope.Namespace, "conversation.message", "hello", now.Add(-2*time.Minute), now.Add(-time.Minute),
+			input.RawEventID, input.Scope.Tenant, input.Scope.Project, input.Scope.Namespace, memory.MemoryPathRoot, "conversation.message", "hello", now.Add(-2*time.Minute), now.Add(-time.Minute),
 			2, nil, nil, nil, now.Add(-3*time.Minute), "extractor timeout", scheduledFor, nil, nil,
 		))
 	mock.ExpectExec("INSERT INTO governance_recovery_ledger").
@@ -946,11 +946,11 @@ func TestRepositoryApplyGovernanceRecoveryRequeueClearsExhaustedAndResetsAttempt
 	mock.ExpectQuery("SELECT[\\s\\S]*FROM raw_events[\\s\\S]*FOR UPDATE").
 		WithArgs(input.RawEventID, input.Scope.Tenant, input.Scope.Project, input.Scope.Namespace).
 		WillReturnRows(pgxmock.NewRows([]string{
-			"id", "tenant", "project", "namespace", "event_type", "content", "source_timestamp", "created_at",
+			"id", "tenant", "project", "namespace", "memory_path", "event_type", "content", "source_timestamp", "created_at",
 			"governance_attempt", "governance_worker_id", "governance_claimed_at", "governance_lease_until",
 			"governance_last_failed_at", "governance_last_error", "governance_next_attempt_at", "governance_exhausted_at", "governance_processed_at",
 		}).AddRow(
-			input.RawEventID, input.Scope.Tenant, input.Scope.Project, input.Scope.Namespace, "conversation.message", "hello", now.Add(-3*time.Minute), now.Add(-2*time.Minute),
+			input.RawEventID, input.Scope.Tenant, input.Scope.Project, input.Scope.Namespace, memory.MemoryPathRoot, "conversation.message", "hello", now.Add(-3*time.Minute), now.Add(-2*time.Minute),
 			5, nil, nil, nil, lastFailedAt, "extractor timeout", nil, exhaustedAt, nil,
 		))
 	mock.ExpectQuery("UPDATE raw_events").
@@ -970,11 +970,11 @@ func TestRepositoryApplyGovernanceRecoveryRequeueClearsExhaustedAndResetsAttempt
 			nil,
 		).
 		WillReturnRows(pgxmock.NewRows([]string{
-			"id", "tenant", "project", "namespace", "event_type", "content", "source_timestamp", "created_at",
+			"id", "tenant", "project", "namespace", "memory_path", "event_type", "content", "source_timestamp", "created_at",
 			"governance_attempt", "governance_worker_id", "governance_claimed_at", "governance_lease_until",
 			"governance_last_failed_at", "governance_last_error", "governance_next_attempt_at", "governance_exhausted_at", "governance_processed_at",
 		}).AddRow(
-			input.RawEventID, input.Scope.Tenant, input.Scope.Project, input.Scope.Namespace, "conversation.message", "hello", now.Add(-3*time.Minute), now.Add(-2*time.Minute),
+			input.RawEventID, input.Scope.Tenant, input.Scope.Project, input.Scope.Namespace, memory.MemoryPathRoot, "conversation.message", "hello", now.Add(-3*time.Minute), now.Add(-2*time.Minute),
 			0, nil, nil, nil, lastFailedAt, "extractor timeout", now, nil, nil,
 		))
 	mock.ExpectExec("INSERT INTO governance_recovery_ledger").
@@ -1038,11 +1038,11 @@ func TestRepositoryApplyGovernanceRecoveryRejectsLeasedRawEvent(t *testing.T) {
 	mock.ExpectQuery("SELECT[\\s\\S]*FROM raw_events[\\s\\S]*FOR UPDATE").
 		WithArgs(input.RawEventID, input.Scope.Tenant, input.Scope.Project, input.Scope.Namespace).
 		WillReturnRows(pgxmock.NewRows([]string{
-			"id", "tenant", "project", "namespace", "event_type", "content", "source_timestamp", "created_at",
+			"id", "tenant", "project", "namespace", "memory_path", "event_type", "content", "source_timestamp", "created_at",
 			"governance_attempt", "governance_worker_id", "governance_claimed_at", "governance_lease_until",
 			"governance_last_failed_at", "governance_last_error", "governance_next_attempt_at", "governance_exhausted_at", "governance_processed_at",
 		}).AddRow(
-			input.RawEventID, input.Scope.Tenant, input.Scope.Project, input.Scope.Namespace, "conversation.message", "hello", now.Add(-2*time.Minute), now.Add(-time.Minute),
+			input.RawEventID, input.Scope.Tenant, input.Scope.Project, input.Scope.Namespace, memory.MemoryPathRoot, "conversation.message", "hello", now.Add(-2*time.Minute), now.Add(-time.Minute),
 			2, "worker-a", now.Add(-30*time.Second), now.Add(time.Minute), now.Add(-time.Minute), "extractor timeout", now.Add(20*time.Minute), nil, nil,
 		))
 	mock.ExpectRollback()
@@ -1071,13 +1071,14 @@ func TestRepositoryReadMemoryHistoryReturnsCanonicalVersionsAndProvenance(t *tes
 	mock.ExpectQuery("SELECT[\\s\\S]*FROM canonical_memories").
 		WithArgs("mem_hidden", scope.Tenant, scope.Project, scope.Namespace, true).
 		WillReturnRows(pgxmock.NewRows([]string{
-			"id", "tenant", "project", "namespace", "class", "state", "content", "created_at", "updated_at",
+			"id", "tenant", "project", "namespace", "memory_path", "class", "state", "content", "created_at", "updated_at",
 			"temporal_fact_id", "ingested_at", "valid_from", "valid_to", "validity_source",
 		}).AddRow(
 			"mem_hidden",
 			scope.Tenant,
 			scope.Project,
 			scope.Namespace,
+			memory.MemoryPathRoot,
 			memory.MemoryClassProfile,
 			memory.MemoryStateForgotten,
 			"Old preference",
@@ -1093,11 +1094,12 @@ func TestRepositoryReadMemoryHistoryReturnsCanonicalVersionsAndProvenance(t *tes
 	mock.ExpectQuery("SELECT[\\s\\S]*FROM memory_versions").
 		WithArgs("mem_hidden").
 		WillReturnRows(pgxmock.NewRows([]string{
-			"id", "memory_id", "version", "state", "content", "created_at", "modified_by",
+			"id", "memory_id", "memory_path", "version", "state", "content", "created_at", "modified_by",
 			"temporal_fact_id", "ingested_at", "valid_from", "valid_to", "validity_source",
 		}).AddRow(
 			"ver_2",
 			"mem_hidden",
+			"agents/research",
 			int64(2),
 			memory.MemoryStateForgotten,
 			"Old preference",
@@ -1147,6 +1149,9 @@ func TestRepositoryReadMemoryHistoryReturnsCanonicalVersionsAndProvenance(t *tes
 
 	if len(history.Versions) != 1 || history.Versions[0].ID != "ver_2" {
 		t.Fatalf("Versions = %+v, want one version", history.Versions)
+	}
+	if history.Versions[0].MemoryPath != "agents/research" {
+		t.Fatalf("version memory path=%q, want agents/research", history.Versions[0].MemoryPath)
 	}
 
 	if !history.Hidden {
@@ -1199,10 +1204,10 @@ func TestRepositoryReadMemoryHistoryOrdinaryReadOmitsPrivilegedTemporalData(t *t
 	mock.ExpectQuery("SELECT[\\s\\S]*FROM canonical_memories").
 		WithArgs("mem_ordinary", scope.Tenant, scope.Project, scope.Namespace, false).
 		WillReturnRows(pgxmock.NewRows([]string{
-			"id", "tenant", "project", "namespace", "class", "state", "content", "created_at", "updated_at",
+			"id", "tenant", "project", "namespace", "memory_path", "class", "state", "content", "created_at", "updated_at",
 			"temporal_fact_id", "ingested_at", "valid_from", "valid_to", "validity_source",
 		}).AddRow(
-			"mem_ordinary", scope.Tenant, scope.Project, scope.Namespace,
+			"mem_ordinary", scope.Tenant, scope.Project, scope.Namespace, memory.MemoryPathRoot,
 			memory.MemoryClassProfile, memory.MemoryStateActive, "Likes concise answers",
 			now.Add(-time.Hour), now,
 			"mem_ordinary", now.Add(-time.Hour), now.Add(-time.Hour), nil,
@@ -1465,7 +1470,7 @@ func TestRepositoryTransitionCandidateStatus(t *testing.T) {
 	mock.ExpectQuery("UPDATE candidate_memories").
 		WithArgs(transition.CandidateID, transition.ToStatus, transition.UpdatedAt).
 		WillReturnRows(pgxmock.NewRows([]string{
-			"id", "source_raw_event_id", "tenant", "project", "namespace", "class", "content",
+			"id", "source_raw_event_id", "tenant", "project", "namespace", "memory_path", "class", "content",
 			"confidence", "importance", "freshness", "sensitivity", "mutability", "retention_class",
 			"status", "created_at", "updated_at",
 		}).AddRow(
@@ -1474,6 +1479,7 @@ func TestRepositoryTransitionCandidateStatus(t *testing.T) {
 			"tenant-a",
 			"project-a",
 			"namespace-a",
+			memory.MemoryPathRoot,
 			memory.MemoryClassProfile,
 			"User prefers concise answers.",
 			0.91,
@@ -1819,13 +1825,14 @@ func TestRepositoryGetLatestCanonicalByScopeAndClass(t *testing.T) {
 	mock.ExpectQuery("SELECT .* FROM canonical_memories").
 		WithArgs(scope.Tenant, scope.Project, scope.Namespace, memory.MemoryClassProfile, memory.MemoryStateActive).
 		WillReturnRows(pgxmock.NewRows([]string{
-			"id", "tenant", "project", "namespace", "class", "state", "content", "created_at", "updated_at",
+			"id", "tenant", "project", "namespace", "memory_path", "class", "state", "content", "created_at", "updated_at",
 			"temporal_fact_id", "ingested_at", "valid_from", "valid_to", "validity_source",
 		}).AddRow(
 			"mem_123",
 			scope.Tenant,
 			scope.Project,
 			scope.Namespace,
+			memory.MemoryPathRoot,
 			memory.MemoryClassProfile,
 			memory.MemoryStateActive,
 			"User prefers concise answers.",
@@ -1873,6 +1880,7 @@ func TestRepositoryPromoteCandidateCreatesCanonicalMemoryVersionAndProvenance(t 
 				Project:   "project-a",
 				Namespace: "namespace-a",
 			},
+			MemoryPath:     memory.MemoryPathRoot,
 			Class:          memory.MemoryClassProfile,
 			Content:        "User prefers concise answers.",
 			Confidence:     0.91,
@@ -1901,6 +1909,7 @@ func TestRepositoryPromoteCandidateCreatesCanonicalMemoryVersionAndProvenance(t 
 			input.Candidate.Scope.Tenant,
 			input.Candidate.Scope.Project,
 			input.Candidate.Scope.Namespace,
+			input.Candidate.MemoryPath,
 			input.Candidate.Class,
 			memory.MemoryStateActive,
 			input.Candidate.RetentionClass,
@@ -1914,13 +1923,14 @@ func TestRepositoryPromoteCandidateCreatesCanonicalMemoryVersionAndProvenance(t 
 			string(legacy.ValiditySource),
 		).
 		WillReturnRows(pgxmock.NewRows([]string{
-			"id", "tenant", "project", "namespace", "class", "state", "content", "created_at", "updated_at",
+			"id", "tenant", "project", "namespace", "memory_path", "class", "state", "content", "created_at", "updated_at",
 			"temporal_fact_id", "ingested_at", "valid_from", "valid_to", "validity_source",
 		}).AddRow(
 			input.MemoryID,
 			input.Candidate.Scope.Tenant,
 			input.Candidate.Scope.Project,
 			input.Candidate.Scope.Namespace,
+			input.Candidate.MemoryPath,
 			input.Candidate.Class,
 			memory.MemoryStateActive,
 			input.Candidate.Content,
@@ -1936,6 +1946,7 @@ func TestRepositoryPromoteCandidateCreatesCanonicalMemoryVersionAndProvenance(t 
 		WithArgs(
 			input.VersionID,
 			input.MemoryID,
+			input.Candidate.MemoryPath,
 			input.Version,
 			memory.MemoryStateActive,
 			input.Candidate.Content,
@@ -1948,11 +1959,12 @@ func TestRepositoryPromoteCandidateCreatesCanonicalMemoryVersionAndProvenance(t 
 			string(legacy.ValiditySource),
 		).
 		WillReturnRows(pgxmock.NewRows([]string{
-			"id", "memory_id", "version", "state", "content", "created_at", "modified_by",
+			"id", "memory_id", "memory_path", "version", "state", "content", "created_at", "modified_by",
 			"temporal_fact_id", "ingested_at", "valid_from", "valid_to", "validity_source",
 		}).AddRow(
 			input.VersionID,
 			input.MemoryID,
+			input.Candidate.MemoryPath,
 			input.Version,
 			memory.MemoryStateActive,
 			input.Candidate.Content,
@@ -2021,6 +2033,7 @@ func TestRepositoryPromoteCandidateSupersedeUpdatesCanonicalAndAppendsVersion(t 
 				Project:   "project-a",
 				Namespace: "namespace-a",
 			},
+			MemoryPath:     memory.MemoryPathRoot,
 			Class:          memory.MemoryClassProfile,
 			Content:        "User prefers concise answers.",
 			Confidence:     0.94,
@@ -2054,15 +2067,17 @@ func TestRepositoryPromoteCandidateSupersedeUpdatesCanonicalAndAppendsVersion(t 
 			legacy.ValidFrom,
 			legacy.ValidTo,
 			string(legacy.ValiditySource),
+			memory.MemoryPathRoot,
 		).
 		WillReturnRows(pgxmock.NewRows([]string{
-			"id", "tenant", "project", "namespace", "class", "state", "content", "created_at", "updated_at",
+			"id", "tenant", "project", "namespace", "memory_path", "class", "state", "content", "created_at", "updated_at",
 			"temporal_fact_id", "ingested_at", "valid_from", "valid_to", "validity_source",
 		}).AddRow(
 			input.MemoryID,
 			input.Candidate.Scope.Tenant,
 			input.Candidate.Scope.Project,
 			input.Candidate.Scope.Namespace,
+			memory.MemoryPathRoot,
 			input.Candidate.Class,
 			memory.MemoryStateActive,
 			input.Candidate.Content,
@@ -2078,6 +2093,7 @@ func TestRepositoryPromoteCandidateSupersedeUpdatesCanonicalAndAppendsVersion(t 
 		WithArgs(
 			input.VersionID,
 			input.MemoryID,
+			memory.MemoryPathRoot,
 			int64(2),
 			memory.MemoryStateActive,
 			input.Candidate.Content,
@@ -2090,11 +2106,12 @@ func TestRepositoryPromoteCandidateSupersedeUpdatesCanonicalAndAppendsVersion(t 
 			string(legacy.ValiditySource),
 		).
 		WillReturnRows(pgxmock.NewRows([]string{
-			"id", "memory_id", "version", "state", "content", "created_at", "modified_by",
+			"id", "memory_id", "memory_path", "version", "state", "content", "created_at", "modified_by",
 			"temporal_fact_id", "ingested_at", "valid_from", "valid_to", "validity_source",
 		}).AddRow(
 			input.VersionID,
 			input.MemoryID,
+			memory.MemoryPathRoot,
 			int64(2),
 			memory.MemoryStateActive,
 			input.Candidate.Content,
@@ -2137,6 +2154,9 @@ func TestRepositoryPromoteCandidateSupersedeUpdatesCanonicalAndAppendsVersion(t 
 	if version.Version != 2 {
 		t.Fatalf("version.Version = %d, want %d", version.Version, 2)
 	}
+	if canonical.MemoryPath != memory.MemoryPathRoot || version.MemoryPath != memory.MemoryPathRoot {
+		t.Fatalf("paths canonical=%q version=%q, want root", canonical.MemoryPath, version.MemoryPath)
+	}
 }
 
 func TestRepositoryPromoteCandidateRelationUpsertsProjection(t *testing.T) {
@@ -2159,6 +2179,7 @@ func TestRepositoryPromoteCandidateRelationUpsertsProjection(t *testing.T) {
 				Project:   "project-a",
 				Namespace: "namespace-a",
 			},
+			MemoryPath:     memory.MemoryPathRoot,
 			Class:          memory.MemoryClassRelation,
 			Content:        "entity:user relation:interested_in target:travel",
 			Confidence:     0.93,
@@ -2187,6 +2208,7 @@ func TestRepositoryPromoteCandidateRelationUpsertsProjection(t *testing.T) {
 			input.Candidate.Scope.Tenant,
 			input.Candidate.Scope.Project,
 			input.Candidate.Scope.Namespace,
+			memory.MemoryPathRoot,
 			input.Candidate.Class,
 			memory.MemoryStateActive,
 			input.Candidate.RetentionClass,
@@ -2200,13 +2222,14 @@ func TestRepositoryPromoteCandidateRelationUpsertsProjection(t *testing.T) {
 			string(unset.ValiditySource),
 		).
 		WillReturnRows(pgxmock.NewRows([]string{
-			"id", "tenant", "project", "namespace", "class", "state", "content", "created_at", "updated_at",
+			"id", "tenant", "project", "namespace", "memory_path", "class", "state", "content", "created_at", "updated_at",
 			"temporal_fact_id", "ingested_at", "valid_from", "valid_to", "validity_source",
 		}).AddRow(
 			input.MemoryID,
 			input.Candidate.Scope.Tenant,
 			input.Candidate.Scope.Project,
 			input.Candidate.Scope.Namespace,
+			memory.MemoryPathRoot,
 			input.Candidate.Class,
 			memory.MemoryStateActive,
 			input.Candidate.Content,
@@ -2222,6 +2245,7 @@ func TestRepositoryPromoteCandidateRelationUpsertsProjection(t *testing.T) {
 		WithArgs(
 			input.VersionID,
 			input.MemoryID,
+			memory.MemoryPathRoot,
 			input.Version,
 			memory.MemoryStateActive,
 			input.Candidate.Content,
@@ -2234,11 +2258,12 @@ func TestRepositoryPromoteCandidateRelationUpsertsProjection(t *testing.T) {
 			string(unset.ValiditySource),
 		).
 		WillReturnRows(pgxmock.NewRows([]string{
-			"id", "memory_id", "version", "state", "content", "created_at", "modified_by",
+			"id", "memory_id", "memory_path", "version", "state", "content", "created_at", "modified_by",
 			"temporal_fact_id", "ingested_at", "valid_from", "valid_to", "validity_source",
 		}).AddRow(
 			input.VersionID,
 			input.MemoryID,
+			memory.MemoryPathRoot,
 			input.Version,
 			memory.MemoryStateActive,
 			input.Candidate.Content,
@@ -2591,6 +2616,39 @@ func TestRepositoryApplyLifecycleActionUpdatesCanonicalState(t *testing.T) {
 
 	if canonical.State != memory.MemoryStateSuppressed {
 		t.Fatalf("State = %q, want %q", canonical.State, memory.MemoryStateSuppressed)
+	}
+}
+
+func TestRepositoryApplyLifecycleActionConstrainsMemoryPath(t *testing.T) {
+	mock, err := pgxmock.NewPool()
+	if err != nil {
+		t.Fatalf("pgxmock.NewPool() error = %v", err)
+	}
+	defer mock.Close()
+
+	now := time.Date(2026, 6, 1, 17, 22, 0, 0, time.UTC)
+	action := governance.LifecycleAction{
+		MemoryID:   "mem_path",
+		MemoryPath: "agents/research",
+		Scope:      memory.Scope{Tenant: "tenant-a", Project: "project-a", Namespace: "namespace-a"},
+		Action:     policy.ForgettingActionSuppress, Reason: "manual override", Actor: "operator-a", RequestID: "req_path", AppliedAt: now,
+	}
+
+	mock.ExpectBegin()
+	mock.ExpectQuery("UPDATE canonical_memories[\\s\\S]*memory_path").
+		WithArgs(action.MemoryID, action.Scope.Tenant, action.Scope.Project, action.Scope.Namespace, action.TargetState(), now, action.MemoryPath).
+		WillReturnRows(pgxmock.NewRows([]string{"id", "tenant", "project", "namespace", "class", "state", "content", "created_at", "updated_at", "memory_path"}).AddRow(
+			action.MemoryID, action.Scope.Tenant, action.Scope.Project, action.Scope.Namespace, memory.MemoryClassProfile, action.TargetState(), "path-specific", now.Add(-time.Hour), now, action.MemoryPath,
+		))
+	mock.ExpectExec("INSERT INTO provenance_links").WithArgs(pgxmock.AnyArg(), nil, nil, action.MemoryID, action.Scope.Tenant, action.Scope.Project, action.Scope.Namespace, "suppress_memory", action.RequestID, action.Actor, pgxmock.AnyArg(), now).WillReturnResult(pgxmock.NewResult("INSERT", 1))
+	mock.ExpectCommit()
+
+	canonical, err := NewRepository(mock).ApplyLifecycleAction(context.Background(), action)
+	if err != nil {
+		t.Fatalf("ApplyLifecycleAction() error = %v", err)
+	}
+	if canonical.MemoryPath != action.MemoryPath {
+		t.Fatalf("canonical memory path=%q, want %q", canonical.MemoryPath, action.MemoryPath)
 	}
 }
 
@@ -4736,6 +4794,33 @@ func TestRepositorySearchLexicalReturnsVisibleHits(t *testing.T) {
 	}
 }
 
+func TestRepositorySearchLexicalAppliesExactMemoryPathSelector(t *testing.T) {
+	mock, err := pgxmock.NewPool()
+	if err != nil {
+		t.Fatalf("pgxmock.NewPool() error = %v", err)
+	}
+	defer mock.Close()
+	scope := memory.Scope{Tenant: "tenant-a", Project: "project-a", Namespace: "namespace-a"}
+	now := time.Date(2026, 6, 6, 14, 0, 0, 0, time.UTC)
+	mock.ExpectQuery("SELECT .*lexical_score.*FROM canonical_memories[\\s\\S]*memory_path = \\$13").
+		WithArgs(scope.Tenant, scope.Project, scope.Namespace, "research", nil, nil, 3, string(memory.TemporalSelectionCurrent), now, nil, nil, nil, "agents/research").
+		WillReturnRows(pgxmock.NewRows([]string{"id", "tenant", "project", "namespace", "memory_path", "class", "state", "content", "created_at", "updated_at", "lexical_score"}).AddRow(
+			"mem_path", scope.Tenant, scope.Project, scope.Namespace, "agents/research", memory.MemoryClassProfile, memory.MemoryStateActive, "research note", now.Add(-time.Hour), now, 0.91,
+		))
+	repo := NewRepository(mock)
+	repo.now = func() time.Time { return now }
+	hits, err := repo.SearchLexical(context.Background(), retrieval.SearchInput{Scope: scope, Query: "research", Path: "agents/research", TopK: 3})
+	if err != nil {
+		t.Fatalf("SearchLexical() error = %v", err)
+	}
+	if len(hits) != 1 || hits[0].Memory.ID != "mem_path" {
+		t.Fatalf("hits=%+v, want one path-scoped hit", hits)
+	}
+	if hits[0].Memory.MemoryPath != "agents/research" {
+		t.Fatalf("memory path=%q, want agents/research", hits[0].Memory.MemoryPath)
+	}
+}
+
 func TestRepositoryListCitationsByMemoryIDs(t *testing.T) {
 	mock, err := pgxmock.NewPool()
 	if err != nil {
@@ -4789,13 +4874,14 @@ func TestRepositorySearchSemanticReturnsVisibleSummaryHits(t *testing.T) {
 		WithArgs(scope.Tenant, scope.Project, scope.Namespace, "[0.1,0.2,0.3]", nil, nil, 5,
 			string(memory.TemporalSelectionCurrent), temporalInstant, nil, nil, nil).
 		WillReturnRows(pgxmock.NewRows([]string{
-			"id", "tenant", "project", "namespace", "class", "state", "content", "created_at", "updated_at",
+			"id", "tenant", "project", "namespace", "memory_path", "class", "state", "content", "created_at", "updated_at",
 			"semantic_score",
 		}).AddRow(
 			"mem_summary",
 			scope.Tenant,
 			scope.Project,
 			scope.Namespace,
+			"agents/research",
 			memory.MemoryClassSummary,
 			memory.MemoryStateActive,
 			"Summary: the user is planning weekend travel.",
@@ -4823,6 +4909,9 @@ func TestRepositorySearchSemanticReturnsVisibleSummaryHits(t *testing.T) {
 
 	if hits[0].Memory.Class != memory.MemoryClassSummary {
 		t.Fatalf("hits[0].Memory.Class = %q, want %q", hits[0].Memory.Class, memory.MemoryClassSummary)
+	}
+	if hits[0].Memory.MemoryPath != "agents/research" {
+		t.Fatalf("memory path=%q, want agents/research", hits[0].Memory.MemoryPath)
 	}
 }
 
@@ -4914,13 +5003,14 @@ func TestRepositorySearchRelationsReturnsRelationHitsOnlyWhenEnabled(t *testing.
 		WithArgs(scope.Tenant, scope.Project, scope.Namespace, "travel", "travel", "travel", "travel", "travel", nil, nil, 4,
 			string(memory.TemporalSelectionCurrent), temporalInstant, nil, nil, nil).
 		WillReturnRows(pgxmock.NewRows([]string{
-			"id", "tenant", "project", "namespace", "class", "state", "content", "created_at", "updated_at",
+			"id", "tenant", "project", "namespace", "memory_path", "class", "state", "content", "created_at", "updated_at",
 			"relation_score",
 		}).AddRow(
 			"mem_relation",
 			scope.Tenant,
 			scope.Project,
 			scope.Namespace,
+			"agents/research",
 			memory.MemoryClassRelation,
 			memory.MemoryStateActive,
 			"entity:user relation:interested_in target:travel",
@@ -4947,6 +5037,9 @@ func TestRepositorySearchRelationsReturnsRelationHitsOnlyWhenEnabled(t *testing.
 
 	if hits[0].Memory.ID != "mem_relation" {
 		t.Fatalf("hits[0].Memory.ID = %q, want %q", hits[0].Memory.ID, "mem_relation")
+	}
+	if hits[0].Memory.MemoryPath != "agents/research" {
+		t.Fatalf("memory path=%q, want agents/research", hits[0].Memory.MemoryPath)
 	}
 }
 

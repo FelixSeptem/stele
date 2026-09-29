@@ -1191,6 +1191,36 @@ func TestServiceAssembleContextHonorsBudgetAndKeepsSummary(t *testing.T) {
 	}
 }
 
+func TestServiceAssembleContextPathPrefixKeepsSectionsAndCharacterBudget(t *testing.T) {
+	scope := memory.Scope{Tenant: "tenant-a", Project: "project-a", Namespace: "namespace-a"}
+	service := NewService(ServiceDependencies{
+		Lexical: &stubLexicalSource{hits: []ScoredMemory{
+			{Memory: memory.CanonicalMemory{ID: "profile", Scope: scope, Class: memory.MemoryClassProfile, State: memory.MemoryStateActive, MemoryPath: "agents/research", Content: "profile text"}, LexicalScore: 1},
+			{Memory: memory.CanonicalMemory{ID: "sibling", Scope: scope, Class: memory.MemoryClassProfile, State: memory.MemoryStateActive, MemoryPath: "agents/researcher", Content: "must not leak"}, LexicalScore: 100},
+		}},
+		Semantic: &stubSemanticSource{hits: []ScoredMemory{{Memory: memory.CanonicalMemory{ID: "summary", Scope: scope, Class: memory.MemoryClassSummary, State: memory.MemoryStateActive, MemoryPath: "agents/research/summary", Content: "summary text"}, SemanticScore: 1}}},
+	})
+	result, err := service.AssembleContext(context.Background(), AssembleContextInput{Scope: scope, Query: "research", PathPrefix: "agents/research", Budget: 5, CharacterBudget: len("profile text") + len("summary text") - 1})
+	if err != nil {
+		t.Fatalf("AssembleContext() error = %v", err)
+	}
+	if len(result.Profile) != 1 || result.Profile[0].Memory.ID != "profile" {
+		t.Fatalf("profile=%+v, want path-matched profile section", result.Profile)
+	}
+	if len(result.RelevantSummaries) > 1 {
+		t.Fatalf("summaries=%+v, want at most one item under character budget", result.RelevantSummaries)
+	}
+	selector, err := memory.NewMemoryPathSelector("", "agents/research")
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, hit := range append(append([]SearchHit{}, result.Profile...), result.RelevantSummaries...) {
+		if !selector.Matches(hit.Memory.MemoryPath) {
+			t.Fatalf("context included out-of-prefix path %q", hit.Memory.MemoryPath)
+		}
+	}
+}
+
 func TestServiceSearchTopKUsesSortedHitsForCitationLookup(t *testing.T) {
 	scope := memory.Scope{
 		Tenant:    "tenant-a",

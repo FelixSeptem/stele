@@ -654,13 +654,15 @@ type embeddingCutoverCreateRequest struct {
 }
 
 type manualCreateMemoryRequest struct {
-	Class   memory.MemoryClass `json:"class"`
-	Content string             `json:"content"`
-	Reason  string             `json:"reason"`
+	Class      memory.MemoryClass `json:"class"`
+	Content    string             `json:"content"`
+	MemoryPath string             `json:"memory_path,omitempty"`
+	Reason     string             `json:"reason"`
 }
 
 type manualUpdateMemoryRequest struct {
 	Content         string `json:"content"`
+	MemoryPath      string `json:"memory_path,omitempty"`
 	ExpectedVersion int64  `json:"expected_version"`
 	Reason          string `json:"reason"`
 }
@@ -668,6 +670,7 @@ type manualUpdateMemoryRequest struct {
 type manualMergeMemoryRequest struct {
 	SourceMemoryID  string `json:"source_memory_id"`
 	Content         string `json:"content"`
+	MemoryPath      string `json:"memory_path,omitempty"`
 	ExpectedVersion int64  `json:"expected_version"`
 	Reason          string `json:"reason"`
 }
@@ -681,6 +684,7 @@ type manualReclassifyMemoryRequest struct {
 type eventIngestRequest struct {
 	EventType       string         `json:"event_type"`
 	Content         string         `json:"content"`
+	MemoryPath      string         `json:"memory_path,omitempty"`
 	Metadata        map[string]any `json:"metadata"`
 	SourceTimestamp string         `json:"source_timestamp"`
 }
@@ -763,6 +767,8 @@ func parseTemporalSelector(asOf string, validFrom string, validTo string) (memor
 
 type memorySearchRequest struct {
 	Query                      string               `json:"query"`
+	Path                       string               `json:"path,omitempty"`
+	PathPrefix                 string               `json:"path_prefix,omitempty"`
 	QueryEmbedding             []float32            `json:"query_embedding"`
 	Classes                    []memory.MemoryClass `json:"classes"`
 	TimeFrom                   string               `json:"time_from"`
@@ -784,6 +790,8 @@ type memorySearchRequest struct {
 
 type contextAssembleRequest struct {
 	Query                      string `json:"query"`
+	Path                       string `json:"path,omitempty"`
+	PathPrefix                 string `json:"path_prefix,omitempty"`
 	Budget                     int    `json:"budget"`
 	IncludeRelations           bool   `json:"include_relations"`
 	IncludeExperienceInsights  bool   `json:"include_experience_insights"`
@@ -1669,10 +1677,8 @@ func handleEventIngest(w http.ResponseWriter, r *http.Request, ingestor memory.E
 	}
 
 	input := memory.IngestEventInput{
-		Scope:     scope,
-		EventType: req.EventType,
-		Content:   req.Content,
-		Metadata:  req.Metadata,
+		Scope: scope, EventType: req.EventType, Content: req.Content,
+		MemoryPath: req.MemoryPath, Metadata: req.Metadata,
 	}
 	if req.SourceTimestamp != "" {
 		sourceTime, err := time.Parse(time.RFC3339, req.SourceTimestamp)
@@ -1989,9 +1995,8 @@ func handleMemoryList(w http.ResponseWriter, r *http.Request, reader MemoryQuery
 	}
 
 	input := memory.ListMemoriesInput{
-		Scope:   scope,
-		Classes: parseMemoryClasses(r.URL.Query()["class"]),
-		Limit:   limit,
+		Scope: scope, Path: r.URL.Query().Get("path"), PathPrefix: r.URL.Query().Get("path_prefix"),
+		Classes: parseMemoryClasses(r.URL.Query()["class"]), Limit: limit,
 	}
 	if raw := strings.TrimSpace(r.URL.Query().Get("time_from")); raw != "" {
 		parsed, err := time.Parse(time.RFC3339, raw)
@@ -2075,6 +2080,8 @@ func handleMemorySearch(w http.ResponseWriter, r *http.Request, searcher retriev
 	input := retrieval.SearchInput{
 		Scope:                      scope,
 		Query:                      req.Query,
+		Path:                       req.Path,
+		PathPrefix:                 req.PathPrefix,
 		QueryEmbedding:             req.QueryEmbedding,
 		Classes:                    req.Classes,
 		TopK:                       req.TopK,
@@ -2213,6 +2220,8 @@ func handleContextAssembly(w http.ResponseWriter, r *http.Request, assembler ret
 	result, err := assembler.AssembleContext(r.Context(), retrieval.AssembleContextInput{
 		Scope:                      scope,
 		Query:                      req.Query,
+		Path:                       req.Path,
+		PathPrefix:                 req.PathPrefix,
 		Budget:                     req.Budget,
 		IncludeRelations:           req.IncludeRelations,
 		IncludeExperienceInsights:  req.IncludeExperienceInsights,
@@ -5398,12 +5407,13 @@ func handleAdminMemoryCreate(w http.ResponseWriter, r *http.Request, service Man
 	}
 
 	input := memory.ManualCreateMemoryInput{
-		Scope:     scope,
-		Class:     req.Class,
-		Content:   req.Content,
-		Reason:    req.Reason,
-		Actor:     strings.TrimSpace(r.Header.Get("X-Stele-Actor")),
-		RequestID: strings.TrimSpace(r.Header.Get("X-Request-ID")),
+		Scope:      scope,
+		Class:      req.Class,
+		Content:    req.Content,
+		MemoryPath: req.MemoryPath,
+		Reason:     req.Reason,
+		Actor:      strings.TrimSpace(r.Header.Get("X-Stele-Actor")),
+		RequestID:  strings.TrimSpace(r.Header.Get("X-Request-ID")),
 	}
 	if err := input.Validate(); err != nil {
 		http.Error(w, err.Error(), http.StatusBadRequest)
@@ -5440,6 +5450,7 @@ func handleAdminMemoryUpdate(w http.ResponseWriter, r *http.Request, service Man
 		Scope:           scope,
 		MemoryID:        r.PathValue("memory_id"),
 		Content:         req.Content,
+		MemoryPath:      req.MemoryPath,
 		ExpectedVersion: req.ExpectedVersion,
 		Reason:          req.Reason,
 		Actor:           strings.TrimSpace(r.Header.Get("X-Stele-Actor")),
@@ -5499,6 +5510,7 @@ func handleAdminMemoryMergeAction(w http.ResponseWriter, r *http.Request, servic
 		TargetMemoryID:  memoryID,
 		SourceMemoryID:  req.SourceMemoryID,
 		Content:         req.Content,
+		MemoryPath:      req.MemoryPath,
 		ExpectedVersion: req.ExpectedVersion,
 		Reason:          req.Reason,
 		Actor:           strings.TrimSpace(r.Header.Get("X-Stele-Actor")),

@@ -67,6 +67,7 @@ type CandidateMemory struct {
 	ID               string
 	SourceRawEventID string
 	Scope            memory.Scope
+	MemoryPath       string
 	Class            memory.MemoryClass
 	Content          string
 	Confidence       float64
@@ -93,6 +94,8 @@ func (c CandidateMemory) Validate() error {
 		return fmt.Errorf("source raw event id is required")
 	case c.Scope.Validate() != nil:
 		return c.Scope.Validate()
+	case func() error { _, err := memory.NormalizeMemoryPath(c.MemoryPath); return err }() != nil:
+		return fmt.Errorf("memory path: invalid path")
 	case validateCandidateClass(c.Class) != nil:
 		return validateCandidateClass(c.Class)
 	case strings.TrimSpace(c.Content) == "":

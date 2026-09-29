@@ -29,20 +29,44 @@ func (r *Repository) AppendMemoryIntent(ctx context.Context, record memory.Memor
 	if record.CreatedAt.IsZero() {
 		record.CreatedAt = time.Now().UTC()
 	}
-	payload, _ := json.Marshal(map[string]any{"content": record.Content, "target_memory_id": record.TargetMemoryID, "target_version": record.TargetVersion})
+	var pathErr error
+	record.MemoryPath, pathErr = memory.NormalizeMemoryPath(record.MemoryPath)
+	if pathErr != nil {
+		return memory.MemoryIntentRecord{}, pathErr
+	}
+	payload, _ := json.Marshal(map[string]any{"content": record.Content, "target_memory_id": record.TargetMemoryID, "target_version": record.TargetVersion, "memory_path": record.MemoryPath})
 	prov, _ := json.Marshal(record.Provenance)
 	fingerprint := sha256.Sum256(payload)
 	fp := hex.EncodeToString(fingerprint[:])
-	const q = `INSERT INTO memory_intents (id,tenant,project,namespace,intent_type,actor,reason,provenance,request_id,operation_id,idempotency_key,request_fingerprint,target_memory_id,target_version,payload,status,created_at)
-VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,NULLIF($13,''),NULLIF($14,0),$15,$16,$17)
+	if record.MemoryPath == memory.MemoryPathRoot {
+		const legacy = `INSERT INTO memory_intents (id,tenant,project,namespace,intent_type,actor,reason,provenance,request_id,operation_id,idempotency_key,request_fingerprint,target_memory_id,target_version,payload,status,created_at) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,NULLIF($13,''),NULLIF($14,0),$15,$16,$17) RETURNING id,tenant,project,namespace,intent_type,actor,reason,provenance,request_id,operation_id,idempotency_key,target_memory_id,target_version,payload,status,created_at`
+		row := r.db.QueryRow(ctx, legacy, record.ID, record.Scope.Tenant, record.Scope.Project, record.Scope.Namespace, record.Type, record.Actor, record.Reason, prov, record.RequestID, record.OperationID, record.IdempotencyKey, fp, record.TargetMemoryID, record.TargetVersion, payload, record.Status, record.CreatedAt)
+		created, err := scanMemoryIntentLegacy(row)
+		if err == nil {
+			created.MemoryPath = memory.MemoryPathRoot
+			return created, nil
+		}
+		const existing = `SELECT request_fingerprint,id,tenant,project,namespace,intent_type,actor,reason,provenance,request_id,operation_id,idempotency_key,target_memory_id,target_version,payload,status,created_at FROM memory_intents WHERE tenant=$1 AND project=$2 AND namespace=$3 AND (idempotency_key=$4 OR operation_id=$5) ORDER BY created_at LIMIT 1`
+		existingRecord, existingFingerprint, lookupErr := scanMemoryIntentWithFingerprintLegacy(r.db.QueryRow(ctx, existing, record.Scope.Tenant, record.Scope.Project, record.Scope.Namespace, record.IdempotencyKey, record.OperationID))
+		if lookupErr != nil {
+			return memory.MemoryIntentRecord{}, fmt.Errorf("append memory intent: %w", err)
+		}
+		if existingFingerprint != fp {
+			return memory.MemoryIntentRecord{}, memory.ErrIdempotencyConflict
+		}
+		existingRecord.MemoryPath = memory.MemoryPathRoot
+		return existingRecord, nil
+	}
+	const q = `INSERT INTO memory_intents (id,tenant,project,namespace,memory_path,intent_type,actor,reason,provenance,request_id,operation_id,idempotency_key,request_fingerprint,target_memory_id,target_version,payload,status,created_at)
+VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,NULLIF($14,''),NULLIF($15,0),$16,$17,$18)
 ON CONFLICT DO NOTHING
-RETURNING id,tenant,project,namespace,intent_type,actor,reason,provenance,request_id,operation_id,idempotency_key,target_memory_id,target_version,payload,status,created_at`
-	row := r.db.QueryRow(ctx, q, record.ID, record.Scope.Tenant, record.Scope.Project, record.Scope.Namespace, record.Type, record.Actor, record.Reason, prov, record.RequestID, record.OperationID, record.IdempotencyKey, fp, record.TargetMemoryID, record.TargetVersion, payload, record.Status, record.CreatedAt)
+RETURNING id,tenant,project,namespace,memory_path,intent_type,actor,reason,provenance,request_id,operation_id,idempotency_key,target_memory_id,target_version,payload,status,created_at`
+	row := r.db.QueryRow(ctx, q, record.ID, record.Scope.Tenant, record.Scope.Project, record.Scope.Namespace, record.MemoryPath, record.Type, record.Actor, record.Reason, prov, record.RequestID, record.OperationID, record.IdempotencyKey, fp, record.TargetMemoryID, record.TargetVersion, payload, record.Status, record.CreatedAt)
 	created, err := scanMemoryIntent(row)
 	if err == nil {
 		return created, nil
 	}
-	const existing = `SELECT request_fingerprint,id,tenant,project,namespace,intent_type,actor,reason,provenance,request_id,operation_id,idempotency_key,target_memory_id,target_version,payload,status,created_at FROM memory_intents WHERE tenant=$1 AND project=$2 AND namespace=$3 AND (idempotency_key=$4 OR operation_id=$5) ORDER BY created_at LIMIT 1`
+	const existing = `SELECT request_fingerprint,id,tenant,project,namespace,memory_path,intent_type,actor,reason,provenance,request_id,operation_id,idempotency_key,target_memory_id,target_version,payload,status,created_at FROM memory_intents WHERE tenant=$1 AND project=$2 AND namespace=$3 AND (idempotency_key=$4 OR operation_id=$5) ORDER BY created_at LIMIT 1`
 	existingRecord, existingFingerprint, lookupErr := scanMemoryIntentWithFingerprint(r.db.QueryRow(ctx, existing, record.Scope.Tenant, record.Scope.Project, record.Scope.Namespace, record.IdempotencyKey, record.OperationID))
 	if lookupErr != nil {
 		return memory.MemoryIntentRecord{}, fmt.Errorf("append memory intent: %w", err)
@@ -129,7 +153,7 @@ func (r *Repository) ReadMemoryIntent(ctx context.Context, scope memory.Scope, i
 		return memory.MemoryIntentRecord{}, fmt.Errorf("intent id is required")
 	}
 	const query = `
-SELECT id, tenant, project, namespace, intent_type, actor, reason, provenance,
+SELECT id, tenant, project, namespace, memory_path, intent_type, actor, reason, provenance,
        request_id, operation_id, idempotency_key, target_memory_id,
        target_version, payload, status, created_at
 FROM memory_intents
@@ -151,7 +175,7 @@ func (r *Repository) PromoteReviewedCandidate(ctx context.Context, input memory.
 		return fmt.Errorf("candidate id and reviewer are required")
 	}
 	const query = `
-SELECT id, source_raw_event_id, tenant, project, namespace, class, content,
+SELECT id, source_raw_event_id, tenant, project, namespace, memory_path, class, content,
        confidence, importance, freshness, sensitivity, mutability,
        retention_class, status, created_at, updated_at
 FROM candidate_memories
@@ -186,6 +210,37 @@ func scanMemoryIntent(s interface{ Scan(...any) error }) (memory.MemoryIntentRec
 	var prov, payload []byte
 	var targetID *string
 	var targetVersion *int64
+	if err := s.Scan(&out.ID, &out.Scope.Tenant, &out.Scope.Project, &out.Scope.Namespace, &out.MemoryPath, &out.Type, &out.Actor, &out.Reason, &prov, &out.RequestID, &out.OperationID, &out.IdempotencyKey, &targetID, &targetVersion, &payload, &out.Status, &out.CreatedAt); err != nil {
+		return out, err
+	}
+	if targetID != nil {
+		out.TargetMemoryID = *targetID
+	}
+	if targetVersion != nil {
+		out.TargetVersion = *targetVersion
+	}
+	if len(prov) > 0 {
+		_ = json.Unmarshal(prov, &out.Provenance)
+	}
+	if len(payload) > 0 {
+		var p struct {
+			Content    string `json:"content"`
+			MemoryPath string `json:"memory_path"`
+		}
+		_ = json.Unmarshal(payload, &p)
+		out.Content = p.Content
+		if out.MemoryPath == "" {
+			out.MemoryPath = p.MemoryPath
+		}
+	}
+	return out, nil
+}
+
+func scanMemoryIntentLegacy(s interface{ Scan(...any) error }) (memory.MemoryIntentRecord, error) {
+	var out memory.MemoryIntentRecord
+	var prov, payload []byte
+	var targetID *string
+	var targetVersion *int64
 	if err := s.Scan(&out.ID, &out.Scope.Tenant, &out.Scope.Project, &out.Scope.Namespace, &out.Type, &out.Actor, &out.Reason, &prov, &out.RequestID, &out.OperationID, &out.IdempotencyKey, &targetID, &targetVersion, &payload, &out.Status, &out.CreatedAt); err != nil {
 		return out, err
 	}
@@ -214,7 +269,7 @@ func scanMemoryIntentWithFingerprint(s interface{ Scan(...any) error }) (memory.
 	var prov, payload []byte
 	var targetID *string
 	var targetVersion *int64
-	if err := s.Scan(&fingerprint, &out.ID, &out.Scope.Tenant, &out.Scope.Project, &out.Scope.Namespace, &out.Type, &out.Actor, &out.Reason, &prov, &out.RequestID, &out.OperationID, &out.IdempotencyKey, &targetID, &targetVersion, &payload, &out.Status, &out.CreatedAt); err != nil {
+	if err := s.Scan(&fingerprint, &out.ID, &out.Scope.Tenant, &out.Scope.Project, &out.Scope.Namespace, &out.MemoryPath, &out.Type, &out.Actor, &out.Reason, &prov, &out.RequestID, &out.OperationID, &out.IdempotencyKey, &targetID, &targetVersion, &payload, &out.Status, &out.CreatedAt); err != nil {
 		return out, "", err
 	}
 	if targetID != nil {
@@ -228,10 +283,30 @@ func scanMemoryIntentWithFingerprint(s interface{ Scan(...any) error }) (memory.
 	}
 	if len(payload) > 0 {
 		var p struct {
-			Content string `json:"content"`
+			Content    string `json:"content"`
+			MemoryPath string `json:"memory_path"`
 		}
 		_ = json.Unmarshal(payload, &p)
 		out.Content = p.Content
+		if out.MemoryPath == "" {
+			out.MemoryPath = p.MemoryPath
+		}
 	}
 	return out, fingerprint, nil
+}
+
+func scanMemoryIntentWithFingerprintLegacy(s interface{ Scan(...any) error }) (memory.MemoryIntentRecord, string, error) {
+	var fp string
+	out, err := scanMemoryIntentLegacy(&fingerprintScanner{scanner: s, fp: &fp})
+	return out, fp, err
+}
+
+type fingerprintScanner struct {
+	scanner interface{ Scan(...any) error }
+	fp      *string
+}
+
+func (s *fingerprintScanner) Scan(dest ...any) error {
+	all := append([]any{s.fp}, dest...)
+	return s.scanner.Scan(all...)
 }

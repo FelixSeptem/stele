@@ -84,6 +84,8 @@ func (s ScopeInput) ToScope() memory.Scope {
 
 type SearchRequest struct {
 	Query            string `json:"query"`
+	Path             string `json:"path,omitempty"`
+	PathPrefix       string `json:"path_prefix,omitempty"`
 	Limit            int    `json:"limit,omitempty"`
 	AsOf             string `json:"as_of,omitempty"`
 	ValidFrom        string `json:"valid_from,omitempty"`
@@ -94,6 +96,8 @@ type SearchRequest struct {
 
 type ContextRequest struct {
 	Query            string `json:"query"`
+	Path             string `json:"path,omitempty"`
+	PathPrefix       string `json:"path_prefix,omitempty"`
 	BudgetBytes      int    `json:"budget_bytes,omitempty"`
 	RuntimeBindingID string `json:"runtime_binding_id,omitempty"`
 	ScopeInput
@@ -102,12 +106,15 @@ type ContextRequest struct {
 type BrowseRequest struct {
 	Limit            int    `json:"limit,omitempty"`
 	Offset           int    `json:"offset,omitempty"`
+	Path             string `json:"path,omitempty"`
+	PathPrefix       string `json:"path_prefix,omitempty"`
 	RuntimeBindingID string `json:"runtime_binding_id,omitempty"`
 	ScopeInput
 }
 
 type RememberRequest struct {
 	Content          string `json:"content"`
+	MemoryPath       string `json:"memory_path,omitempty"`
 	MemoryClass      string `json:"memory_class,omitempty"`
 	Reason           string `json:"reason"`
 	TargetMemoryID   string `json:"target_memory_id,omitempty"`
@@ -121,6 +128,7 @@ type RememberRequest struct {
 // forgetting must use the separate preview/apply contract.
 type ForgetRequest struct {
 	MemoryID         string `json:"memory_id"`
+	Path             string `json:"path,omitempty"`
 	Action           string `json:"action,omitempty"`
 	Reason           string `json:"reason"`
 	IdempotencyKey   string `json:"idempotency_key"`
@@ -137,6 +145,7 @@ type ForgetResponse struct {
 type ForgetApplyRequest struct {
 	PreviewID        string   `json:"preview_id"`
 	MemoryIDs        []string `json:"memory_ids"`
+	Path             string   `json:"path,omitempty"`
 	Action           string   `json:"action,omitempty"`
 	Reason           string   `json:"reason"`
 	IdempotencyKey   string   `json:"idempotency_key,omitempty"`
@@ -146,6 +155,8 @@ type ForgetApplyRequest struct {
 
 type ForgetPreviewRequest struct {
 	Query            string  `json:"query"`
+	Path             string  `json:"path,omitempty"`
+	PathPrefix       string  `json:"path_prefix,omitempty"`
 	Limit            int     `json:"limit,omitempty"`
 	Threshold        float64 `json:"threshold,omitempty"`
 	RuntimeBindingID string  `json:"runtime_binding_id,omitempty"`
@@ -221,12 +232,18 @@ func (r ForgetRequest) Validate(_ Limits) error {
 			return fmt.Errorf("forget action is invalid")
 		}
 	}
+	if _, err := memory.NewMemoryPathSelector(r.Path, ""); err != nil {
+		return err
+	}
 	return nil
 }
 
 func (r SearchRequest) Validate(l Limits) error {
 	if len([]byte(r.Query)) == 0 || len([]byte(r.Query)) > l.MaxQueryBytes {
 		return fmt.Errorf("query exceeds MCP bound")
+	}
+	if _, err := memory.NewMemoryPathSelector(r.Path, r.PathPrefix); err != nil {
+		return err
 	}
 	return validateLimit(r.Limit, l.MaxResults)
 }
@@ -235,12 +252,18 @@ func (r ContextRequest) Validate(l Limits) error {
 	if len([]byte(r.Query)) == 0 || len([]byte(r.Query)) > l.MaxQueryBytes {
 		return fmt.Errorf("query exceeds MCP bound")
 	}
+	if _, err := memory.NewMemoryPathSelector(r.Path, r.PathPrefix); err != nil {
+		return err
+	}
 	return validateLimit(r.BudgetBytes, l.MaxPayloadBytes)
 }
 
 func (r BrowseRequest) Validate(l Limits) error {
 	if r.Offset < 0 || (l.MaxResults > 0 && r.Offset > l.MaxResults) {
 		return fmt.Errorf("offset must not be negative")
+	}
+	if _, err := memory.NewMemoryPathSelector(r.Path, r.PathPrefix); err != nil {
+		return err
 	}
 	return validateLimit(r.Limit, l.MaxResults)
 }
@@ -257,6 +280,9 @@ func (r RememberRequest) Validate(l Limits) error {
 	}
 	if len(r.TargetMemoryID) > 256 {
 		return fmt.Errorf("target memory ID exceeds MCP bound")
+	}
+	if _, err := memory.NormalizeMemoryPath(r.MemoryPath); err != nil {
+		return err
 	}
 	return nil
 }
@@ -278,6 +304,9 @@ func (r ForgetApplyRequest) Validate(l Limits) error {
 		if err := action.Validate(); err != nil {
 			return fmt.Errorf("forget action is invalid")
 		}
+	}
+	if _, err := memory.NewMemoryPathSelector(r.Path, ""); err != nil {
+		return err
 	}
 	seen := make(map[string]struct{}, len(r.MemoryIDs))
 	for _, id := range r.MemoryIDs {
@@ -302,6 +331,9 @@ func (r ForgetPreviewRequest) Validate(l Limits) error {
 	}
 	if r.Threshold < 0 || r.Threshold > 1 {
 		return fmt.Errorf("threshold must be between zero and one")
+	}
+	if _, err := memory.NewMemoryPathSelector(r.Path, r.PathPrefix); err != nil {
+		return err
 	}
 	return validateLimit(r.Limit, l.MaxResults)
 }

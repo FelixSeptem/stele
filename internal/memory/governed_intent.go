@@ -48,6 +48,7 @@ func (s MemoryIntentStatus) Valid() bool {
 
 type MemoryIntentInput struct {
 	Scope          Scope
+	MemoryPath     string
 	Type           MemoryIntentType
 	TargetMemoryID string
 	TargetVersion  int64
@@ -63,6 +64,9 @@ type MemoryIntentInput struct {
 func (i MemoryIntentInput) Validate() error {
 	if err := i.Scope.Validate(); err != nil {
 		return err
+	}
+	if _, err := NormalizeMemoryPath(i.MemoryPath); err != nil {
+		return fmt.Errorf("memory path: %w", err)
 	}
 	switch {
 	case !i.Type.Valid():
@@ -99,6 +103,7 @@ func (i MemoryIntentInput) Validate() error {
 type MemoryIntentRecord struct {
 	ID             string
 	Scope          Scope
+	MemoryPath     string
 	Type           MemoryIntentType
 	TargetMemoryID string
 	TargetVersion  int64
@@ -158,7 +163,7 @@ func (s MemoryIntentService) Submit(ctx context.Context, input MemoryIntentInput
 		id = s.NewID()
 	}
 	record := MemoryIntentRecord{
-		ID: id, Scope: input.Scope, Type: input.Type, TargetMemoryID: strings.TrimSpace(input.TargetMemoryID),
+		ID: id, Scope: input.Scope, MemoryPath: func() string { p, _ := NormalizeMemoryPath(input.MemoryPath); return p }(), Type: input.Type, TargetMemoryID: strings.TrimSpace(input.TargetMemoryID),
 		TargetVersion: input.TargetVersion, Content: input.Content, Actor: strings.TrimSpace(input.Actor),
 		Reason: input.Reason, Provenance: input.Provenance, RequestID: strings.TrimSpace(input.RequestID),
 		OperationID: strings.TrimSpace(input.OperationID), IdempotencyKey: strings.TrimSpace(input.IdempotencyKey),

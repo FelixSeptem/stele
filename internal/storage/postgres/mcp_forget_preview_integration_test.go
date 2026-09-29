@@ -168,6 +168,34 @@ func TestMCPForgetLedgerPostgresPersistsReviewAndReplayAcrossRepositories(t *tes
 	if err != nil || len(searchHits) != 1 || searchHits[0].Memory.ID != visibleID {
 		t.Fatalf("scoped lexical search = %+v, %v; want only visible in-scope hit", searchHits, err)
 	}
+	exactPathFixture, err := seedMCPPostgresFixtureMemoryAtPath(ctx, firstRepository, scope, "scoped path conformance exact", memory.MemoryStateActive, "agents/research")
+	fixtureRecords = append(fixtureRecords, exactPathFixture)
+	if err != nil {
+		t.Fatalf("seed exact-path governed fixture: %v", err)
+	}
+	descendantPathFixture, err := seedMCPPostgresFixtureMemoryAtPath(ctx, firstRepository, scope, "scoped path conformance descendant", memory.MemoryStateActive, "agents/research/preferences")
+	fixtureRecords = append(fixtureRecords, descendantPathFixture)
+	if err != nil {
+		t.Fatalf("seed descendant-path governed fixture: %v", err)
+	}
+	siblingPathFixture, err := seedMCPPostgresFixtureMemoryAtPath(ctx, firstRepository, scope, "scoped path conformance sibling", memory.MemoryStateActive, "agents/researcher")
+	fixtureRecords = append(fixtureRecords, siblingPathFixture)
+	if err != nil {
+		t.Fatalf("seed sibling-path governed fixture: %v", err)
+	}
+	hiddenPathFixture, err := seedMCPPostgresFixtureMemoryAtPath(ctx, firstRepository, scope, "scoped path conformance hidden", memory.MemoryStateSuppressed, "agents/research/hidden")
+	fixtureRecords = append(fixtureRecords, hiddenPathFixture)
+	if err != nil {
+		t.Fatalf("seed hidden-path governed fixture: %v", err)
+	}
+	exactPathHits, err := firstRepository.SearchLexical(ctx, retrieval.SearchInput{Scope: scope, Query: "scoped path conformance", Path: "agents/research", TopK: 10})
+	if err != nil || !hasOnlyFixtureMemories(exactPathHits, exactPathFixture.MemoryID) {
+		t.Fatalf("exact PostgreSQL path search = %+v, %v; want exact-path fixture only", exactPathHits, err)
+	}
+	prefixPathHits, err := firstRepository.SearchLexical(ctx, retrieval.SearchInput{Scope: scope, Query: "scoped path conformance", PathPrefix: "agents/research", TopK: 10})
+	if err != nil || !hasOnlyFixtureMemories(prefixPathHits, exactPathFixture.MemoryID, descendantPathFixture.MemoryID) {
+		t.Fatalf("prefix PostgreSQL path search = %+v, %v; want exact and descendant fixtures only", prefixPathHits, err)
+	}
 	fixtureMemoryIDs := make([]string, 0, len(fixtureRecords))
 	for _, record := range fixtureRecords {
 		fixtureMemoryIDs = append(fixtureMemoryIDs, record.MemoryID)
@@ -232,6 +260,10 @@ type mcpPostgresFixtureRecord struct {
 }
 
 func seedMCPPostgresFixtureMemory(ctx context.Context, repository *Repository, scope memory.Scope, content string, state memory.MemoryState) (mcpPostgresFixtureRecord, error) {
+	return seedMCPPostgresFixtureMemoryAtPath(ctx, repository, scope, content, state, memory.MemoryPathRoot)
+}
+
+func seedMCPPostgresFixtureMemoryAtPath(ctx context.Context, repository *Repository, scope memory.Scope, content string, state memory.MemoryState, memoryPath string) (mcpPostgresFixtureRecord, error) {
 	createdAt := time.Now().UTC().Truncate(time.Microsecond)
 	record := mcpPostgresFixtureRecord{MemoryID: uuid.NewString(), CandidateID: uuid.NewString()}
 	actor := "mcp-postgres-conformance"
@@ -239,6 +271,7 @@ func seedMCPPostgresFixtureMemory(ctx context.Context, repository *Repository, s
 		Scope:           scope,
 		EventType:       "mcp_conformance_fixture",
 		Content:         content,
+		MemoryPath:      memoryPath,
 		Metadata:        map[string]any{"fixture": "mcp-postgres-conformance"},
 		SourceTimestamp: createdAt,
 	}, memory.ProvenanceRecord{
@@ -256,6 +289,7 @@ func seedMCPPostgresFixtureMemory(ctx context.Context, repository *Repository, s
 		ID:               record.CandidateID,
 		SourceRawEventID: event.ID,
 		Scope:            scope,
+		MemoryPath:       memoryPath,
 		Class:            memory.MemoryClassEpisodic,
 		Content:          content,
 		Confidence:       1,
@@ -317,6 +351,23 @@ func seedMCPPostgresFixtureMemory(ctx context.Context, repository *Repository, s
 		}
 	}
 	return record, nil
+}
+
+func hasOnlyFixtureMemories(hits []retrieval.ScoredMemory, expectedIDs ...string) bool {
+	if len(hits) != len(expectedIDs) {
+		return false
+	}
+	want := make(map[string]struct{}, len(expectedIDs))
+	for _, id := range expectedIDs {
+		want[id] = struct{}{}
+	}
+	for _, hit := range hits {
+		if _, ok := want[hit.Memory.ID]; !ok {
+			return false
+		}
+		delete(want, hit.Memory.ID)
+	}
+	return len(want) == 0
 }
 
 func cleanupMCPPostgresFixtures(ctx context.Context, pool *pgxpool.Pool, records []mcpPostgresFixtureRecord) error {

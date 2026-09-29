@@ -10,11 +10,12 @@ import (
 )
 
 type SafeMemoryHit struct {
-	ID        string               `json:"id"`
-	Class     memory.MemoryClass   `json:"class"`
-	State     memory.MemoryState   `json:"state"`
-	Content   string               `json:"content"`
-	Citations []retrieval.Citation `json:"citations,omitempty"`
+	ID         string               `json:"id"`
+	MemoryPath string               `json:"memory_path"`
+	Class      memory.MemoryClass   `json:"class"`
+	State      memory.MemoryState   `json:"state"`
+	Content    string               `json:"content"`
+	Citations  []retrieval.Citation `json:"citations,omitempty"`
 }
 
 type SearchResponse struct {
@@ -33,6 +34,7 @@ type ContextResponse struct {
 
 type SafeMemoryResource struct {
 	ID         string                  `json:"id"`
+	MemoryPath string                  `json:"memory_path"`
 	Class      memory.MemoryClass      `json:"class"`
 	State      memory.MemoryState      `json:"state"`
 	Content    string                  `json:"content"`
@@ -86,7 +88,7 @@ func shapeHits(hits []retrieval.SearchHit) []SafeMemoryHit {
 }
 
 func safeHit(hit retrieval.SearchHit) SafeMemoryHit {
-	return SafeMemoryHit{ID: hit.Memory.ID, Class: hit.Memory.Class, State: hit.Memory.State, Content: hit.Memory.Content, Citations: hit.Citations}
+	return SafeMemoryHit{ID: hit.Memory.ID, MemoryPath: hit.Memory.MemoryPath, Class: hit.Memory.Class, State: hit.Memory.State, Content: hit.Memory.Content, Citations: hit.Citations}
 }
 
 func shapeBrowseResponse(page memory.MemoryPage, offset, limit int) BrowseResponse {
@@ -102,7 +104,7 @@ func shapeBrowseResponse(page memory.MemoryPage, offset, limit int) BrowseRespon
 	}
 	items := make([]SafeMemoryResource, 0, end-offset)
 	for _, item := range page.Items[offset:end] {
-		items = append(items, SafeMemoryResource{ID: item.ID, Class: item.Class, State: item.State, Content: item.Content, CreatedAt: item.CreatedAt, ModifiedAt: item.ModifiedAt, Temporal: item.Temporal})
+		items = append(items, SafeMemoryResource{ID: item.ID, MemoryPath: item.MemoryPath, Class: item.Class, State: item.State, Content: item.Content, CreatedAt: item.CreatedAt, ModifiedAt: item.ModifiedAt, Temporal: item.Temporal})
 	}
 	next := 0
 	if end < len(page.Items) {

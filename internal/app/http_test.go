@@ -1379,7 +1379,7 @@ func TestNewHTTPHandlerUsesPrincipalAuthorizationForPublicRoutes(t *testing.T) {
 		MemoryQuery: query,
 	})
 
-	req := httptest.NewRequest(http.MethodGet, "/v1/memories", nil)
+	req := httptest.NewRequest(http.MethodGet, "/v1/memories?path_prefix=agents%2Fresearch", nil)
 	req.Header.Set("X-API-Key", "principal-key")
 	req.Header.Set("X-Stele-Tenant", "tenant-a")
 	req.Header.Set("X-Stele-Project", "project-a")
@@ -1393,6 +1393,9 @@ func TestNewHTTPHandlerUsesPrincipalAuthorizationForPublicRoutes(t *testing.T) {
 	}
 	if query.gotListInput.Scope != (memory.Scope{Tenant: "tenant-a", Project: "project-a", Namespace: "namespace-a"}) {
 		t.Fatalf("scope = %+v, want authorized header scope", query.gotListInput.Scope)
+	}
+	if query.gotListInput.PathPrefix != "agents/research" {
+		t.Fatalf("path prefix = %q, want delegated selector", query.gotListInput.PathPrefix)
 	}
 }
 
@@ -1811,7 +1814,7 @@ func TestNewHTTPHandlerSearchesMemories(t *testing.T) {
 		MemorySearcher: searcher,
 	})
 
-	req := httptest.NewRequest(http.MethodPost, "/v1/memories/search", bytes.NewBufferString(`{"query":"concise","query_embedding":[0.1,0.2,0.3],"top_k":3,"include_summaries":true,"include_feedback_diagnostics":true,"feedback_aware_ranking":true,"time_from":"2026-06-06T09:00:00Z","time_to":"2026-06-06T12:00:00Z"}`))
+	req := httptest.NewRequest(http.MethodPost, "/v1/memories/search", bytes.NewBufferString(`{"query":"concise","query_embedding":[0.1,0.2,0.3],"top_k":3,"path_prefix":"agents/research","include_summaries":true,"include_feedback_diagnostics":true,"feedback_aware_ranking":true,"time_from":"2026-06-06T09:00:00Z","time_to":"2026-06-06T12:00:00Z"}`))
 	req.Header.Set("Content-Type", "application/json")
 	req.Header.Set("X-API-Key", "test-key")
 	req.Header.Set("X-Stele-Tenant", "tenant-a")
@@ -1827,6 +1830,9 @@ func TestNewHTTPHandlerSearchesMemories(t *testing.T) {
 
 	if searcher.gotInput.Scope.Tenant != "tenant-a" {
 		t.Fatalf("search scope = %+v, want resolved request scope", searcher.gotInput.Scope)
+	}
+	if searcher.gotInput.PathPrefix != "agents/research" {
+		t.Fatalf("search path prefix = %q, want delegated normalized selector", searcher.gotInput.PathPrefix)
 	}
 
 	if searcher.gotInput.TimeFrom.IsZero() || searcher.gotInput.TimeTo.IsZero() {
@@ -1848,6 +1854,25 @@ func TestNewHTTPHandlerSearchesMemories(t *testing.T) {
 	hits, ok := payload["hits"].([]any)
 	if !ok || len(hits) != 1 {
 		t.Fatalf("hits payload = %#v, want one hit", payload["hits"])
+	}
+}
+
+func TestNewHTTPHandlerAssemblesPathScopedContext(t *testing.T) {
+	assembler := &stubContextAssembler{}
+	handler := NewHTTPHandler(HTTPDependencies{Readiness: stubReadinessChecker{}, APIKeys: map[string]struct{}{"test-key": {}}, ContextAssembler: assembler})
+	req := httptest.NewRequest(http.MethodPost, "/v1/context/assemble", bytes.NewBufferString(`{"query":"research","path_prefix":"agents/research","budget":2}`))
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("X-API-Key", "test-key")
+	req.Header.Set("X-Stele-Tenant", "tenant-a")
+	req.Header.Set("X-Stele-Project", "project-a")
+	req.Header.Set("X-Stele-Namespace", "namespace-a")
+	rec := httptest.NewRecorder()
+	handler.ServeHTTP(rec, req)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d, want %d", rec.Code, http.StatusOK)
+	}
+	if assembler.gotInput.Scope != (memory.Scope{Tenant: "tenant-a", Project: "project-a", Namespace: "namespace-a"}) || assembler.gotInput.PathPrefix != "agents/research" || assembler.gotInput.Budget != 2 {
+		t.Fatalf("context input = %+v, want exact scope, path prefix, and budget", assembler.gotInput)
 	}
 }
 
@@ -4446,7 +4471,7 @@ func TestNewHTTPHandlerCreatesAdminMemory(t *testing.T) {
 		MemoryManualMutation: service,
 	})
 
-	req := httptest.NewRequest(http.MethodPost, "/v1/admin/memories", strings.NewReader(`{"class":"profile","content":"seed knowledge","reason":"seed"}`))
+	req := httptest.NewRequest(http.MethodPost, "/v1/admin/memories", strings.NewReader(`{"class":"profile","content":"seed knowledge","memory_path":"agents/research","reason":"seed"}`))
 	req.Header.Set("Content-Type", "application/json")
 	req.Header.Set("X-API-Key", "admin-key")
 	req.Header.Set("X-Stele-Actor", "operator-a")
@@ -4466,6 +4491,9 @@ func TestNewHTTPHandlerCreatesAdminMemory(t *testing.T) {
 	if service.gotCreateInput.Actor != "operator-a" {
 		t.Fatalf("actor = %q, want operator-a", service.gotCreateInput.Actor)
 	}
+	if service.gotCreateInput.MemoryPath != "agents/research" {
+		t.Fatalf("memory path=%q, want agents/research", service.gotCreateInput.MemoryPath)
+	}
 }
 
 func TestNewHTTPHandlerUpdatesAdminMemory(t *testing.T) {
@@ -4483,7 +4511,7 @@ func TestNewHTTPHandlerUpdatesAdminMemory(t *testing.T) {
 		MemoryManualMutation: service,
 	})
 
-	req := httptest.NewRequest(http.MethodPatch, "/v1/admin/memories/mem_123", strings.NewReader(`{"content":"corrected knowledge","expected_version":2,"reason":"correct"}`))
+	req := httptest.NewRequest(http.MethodPatch, "/v1/admin/memories/mem_123", strings.NewReader(`{"content":"corrected knowledge","memory_path":"agents/research","expected_version":2,"reason":"correct"}`))
 	req.Header.Set("Content-Type", "application/json")
 	req.Header.Set("X-API-Key", "admin-key")
 	req.Header.Set("X-Stele-Actor", "operator-a")
@@ -4503,6 +4531,9 @@ func TestNewHTTPHandlerUpdatesAdminMemory(t *testing.T) {
 	if service.gotUpdateInput.ExpectedVersion != 2 {
 		t.Fatalf("expected version = %d, want 2", service.gotUpdateInput.ExpectedVersion)
 	}
+	if service.gotUpdateInput.MemoryPath != "agents/research" {
+		t.Fatalf("memory path=%q, want agents/research", service.gotUpdateInput.MemoryPath)
+	}
 }
 
 func TestNewHTTPHandlerMergesAdminMemory(t *testing.T) {
@@ -4520,7 +4551,7 @@ func TestNewHTTPHandlerMergesAdminMemory(t *testing.T) {
 		MemoryManualMutation: service,
 	})
 
-	req := httptest.NewRequest(http.MethodPost, "/v1/admin/memories/mem_target:merge", strings.NewReader(`{"source_memory_id":"mem_source","content":"merged knowledge","expected_version":3,"reason":"dedupe"}`))
+	req := httptest.NewRequest(http.MethodPost, "/v1/admin/memories/mem_target:merge", strings.NewReader(`{"source_memory_id":"mem_source","content":"merged knowledge","memory_path":"agents/research","expected_version":3,"reason":"dedupe"}`))
 	req.Header.Set("Content-Type", "application/json")
 	req.Header.Set("X-API-Key", "admin-key")
 	req.Header.Set("X-Stele-Actor", "operator-a")
@@ -4539,6 +4570,9 @@ func TestNewHTTPHandlerMergesAdminMemory(t *testing.T) {
 	}
 	if service.gotMergeInput.SourceMemoryID != "mem_source" {
 		t.Fatalf("source memory id = %q, want mem_source", service.gotMergeInput.SourceMemoryID)
+	}
+	if service.gotMergeInput.MemoryPath != "agents/research" {
+		t.Fatalf("memory path=%q, want agents/research", service.gotMergeInput.MemoryPath)
 	}
 }
 

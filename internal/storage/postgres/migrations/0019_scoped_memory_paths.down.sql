@@ -1,0 +1,3 @@
+-- Operational rollback intentionally retains memory_path columns and indexes.
+-- The application can disable path selectors while preserving populated values;
+-- dropping them here would make a rollback unable to read migrated data.

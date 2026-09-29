@@ -53,6 +53,19 @@ func TestApplyForgetLifecycleUsesBoundedDistinctDurableProviderOperations(t *tes
 	}
 }
 
+func TestApplyForgetLifecyclePropagatesNormalizedPath(t *testing.T) {
+	stub := &lifecycleAdapterStub{}
+	adapter := NewAdapter(AdapterOptions{LifecycleAdapter: stub})
+	binding := provider.RuntimeBinding{BindingID: "binding", PrincipalID: "principal", Scope: memory.Scope{Tenant: "t", Project: "p", Namespace: "n"}, SessionID: "session"}
+	_, err := adapter.applyForgetLifecycle(context.Background(), auth.Principal{ID: "principal", Role: auth.PrincipalRoleAdmin, Status: auth.PrincipalStatusActive}, binding, ForgetApplyRequest{PreviewID: "fp_1", MemoryIDs: []string{"memory-1"}, Path: "/agents/research/", Action: "suppress", Reason: "requested", IdempotencyKey: "key"})
+	if err != nil {
+		t.Fatalf("applyForgetLifecycle() error = %v", err)
+	}
+	if stub.last.MemoryPath != "agents/research" {
+		t.Fatalf("metadata memory path=%q, want normalized path", stub.last.MemoryPath)
+	}
+}
+
 func TestApplyForgetLifecycleRejectsNonAdminBeforeMutation(t *testing.T) {
 	stub := &lifecycleAdapterStub{}
 	adapter := NewAdapter(AdapterOptions{LifecycleAdapter: stub})

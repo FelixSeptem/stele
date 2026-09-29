@@ -696,6 +696,16 @@ paths:
             type: string
             format: date-time
         - in: query
+          name: path
+          required: false
+          schema: {type: string, maxLength: 512}
+          description: Exact normalized memory path. Mutually exclusive with path_prefix.
+        - in: query
+          name: path_prefix
+          required: false
+          schema: {type: string, maxLength: 512}
+          description: Explicit segment-boundary descendant selector.
+        - in: query
           name: limit
           required: false
           schema:
@@ -4113,6 +4123,7 @@ components:
         metadata: {$ref: '#/components/schemas/ProviderOperationMetadata'}
         event_type: {type: string}
         content: {type: string}
+        memory_path: {type: string, maxLength: 512}
         metadata_map: {type: object}
     ProviderEventResponse:
       type: object
@@ -4621,6 +4632,9 @@ components:
         type:
           type: string
           enum: [remember, update, forget, contradiction, feedback]
+        memory_path:
+          type: string
+          maxLength: 512
         target_memory_id: {type: string}
         target_version: {type: integer, minimum: 1}
         content: {type: string}
@@ -6589,6 +6603,9 @@ components:
       properties:
         event_type:
           type: string
+        memory_path:
+          type: string
+          maxLength: 512
         content:
           type: string
         metadata:
@@ -6781,6 +6798,7 @@ components:
       required:
         - id
         - scope
+        - memory_path
         - class
         - state
         - content
@@ -6789,6 +6807,9 @@ components:
           type: string
         scope:
           $ref: '#/components/schemas/Scope'
+        memory_path:
+          type: string
+          maxLength: 512
         class:
           type: string
         state:
@@ -6874,6 +6895,14 @@ components:
       properties:
         query:
           type: string
+        path:
+          type: string
+          maxLength: 512
+          description: Exact normalized memory path; mutually exclusive with path_prefix.
+        path_prefix:
+          type: string
+          maxLength: 512
+          description: Explicit segment-boundary descendant selector.
         query_embedding:
           type: array
           items:
@@ -6995,6 +7024,12 @@ components:
       properties:
         query:
           type: string
+        path:
+          type: string
+          maxLength: 512
+        path_prefix:
+          type: string
+          maxLength: 512
         budget:
           type: integer
         include_relations:

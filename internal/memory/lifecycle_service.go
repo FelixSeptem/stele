@@ -14,12 +14,13 @@ type LifecycleActionProcessor interface {
 }
 
 type LifecycleActionInput struct {
-	Scope     Scope
-	MemoryID  string
-	Action    policy.ForgettingAction
-	Reason    string
-	Actor     string
-	RequestID string
+	Scope      Scope
+	MemoryID   string
+	MemoryPath string
+	Action     policy.ForgettingAction
+	Reason     string
+	Actor      string
+	RequestID  string
 }
 
 func (i LifecycleActionInput) Validate() error {
@@ -45,18 +46,26 @@ type LifecycleService struct {
 }
 
 type LifecycleActionRecord struct {
-	Scope     Scope
-	MemoryID  string
-	Action    policy.ForgettingAction
-	Reason    string
-	Actor     string
-	RequestID string
-	AppliedAt time.Time
+	Scope      Scope
+	MemoryID   string
+	MemoryPath string
+	Action     policy.ForgettingAction
+	Reason     string
+	Actor      string
+	RequestID  string
+	AppliedAt  time.Time
 }
 
 func (s LifecycleService) Apply(ctx context.Context, input LifecycleActionInput) error {
 	if err := input.Validate(); err != nil {
 		return err
+	}
+	if strings.TrimSpace(input.MemoryPath) != "" {
+		path, err := NormalizeMemoryPath(input.MemoryPath)
+		if err != nil {
+			return err
+		}
+		input.MemoryPath = path
 	}
 	if s.Processor == nil {
 		return fmt.Errorf("lifecycle processor is not configured")
@@ -68,12 +77,13 @@ func (s LifecycleService) Apply(ctx context.Context, input LifecycleActionInput)
 	}
 
 	return s.Processor.Apply(ctx, LifecycleActionRecord{
-		MemoryID:  input.MemoryID,
-		Scope:     input.Scope,
-		Action:    input.Action,
-		Reason:    input.Reason,
-		Actor:     input.Actor,
-		RequestID: input.RequestID,
-		AppliedAt: now().UTC(),
+		MemoryID:   input.MemoryID,
+		MemoryPath: input.MemoryPath,
+		Scope:      input.Scope,
+		Action:     input.Action,
+		Reason:     input.Reason,
+		Actor:      input.Actor,
+		RequestID:  input.RequestID,
+		AppliedAt:  now().UTC(),
 	})
 }

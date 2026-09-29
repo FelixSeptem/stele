@@ -178,13 +178,14 @@ type lifecycleProcessorAdapter struct {
 
 func (a lifecycleProcessorAdapter) Apply(ctx context.Context, action memory.LifecycleActionRecord) error {
 	return a.processor.Apply(ctx, governance.LifecycleAction{
-		MemoryID:  action.MemoryID,
-		Scope:     action.Scope,
-		Action:    action.Action,
-		Reason:    action.Reason,
-		Actor:     action.Actor,
-		RequestID: action.RequestID,
-		AppliedAt: action.AppliedAt,
+		MemoryID:   action.MemoryID,
+		MemoryPath: action.MemoryPath,
+		Scope:      action.Scope,
+		Action:     action.Action,
+		Reason:     action.Reason,
+		Actor:      action.Actor,
+		RequestID:  action.RequestID,
+		AppliedAt:  action.AppliedAt,
 	})
 }
 

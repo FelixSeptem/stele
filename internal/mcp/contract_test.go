@@ -92,12 +92,12 @@ func TestMCPSearchDelegatesExactScopeAndTemporalSelectorWithRedactedShape(t *tes
 	adapter := NewAdapter(AdapterOptions{Enabled: true, Authorizer: authorizer, Searcher: searcher, Limits: Limits{MaxQueryBytes: 128, MaxPayloadBytes: 4096, MaxResults: 10, MaxIDs: 10}})
 	session := connectMCPContractSession(t, adapter, principal, "")
 	result, err := session.CallTool(ctx, &protocolmcp.CallToolParams{Name: ToolSearch, Arguments: map[string]any{
-		"tenant": scope.Tenant, "project": scope.Project, "namespace": scope.Namespace, "query": "question", "limit": float64(3), "as_of": "2026-09-25T00:00:00Z",
+		"tenant": scope.Tenant, "project": scope.Project, "namespace": scope.Namespace, "query": "question", "limit": float64(3), "as_of": "2026-09-25T00:00:00Z", "path": "agents/research",
 	}})
 	if err != nil || result.IsError {
 		t.Fatalf("memory_search result=%+v error=%v", result, err)
 	}
-	if searcher.got.Scope != scope || searcher.got.Query != "question" || searcher.got.TemporalConstraint.Mode != memory.TemporalSelectionAsOf || searcher.got.TemporalConstraint.AsOf == nil {
+	if searcher.got.Scope != scope || searcher.got.Query != "question" || searcher.got.Path != "agents/research" || searcher.got.TemporalConstraint.Mode != memory.TemporalSelectionAsOf || searcher.got.TemporalConstraint.AsOf == nil {
 		t.Fatalf("delegated search input = %+v, want exact scope, query, and explicit as_of", searcher.got)
 	}
 	encoded, err := json.Marshal(result.StructuredContent)
@@ -170,12 +170,12 @@ func TestMCPContextDelegatesExactBudgetAndKeepsProfileSectionsSeparate(t *testin
 	})
 	session := connectMCPContractSession(t, adapter, principal, "")
 	result, err := session.CallTool(ctx, &protocolmcp.CallToolParams{Name: ToolContext, Arguments: map[string]any{
-		"tenant": scope.Tenant, "project": scope.Project, "namespace": scope.Namespace, "query": "question", "budget_bytes": float64(256),
+		"tenant": scope.Tenant, "project": scope.Project, "namespace": scope.Namespace, "query": "question", "budget_bytes": float64(256), "path_prefix": "agents/research",
 	}})
 	if err != nil || result.IsError {
 		t.Fatalf("memory_context result=%+v error=%v", result, err)
 	}
-	if assembler.got.Scope != scope || assembler.got.Query != "question" || assembler.got.Budget != 10 || assembler.got.CharacterBudget != 256 {
+	if assembler.got.Scope != scope || assembler.got.Query != "question" || assembler.got.PathPrefix != "agents/research" || assembler.got.Budget != 10 || assembler.got.CharacterBudget != 256 {
 		t.Fatalf("delegated context input = %+v, want bounded item budget and exact character budget", assembler.got)
 	}
 	encoded, err := json.Marshal(result.StructuredContent)
@@ -212,12 +212,12 @@ func TestMCPBrowseUsesDefaultLimitAfterOffset(t *testing.T) {
 	})
 	session := connectMCPContractSession(t, adapter, principal, "")
 	result, err := session.CallTool(ctx, &protocolmcp.CallToolParams{Name: ToolBrowse, Arguments: map[string]any{
-		"tenant": scope.Tenant, "project": scope.Project, "namespace": scope.Namespace, "offset": float64(1),
+		"tenant": scope.Tenant, "project": scope.Project, "namespace": scope.Namespace, "offset": float64(1), "path_prefix": "agents/research",
 	}})
 	if err != nil || result.IsError {
 		t.Fatalf("memory_browse result=%+v error=%v", result, err)
 	}
-	if query.got.Scope != scope || query.got.Limit != 3 {
+	if query.got.Scope != scope || query.got.PathPrefix != "agents/research" || query.got.Limit != 3 {
 		t.Fatalf("browse input = %+v, want exact scope and offset + default limit fetch of 3", query.got)
 	}
 	encoded, err := json.Marshal(result.StructuredContent)

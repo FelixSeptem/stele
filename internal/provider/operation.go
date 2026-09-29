@@ -24,6 +24,7 @@ type OperationMetadata struct {
 	IdempotencyKey string `json:"idempotency_key,omitempty"`
 	EventSeq       int64  `json:"event_seq,omitempty"`
 	SchemaVersion  string `json:"schema_version"`
+	MemoryPath     string `json:"memory_path,omitempty"`
 }
 
 // Validate checks metadata without mutating the caller's envelope.
@@ -37,6 +38,13 @@ func (m *OperationMetadata) NormalizeValidate() error {
 	m.OperationID = strings.TrimSpace(m.OperationID)
 	m.IdempotencyKey = strings.TrimSpace(m.IdempotencyKey)
 	m.SchemaVersion = strings.TrimSpace(m.SchemaVersion)
+	if strings.TrimSpace(m.MemoryPath) != "" {
+		path, err := memory.NormalizeMemoryPath(m.MemoryPath)
+		if err != nil {
+			return err
+		}
+		m.MemoryPath = path
+	}
 	if !boundedToken(m.SchemaVersion, MaxSchemaVersionBytes) {
 		return fmt.Errorf("schema_version is invalid")
 	}
@@ -348,8 +356,9 @@ func (a *Adapter) ApplyLifecycle(ctx context.Context, binding RuntimeBinding, me
 	payload, _ := json.Marshal(struct {
 		Scope                                   memory.Scope
 		Principal, Key, MemoryID, Reason, Actor string
+		MemoryPath                              string
 		Action                                  policy.ForgettingAction
-	}{binding.Scope, binding.PrincipalID, meta.IdempotencyKey, memoryID, reason, actor, action})
+	}{binding.Scope, binding.PrincipalID, meta.IdempotencyKey, memoryID, reason, actor, meta.MemoryPath, action})
 	claim := LifecycleClaim{Scope: binding.Scope, PrincipalID: binding.PrincipalID, IdempotencyKey: meta.IdempotencyKey, RequestFingerprint: fmt.Sprintf("%x", sha256.Sum256(payload))}
 	if a.deps.LifecycleStore != nil {
 		cr, err := a.deps.LifecycleStore.ClaimLifecycle(ctx, claim)
@@ -365,7 +374,7 @@ func (a *Adapter) ApplyLifecycle(ctx context.Context, binding RuntimeBinding, me
 			return OperationOutcome{Metadata: meta}, fmt.Errorf("lifecycle operation in progress")
 		}
 	}
-	err := a.deps.Lifecycle.Apply(ctx, memory.LifecycleActionInput{Scope: binding.Scope, MemoryID: strings.TrimSpace(memoryID), Action: action, Reason: strings.TrimSpace(reason), Actor: strings.TrimSpace(actor), RequestID: meta.RequestID})
+	err := a.deps.Lifecycle.Apply(ctx, memory.LifecycleActionInput{Scope: binding.Scope, MemoryID: strings.TrimSpace(memoryID), MemoryPath: meta.MemoryPath, Action: action, Reason: strings.TrimSpace(reason), Actor: strings.TrimSpace(actor), RequestID: meta.RequestID})
 	if err != nil {
 		if a.deps.LifecycleStore != nil {
 			_ = a.deps.LifecycleStore.ReleaseLifecycle(context.WithoutCancel(ctx), claim)

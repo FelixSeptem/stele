@@ -82,12 +82,13 @@ func TestManualMutationServiceCreateMemoryNormalizesRecord(t *testing.T) {
 	}
 
 	resource, err := service.CreateMemory(context.Background(), memory.ManualCreateMemoryInput{
-		Scope:     memory.Scope{Tenant: "tenant-a", Project: "project-a", Namespace: "namespace-a"},
-		Class:     memory.MemoryClassProfile,
-		Content:   "seed knowledge",
-		Reason:    "seed profile",
-		Actor:     "operator-a",
-		RequestID: "req_123",
+		Scope:      memory.Scope{Tenant: "tenant-a", Project: "project-a", Namespace: "namespace-a"},
+		Class:      memory.MemoryClassProfile,
+		Content:    "seed knowledge",
+		MemoryPath: "agents/research",
+		Reason:     "seed profile",
+		Actor:      "operator-a",
+		RequestID:  "req_123",
 	})
 	if err != nil {
 		t.Fatalf("CreateMemory() error = %v", err)
@@ -101,6 +102,9 @@ func TestManualMutationServiceCreateMemoryNormalizesRecord(t *testing.T) {
 	}
 	if processor.gotCreate.CreatedAt.IsZero() {
 		t.Fatal("CreatedAt = zero, want normalized timestamp")
+	}
+	if processor.gotCreate.MemoryPath != "agents/research" {
+		t.Fatalf("MemoryPath = %q, want agents/research", processor.gotCreate.MemoryPath)
 	}
 	if resource.ID != "mem_123" {
 		t.Fatalf("resource.ID = %q, want mem_123", resource.ID)
@@ -129,6 +133,7 @@ func TestManualMutationServiceUpdateMemoryCarriesExpectedVersion(t *testing.T) {
 		Scope:           memory.Scope{Tenant: "tenant-a", Project: "project-a", Namespace: "namespace-a"},
 		MemoryID:        "mem_123",
 		Content:         "corrected",
+		MemoryPath:      "agents/research",
 		ExpectedVersion: 2,
 		Reason:          "manual correction",
 		Actor:           "operator-a",
@@ -143,6 +148,9 @@ func TestManualMutationServiceUpdateMemoryCarriesExpectedVersion(t *testing.T) {
 	}
 	if processor.gotUpdate.VersionID != "ver_124" {
 		t.Fatalf("VersionID = %q, want ver_124", processor.gotUpdate.VersionID)
+	}
+	if processor.gotUpdate.MemoryPath != "agents/research" {
+		t.Fatalf("MemoryPath = %q, want agents/research", processor.gotUpdate.MemoryPath)
 	}
 }
 
@@ -183,6 +191,7 @@ func TestManualMutationServiceMergeMemoryNormalizesSourceAndTarget(t *testing.T)
 		TargetMemoryID:  "mem_target",
 		SourceMemoryID:  "mem_source",
 		Content:         "merged content",
+		MemoryPath:      "agents/research",
 		ExpectedVersion: 4,
 		Reason:          "dedupe duplicate",
 		Actor:           "operator-a",
@@ -200,6 +209,9 @@ func TestManualMutationServiceMergeMemoryNormalizesSourceAndTarget(t *testing.T)
 	}
 	if processor.gotMerge.ExpectedVersion != 4 {
 		t.Fatalf("ExpectedVersion = %d, want 4", processor.gotMerge.ExpectedVersion)
+	}
+	if processor.gotMerge.MemoryPath != "agents/research" {
+		t.Fatalf("MemoryPath = %q, want agents/research", processor.gotMerge.MemoryPath)
 	}
 }
 

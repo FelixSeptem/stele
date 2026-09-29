@@ -100,3 +100,25 @@ func TestSearchValidatesExplicitHistoricalConstraint(t *testing.T) {
 		t.Fatal("Validate() error = nil, want missing as_of rejection")
 	}
 }
+
+func TestSearchPathPrefixPreservesTemporalAndLifecycleFiltering(t *testing.T) {
+	scope := memory.Scope{Tenant: "t", Project: "p", Namespace: "n"}
+	now := time.Date(2026, 6, 1, 12, 0, 0, 0, time.UTC)
+	expired := now.Add(-time.Minute)
+	lexical := &stubLexicalSource{hits: []ScoredMemory{
+		{Memory: memory.CanonicalMemory{ID: "exact", Scope: scope, MemoryPath: "agents/research", State: memory.MemoryStateActive, Class: memory.MemoryClassProfile}, LexicalScore: 10},
+		{Memory: memory.CanonicalMemory{ID: "child", Scope: scope, MemoryPath: "agents/research/preferences", State: memory.MemoryStateActive, Class: memory.MemoryClassProfile}, LexicalScore: 9},
+		{Memory: memory.CanonicalMemory{ID: "sibling", Scope: scope, MemoryPath: "agents/researcher", State: memory.MemoryStateActive, Class: memory.MemoryClassProfile}, LexicalScore: 100},
+		{Memory: memory.CanonicalMemory{ID: "hidden", Scope: scope, MemoryPath: "agents/research/hidden", State: memory.MemoryStateSuppressed, Class: memory.MemoryClassProfile}, LexicalScore: 100},
+		{Memory: memory.CanonicalMemory{ID: "expired", Scope: scope, MemoryPath: "agents/research/old", State: memory.MemoryStateActive, Class: memory.MemoryClassProfile, TemporalValidity: memory.TemporalValidity{TemporalFactID: "fact", IngestedAt: now.Add(-2 * time.Hour), ValidFrom: now.Add(-2 * time.Hour), ValidTo: &expired, ValiditySource: memory.TemporalValiditySourceExplicit}}, LexicalScore: 8},
+	}}
+	service := NewService(ServiceDependencies{Lexical: lexical})
+	service.now = func() time.Time { return now }
+	result, err := service.Search(context.Background(), SearchInput{Scope: scope, Query: "research", PathPrefix: "agents/research", TopK: 10})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(result.Hits) != 2 || result.Hits[0].Memory.ID != "exact" || result.Hits[1].Memory.ID != "child" {
+		t.Fatalf("hits=%+v, want exact and child only in ranking order", result.Hits)
+	}
+}

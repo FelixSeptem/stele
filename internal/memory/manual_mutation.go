@@ -12,12 +12,13 @@ var ErrManualMutationVersionConflict = errors.New("manual memory version conflic
 var ErrManualMutationRejected = errors.New("manual memory mutation rejected")
 
 type ManualCreateMemoryInput struct {
-	Scope     Scope
-	Class     MemoryClass
-	Content   string
-	Reason    string
-	Actor     string
-	RequestID string
+	Scope      Scope
+	Class      MemoryClass
+	Content    string
+	MemoryPath string
+	Reason     string
+	Actor      string
+	RequestID  string
 }
 
 func (i ManualCreateMemoryInput) Validate() error {
@@ -28,6 +29,9 @@ func (i ManualCreateMemoryInput) Validate() error {
 		return fmt.Errorf("manual create class %q is not allowed", i.Class)
 	case strings.TrimSpace(i.Content) == "":
 		return fmt.Errorf("content is required")
+	case strings.TrimSpace(i.MemoryPath) != "":
+		_, err := NormalizeMemoryPath(i.MemoryPath)
+		return err
 	case strings.TrimSpace(i.Reason) == "":
 		return fmt.Errorf("reason is required")
 	case strings.TrimSpace(i.Actor) == "":
@@ -41,6 +45,7 @@ type ManualUpdateMemoryInput struct {
 	Scope           Scope
 	MemoryID        string
 	Content         string
+	MemoryPath      string
 	ExpectedVersion int64
 	Reason          string
 	Actor           string
@@ -55,6 +60,9 @@ func (i ManualUpdateMemoryInput) Validate() error {
 		return fmt.Errorf("memory id is required")
 	case strings.TrimSpace(i.Content) == "":
 		return fmt.Errorf("content is required")
+	case strings.TrimSpace(i.MemoryPath) != "":
+		_, err := NormalizeMemoryPath(i.MemoryPath)
+		return err
 	case i.ExpectedVersion <= 0:
 		return fmt.Errorf("expected version must be greater than zero")
 	case strings.TrimSpace(i.Reason) == "":
@@ -71,6 +79,7 @@ type ManualMergeMemoryInput struct {
 	TargetMemoryID  string
 	SourceMemoryID  string
 	Content         string
+	MemoryPath      string
 	ExpectedVersion int64
 	Reason          string
 	Actor           string
@@ -89,6 +98,9 @@ func (i ManualMergeMemoryInput) Validate() error {
 		return fmt.Errorf("source memory id must differ from target memory id")
 	case strings.TrimSpace(i.Content) == "":
 		return fmt.Errorf("content is required")
+	case strings.TrimSpace(i.MemoryPath) != "":
+		_, err := NormalizeMemoryPath(i.MemoryPath)
+		return err
 	case i.ExpectedVersion <= 0:
 		return fmt.Errorf("expected version must be greater than zero")
 	case strings.TrimSpace(i.Reason) == "":
@@ -130,15 +142,16 @@ func (i ManualReclassifyMemoryInput) Validate() error {
 }
 
 type ManualCreateMemoryRecord struct {
-	MemoryID  string
-	VersionID string
-	Scope     Scope
-	Class     MemoryClass
-	Content   string
-	Reason    string
-	Actor     string
-	RequestID string
-	CreatedAt time.Time
+	MemoryID   string
+	VersionID  string
+	Scope      Scope
+	Class      MemoryClass
+	Content    string
+	MemoryPath string
+	Reason     string
+	Actor      string
+	RequestID  string
+	CreatedAt  time.Time
 }
 
 type ManualUpdateMemoryRecord struct {
@@ -146,6 +159,7 @@ type ManualUpdateMemoryRecord struct {
 	VersionID       string
 	Scope           Scope
 	Content         string
+	MemoryPath      string
 	ExpectedVersion int64
 	Reason          string
 	Actor           string
@@ -159,6 +173,7 @@ type ManualMergeMemoryRecord struct {
 	VersionID       string
 	Scope           Scope
 	Content         string
+	MemoryPath      string
 	ExpectedVersion int64
 	Reason          string
 	Actor           string
@@ -207,15 +222,16 @@ func (s ManualMutationService) CreateMemory(ctx context.Context, input ManualCre
 	}
 
 	canonical, err := s.Processor.CreateMemory(ctx, ManualCreateMemoryRecord{
-		MemoryID:  s.NewMemoryID(),
-		VersionID: s.NewVersionID(),
-		Scope:     input.Scope,
-		Class:     input.Class,
-		Content:   input.Content,
-		Reason:    input.Reason,
-		Actor:     input.Actor,
-		RequestID: strings.TrimSpace(input.RequestID),
-		CreatedAt: manualMutationNow(s.Now),
+		MemoryID:   s.NewMemoryID(),
+		VersionID:  s.NewVersionID(),
+		Scope:      input.Scope,
+		Class:      input.Class,
+		Content:    input.Content,
+		MemoryPath: normalizedManualPath(input.MemoryPath),
+		Reason:     input.Reason,
+		Actor:      input.Actor,
+		RequestID:  strings.TrimSpace(input.RequestID),
+		CreatedAt:  manualMutationNow(s.Now),
 	})
 	if err != nil {
 		return MemoryResource{}, err
@@ -240,6 +256,7 @@ func (s ManualMutationService) UpdateMemory(ctx context.Context, input ManualUpd
 		VersionID:       s.NewVersionID(),
 		Scope:           input.Scope,
 		Content:         input.Content,
+		MemoryPath:      normalizedManualPath(input.MemoryPath),
 		ExpectedVersion: input.ExpectedVersion,
 		Reason:          input.Reason,
 		Actor:           input.Actor,
@@ -270,6 +287,7 @@ func (s ManualMutationService) MergeMemory(ctx context.Context, input ManualMerg
 		VersionID:       s.NewVersionID(),
 		Scope:           input.Scope,
 		Content:         input.Content,
+		MemoryPath:      normalizedManualPath(input.MemoryPath),
 		ExpectedVersion: input.ExpectedVersion,
 		Reason:          input.Reason,
 		Actor:           input.Actor,
@@ -281,6 +299,14 @@ func (s ManualMutationService) MergeMemory(ctx context.Context, input ManualMerg
 	}
 
 	return NewMemoryResource(canonical), nil
+}
+
+func normalizedManualPath(raw string) string {
+	if strings.TrimSpace(raw) == "" {
+		return ""
+	}
+	path, _ := NormalizeMemoryPath(raw)
+	return path
 }
 
 func (s ManualMutationService) ReclassifyMemory(ctx context.Context, input ManualReclassifyMemoryInput) (MemoryResource, error) {

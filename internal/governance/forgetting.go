@@ -12,14 +12,15 @@ import (
 )
 
 type LifecycleAction struct {
-	MemoryID  string
-	Scope     memory.Scope
-	Action    policy.ForgettingAction
-	Content   string
-	Reason    string
-	Actor     string
-	RequestID string
-	AppliedAt time.Time
+	MemoryID   string
+	MemoryPath string
+	Scope      memory.Scope
+	Action     policy.ForgettingAction
+	Content    string
+	Reason     string
+	Actor      string
+	RequestID  string
+	AppliedAt  time.Time
 }
 
 func (a LifecycleAction) Validate() error {
@@ -32,9 +33,13 @@ func (a LifecycleAction) Validate() error {
 		return a.Action.Validate()
 	case a.AppliedAt.IsZero():
 		return fmt.Errorf("applied at is required")
-	default:
-		return nil
 	}
+	if strings.TrimSpace(a.MemoryPath) != "" {
+		if _, err := memory.NormalizeMemoryPath(a.MemoryPath); err != nil {
+			return err
+		}
+	}
+	return nil
 }
 
 func (a LifecycleAction) TargetState() memory.MemoryState {

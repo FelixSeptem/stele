@@ -69,6 +69,13 @@ func TestLifecycleActionTargetState(t *testing.T) {
 	}
 }
 
+func TestLifecycleActionWithPathStillRequiresAppliedAt(t *testing.T) {
+	action := LifecycleAction{MemoryID: "mem", MemoryPath: "agents/research", Scope: memory.Scope{Tenant: "t", Project: "p", Namespace: "n"}, Action: policy.ForgettingActionSuppress}
+	if err := action.Validate(); err == nil {
+		t.Fatal("Validate() error = nil, want missing applied-at rejection even with a memory path")
+	}
+}
+
 func TestForgettingProcessorApplyRetentionAction(t *testing.T) {
 	now := time.Date(2026, 6, 1, 17, 5, 0, 0, time.UTC)
 	repo := &stubLifecycleRepository{}

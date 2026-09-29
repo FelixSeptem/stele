@@ -222,6 +222,7 @@ SELECT
 	tenant,
 	project,
 	namespace,
+	memory_path,
 	class,
 	content,
 	confidence,
@@ -286,6 +287,7 @@ RETURNING
 	tenant,
 	project,
 	namespace,
+	memory_path,
 	class,
 	content,
 	confidence,
@@ -345,6 +347,7 @@ WITH claimed AS (
 		tenant,
 		project,
 		namespace,
+		memory_path,
 		event_type,
 		content,
 		source_timestamp,
@@ -357,9 +360,10 @@ WITH claimed AS (
 SELECT
 	id,
 	tenant,
-	project,
-	namespace,
-	event_type,
+		project,
+		namespace,
+		memory_path,
+		event_type,
 	content,
 	source_timestamp,
 	created_at,
@@ -380,11 +384,12 @@ ORDER BY created_at ASC
 	claims := make([]governance.ClaimedRawEvent, 0)
 	for rows.Next() {
 		var claim governance.ClaimedRawEvent
-		if err := rows.Scan(
+		if err := scanWithOptionalMemoryPath(rows, &claim.Event.MemoryPath, []any{
 			&claim.Event.ID,
 			&claim.Event.Scope.Tenant,
 			&claim.Event.Scope.Project,
 			&claim.Event.Scope.Namespace,
+			&claim.Event.MemoryPath,
 			&claim.Event.EventType,
 			&claim.Event.Content,
 			&claim.Event.SourceTimestamp,
@@ -393,7 +398,11 @@ ORDER BY created_at ASC
 			&claim.ClaimedAt,
 			&claim.LeaseUntil,
 			&claim.Attempt,
-		); err != nil {
+		}, []any{
+			&claim.Event.ID, &claim.Event.Scope.Tenant, &claim.Event.Scope.Project, &claim.Event.Scope.Namespace,
+			&claim.Event.EventType, &claim.Event.Content, &claim.Event.SourceTimestamp, &claim.Event.CreatedAt,
+			&claim.WorkerID, &claim.ClaimedAt, &claim.LeaseUntil, &claim.Attempt,
+		}); err != nil {
 			return nil, fmt.Errorf("scan claimed raw event: %w", err)
 		}
 
@@ -552,9 +561,10 @@ func (r *Repository) ListGovernanceRawEvents(ctx context.Context, input governan
 SELECT
 	id,
 	tenant,
-	project,
-	namespace,
-	event_type,
+		project,
+		namespace,
+		memory_path,
+		event_type,
 	content,
 	source_timestamp,
 	created_at,
@@ -653,9 +663,10 @@ func (r *Repository) ReadGovernanceRawEvent(ctx context.Context, input governanc
 SELECT
 	id,
 	tenant,
-	project,
-	namespace,
-	event_type,
+		project,
+		namespace,
+		memory_path,
+		event_type,
 	content,
 	source_timestamp,
 	created_at,
@@ -996,25 +1007,9 @@ WHERE id = $1
 `
 
 	var canonical memory.CanonicalMemory
-	if err := r.db.QueryRow(ctx, query, memoryID, scope.Tenant, scope.Project, scope.Namespace, includeHidden).Scan(
-		&canonical.ID,
-		&canonical.Scope.Tenant,
-		&canonical.Scope.Project,
-		&canonical.Scope.Namespace,
-		&canonical.Class,
-		&canonical.State,
-		&canonical.Content,
-		&canonical.CreatedAt,
-		&canonical.ModifiedAt,
-		&canonical.TemporalValidity.TemporalFactID,
-		&canonical.TemporalValidity.IngestedAt,
-		&canonical.TemporalValidity.ValidFrom,
-		&canonical.TemporalValidity.ValidTo,
-		&canonical.TemporalValidity.ValiditySource,
-	); err != nil {
+	if err := scanCanonicalMemory(r.db.QueryRow(ctx, query, memoryID, scope.Tenant, scope.Project, scope.Namespace, includeHidden), &canonical); err != nil {
 		return memory.CanonicalMemory{}, fmt.Errorf("read canonical memory: %w", err)
 	}
-
 	return canonical, nil
 }
 
@@ -1090,6 +1085,7 @@ func (r *Repository) ReadMemoryHistory(ctx context.Context, scope memory.Scope, 
 SELECT
 	id,
 	memory_id,
+	memory_path,
 	version,
 	state,
 	content,
@@ -1113,7 +1109,21 @@ ORDER BY version DESC
 
 	for versionRows.Next() {
 		var version memory.MemoryVersion
-		if err := versionRows.Scan(
+		if err := scanWithOptionalMemoryPath(versionRows, &version.MemoryPath, []any{
+			&version.ID,
+			&version.MemoryID,
+			&version.MemoryPath,
+			&version.Version,
+			&version.State,
+			&version.Content,
+			&version.CreatedAt,
+			&version.ModifiedBy,
+			&version.TemporalValidity.TemporalFactID,
+			&version.TemporalValidity.IngestedAt,
+			&version.TemporalValidity.ValidFrom,
+			&version.TemporalValidity.ValidTo,
+			&version.TemporalValidity.ValiditySource,
+		}, []any{
 			&version.ID,
 			&version.MemoryID,
 			&version.Version,
@@ -1126,7 +1136,7 @@ ORDER BY version DESC
 			&version.TemporalValidity.ValidFrom,
 			&version.TemporalValidity.ValidTo,
 			&version.TemporalValidity.ValiditySource,
-		); err != nil {
+		}); err != nil {
 			return memory.MemoryHistory{}, fmt.Errorf("scan memory version: %w", err)
 		}
 
@@ -1527,6 +1537,7 @@ SELECT
 	tenant,
 	project,
 	namespace,
+	memory_path,
 	class,
 	state,
 	content,
@@ -1548,11 +1559,12 @@ LIMIT 1
 `
 
 	var canonical memory.CanonicalMemory
-	err := r.db.QueryRow(ctx, query, scope.Tenant, scope.Project, scope.Namespace, class, memory.MemoryStateActive).Scan(
+	err := scanWithOptionalMemoryPath(r.db.QueryRow(ctx, query, scope.Tenant, scope.Project, scope.Namespace, class, memory.MemoryStateActive), &canonical.MemoryPath, []any{
 		&canonical.ID,
 		&canonical.Scope.Tenant,
 		&canonical.Scope.Project,
 		&canonical.Scope.Namespace,
+		&canonical.MemoryPath,
 		&canonical.Class,
 		&canonical.State,
 		&canonical.Content,
@@ -1563,7 +1575,7 @@ LIMIT 1
 		&canonical.TemporalValidity.ValidFrom,
 		&canonical.TemporalValidity.ValidTo,
 		&canonical.TemporalValidity.ValiditySource,
-	)
+	}, []any{&canonical.ID, &canonical.Scope.Tenant, &canonical.Scope.Project, &canonical.Scope.Namespace, &canonical.Class, &canonical.State, &canonical.Content, &canonical.CreatedAt, &canonical.ModifiedAt, &canonical.TemporalValidity.TemporalFactID, &canonical.TemporalValidity.IngestedAt, &canonical.TemporalValidity.ValidFrom, &canonical.TemporalValidity.ValidTo, &canonical.TemporalValidity.ValiditySource})
 	if err != nil {
 		if errors.Is(err, pgx.ErrNoRows) {
 			return memory.CanonicalMemory{}, false, nil
@@ -1576,6 +1588,7 @@ LIMIT 1
 }
 
 func (r *Repository) PromoteCandidate(ctx context.Context, input governance.CanonicalPromotion) (memory.CanonicalMemory, memory.MemoryVersion, error) {
+	input.Candidate.MemoryPath, _ = memory.NormalizeMemoryPath(input.Candidate.MemoryPath)
 	tx, err := r.tx.BeginTx(ctx, pgx.TxOptions{})
 	if err != nil {
 		return memory.CanonicalMemory{}, memory.MemoryVersion{}, fmt.Errorf("begin canonical promotion transaction: %w", err)
@@ -1594,6 +1607,7 @@ INSERT INTO canonical_memories (
 	tenant,
 	project,
 	namespace,
+	memory_path,
 	class,
 	state,
 	retention_class,
@@ -1606,8 +1620,8 @@ INSERT INTO canonical_memories (
 	valid_from,
 	valid_to,
 	validity_source
-) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, to_tsvector('simple', $8), $9, $10, $11, $12, $13, $14, $15)
-RETURNING id, tenant, project, namespace, class, state, content, created_at, updated_at,
+) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, to_tsvector('simple', $9), $10, $11, $12, $13, $14, $15, $16)
+RETURNING id, tenant, project, namespace, memory_path, class, state, content, created_at, updated_at,
 	temporal_fact_id, ingested_at, valid_from, valid_to, validity_source
 `
 
@@ -1624,6 +1638,7 @@ RETURNING id, tenant, project, namespace, class, state, content, created_at, upd
 			input.Candidate.Scope.Tenant,
 			input.Candidate.Scope.Project,
 			input.Candidate.Scope.Namespace,
+			input.Candidate.MemoryPath,
 			input.Candidate.Class,
 			memory.MemoryStateActive,
 			input.Candidate.RetentionClass,
@@ -1640,6 +1655,7 @@ RETURNING id, tenant, project, namespace, class, state, content, created_at, upd
 			&canonical.Scope.Tenant,
 			&canonical.Scope.Project,
 			&canonical.Scope.Namespace,
+			&canonical.MemoryPath,
 			&canonical.Class,
 			&canonical.State,
 			&canonical.Content,
@@ -1681,7 +1697,6 @@ RETURNING id, tenant, project, namespace, class, state, content, created_at, upd
 
 		return canonical, version, nil
 	}
-
 	const canonicalUpdateQuery = `
 UPDATE canonical_memories
 SET state = $2,
@@ -1692,12 +1707,12 @@ SET state = $2,
 	temporal_fact_id = COALESCE(temporal_fact_id, $6),
 	valid_from = $7,
 	valid_to = $8,
-	validity_source = $9
+	validity_source = $9,
+	memory_path = $10
 WHERE id = $1
-RETURNING id, tenant, project, namespace, class, state, content, created_at, updated_at,
+RETURNING id, tenant, project, namespace, memory_path, class, state, content, created_at, updated_at,
 	temporal_fact_id, ingested_at, valid_from, valid_to, validity_source
 `
-
 	validity, err := promotedTemporalValidity(input)
 	if err != nil {
 		return memory.CanonicalMemory{}, memory.MemoryVersion{}, err
@@ -1716,11 +1731,13 @@ RETURNING id, tenant, project, namespace, class, state, content, created_at, upd
 		validity.ValidFrom,
 		validity.ValidTo,
 		string(validity.ValiditySource),
+		input.Candidate.MemoryPath,
 	).Scan(
 		&canonical.ID,
 		&canonical.Scope.Tenant,
 		&canonical.Scope.Project,
 		&canonical.Scope.Namespace,
+		&canonical.MemoryPath,
 		&canonical.Class,
 		&canonical.State,
 		&canonical.Content,
@@ -1768,6 +1785,7 @@ func writeMemoryVersion(ctx context.Context, tx pgx.Tx, input governance.Canonic
 INSERT INTO memory_versions (
 	id,
 	memory_id,
+	memory_path,
 	version,
 	state,
 	content,
@@ -1778,8 +1796,8 @@ INSERT INTO memory_versions (
 	valid_from,
 	valid_to,
 	validity_source
-) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12)
-RETURNING id, memory_id, version, state, content, created_at, modified_by,
+) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13)
+RETURNING id, memory_id, memory_path, version, state, content, created_at, modified_by,
 	temporal_fact_id, ingested_at, valid_from, valid_to, validity_source
 `
 
@@ -1794,6 +1812,7 @@ RETURNING id, memory_id, version, state, content, created_at, modified_by,
 		versionQuery,
 		input.VersionID,
 		input.MemoryID,
+		input.Candidate.MemoryPath,
 		versionNumber,
 		memory.MemoryStateActive,
 		input.Candidate.Content,
@@ -1807,6 +1826,7 @@ RETURNING id, memory_id, version, state, content, created_at, modified_by,
 	).Scan(
 		&version.ID,
 		&version.MemoryID,
+		&version.MemoryPath,
 		&version.Version,
 		&version.State,
 		&version.Content,
@@ -1873,6 +1893,7 @@ INSERT INTO canonical_memories (
 	tenant,
 	project,
 	namespace,
+	memory_path,
 	class,
 	state,
 	retention_class,
@@ -1975,6 +1996,7 @@ SELECT
 	tenant,
 	project,
 	namespace,
+	memory_path,
 	class,
 	state,
 	content,
@@ -2002,22 +2024,7 @@ ORDER BY updated_at DESC
 	memories := make([]memory.CanonicalMemory, 0)
 	for rows.Next() {
 		var canonical memory.CanonicalMemory
-		if err := rows.Scan(
-			&canonical.ID,
-			&canonical.Scope.Tenant,
-			&canonical.Scope.Project,
-			&canonical.Scope.Namespace,
-			&canonical.Class,
-			&canonical.State,
-			&canonical.Content,
-			&canonical.CreatedAt,
-			&canonical.ModifiedAt,
-			&canonical.TemporalValidity.TemporalFactID,
-			&canonical.TemporalValidity.IngestedAt,
-			&canonical.TemporalValidity.ValidFrom,
-			&canonical.TemporalValidity.ValidTo,
-			&canonical.TemporalValidity.ValiditySource,
-		); err != nil {
+		if err := scanCanonicalMemory(rows, &canonical); err != nil {
 			return nil, fmt.Errorf("scan canonical memory: %w", err)
 		}
 
@@ -2051,7 +2058,8 @@ func (r *Repository) CreateMemory(ctx context.Context, record memory.ManualCreat
 		return memory.CanonicalMemory{}, err
 	}
 
-	const canonicalQuery = `
+	path := normalizedRecordMemoryPath(record.MemoryPath)
+	canonicalQuery := `
 INSERT INTO canonical_memories (
 	id,
 	tenant,
@@ -2069,30 +2077,20 @@ INSERT INTO canonical_memories (
 	valid_from,
 	valid_to,
 	validity_source
-) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, to_tsvector('simple', $8), $9, $10, $11, $12, $13, $14, $15)
+	) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, to_tsvector('simple', $8), $9, $10, $11, $12, $13, $14, $15)
 RETURNING id, tenant, project, namespace, class, state, content, created_at, updated_at,
 	temporal_fact_id, ingested_at, valid_from, valid_to, validity_source
 `
+	args := []any{record.MemoryID, record.Scope.Tenant, record.Scope.Project, record.Scope.Namespace, record.Class, memory.MemoryStateActive, policy.RetentionClassDurable, record.Content, record.CreatedAt, record.CreatedAt, validity.TemporalFactID, validity.IngestedAt, validity.ValidFrom, validity.ValidTo, string(validity.ValiditySource)}
+	if path != memory.MemoryPathRoot {
+		canonicalQuery = `INSERT INTO canonical_memories (id,tenant,project,namespace,memory_path,class,state,retention_class,content,search_text,created_at,updated_at,temporal_fact_id,ingested_at,valid_from,valid_to,validity_source) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,to_tsvector('simple',$9),$10,$11,$12,$13,$14,$15,$16) RETURNING id,tenant,project,namespace,memory_path,class,state,content,created_at,updated_at,temporal_fact_id,ingested_at,valid_from,valid_to,validity_source`
+		args = []any{record.MemoryID, record.Scope.Tenant, record.Scope.Project, record.Scope.Namespace, path, record.Class, memory.MemoryStateActive, policy.RetentionClassDurable, record.Content, record.CreatedAt, record.CreatedAt, validity.TemporalFactID, validity.IngestedAt, validity.ValidFrom, validity.ValidTo, string(validity.ValiditySource)}
+	}
 
 	var canonical memory.CanonicalMemory
 	if err := tx.QueryRow(
 		ctx,
-		canonicalQuery,
-		record.MemoryID,
-		record.Scope.Tenant,
-		record.Scope.Project,
-		record.Scope.Namespace,
-		record.Class,
-		memory.MemoryStateActive,
-		policy.RetentionClassDurable,
-		record.Content,
-		record.CreatedAt,
-		record.CreatedAt,
-		validity.TemporalFactID,
-		validity.IngestedAt,
-		validity.ValidFrom,
-		validity.ValidTo,
-		string(validity.ValiditySource),
+		canonicalQuery, args...,
 	).Scan(
 		&canonical.ID,
 		&canonical.Scope.Tenant,
@@ -2112,7 +2110,8 @@ RETURNING id, tenant, project, namespace, class, state, content, created_at, upd
 		return memory.CanonicalMemory{}, fmt.Errorf("insert manual canonical memory: %w", err)
 	}
 
-	if _, err := writeManualMemoryVersionWithValidity(ctx, tx, record.VersionID, record.MemoryID, versionNumber, canonical.State, record.Content, record.CreatedAt, record.Actor, validity); err != nil {
+	canonical.MemoryPath = path
+	if _, err := writeManualMemoryVersionWithPath(ctx, tx, record.VersionID, record.MemoryID, path, versionNumber, canonical.State, record.Content, record.CreatedAt, record.Actor, validity); err != nil {
 		return memory.CanonicalMemory{}, err
 	}
 
@@ -2167,7 +2166,12 @@ func (r *Repository) UpdateMemory(ctx context.Context, record memory.ManualUpdat
 		return memory.CanonicalMemory{}, err
 	}
 
-	const updateQuery = `
+	hasPath := strings.TrimSpace(record.MemoryPath) != ""
+	path := existing.MemoryPath
+	if hasPath {
+		path = normalizedRecordMemoryPath(record.MemoryPath)
+	}
+	updateQuery := `
 UPDATE canonical_memories
 SET content = $5,
 	search_text = to_tsvector('simple', $5),
@@ -2186,42 +2190,29 @@ WHERE id = $1
 RETURNING id, tenant, project, namespace, class, state, content, created_at, updated_at,
 	temporal_fact_id, ingested_at, valid_from, valid_to, validity_source
 `
-
-	var canonical memory.CanonicalMemory
-	if err := tx.QueryRow(
-		ctx,
-		updateQuery,
-		record.MemoryID,
-		record.Scope.Tenant,
-		record.Scope.Project,
-		record.Scope.Namespace,
-		record.Content,
-		record.UpdatedAt,
-		validity.TemporalFactID,
-		validity.IngestedAt,
-		validity.ValidFrom,
-		validity.ValidTo,
-		string(validity.ValiditySource),
-	).Scan(
-		&canonical.ID,
-		&canonical.Scope.Tenant,
-		&canonical.Scope.Project,
-		&canonical.Scope.Namespace,
-		&canonical.Class,
-		&canonical.State,
-		&canonical.Content,
-		&canonical.CreatedAt,
-		&canonical.ModifiedAt,
-		&canonical.TemporalValidity.TemporalFactID,
-		&canonical.TemporalValidity.IngestedAt,
-		&canonical.TemporalValidity.ValidFrom,
-		&canonical.TemporalValidity.ValidTo,
-		&canonical.TemporalValidity.ValiditySource,
-	); err != nil {
-		return memory.CanonicalMemory{}, fmt.Errorf("update manual canonical memory: %w", err)
+	args := []any{record.MemoryID, record.Scope.Tenant, record.Scope.Project, record.Scope.Namespace, record.Content, record.UpdatedAt, validity.TemporalFactID, validity.IngestedAt, validity.ValidFrom, validity.ValidTo, string(validity.ValiditySource)}
+	if hasPath {
+		updateQuery = strings.Replace(updateQuery, "validity_source = $11", "validity_source = $11, memory_path = $12", 1)
+		args = append(args, path)
+		updateQuery = strings.Replace(updateQuery, "RETURNING id, tenant, project, namespace, class", "RETURNING id, tenant, project, namespace, memory_path, class", 1)
 	}
 
-	if _, err := writeManualMemoryVersionWithValidity(ctx, tx, record.VersionID, record.MemoryID, currentVersion+1, canonical.State, record.Content, record.UpdatedAt, record.Actor, canonical.TemporalValidity); err != nil {
+	var canonical memory.CanonicalMemory
+	scanDest := []any{&canonical.ID, &canonical.Scope.Tenant, &canonical.Scope.Project, &canonical.Scope.Namespace, &canonical.Class, &canonical.State, &canonical.Content, &canonical.CreatedAt, &canonical.ModifiedAt, &canonical.TemporalValidity.TemporalFactID, &canonical.TemporalValidity.IngestedAt, &canonical.TemporalValidity.ValidFrom, &canonical.TemporalValidity.ValidTo, &canonical.TemporalValidity.ValiditySource}
+	// An explicitly requested root path still changes the stored value and the
+	// dynamic RETURNING clause includes memory_path, so scan that column based on
+	// whether a path was supplied, not on the value it normalizes to.
+	if hasPath {
+		scanDest = append([]any{&canonical.ID, &canonical.Scope.Tenant, &canonical.Scope.Project, &canonical.Scope.Namespace, &canonical.MemoryPath}, scanDest[4:]...)
+	}
+	if err := tx.QueryRow(ctx, updateQuery, args...).Scan(scanDest...); err != nil {
+		return memory.CanonicalMemory{}, fmt.Errorf("update manual canonical memory: %w", err)
+	}
+	if !hasPath {
+		canonical.MemoryPath = existing.MemoryPath
+	}
+
+	if _, err := writeManualMemoryVersionWithPath(ctx, tx, record.VersionID, record.MemoryID, canonical.MemoryPath, currentVersion+1, canonical.State, record.Content, record.UpdatedAt, record.Actor, canonical.TemporalValidity); err != nil {
 		return memory.CanonicalMemory{}, err
 	}
 
@@ -2286,7 +2277,12 @@ func (r *Repository) MergeMemory(ctx context.Context, record memory.ManualMergeM
 		return memory.CanonicalMemory{}, err
 	}
 
-	const updateTargetQuery = `
+	hasPath := strings.TrimSpace(record.MemoryPath) != ""
+	path := target.MemoryPath
+	if hasPath {
+		path = normalizedRecordMemoryPath(record.MemoryPath)
+	}
+	updateTargetQuery := `
 UPDATE canonical_memories
 SET content = $5,
 	search_text = to_tsvector('simple', $5),
@@ -2304,42 +2300,28 @@ WHERE id = $1
 RETURNING id, tenant, project, namespace, class, state, content, created_at, updated_at,
 	temporal_fact_id, ingested_at, valid_from, valid_to, validity_source
 `
-
-	var canonical memory.CanonicalMemory
-	if err := tx.QueryRow(
-		ctx,
-		updateTargetQuery,
-		record.TargetMemoryID,
-		record.Scope.Tenant,
-		record.Scope.Project,
-		record.Scope.Namespace,
-		record.Content,
-		record.AppliedAt,
-		validity.TemporalFactID,
-		validity.IngestedAt,
-		validity.ValidFrom,
-		validity.ValidTo,
-		string(validity.ValiditySource),
-	).Scan(
-		&canonical.ID,
-		&canonical.Scope.Tenant,
-		&canonical.Scope.Project,
-		&canonical.Scope.Namespace,
-		&canonical.Class,
-		&canonical.State,
-		&canonical.Content,
-		&canonical.CreatedAt,
-		&canonical.ModifiedAt,
-		&canonical.TemporalValidity.TemporalFactID,
-		&canonical.TemporalValidity.IngestedAt,
-		&canonical.TemporalValidity.ValidFrom,
-		&canonical.TemporalValidity.ValidTo,
-		&canonical.TemporalValidity.ValiditySource,
-	); err != nil {
-		return memory.CanonicalMemory{}, fmt.Errorf("update merge target memory: %w", err)
+	args := []any{record.TargetMemoryID, record.Scope.Tenant, record.Scope.Project, record.Scope.Namespace, record.Content, record.AppliedAt, validity.TemporalFactID, validity.IngestedAt, validity.ValidFrom, validity.ValidTo, string(validity.ValiditySource)}
+	if hasPath {
+		updateTargetQuery = strings.Replace(updateTargetQuery, "validity_source = $11", "validity_source = $11, memory_path = $12", 1)
+		updateTargetQuery = strings.Replace(updateTargetQuery, "RETURNING id, tenant, project, namespace, class", "RETURNING id, tenant, project, namespace, memory_path, class", 1)
+		args = append(args, path)
 	}
 
-	if _, err := writeManualMemoryVersionWithValidity(ctx, tx, record.VersionID, record.TargetMemoryID, currentVersion+1, canonical.State, record.Content, record.AppliedAt, record.Actor, canonical.TemporalValidity); err != nil {
+	var canonical memory.CanonicalMemory
+	scanDest := []any{&canonical.ID, &canonical.Scope.Tenant, &canonical.Scope.Project, &canonical.Scope.Namespace, &canonical.Class, &canonical.State, &canonical.Content, &canonical.CreatedAt, &canonical.ModifiedAt, &canonical.TemporalValidity.TemporalFactID, &canonical.TemporalValidity.IngestedAt, &canonical.TemporalValidity.ValidFrom, &canonical.TemporalValidity.ValidTo, &canonical.TemporalValidity.ValiditySource}
+	// Root is a valid explicit move target; it is not equivalent to an omitted
+	// path because the latter preserves the existing canonical path.
+	if hasPath {
+		scanDest = append([]any{&canonical.ID, &canonical.Scope.Tenant, &canonical.Scope.Project, &canonical.Scope.Namespace, &canonical.MemoryPath}, scanDest[4:]...)
+	}
+	if err := tx.QueryRow(ctx, updateTargetQuery, args...).Scan(scanDest...); err != nil {
+		return memory.CanonicalMemory{}, fmt.Errorf("update merge target memory: %w", err)
+	}
+	if !hasPath {
+		canonical.MemoryPath = target.MemoryPath
+	}
+
+	if _, err := writeManualMemoryVersionWithPath(ctx, tx, record.VersionID, record.TargetMemoryID, canonical.MemoryPath, currentVersion+1, canonical.State, record.Content, record.AppliedAt, record.Actor, canonical.TemporalValidity); err != nil {
 		return memory.CanonicalMemory{}, err
 	}
 
@@ -2436,42 +2418,16 @@ WHERE id = $1
 RETURNING id, tenant, project, namespace, class, state, content, created_at, updated_at,
 	temporal_fact_id, ingested_at, valid_from, valid_to, validity_source
 `
+	args := []any{record.MemoryID, record.Scope.Tenant, record.Scope.Project, record.Scope.Namespace, record.TargetClass, record.AppliedAt, existingValidity.TemporalFactID, existingValidity.IngestedAt, existingValidity.ValidFrom, existingValidity.ValidTo, string(existingValidity.ValiditySource)}
 
 	var canonical memory.CanonicalMemory
-	if err := tx.QueryRow(
-		ctx,
-		updateQuery,
-		record.MemoryID,
-		record.Scope.Tenant,
-		record.Scope.Project,
-		record.Scope.Namespace,
-		record.TargetClass,
-		record.AppliedAt,
-		existingValidity.TemporalFactID,
-		existingValidity.IngestedAt,
-		existingValidity.ValidFrom,
-		existingValidity.ValidTo,
-		string(existingValidity.ValiditySource),
-	).Scan(
-		&canonical.ID,
-		&canonical.Scope.Tenant,
-		&canonical.Scope.Project,
-		&canonical.Scope.Namespace,
-		&canonical.Class,
-		&canonical.State,
-		&canonical.Content,
-		&canonical.CreatedAt,
-		&canonical.ModifiedAt,
-		&canonical.TemporalValidity.TemporalFactID,
-		&canonical.TemporalValidity.IngestedAt,
-		&canonical.TemporalValidity.ValidFrom,
-		&canonical.TemporalValidity.ValidTo,
-		&canonical.TemporalValidity.ValiditySource,
-	); err != nil {
+	scanDest := []any{&canonical.ID, &canonical.Scope.Tenant, &canonical.Scope.Project, &canonical.Scope.Namespace, &canonical.Class, &canonical.State, &canonical.Content, &canonical.CreatedAt, &canonical.ModifiedAt, &canonical.TemporalValidity.TemporalFactID, &canonical.TemporalValidity.IngestedAt, &canonical.TemporalValidity.ValidFrom, &canonical.TemporalValidity.ValidTo, &canonical.TemporalValidity.ValiditySource}
+	canonical.MemoryPath = current.MemoryPath
+	if err := tx.QueryRow(ctx, updateQuery, args...).Scan(scanDest...); err != nil {
 		return memory.CanonicalMemory{}, fmt.Errorf("reclassify canonical memory: %w", err)
 	}
 
-	if _, err := writeManualMemoryVersionWithValidity(ctx, tx, record.VersionID, record.MemoryID, currentVersion+1, canonical.State, canonical.Content, record.AppliedAt, record.Actor, canonical.TemporalValidity); err != nil {
+	if _, err := writeManualMemoryVersionWithPath(ctx, tx, record.VersionID, record.MemoryID, canonical.MemoryPath, currentVersion+1, canonical.State, canonical.Content, record.AppliedAt, record.Actor, canonical.TemporalValidity); err != nil {
 		return memory.CanonicalMemory{}, err
 	}
 
@@ -4258,6 +4214,14 @@ func (r *Repository) ApplyLifecycleAction(ctx context.Context, action governance
 	if err := action.Validate(); err != nil {
 		return memory.CanonicalMemory{}, err
 	}
+	memoryPath := ""
+	if strings.TrimSpace(action.MemoryPath) != "" {
+		var err error
+		memoryPath, err = memory.NormalizeMemoryPath(action.MemoryPath)
+		if err != nil {
+			return memory.CanonicalMemory{}, err
+		}
+	}
 
 	tx, err := r.tx.BeginTx(ctx, pgx.TxOptions{})
 	if err != nil {
@@ -4265,7 +4229,7 @@ func (r *Repository) ApplyLifecycleAction(ctx context.Context, action governance
 	}
 	defer tx.Rollback(ctx)
 
-	const query = `
+	query := `
 UPDATE canonical_memories
 SET state = $5,
 	content = CASE WHEN $5 = 'deleted' THEN '' ELSE content END,
@@ -4277,22 +4241,27 @@ WHERE id = $1
 	AND tenant = $2
 	AND project = $3
 	AND namespace = $4
-RETURNING id, tenant, project, namespace, class, state, content, created_at, updated_at
 `
+	if memoryPath != "" {
+		query += "\tAND memory_path = $7\nRETURNING id, tenant, project, namespace, class, state, content, created_at, updated_at, memory_path\n"
+	} else {
+		query += "RETURNING id, tenant, project, namespace, class, state, content, created_at, updated_at\n"
+	}
 
 	var canonical memory.CanonicalMemory
-	if err := tx.QueryRow(ctx, query, action.MemoryID, action.Scope.Tenant, action.Scope.Project, action.Scope.Namespace, action.TargetState(), action.AppliedAt).Scan(
-		&canonical.ID,
-		&canonical.Scope.Tenant,
-		&canonical.Scope.Project,
-		&canonical.Scope.Namespace,
-		&canonical.Class,
-		&canonical.State,
-		&canonical.Content,
-		&canonical.CreatedAt,
-		&canonical.ModifiedAt,
-	); err != nil {
-		return memory.CanonicalMemory{}, fmt.Errorf("apply lifecycle action: %w", err)
+	args := []any{action.MemoryID, action.Scope.Tenant, action.Scope.Project, action.Scope.Namespace, action.TargetState(), action.AppliedAt}
+	if memoryPath != "" {
+		args = append(args, memoryPath)
+	}
+	row := tx.QueryRow(ctx, query, args...)
+	var scanErr error
+	if memoryPath != "" {
+		scanErr = row.Scan(&canonical.ID, &canonical.Scope.Tenant, &canonical.Scope.Project, &canonical.Scope.Namespace, &canonical.Class, &canonical.State, &canonical.Content, &canonical.CreatedAt, &canonical.ModifiedAt, &canonical.MemoryPath)
+	} else {
+		scanErr = row.Scan(&canonical.ID, &canonical.Scope.Tenant, &canonical.Scope.Project, &canonical.Scope.Namespace, &canonical.Class, &canonical.State, &canonical.Content, &canonical.CreatedAt, &canonical.ModifiedAt)
+	}
+	if scanErr != nil {
+		return memory.CanonicalMemory{}, fmt.Errorf("apply lifecycle action: %w", scanErr)
 	}
 
 	if action.TargetState() == memory.MemoryStateDeleted {
@@ -4339,6 +4308,10 @@ func (r *Repository) SearchLexical(ctx context.Context, input retrieval.SearchIn
 	}
 
 	selection := temporalSelectionFor(input, r.evaluationInstant())
+	pathSelector, err := memory.NewMemoryPathSelector(input.Path, input.PathPrefix)
+	if err != nil {
+		return nil, err
+	}
 
 	const allTermsQuery = `
 SELECT
@@ -4346,6 +4319,7 @@ SELECT
 	tenant,
 	project,
 	namespace,
+	memory_path,
 	class,
 	state,
 	content,
@@ -4359,7 +4333,8 @@ WHERE tenant = $1
 	AND state NOT IN ('suppressed', 'forgotten', 'deleted')
 	AND search_text @@ plainto_tsquery('simple', $4)
 	AND ($5::timestamptz IS NULL OR updated_at >= $5)
-	AND ($6::timestamptz IS NULL OR updated_at <= $6)
+		AND ($6::timestamptz IS NULL OR updated_at <= $6)
+	/*memory_path_predicate*/
 	/*temporal_validity_predicate*/
 ORDER BY lexical_score DESC, updated_at DESC
 LIMIT $7
@@ -4385,6 +4360,7 @@ SELECT
 	tenant,
 	project,
 	namespace,
+	memory_path,
 	class,
 	state,
 	content,
@@ -4400,7 +4376,8 @@ WHERE tenant = $1
 	AND query_terms.terms IS NOT NULL
 	AND search_text @@ query_terms.terms
 	AND ($5::timestamptz IS NULL OR updated_at >= $5)
-	AND ($6::timestamptz IS NULL OR updated_at <= $6)
+		AND ($6::timestamptz IS NULL OR updated_at <= $6)
+	/*memory_path_predicate*/
 	/*temporal_validity_predicate*/
 ORDER BY lexical_score DESC, updated_at DESC
 LIMIT $7
@@ -4410,6 +4387,8 @@ LIMIT $7
 		query = anyTermsQuery
 	}
 	query = withTemporalPredicate(query, selection, 8, 9, 10, 11, 12, "")
+	pathPredicate := memoryPathPredicateSQL("", pathSelector, 13)
+	query = strings.Replace(query, memoryPathPredicatePlaceholder, pathPredicate, 1)
 
 	args := []any{
 		input.Scope.Tenant,
@@ -4421,6 +4400,9 @@ LIMIT $7
 		limit,
 	}
 	args = appendTemporalArgs(args, selection)
+	if pathPredicate != "" {
+		args = append(args, pathSelector.Value)
+	}
 
 	rows, err := r.db.Query(ctx, query, args...)
 	if err != nil {
@@ -4431,7 +4413,19 @@ LIMIT $7
 	hits := make([]retrieval.ScoredMemory, 0)
 	for rows.Next() {
 		var hit retrieval.ScoredMemory
-		if err := rows.Scan(
+		if err := scanWithOptionalMemoryPath(rows, &hit.Memory.MemoryPath, []any{
+			&hit.Memory.ID,
+			&hit.Memory.Scope.Tenant,
+			&hit.Memory.Scope.Project,
+			&hit.Memory.Scope.Namespace,
+			&hit.Memory.MemoryPath,
+			&hit.Memory.Class,
+			&hit.Memory.State,
+			&hit.Memory.Content,
+			&hit.Memory.CreatedAt,
+			&hit.Memory.ModifiedAt,
+			&hit.LexicalScore,
+		}, []any{
 			&hit.Memory.ID,
 			&hit.Memory.Scope.Tenant,
 			&hit.Memory.Scope.Project,
@@ -4442,7 +4436,7 @@ LIMIT $7
 			&hit.Memory.CreatedAt,
 			&hit.Memory.ModifiedAt,
 			&hit.LexicalScore,
-		); err != nil {
+		}); err != nil {
 			return nil, fmt.Errorf("scan lexical search hit: %w", err)
 		}
 		hits = append(hits, hit)
@@ -4469,6 +4463,10 @@ func (r *Repository) SearchSemantic(ctx context.Context, input retrieval.SearchI
 	}
 
 	selection := temporalSelectionFor(input, r.evaluationInstant())
+	pathSelector, err := memory.NewMemoryPathSelector(input.Path, input.PathPrefix)
+	if err != nil {
+		return nil, err
+	}
 
 	const semanticQuery = `
 SELECT
@@ -4476,6 +4474,7 @@ SELECT
 	cm.tenant,
 	cm.project,
 	cm.namespace,
+	cm.memory_path,
 	cm.class,
 	cm.state,
 	cm.content,
@@ -4507,11 +4506,14 @@ WHERE cm.tenant = $1
 	AND cm.class IN ('profile', 'episodic', 'procedural', 'summary')
 	AND ($5::timestamptz IS NULL OR cm.updated_at >= $5)
 	AND ($6::timestamptz IS NULL OR cm.updated_at <= $6)
+	/*memory_path_predicate*/
 	/*temporal_validity_predicate*/
 ORDER BY semantic_score DESC, updated_at DESC
 LIMIT $7
 `
 	query := withTemporalPredicate(semanticQuery, selection, 8, 9, 10, 11, 12, "cm")
+	pathPredicate := memoryPathPredicateSQL("cm", pathSelector, 13)
+	query = strings.Replace(query, memoryPathPredicatePlaceholder, pathPredicate, 1)
 
 	semanticArgs := []any{
 		input.Scope.Tenant,
@@ -4523,6 +4525,9 @@ LIMIT $7
 		limit,
 	}
 	semanticArgs = appendTemporalArgs(semanticArgs, selection)
+	if pathPredicate != "" {
+		semanticArgs = append(semanticArgs, pathSelector.Value)
+	}
 
 	rows, err := r.db.Query(
 		ctx,
@@ -4537,7 +4542,19 @@ LIMIT $7
 	hits := make([]retrieval.ScoredMemory, 0)
 	for rows.Next() {
 		var hit retrieval.ScoredMemory
-		if err := rows.Scan(
+		if err := scanWithOptionalMemoryPath(rows, &hit.Memory.MemoryPath, []any{
+			&hit.Memory.ID,
+			&hit.Memory.Scope.Tenant,
+			&hit.Memory.Scope.Project,
+			&hit.Memory.Scope.Namespace,
+			&hit.Memory.MemoryPath,
+			&hit.Memory.Class,
+			&hit.Memory.State,
+			&hit.Memory.Content,
+			&hit.Memory.CreatedAt,
+			&hit.Memory.ModifiedAt,
+			&hit.SemanticScore,
+		}, []any{
 			&hit.Memory.ID,
 			&hit.Memory.Scope.Tenant,
 			&hit.Memory.Scope.Project,
@@ -4548,7 +4565,7 @@ LIMIT $7
 			&hit.Memory.CreatedAt,
 			&hit.Memory.ModifiedAt,
 			&hit.SemanticScore,
-		); err != nil {
+		}); err != nil {
 			return nil, fmt.Errorf("scan semantic search hit: %w", err)
 		}
 		hits = append(hits, hit)
@@ -4575,6 +4592,10 @@ func (r *Repository) SearchRelations(ctx context.Context, input retrieval.Search
 	}
 
 	selection := temporalSelectionFor(input, r.evaluationInstant())
+	pathSelector, err := memory.NewMemoryPathSelector(input.Path, input.PathPrefix)
+	if err != nil {
+		return nil, err
+	}
 
 	const relationQuery = `
 SELECT
@@ -4582,6 +4603,7 @@ SELECT
 	cm.tenant,
 	cm.project,
 	cm.namespace,
+	cm.memory_path,
 	cm.class,
 	cm.state,
 	cm.content,
@@ -4610,12 +4632,15 @@ WHERE rp.tenant = $1
 	AND ($9::timestamptz IS NULL OR cm.updated_at >= $9)
 	AND ($10::timestamptz IS NULL OR cm.updated_at <= $10)
 	/*relation_source_currency_predicate*/
+	/*memory_path_predicate*/
 	/*temporal_validity_predicate*/
 ORDER BY relation_score DESC, cm.updated_at DESC
 LIMIT $11
 `
 	query := withTemporalPredicate(relationQuery, selection, 12, 13, 14, 15, 16, "cm")
 	query = strings.Replace(query, relationSourceCurrencyPlaceholder, relationSourceCurrencyPredicate(selection), 1)
+	pathPredicate := memoryPathPredicateSQL("cm", pathSelector, 17)
+	query = strings.Replace(query, memoryPathPredicatePlaceholder, pathPredicate, 1)
 
 	relationArgs := []any{
 		input.Scope.Tenant,
@@ -4631,6 +4656,9 @@ LIMIT $11
 		limit,
 	}
 	relationArgs = appendTemporalArgs(relationArgs, selection)
+	if pathPredicate != "" {
+		relationArgs = append(relationArgs, pathSelector.Value)
+	}
 
 	rows, err := r.db.Query(ctx, query, relationArgs...)
 	if err != nil {
@@ -4641,7 +4669,19 @@ LIMIT $11
 	hits := make([]retrieval.ScoredMemory, 0)
 	for rows.Next() {
 		var hit retrieval.ScoredMemory
-		if err := rows.Scan(
+		if err := scanWithOptionalMemoryPath(rows, &hit.Memory.MemoryPath, []any{
+			&hit.Memory.ID,
+			&hit.Memory.Scope.Tenant,
+			&hit.Memory.Scope.Project,
+			&hit.Memory.Scope.Namespace,
+			&hit.Memory.MemoryPath,
+			&hit.Memory.Class,
+			&hit.Memory.State,
+			&hit.Memory.Content,
+			&hit.Memory.CreatedAt,
+			&hit.Memory.ModifiedAt,
+			&hit.RelationScore,
+		}, []any{
 			&hit.Memory.ID,
 			&hit.Memory.Scope.Tenant,
 			&hit.Memory.Scope.Project,
@@ -4652,7 +4692,7 @@ LIMIT $11
 			&hit.Memory.CreatedAt,
 			&hit.Memory.ModifiedAt,
 			&hit.RelationScore,
-		); err != nil {
+		}); err != nil {
 			return nil, fmt.Errorf("scan relation search hit: %w", err)
 		}
 		hits = append(hits, hit)
@@ -4931,14 +4971,28 @@ INSERT INTO deletion_markers (
 }
 
 func writeManualMemoryVersion(ctx context.Context, tx pgx.Tx, versionID string, memoryID string, versionNumber int64, state memory.MemoryState, content string, createdAt time.Time, modifiedBy string) (memory.MemoryVersion, error) {
-	return writeManualMemoryVersionWithValidity(ctx, tx, versionID, memoryID, versionNumber, state, content, createdAt, modifiedBy, memory.TemporalValidity{})
+	return writeManualMemoryVersionWithPath(ctx, tx, versionID, memoryID, memory.MemoryPathRoot, versionNumber, state, content, createdAt, modifiedBy, memory.TemporalValidity{})
 }
 
 func writeManualMemoryVersionWithValidity(ctx context.Context, tx pgx.Tx, versionID string, memoryID string, versionNumber int64, state memory.MemoryState, content string, createdAt time.Time, modifiedBy string, validity memory.TemporalValidity) (memory.MemoryVersion, error) {
+	const query = `INSERT INTO memory_versions (id,memory_id,version,state,content,created_at,modified_by,temporal_fact_id,ingested_at,valid_from,valid_to,validity_source) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12) RETURNING id,memory_id,version,state,content,created_at,modified_by,temporal_fact_id,ingested_at,valid_from,valid_to,validity_source`
+	var version memory.MemoryVersion
+	if err := tx.QueryRow(ctx, query, versionID, memoryID, versionNumber, state, content, createdAt, modifiedBy, validity.TemporalFactID, validity.IngestedAt, validity.ValidFrom, validity.ValidTo, string(validity.ValiditySource)).Scan(&version.ID, &version.MemoryID, &version.Version, &version.State, &version.Content, &version.CreatedAt, &version.ModifiedBy, &version.TemporalValidity.TemporalFactID, &version.TemporalValidity.IngestedAt, &version.TemporalValidity.ValidFrom, &version.TemporalValidity.ValidTo, &version.TemporalValidity.ValiditySource); err != nil {
+		return memory.MemoryVersion{}, fmt.Errorf("insert manual memory version: %w", err)
+	}
+	version.MemoryPath = memory.MemoryPathRoot
+	return version, nil
+}
+
+func writeManualMemoryVersionWithPath(ctx context.Context, tx pgx.Tx, versionID string, memoryID, memoryPath string, versionNumber int64, state memory.MemoryState, content string, createdAt time.Time, modifiedBy string, validity memory.TemporalValidity) (memory.MemoryVersion, error) {
+	if normalizedRecordMemoryPath(memoryPath) == memory.MemoryPathRoot {
+		return writeManualMemoryVersionWithValidity(ctx, tx, versionID, memoryID, versionNumber, state, content, createdAt, modifiedBy, validity)
+	}
 	const versionQuery = `
 INSERT INTO memory_versions (
 	id,
 	memory_id,
+	memory_path,
 	version,
 	state,
 	content,
@@ -4949,8 +5003,8 @@ INSERT INTO memory_versions (
 	valid_from,
 	valid_to,
 	validity_source
-) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12)
-RETURNING id, memory_id, version, state, content, created_at, modified_by,
+) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13)
+RETURNING id, memory_id, memory_path, version, state, content, created_at, modified_by,
 	temporal_fact_id, ingested_at, valid_from, valid_to, validity_source
 `
 
@@ -4960,6 +5014,7 @@ RETURNING id, memory_id, version, state, content, created_at, modified_by,
 		versionQuery,
 		versionID,
 		memoryID,
+		normalizedRecordMemoryPath(memoryPath),
 		versionNumber,
 		state,
 		content,
@@ -4973,6 +5028,7 @@ RETURNING id, memory_id, version, state, content, created_at, modified_by,
 	).Scan(
 		&version.ID,
 		&version.MemoryID,
+		&version.MemoryPath,
 		&version.Version,
 		&version.State,
 		&version.Content,
@@ -5057,27 +5113,41 @@ WHERE id = $1
 	AND namespace = $4
 `
 
+	rows, err := tx.Query(ctx, query, memoryID, scope.Tenant, scope.Project, scope.Namespace)
+	if err != nil {
+		return memory.CanonicalMemory{}, fmt.Errorf("read scoped canonical memory: %w", err)
+	}
+	defer rows.Close()
 	var canonical memory.CanonicalMemory
-	if err := tx.QueryRow(ctx, query, memoryID, scope.Tenant, scope.Project, scope.Namespace).Scan(
-		&canonical.ID,
-		&canonical.Scope.Tenant,
-		&canonical.Scope.Project,
-		&canonical.Scope.Namespace,
-		&canonical.Class,
-		&canonical.State,
-		&canonical.Content,
-		&canonical.CreatedAt,
-		&canonical.ModifiedAt,
-		&canonical.TemporalValidity.TemporalFactID,
-		&canonical.TemporalValidity.IngestedAt,
-		&canonical.TemporalValidity.ValidFrom,
-		&canonical.TemporalValidity.ValidTo,
-		&canonical.TemporalValidity.ValiditySource,
-	); err != nil {
+	if !rows.Next() {
+		if err := rows.Err(); err != nil {
+			return memory.CanonicalMemory{}, fmt.Errorf("read scoped canonical memory: %w", err)
+		}
+		return memory.CanonicalMemory{}, pgx.ErrNoRows
+	}
+	if err := scanWithOptionalMemoryPath(rows, &canonical.MemoryPath, []any{
+		&canonical.ID, &canonical.Scope.Tenant, &canonical.Scope.Project, &canonical.Scope.Namespace,
+		&canonical.Class, &canonical.State, &canonical.Content, &canonical.CreatedAt, &canonical.ModifiedAt,
+		&canonical.TemporalValidity.TemporalFactID, &canonical.TemporalValidity.IngestedAt, &canonical.TemporalValidity.ValidFrom,
+		&canonical.TemporalValidity.ValidTo, &canonical.TemporalValidity.ValiditySource, &canonical.MemoryPath,
+	}, []any{
+		&canonical.ID, &canonical.Scope.Tenant, &canonical.Scope.Project, &canonical.Scope.Namespace,
+		&canonical.Class, &canonical.State, &canonical.Content, &canonical.CreatedAt, &canonical.ModifiedAt,
+		&canonical.TemporalValidity.TemporalFactID, &canonical.TemporalValidity.IngestedAt, &canonical.TemporalValidity.ValidFrom,
+		&canonical.TemporalValidity.ValidTo, &canonical.TemporalValidity.ValiditySource,
+	}); err != nil {
 		return memory.CanonicalMemory{}, fmt.Errorf("read scoped canonical memory: %w", err)
 	}
 
 	return canonical, nil
+}
+
+func normalizedRecordMemoryPath(raw string) string {
+	path, err := memory.NormalizeMemoryPath(raw)
+	if err != nil || path == "" {
+		return memory.MemoryPathRoot
+	}
+	return path
 }
 
 func suppressScopedCanonicalMemory(ctx context.Context, tx pgx.Tx, scope memory.Scope, memoryID string, updatedAt time.Time) (memory.CanonicalMemory, error) {
@@ -5260,9 +5330,27 @@ func parseRelationContent(content string) (string, string, string) {
 }
 
 func writeRawEvent(ctx context.Context, db queryRower, input memory.IngestEventInput) (memory.RawEvent, error) {
+	input.MemoryPath, _ = memory.NormalizeMemoryPath(input.MemoryPath)
 	metadata, err := json.Marshal(input.Metadata)
 	if err != nil {
 		return memory.RawEvent{}, fmt.Errorf("marshal metadata: %w", err)
+	}
+
+	if input.MemoryPath == memory.MemoryPathRoot {
+		const legacyQuery = `
+INSERT INTO raw_events (tenant, project, namespace, event_type, content, metadata, source_timestamp)
+VALUES ($1, $2, $3, $4, $5, $6, $7)
+RETURNING id, tenant, project, namespace, event_type, content, source_timestamp, created_at
+`
+		var event memory.RawEvent
+		if err := db.QueryRow(ctx, legacyQuery, input.Scope.Tenant, input.Scope.Project, input.Scope.Namespace, input.EventType, input.Content, metadata, input.SourceTimestamp).Scan(
+			&event.ID, &event.Scope.Tenant, &event.Scope.Project, &event.Scope.Namespace, &event.EventType, &event.Content, &event.SourceTimestamp, &event.CreatedAt,
+		); err != nil {
+			return memory.RawEvent{}, fmt.Errorf("insert raw event: %w", err)
+		}
+		event.MemoryPath = memory.MemoryPathRoot
+		event.Metadata = input.Metadata
+		return event, nil
 	}
 
 	const query = `
@@ -5270,12 +5358,13 @@ INSERT INTO raw_events (
 	tenant,
 	project,
 	namespace,
+	memory_path,
 	event_type,
 	content,
 	metadata,
 	source_timestamp
-) VALUES ($1, $2, $3, $4, $5, $6, $7)
-RETURNING id, tenant, project, namespace, event_type, content, source_timestamp, created_at
+) VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
+RETURNING id, tenant, project, namespace, memory_path, event_type, content, source_timestamp, created_at
 `
 
 	var event memory.RawEvent
@@ -5285,6 +5374,7 @@ RETURNING id, tenant, project, namespace, event_type, content, source_timestamp,
 		input.Scope.Tenant,
 		input.Scope.Project,
 		input.Scope.Namespace,
+		input.MemoryPath,
 		input.EventType,
 		input.Content,
 		metadata,
@@ -5294,6 +5384,7 @@ RETURNING id, tenant, project, namespace, event_type, content, source_timestamp,
 		&event.Scope.Tenant,
 		&event.Scope.Project,
 		&event.Scope.Namespace,
+		&event.MemoryPath,
 		&event.EventType,
 		&event.Content,
 		&event.SourceTimestamp,
@@ -5307,6 +5398,25 @@ RETURNING id, tenant, project, namespace, event_type, content, source_timestamp,
 }
 
 func writeCandidate(ctx context.Context, db queryRower, candidate governance.CandidateMemory) (governance.CandidateMemory, error) {
+	candidate.MemoryPath, _ = memory.NormalizeMemoryPath(candidate.MemoryPath)
+	if candidate.MemoryPath == memory.MemoryPathRoot {
+		const legacyQuery = `
+INSERT INTO candidate_memories (id, source_raw_event_id, tenant, project, namespace, class, content, confidence, importance, freshness, sensitivity, mutability, retention_class, status, created_at, updated_at)
+VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16)
+RETURNING id, source_raw_event_id, tenant, project, namespace, class, content, confidence, importance, freshness, sensitivity, mutability, retention_class, status, created_at, updated_at
+`
+		var created governance.CandidateMemory
+		err := db.QueryRow(ctx, legacyQuery, candidate.ID, candidate.SourceRawEventID, candidate.Scope.Tenant, candidate.Scope.Project, candidate.Scope.Namespace, candidate.Class, candidate.Content, candidate.Confidence, candidate.Importance, candidate.Freshness, candidate.Sensitivity, candidate.Mutability, candidate.RetentionClass, candidate.Status, candidate.CreatedAt, candidate.UpdatedAt).Scan(
+			&created.ID, &created.SourceRawEventID, &created.Scope.Tenant, &created.Scope.Project, &created.Scope.Namespace,
+			&created.Class, &created.Content, &created.Confidence, &created.Importance, &created.Freshness, &created.Sensitivity,
+			&created.Mutability, &created.RetentionClass, &created.Status, &created.CreatedAt, &created.UpdatedAt,
+		)
+		if err != nil {
+			return governance.CandidateMemory{}, fmt.Errorf("insert candidate memory: %w", err)
+		}
+		created.MemoryPath = memory.MemoryPathRoot
+		return created, nil
+	}
 	const query = `
 INSERT INTO candidate_memories (
 	id,
@@ -5314,6 +5424,7 @@ INSERT INTO candidate_memories (
 	tenant,
 	project,
 	namespace,
+	memory_path,
 	class,
 	content,
 	confidence,
@@ -5325,13 +5436,14 @@ INSERT INTO candidate_memories (
 	status,
 	created_at,
 	updated_at
-) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16)
+) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17)
 RETURNING
 	id,
 	source_raw_event_id,
 	tenant,
 	project,
 	namespace,
+	memory_path,
 	class,
 	content,
 	confidence,
@@ -5353,6 +5465,7 @@ RETURNING
 		candidate.Scope.Tenant,
 		candidate.Scope.Project,
 		candidate.Scope.Namespace,
+		candidate.MemoryPath,
 		candidate.Class,
 		candidate.Content,
 		candidate.Confidence,
@@ -5421,14 +5534,42 @@ type candidateScanner interface {
 	Scan(dest ...any) error
 }
 
+func scanWithOptionalMemoryPath(scanner interface{ Scan(...any) error }, path *string, withPath, withoutPath []any) error {
+	if rows, ok := scanner.(pgx.Rows); ok {
+		if len(rows.FieldDescriptions()) == len(withoutPath) {
+			if err := scanner.Scan(withoutPath...); err != nil {
+				return err
+			}
+			if path != nil && *path == "" {
+				*path = memory.MemoryPathRoot
+			}
+			return nil
+		}
+		if len(rows.FieldDescriptions()) == 0 {
+			if err := scanner.Scan(withoutPath...); err == nil {
+				if path != nil && *path == "" {
+					*path = memory.MemoryPathRoot
+				}
+				return nil
+			}
+		}
+		return scanner.Scan(withPath...)
+	}
+	// QueryRow has no column metadata before Scan, so callers must select the
+	// path-aware destinations. Legacy QueryRow statements use explicit legacy
+	// scans at their call sites to avoid consuming ErrNoRows during probing.
+	return scanner.Scan(withPath...)
+}
+
 func scanCandidate(scanner candidateScanner) (governance.CandidateMemory, error) {
 	var candidate governance.CandidateMemory
-	if err := scanner.Scan(
+	if err := scanWithOptionalMemoryPath(scanner, &candidate.MemoryPath, []any{
 		&candidate.ID,
 		&candidate.SourceRawEventID,
 		&candidate.Scope.Tenant,
 		&candidate.Scope.Project,
 		&candidate.Scope.Namespace,
+		&candidate.MemoryPath,
 		&candidate.Class,
 		&candidate.Content,
 		&candidate.Confidence,
@@ -5440,11 +5581,19 @@ func scanCandidate(scanner candidateScanner) (governance.CandidateMemory, error)
 		&candidate.Status,
 		&candidate.CreatedAt,
 		&candidate.UpdatedAt,
-	); err != nil {
+	}, []any{
+		&candidate.ID, &candidate.SourceRawEventID, &candidate.Scope.Tenant, &candidate.Scope.Project, &candidate.Scope.Namespace,
+		&candidate.Class, &candidate.Content, &candidate.Confidence, &candidate.Importance, &candidate.Freshness, &candidate.Sensitivity,
+		&candidate.Mutability, &candidate.RetentionClass, &candidate.Status, &candidate.CreatedAt, &candidate.UpdatedAt,
+	}); err != nil {
 		return governance.CandidateMemory{}, fmt.Errorf("scan candidate memory: %w", err)
 	}
 
 	return candidate, nil
+}
+
+func scanCanonicalMemory(scanner interface{ Scan(...any) error }, canonical *memory.CanonicalMemory) error {
+	return scanWithOptionalMemoryPath(scanner, &canonical.MemoryPath, []any{&canonical.ID, &canonical.Scope.Tenant, &canonical.Scope.Project, &canonical.Scope.Namespace, &canonical.MemoryPath, &canonical.Class, &canonical.State, &canonical.Content, &canonical.CreatedAt, &canonical.ModifiedAt, &canonical.TemporalValidity.TemporalFactID, &canonical.TemporalValidity.IngestedAt, &canonical.TemporalValidity.ValidFrom, &canonical.TemporalValidity.ValidTo, &canonical.TemporalValidity.ValiditySource}, []any{&canonical.ID, &canonical.Scope.Tenant, &canonical.Scope.Project, &canonical.Scope.Namespace, &canonical.Class, &canonical.State, &canonical.Content, &canonical.CreatedAt, &canonical.ModifiedAt, &canonical.TemporalValidity.TemporalFactID, &canonical.TemporalValidity.IngestedAt, &canonical.TemporalValidity.ValidFrom, &canonical.TemporalValidity.ValidTo, &canonical.TemporalValidity.ValiditySource})
 }
 
 func scanGovernanceRawEvent(scanner governanceRawEventScanner, now time.Time) (governance.GovernanceRawEvent, governance.RawEventGovernanceSnapshot, error) {
@@ -5460,11 +5609,12 @@ func scanGovernanceRawEvent(scanner governanceRawEventScanner, now time.Time) (g
 	var exhaustedAt sql.NullTime
 	var processedAt sql.NullTime
 
-	if err := scanner.Scan(
+	if err := scanWithOptionalMemoryPath(scanner, &event.MemoryPath, []any{
 		&event.ID,
 		&event.Scope.Tenant,
 		&event.Scope.Project,
 		&event.Scope.Namespace,
+		&event.MemoryPath,
 		&event.EventType,
 		&event.Content,
 		&sourceTimestamp,
@@ -5478,7 +5628,11 @@ func scanGovernanceRawEvent(scanner governanceRawEventScanner, now time.Time) (g
 		&nextAttemptAt,
 		&exhaustedAt,
 		&processedAt,
-	); err != nil {
+	}, []any{
+		&event.ID, &event.Scope.Tenant, &event.Scope.Project, &event.Scope.Namespace, &event.EventType, &event.Content,
+		&sourceTimestamp, &event.CreatedAt, &snapshot.Attempt, &workerID, &claimedAt, &leaseUntil, &lastFailedAt,
+		&lastError, &nextAttemptAt, &exhaustedAt, &processedAt,
+	}); err != nil {
 		return governance.GovernanceRawEvent{}, governance.RawEventGovernanceSnapshot{}, fmt.Errorf("scan governance raw event: %w", err)
 	}
 
@@ -5856,6 +6010,7 @@ type embeddingCutoverDispatchCandidate struct {
 	PlanID               string
 	MemoryID             string
 	Scope                memory.Scope
+	MemoryPath           string
 	Class                memory.MemoryClass
 	Status               memory.EmbeddingCutoverItemStatus
 	ActiveVectorRevision string
@@ -6670,6 +6825,29 @@ const temporalPredicatePlaceholder = "/*temporal_validity_predicate*/"
 
 func withTemporalPredicate(query string, selection temporalSelection, modeArg, evaluationArg, asOfArg, validFromArg, validToArg int, alias string) string {
 	return strings.Replace(query, temporalPredicatePlaceholder, temporalSQLPredicate(alias, selection, modeArg, evaluationArg, asOfArg, validFromArg, validToArg), 1)
+}
+
+const memoryPathPredicatePlaceholder = "/*memory_path_predicate*/"
+
+func memoryPathPredicateSQL(alias string, selector memory.MemoryPathSelector, valueArg int) string {
+	column := "memory_path"
+	if strings.TrimSpace(alias) != "" {
+		column = alias + ".memory_path"
+	}
+	switch selector.Kind {
+	case memory.MemoryPathSelectorExact:
+		return fmt.Sprintf("AND %s = $%d", column, valueArg)
+	case memory.MemoryPathSelectorPrefix:
+		if selector.Value == memory.MemoryPathRoot {
+			return ""
+		}
+		// Path segments allow '%' and '_' as literal characters. Escape all
+		// LIKE metacharacters (including the escape character itself) so the
+		// database prefilter agrees with MemoryPathSelector.Matches before LIMIT.
+		return fmt.Sprintf("AND (%s = $%d OR %s LIKE replace(replace(replace($%d, E'\\\\', E'\\\\\\\\'), '%%', E'\\\\%%'), '_', E'\\\\_') || '/%%' ESCAPE E'\\\\')", column, valueArg, column, valueArg)
+	default:
+		return ""
+	}
 }
 
 // appendTemporalArgs appends the temporal bind values, but only when the

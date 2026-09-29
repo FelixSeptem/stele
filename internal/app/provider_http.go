@@ -59,6 +59,7 @@ func registerProviderOperationRoutes(mux *http.ServeMux, deps HTTPDependencies) 
 			Metadata    provider.OperationMetadata `json:"metadata"`
 			EventType   string                     `json:"event_type"`
 			Content     string                     `json:"content"`
+			MemoryPath  string                     `json:"memory_path,omitempty"`
 			MetadataMap map[string]any             `json:"metadata_map"`
 		}
 		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
@@ -69,7 +70,7 @@ func registerProviderOperationRoutes(mux *http.ServeMux, deps HTTPDependencies) 
 			writeProviderCompatibilityError(w, deps.ProviderSchemaVersions)
 			return
 		}
-		out, err := deps.ProviderAdapter.Ingest(r.Context(), b, req.Metadata, memory.IngestEventInput{EventType: req.EventType, Content: req.Content, Metadata: req.MetadataMap})
+		out, err := deps.ProviderAdapter.Ingest(r.Context(), b, req.Metadata, memory.IngestEventInput{EventType: req.EventType, Content: req.Content, MemoryPath: req.MemoryPath, Metadata: req.MetadataMap})
 		if err != nil {
 			writeProviderError(w, 400, providerErrorCategory(err), "operation_failed", boundedProviderMessage(err), providerErrorCategory(err) == provider.ErrorCategoryRetryable)
 			return

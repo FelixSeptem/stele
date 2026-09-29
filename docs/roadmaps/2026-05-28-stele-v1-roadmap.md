@@ -104,7 +104,7 @@ change an archived baseline.
 | P5 | Benchmark expansion and retrieval release evidence | Archived changes 025, 026, 035, and 039 | Implemented baseline; owned real-stack evidence remains a prerequisite for activation. |
 | P6 | Durable multi-scope maintenance and observability | Archived change 037 | Implemented baseline; retain regression, freshness, and SLO evidence. |
 | P7 | Agent runtime memory-provider contract | Archived change 038 | Implemented baseline; integration remains optional to the retrieval path. |
-| P8 | Optional adapters and governed experience insights | Governed insight baseline in changes 013/014; `openapi-backed-mcp-scope-and-profile-context` is the preferred next proposal | Keep MCP as an optional OpenAPI adapter and reuse projections/intents rather than creating a second memory system. |
+| P8 | Optional adapters and governed experience insights | Governed insight baseline in changes 013/014; OpenAPI-backed MCP scope/profile adapter archived as change 044; scoped memory paths are the active next proposal | Keep MCP as an optional OpenAPI adapter and reuse projections/intents rather than creating a second memory system. |
 
 ### Critical path to provider readiness
 
@@ -1359,7 +1359,8 @@ Rollback:
 
 Goal: add ecosystem ergonomics only after the core provider contract is stable.
 
-Preferred next proposal: `openapi-backed-mcp-scope-and-profile-context`.
+The OpenAPI-backed MCP scope/profile adapter is complete and archived as change
+044. The active proposal is `scoped-memory-path-conventions` (P8.2).
 
 Candidate tasks for that bounded proposal:
 
@@ -1384,8 +1385,6 @@ Candidate tasks for that bounded proposal:
 
 Later P8 candidates:
 
-- add optional namespace/topic path conventions inside an existing scope without
-  subtree-based cross-scope expansion;
 - define scoped agent self-model conventions as ordinary governed memories;
 - extend the archived governed-insight baseline only where a new insight type
   has its own provenance, lifecycle, replay, feedback, and context-evidence
@@ -1618,15 +1617,17 @@ scoped P8.1 MCP adapter):
 
 ### Candidate Follow-up Tracks
 
-1. OpenAPI-backed MCP scope and profile-context adapter (preferred next proposal):
+1. OpenAPI-backed MCP scope and profile-context adapter (archived change 044):
    Add an optional MCP surface that maps to existing Stele APIs, separates
    identity/scope, search, and assembled context, and routes mutable operations
    through governed intents with preview-to-fixed-ID forgetting.
 
-2. Namespace path conventions inside existing scopes:
-   Add an optional `memory_path` or `topic_path` convention inside one `tenant/project/namespace`, with bounded subtree retrieval and no cross-scope expansion.
+2. Scoped memory path conventions (active proposal):
+   Add an optional normalized `memory_path` convention inside one
+   `tenant/project/namespace`, with exact matching by default and explicit,
+   bounded prefix retrieval that cannot cross scope boundaries.
 
-3. Agent self-model conventions:
+3. Agent self-model conventions (later P8.2b):
    Standardize scoped memory conventions for capabilities, limits, preferences, and lessons learned while keeping them ordinary governed memories.
 
 4. Self-hosting first-ten-minutes smoke path:
@@ -1659,10 +1660,10 @@ Recommended execution order for the current product baseline and next frontier:
 7. P6: durable multi-scope maintenance and observability baseline (archived)
 8. P7: agent runtime memory-provider contract baseline (archived)
 9. RQ1–RQ4: retrieval-quality frontier (archived changes 040–043)
-10. P8.1: OpenAPI-backed MCP scope and profile-context adapter (preferred next proposal)
-11. P8.2: namespace/topic-path conventions, agent self-model conventions, and
-    later governed insight extensions
-12. P8.3: reasoning-provider boundary and offline/shadow progressive-context
+10. P8.1: OpenAPI-backed MCP scope and profile-context adapter (archived change 044)
+11. P8.2: scoped memory path conventions (active proposal)
+12. P8.2b: agent self-model conventions and later governed insight extensions
+13. P8.3: reasoning-provider boundary and offline/shadow progressive-context
     experiments
 
 The original Phase 1–5 order remains the build order for a fresh repository;
@@ -1746,14 +1747,12 @@ Calibration remains disabled by default: a missing or stale summary falls back
 to the baseline, and active calibration still requires a fresh compatible
 exact-scope summary plus separately governed activation.
 
-The preferred next proposal is P8.1
-`openapi-backed-mcp-scope-and-profile-context`. It should expose only a thin,
-optional adapter over existing OpenAPI/service contracts: server-resolved
-identity and exact scope, query-relevant retrieval, already-authorized assembled
-context/profile projections, and governed remember/update/forget intents.
-It must prove that explicit scope overrides any active-scope default without
-widening grants; preserve lifecycle and temporal filtering; use preview-to-fixed
-ID audit batches for semantic forgetting; redact ordinary outputs; and remain
-independently disableable. It must not reopen archived RQ2/RQ3/RQ4 visibility,
-temporal, graph, or calibration contracts, nor introduce an SDK, UI, OAuth,
-connector, graph store, or second profile/canonical store.
+Change 044, `openapi-backed-mcp-scope-and-profile-context`, is complete and
+archived. The immediate next proposal is P8.2
+`scoped-memory-path-conventions`: an optional normalized path within one exact
+tenant/project/namespace, exact matching by default, and explicit bounded
+`path_prefix` retrieval that cannot widen authorization. It should propagate
+consistently through ingestion, search, canonical reads, context assembly, and
+the OpenAPI-backed MCP adapter while preserving lifecycle, temporal, budget,
+pagination, citation, and idempotency contracts. Agent self-model conventions
+and reasoning-provider boundaries remain separate follow-up proposals.

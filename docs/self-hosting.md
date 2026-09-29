@@ -131,6 +131,15 @@ build/schema compatibility metadata at `GET /version`. Both endpoints are
 unauthenticated discovery surfaces and intentionally exclude DSNs, credentials,
 scope values, migration SQL, and operational backlog details.
 
+Memory paths are optional metadata inside the already authenticated exact
+tenant/project/namespace scope. Use `memory_path` on ingest or governed intent
+writes; an omitted value is stored and returned as `/`. Search, context, and
+memory browse accept an exact `path` selector. Descendants require an explicit
+`path_prefix` selector, which matches complete slash-separated segments (so
+`agents/research` does not match `agents/researcher`). `path` and `path_prefix`
+are mutually exclusive and are bounded by the shared path grammar documented
+in the OpenAPI schema.
+
 The optional agent-runtime memory-provider surface is disabled by default. Its
 scope handshake, bounded metadata/citation contract, configuration, conformance,
 and rollback procedure are documented in
