@@ -186,12 +186,28 @@ func buildReasoningCapability(cfg config.ReasoningConfig, registered reasoning.P
 	enabled := cfg.Enabled && (cfg.Mode == reasoning.ModeOffline || registered != nil)
 	return reasoning.Discover(reasoning.CapabilityInput{
 		ProviderVersion: cfg.ProviderVersion,
+		Model:           cfg.Model,
 		ServiceVersion:  BuildVersion,
 		BuildID:         BuildID,
 		SchemaDigest:    cfg.SchemaDigest,
 		Enabled:         enabled,
 		Mode:            cfg.Mode,
 		Limits:          cfg.Limits,
+	})
+}
+
+func resolveReasoningProvider(cfg config.ReasoningConfig, registered reasoning.Provider) (reasoning.Provider, error) {
+	if registered != nil || !cfg.Enabled || cfg.Mode == reasoning.ModeDisabled || cfg.Mode == reasoning.ModeOffline {
+		return registered, nil
+	}
+	return reasoning.NewOpenAICompatibleProvider(reasoning.OpenAICompatibleConfig{
+		Endpoint:         cfg.Endpoint,
+		Model:            cfg.Model,
+		APIKey:           cfg.APIKey,
+		Timeout:          cfg.Timeout,
+		MaxRequestBytes:  cfg.MaxRequestBytes,
+		MaxResponseBytes: cfg.MaxResponseBytes,
+		Limits:           cfg.Limits,
 	})
 }
 
@@ -511,6 +527,11 @@ func defaultSchedulerRuntimeDependencies() schedulerRuntimeDependencies {
 }
 
 func buildAPIRuntime(ctx context.Context, cfg config.Config, deps apiRuntimeDependencies) (apiRuntime, error) {
+	var err error
+	deps.reasoningProvider, err = resolveReasoningProvider(cfg.Reasoning, deps.reasoningProvider)
+	if err != nil {
+		return apiRuntime{}, err
+	}
 	if deps.openPool == nil {
 		deps.openPool = defaultAPIRuntimeDependencies().openPool
 	}
@@ -731,6 +752,11 @@ func buildAPIRuntime(ctx context.Context, cfg config.Config, deps apiRuntimeDepe
 }
 
 func buildWorkerRuntime(ctx context.Context, cfg config.Config, deps workerRuntimeDependencies) (workerRuntime, error) {
+	var err error
+	deps.reasoningProvider, err = resolveReasoningProvider(cfg.Reasoning, deps.reasoningProvider)
+	if err != nil {
+		return workerRuntime{}, err
+	}
 	if deps.openPool == nil {
 		deps.openPool = defaultWorkerRuntimeDependencies().openPool
 	}
@@ -943,6 +969,11 @@ func buildWorkerRuntime(ctx context.Context, cfg config.Config, deps workerRunti
 }
 
 func buildSchedulerRuntime(ctx context.Context, cfg config.Config, deps schedulerRuntimeDependencies) (schedulerRuntime, error) {
+	var err error
+	deps.reasoningProvider, err = resolveReasoningProvider(cfg.Reasoning, deps.reasoningProvider)
+	if err != nil {
+		return schedulerRuntime{}, err
+	}
 	if deps.openPool == nil {
 		deps.openPool = defaultSchedulerRuntimeDependencies().openPool
 	}

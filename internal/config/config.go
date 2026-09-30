@@ -97,11 +97,17 @@ type ProviderConfig struct {
 // boundary. It deliberately contains no credentials or prompt configuration;
 // concrete providers are registered by the runtime integration layer.
 type ReasoningConfig struct {
-	Enabled         bool
-	Mode            reasoning.Mode
-	ProviderVersion string
-	SchemaDigest    string
-	Limits          reasoning.Limits
+	Enabled          bool
+	Mode             reasoning.Mode
+	ProviderVersion  string
+	SchemaDigest     string
+	Endpoint         string
+	Model            string
+	APIKey           string
+	Timeout          time.Duration
+	MaxRequestBytes  int
+	MaxResponseBytes int
+	Limits           reasoning.Limits
 }
 
 type EvaluationConfig struct {
@@ -716,12 +722,39 @@ func loadReasoningConfig() (ReasoningConfig, error) {
 	if enabled && mode == reasoning.ModeDisabled {
 		return ReasoningConfig{}, fmt.Errorf("enabled reasoning configuration cannot use disabled mode")
 	}
+	timeout, err := loadDurationWithDefault("STELE_REASONING_TIMEOUT", 30*time.Second)
+	if err != nil {
+		return ReasoningConfig{}, err
+	}
+	maxRequestBytes, err := loadIntWithDefault("STELE_REASONING_MAX_REQUEST_BYTES", 128<<10)
+	if err != nil {
+		return ReasoningConfig{}, err
+	}
+	maxResponseBytes, err := loadIntWithDefault("STELE_REASONING_MAX_RESPONSE_BYTES", 64<<10)
+	if err != nil {
+		return ReasoningConfig{}, err
+	}
+	if timeout <= 0 || timeout > 10*time.Minute || maxRequestBytes <= 0 || maxRequestBytes > 1<<20 || maxResponseBytes <= 0 || maxResponseBytes > 1<<20 {
+		return ReasoningConfig{}, fmt.Errorf("reasoning adapter transport settings are invalid")
+	}
+	endpoint := strings.TrimSpace(os.Getenv("STELE_REASONING_ENDPOINT"))
+	model := strings.TrimSpace(os.Getenv("STELE_REASONING_MODEL"))
+	apiKey := strings.TrimSpace(os.Getenv("STELE_REASONING_API_KEY"))
+	if enabled && (mode == reasoning.ModeShadow || mode == reasoning.ModeLive) && (endpoint == "" || model == "" || apiKey == "") {
+		return ReasoningConfig{}, fmt.Errorf("enabled remote reasoning configuration requires endpoint, model, and api key")
+	}
 	return ReasoningConfig{
-		Enabled:         enabled,
-		Mode:            mode,
-		ProviderVersion: strings.TrimSpace(getEnvOrDefault("STELE_REASONING_PROVIDER_VERSION", "reasoning-provider-v1")),
-		SchemaDigest:    strings.TrimSpace(getEnvOrDefault("STELE_REASONING_SCHEMA_DIGEST", reasoning.SchemaVersionV1)),
-		Limits:          limits,
+		Enabled:          enabled,
+		Mode:             mode,
+		ProviderVersion:  strings.TrimSpace(getEnvOrDefault("STELE_REASONING_PROVIDER_VERSION", "reasoning-provider-v1")),
+		SchemaDigest:     strings.TrimSpace(getEnvOrDefault("STELE_REASONING_SCHEMA_DIGEST", reasoning.SchemaVersionV1)),
+		Endpoint:         endpoint,
+		Model:            model,
+		APIKey:           apiKey,
+		Timeout:          timeout,
+		MaxRequestBytes:  maxRequestBytes,
+		MaxResponseBytes: maxResponseBytes,
+		Limits:           limits,
 	}, nil
 }
 

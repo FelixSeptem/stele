@@ -8,6 +8,7 @@ import (
 	"net/http/httptest"
 	"reflect"
 	"testing"
+	"time"
 
 	"github.com/FelixSeptem/stele/internal/auth"
 	"github.com/FelixSeptem/stele/internal/config"
@@ -68,6 +69,26 @@ func TestReasoningLiveCapabilityIsDiscoveredAfterProviderRegistration(t *testing
 	}
 	if !capability.Enabled || capability.Mode != reasoning.ModeLive {
 		t.Fatalf("registered live capability = %+v, want enabled live mode", capability)
+	}
+}
+
+func TestResolveReasoningProviderBuildsConfiguredRemoteAdapter(t *testing.T) {
+	provider, err := resolveReasoningProvider(config.ReasoningConfig{
+		Enabled:          true,
+		Mode:             reasoning.ModeShadow,
+		Endpoint:         "http://localhost:9000/v1/chat/completions",
+		Model:            "reasoning-model",
+		APIKey:           "secret",
+		Timeout:          time.Second,
+		MaxRequestBytes:  128 << 10,
+		MaxResponseBytes: 64 << 10,
+		Limits:           reasoning.DefaultLimits(),
+	}, nil)
+	if err != nil {
+		t.Fatalf("resolveReasoningProvider() error = %v", err)
+	}
+	if provider == nil {
+		t.Fatal("resolveReasoningProvider() returned nil provider")
 	}
 }
 

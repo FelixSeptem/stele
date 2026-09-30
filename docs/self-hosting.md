@@ -221,6 +221,22 @@ Authorized callers can inspect the redacted, scope-bound capability document at
 `GET /v1/reasoning/capabilities`. The API, worker, and scheduler derive this
 same document from shared configuration.
 
+The optional OpenAI-compatible adapter uses these additional settings:
+
+- `STELE_REASONING_ENDPOINT`: exact chat-completions-compatible endpoint;
+- `STELE_REASONING_MODEL`: configured model identifier;
+- `STELE_REASONING_API_KEY`: operator credential, never returned in diagnostics;
+- `STELE_REASONING_TIMEOUT`: outbound timeout, default `30s`;
+- `STELE_REASONING_MAX_REQUEST_BYTES` and `STELE_REASONING_MAX_RESPONSE_BYTES`:
+  transport bounds, default `128KiB` and `64KiB`.
+
+Remote `shadow` and `live` modes require all endpoint/model/credential settings
+and fail startup if they are incomplete. The adapter sends one bounded,
+server-owned structured-output request and performs no automatic retries. Start
+with `shadow` to compare candidate-only diagnostics; rollback by setting
+`STELE_REASONING_ENABLED=false` or `STELE_REASONING_MODE=offline`. Offline
+replay never contacts the configured endpoint.
+
 offline replay uses checksum-locked fixtures and deterministic normalized
 envelopes without remote provider calls. Opt-in shadow execution compares a
 provider result with the baseline but remains non-authoritative; disagreement,

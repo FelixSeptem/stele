@@ -45,6 +45,7 @@ func (l Limits) Validate() error {
 
 type CapabilityInput struct {
 	ProviderVersion string
+	Model           string
 	ServiceVersion  string
 	BuildID         string
 	SchemaDigest    string
@@ -55,6 +56,7 @@ type CapabilityInput struct {
 
 type Capability struct {
 	ProviderVersion string   `json:"provider_version"`
+	Model           string   `json:"model,omitempty"`
 	ServiceVersion  string   `json:"service_version"`
 	BuildID         string   `json:"build_id"`
 	SchemaVersion   string   `json:"schema_version"`
@@ -77,7 +79,7 @@ func Discover(in CapabilityInput) Capability {
 	if mode == "" {
 		mode = ModeDisabled
 	}
-	return Capability{ProviderVersion: fallback(in.ProviderVersion), ServiceVersion: fallback(in.ServiceVersion), BuildID: fallback(in.BuildID), SchemaVersion: SchemaVersionV1, SchemaDigest: fallback(in.SchemaDigest), Enabled: in.Enabled, Mode: mode, Operations: []string{"capability", "derive", "replay", "shadow", "conformance"}, Limits: limits}
+	return Capability{ProviderVersion: fallback(in.ProviderVersion), Model: optionalBounded(in.Model, 256), ServiceVersion: fallback(in.ServiceVersion), BuildID: fallback(in.BuildID), SchemaVersion: SchemaVersionV1, SchemaDigest: fallback(in.SchemaDigest), Enabled: in.Enabled, Mode: mode, Operations: []string{"capability", "derive", "replay", "shadow", "conformance"}, Limits: limits}
 }
 
 func (c Capability) Validate() error {
@@ -275,6 +277,13 @@ func fallback(v string) string {
 		return "unknown"
 	}
 	return strings.TrimSpace(v)
+}
+func optionalBounded(v string, max int) string {
+	v = strings.TrimSpace(v)
+	if v == "" || len(v) > max || strings.ContainsAny(v, "\r\n\x00") {
+		return ""
+	}
+	return v
 }
 func bounded(v string, max int) bool {
 	v = strings.TrimSpace(v)

@@ -1,6 +1,6 @@
 # Archive Index
 
-Updated: 2026-09-30 20:28:38
+Updated: 2026-09-30 21:42:41
 
 - 001 -> bootstrap-foundation-and-event-ingestion
 - 002 -> governance-pipeline-and-memory-consolidation
@@ -50,3 +50,4 @@ Updated: 2026-09-30 20:28:38
 - 046 -> scoped-memory-path-conventions
 - 047 -> scoped-agent-self-model-conventions
 - 048 -> reasoning-provider-boundary
+- 049 -> reasoning-openai-compatible-adapter

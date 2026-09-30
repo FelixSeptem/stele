@@ -4120,6 +4120,7 @@ components:
       required: [provider_version, service_version, build_id, schema_version, schema_digest, enabled, mode, operations, limits]
       properties:
         provider_version: {type: string, maxLength: 128}
+        model: {type: string, maxLength: 256}
         service_version: {type: string, maxLength: 128}
         build_id: {type: string, maxLength: 128}
         schema_version: {type: string, maxLength: 128}

@@ -90,6 +90,28 @@ func TestSelfHostingDocsDescribeReasoningProviderBoundary(t *testing.T) {
 	}
 }
 
+func TestSelfHostingDocsDescribeOpenAICompatibleReasoningAdapter(t *testing.T) {
+	contentBytes, err := os.ReadFile("self-hosting.md")
+	if err != nil {
+		t.Fatalf("read self-hosting.md: %v", err)
+	}
+	content := string(contentBytes)
+	for _, want := range []string{
+		"STELE_REASONING_ENDPOINT",
+		"STELE_REASONING_MODEL",
+		"STELE_REASONING_API_KEY",
+		"shadow",
+		"one bounded",
+		"automatic retries",
+		"Offline",
+		"replay never contacts",
+	} {
+		if !strings.Contains(content, want) {
+			t.Fatalf("self-hosting adapter docs missing %q", want)
+		}
+	}
+}
+
 func TestRoadmapTracksReasoningProviderAsNextProposal(t *testing.T) {
 	roadmapBytes, err := os.ReadFile("roadmaps/2026-05-28-stele-v1-roadmap.md")
 	if err != nil {
@@ -98,11 +120,11 @@ func TestRoadmapTracksReasoningProviderAsNextProposal(t *testing.T) {
 	roadmap := string(roadmapBytes)
 	for _, want := range []string{
 		"P8.2b: agent self-model conventions (archived change 047)",
-		"P8.3: reasoning-provider boundary (active proposal)",
-		"The immediate next proposal is P8.3",
-		"`reasoning-provider-boundary`",
-		"Concrete model",
-		"separate follow-up proposals.",
+		"P8.3: reasoning-provider boundary (archived change 048)",
+		"The immediate next proposal is P8.4",
+		"`reasoning-openai-compatible-adapter`",
+		"OpenAI-compatible HTTP adapter",
+		"separate follow-up proposal.",
 	} {
 		if !strings.Contains(roadmap, want) {
 			t.Fatalf("roadmap missing reasoning proposal status %q", want)
@@ -175,7 +197,7 @@ func TestRoadmapTracksScopedMemoryAndSelfModelProposalStatus(t *testing.T) {
 		"Agent self-model conventions are complete and archived as change 047.",
 		"P8.2: scoped memory path conventions (archived change 046)",
 		"P8.2b: agent self-model conventions (archived change 047)",
-		"P8.3: reasoning-provider boundary (active proposal)",
+		"P8.3: reasoning-provider boundary (archived change 048)",
 	} {
 		if !strings.Contains(roadmap, want) {
 			t.Fatalf("v1 roadmap missing proposal status contract %q", want)

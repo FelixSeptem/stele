@@ -2,6 +2,7 @@ package config
 
 import (
 	"testing"
+	"time"
 
 	"github.com/FelixSeptem/stele/internal/reasoning"
 )
@@ -43,6 +44,32 @@ func TestLoadFromEnvReasoningParsesBoundedOfflineConfiguration(t *testing.T) {
 	}
 	if cfg.Reasoning.Limits.MaxInputBytes != 1024 || cfg.Reasoning.Limits.MaxOutputBytes != 2048 {
 		t.Fatalf("reasoning limits = %+v, want configured bounds", cfg.Reasoning.Limits)
+	}
+}
+
+func TestLoadFromEnvReasoningParsesRemoteAdapterConfiguration(t *testing.T) {
+	t.Setenv("STELE_POSTGRES_DSN", "postgres://runtime/db")
+	t.Setenv("STELE_REASONING_ENABLED", "true")
+	t.Setenv("STELE_REASONING_MODE", "shadow")
+	t.Setenv("STELE_REASONING_ENDPOINT", "http://localhost:9000/v1/chat/completions")
+	t.Setenv("STELE_REASONING_MODEL", "reasoning-model")
+	t.Setenv("STELE_REASONING_API_KEY", "secret-key")
+	t.Setenv("STELE_REASONING_TIMEOUT", "7s")
+	cfg, err := LoadFromEnv()
+	if err != nil {
+		t.Fatalf("LoadFromEnv() error = %v", err)
+	}
+	if cfg.Reasoning.Endpoint == "" || cfg.Reasoning.Model != "reasoning-model" || cfg.Reasoning.APIKey != "secret-key" || cfg.Reasoning.Timeout != 7*time.Second {
+		t.Fatalf("reasoning config = %+v", cfg.Reasoning)
+	}
+}
+
+func TestLoadFromEnvRejectsIncompleteRemoteReasoningConfiguration(t *testing.T) {
+	t.Setenv("STELE_POSTGRES_DSN", "postgres://runtime/db")
+	t.Setenv("STELE_REASONING_ENABLED", "true")
+	t.Setenv("STELE_REASONING_MODE", "live")
+	if _, err := LoadFromEnv(); err == nil {
+		t.Fatal("LoadFromEnv() error = nil, want incomplete remote reasoning rejection")
 	}
 }
 

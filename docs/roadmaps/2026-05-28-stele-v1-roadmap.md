@@ -1362,7 +1362,8 @@ Goal: add ecosystem ergonomics only after the core provider contract is stable.
 The OpenAPI-backed MCP scope/profile adapter is complete and archived as change
 044. Scoped memory path conventions are complete and archived as change 046.
 Agent self-model conventions are complete and archived as change 047. The
-active proposal is `reasoning-provider-boundary` (P8.3).
+reasoning provider boundary is complete and archived as change 048. The active
+proposal is `reasoning-openai-compatible-adapter` (P8.4).
 
 Candidate tasks for that bounded proposal:
 
@@ -1665,8 +1666,8 @@ Recommended execution order for the current product baseline and next frontier:
 10. P8.1: OpenAPI-backed MCP scope and profile-context adapter (archived change 044)
 11. P8.2: scoped memory path conventions (archived change 046)
 12. P8.2b: agent self-model conventions (archived change 047)
-13. P8.3: reasoning-provider boundary (active proposal) and offline/shadow progressive-context
-    experiments
+13. P8.3: reasoning-provider boundary (archived change 048), followed by the
+    P8.4 concrete OpenAI-compatible reasoning adapter proposal
 
 The original Phase 1–5 order remains the build order for a fresh repository;
 the P0–P7 sequence is the archived baseline and RQ1–RQ4 are the next
@@ -1752,9 +1753,8 @@ exact-scope summary plus separately governed activation.
 Change 044, `openapi-backed-mcp-scope-and-profile-context`, is complete and
 archived. Change 046, `scoped-memory-path-conventions`, is complete and
 archived. Change 047, `scoped-agent-self-model-conventions`, is complete and
-archived. The immediate next proposal is P8.3
-`reasoning-provider-boundary`: a provider-independent, bounded, optional
-reasoning contract with exact scope, evidence, replay, fallback, and
-offline/shadow semantics. Concrete model adapters and automatic activation of
-reserved insight types remain separate follow-up proposals. Concrete model
-adapters remain separate follow-up proposals.
+archived. The immediate next proposal is P8.4
+`reasoning-openai-compatible-adapter`: an optional, bounded, secret-safe
+OpenAI-compatible HTTP adapter that exercises the archived reasoning boundary
+through offline and shadow-safe execution. Automatic activation of reserved
+insight types remains a separate follow-up proposal.
