@@ -62,6 +62,54 @@ func TestSelfHostingSmokeLoopDocumentsReplayContextAndMetrics(t *testing.T) {
 	}
 }
 
+func TestSelfHostingDocsDescribeReasoningProviderBoundary(t *testing.T) {
+	contentBytes, err := os.ReadFile("self-hosting.md")
+	if err != nil {
+		t.Fatalf("read self-hosting.md: %v", err)
+	}
+	content := string(contentBytes)
+	for _, want := range []string{
+		"Reasoning provider boundary",
+		"disabled by default",
+		"offline replay",
+		"shadow execution",
+		"candidate or governed intent",
+		"canonical memory",
+		"chain-of-thought",
+		"raw provider payloads",
+		"hypothesis",
+		"causal_link",
+		"rollback",
+		"STELE_REASONING_ENABLED",
+		"STELE_REASONING_MODE",
+		"GET /v1/reasoning/capabilities",
+	} {
+		if !strings.Contains(content, want) {
+			t.Fatalf("self-hosting reasoning docs missing %q", want)
+		}
+	}
+}
+
+func TestRoadmapTracksReasoningProviderAsNextProposal(t *testing.T) {
+	roadmapBytes, err := os.ReadFile("roadmaps/2026-05-28-stele-v1-roadmap.md")
+	if err != nil {
+		t.Fatalf("read v1 roadmap: %v", err)
+	}
+	roadmap := string(roadmapBytes)
+	for _, want := range []string{
+		"P8.2b: agent self-model conventions (archived change 047)",
+		"P8.3: reasoning-provider boundary (active proposal)",
+		"The immediate next proposal is P8.3",
+		"`reasoning-provider-boundary`",
+		"Concrete model",
+		"separate follow-up proposals.",
+	} {
+		if !strings.Contains(roadmap, want) {
+			t.Fatalf("roadmap missing reasoning proposal status %q", want)
+		}
+	}
+}
+
 func TestSelfHostingDocsDescribeScopedAgentSelfModelConvention(t *testing.T) {
 	contentBytes, err := os.ReadFile("self-hosting.md")
 	if err != nil {
@@ -95,7 +143,7 @@ func TestSelfHostingDocsDescribeScopedAgentSelfModelConvention(t *testing.T) {
 }
 
 func TestSelfModelSpecPreservesExistingClassesAndAuthority(t *testing.T) {
-	specBytes, err := os.ReadFile("../openspec/changes/scoped-agent-self-model-conventions/specs/scoped-agent-self-model-conventions/spec.md")
+	specBytes, err := os.ReadFile("../openspec/specs/scoped-agent-self-model-conventions/spec.md")
 	if err != nil {
 		t.Fatalf("read self-model specification: %v", err)
 	}
@@ -105,7 +153,7 @@ func TestSelfModelSpecPreservesExistingClassesAndAuthority(t *testing.T) {
 		"`capabilities`, `preferences`, `limitations`, and `lessons",
 		"ordinary governed `profile` memory",
 		"existing `procedural` memory class",
-		"MUST NOT act as a scope, grant, or authorization selector",
+		"NOT act as a scope, grant, or authorization selector",
 		"MUST NOT grant access, change runtime configuration, or override server-published",
 		"Self-model memories MUST NOT be",
 		"automatically injected into ordinary context",
@@ -124,10 +172,10 @@ func TestRoadmapTracksScopedMemoryAndSelfModelProposalStatus(t *testing.T) {
 	roadmap := string(roadmapBytes)
 	for _, want := range []string{
 		"scoped memory paths archived as change 046",
-		"The active proposal is `scoped-agent-self-model-conventions` (P8.2b).",
+		"Agent self-model conventions are complete and archived as change 047.",
 		"P8.2: scoped memory path conventions (archived change 046)",
-		"P8.2b: agent self-model conventions (active proposal)",
-		"The later reasoning-provider\nboundary remains a separate follow-up proposal.",
+		"P8.2b: agent self-model conventions (archived change 047)",
+		"P8.3: reasoning-provider boundary (active proposal)",
 	} {
 		if !strings.Contains(roadmap, want) {
 			t.Fatalf("v1 roadmap missing proposal status contract %q", want)

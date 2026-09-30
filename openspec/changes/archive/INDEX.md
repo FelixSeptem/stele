@@ -1,6 +1,6 @@
 # Archive Index
 
-Updated: 2026-09-30 07:34:21
+Updated: 2026-09-30 20:28:38
 
 - 001 -> bootstrap-foundation-and-event-ingestion
 - 002 -> governance-pipeline-and-memory-consolidation
@@ -49,3 +49,4 @@ Updated: 2026-09-30 07:34:21
 - 045 -> agent-runtime-memory-provider-contract
 - 046 -> scoped-memory-path-conventions
 - 047 -> scoped-agent-self-model-conventions
+- 048 -> reasoning-provider-boundary

@@ -21,6 +21,7 @@ import (
 	"github.com/FelixSeptem/stele/internal/memory"
 	"github.com/FelixSeptem/stele/internal/policy"
 	"github.com/FelixSeptem/stele/internal/provider"
+	"github.com/FelixSeptem/stele/internal/reasoning"
 	"github.com/FelixSeptem/stele/internal/retrieval"
 	"github.com/FelixSeptem/stele/internal/storage/postgres"
 	"github.com/FelixSeptem/stele/internal/telemetry"
@@ -74,6 +75,7 @@ type apiRunner struct {
 type apiRuntime struct {
 	bootstrapper    bootstrapper
 	server          httpServer
+	reasoning       reasoning.Capability
 	shutdownTimeout time.Duration
 	markDraining    func()
 	cleanup         func()
@@ -83,6 +85,7 @@ type apiRuntime struct {
 type workerRuntime struct {
 	bootstrapper bootstrapper
 	worker       backgroundWorker
+	reasoning    reasoning.Capability
 	readiness    ReadinessChecker
 	authorizer   auth.PrincipalAuthorizer
 	cleanup      func()
@@ -92,6 +95,7 @@ type workerRuntime struct {
 type schedulerRuntime struct {
 	bootstrapper bootstrapper
 	scheduler    backgroundScheduler
+	reasoning    reasoning.Capability
 	readiness    ReadinessChecker
 	authorizer   auth.PrincipalAuthorizer
 	cleanup      func()
@@ -125,6 +129,7 @@ type apiRuntimeDependencies struct {
 	migrateDatabase    func(ctx context.Context, dsn, policy string) error
 	newServer          func(addr string, deps HTTPDependencies) httpServer
 	embeddingProviders map[string]embedding.Provider
+	reasoningProvider  reasoning.Provider
 	observer           telemetry.Observer
 }
 
@@ -133,6 +138,7 @@ type workerRuntimeDependencies struct {
 	bootstrapDatabase  func(ctx context.Context, db postgresRuntimeStore) error
 	migrateDatabase    func(ctx context.Context, dsn, policy string) error
 	embeddingProviders map[string]embedding.Provider
+	reasoningProvider  reasoning.Provider
 	now                func() time.Time
 	observer           telemetry.Observer
 }
@@ -146,6 +152,7 @@ type schedulerRuntimeDependencies struct {
 	bootstrapDatabase  func(ctx context.Context, db postgresRuntimeStore) error
 	migrateDatabase    func(ctx context.Context, dsn, policy string) error
 	embeddingProviders map[string]embedding.Provider
+	reasoningProvider  reasoning.Provider
 	now                func() time.Time
 	observer           telemetry.Observer
 }
@@ -168,6 +175,24 @@ func buildConfiguredReranker(cfg config.RerankerConfig) retrieval.Reranker {
 		Endpoint: cfg.Endpoint, APIKey: cfg.APIKey, Model: cfg.Model,
 		Timeout: cfg.Timeout, MaxCandidates: cfg.MaxCandidates, MaxTextBytes: cfg.MaxTextBytes,
 	}
+}
+
+// buildReasoningCapability is shared by all runtime modes so capability
+// discovery cannot drift between API, worker, and scheduler processes. A
+// live/shadow provider is considered registered only when the runtime has an
+// implementation; offline mode remains useful without one. Disabled is the
+// safe result for the default self-hosted configuration.
+func buildReasoningCapability(cfg config.ReasoningConfig, registered reasoning.Provider) reasoning.Capability {
+	enabled := cfg.Enabled && (cfg.Mode == reasoning.ModeOffline || registered != nil)
+	return reasoning.Discover(reasoning.CapabilityInput{
+		ProviderVersion: cfg.ProviderVersion,
+		ServiceVersion:  BuildVersion,
+		BuildID:         BuildID,
+		SchemaDigest:    cfg.SchemaDigest,
+		Enabled:         enabled,
+		Mode:            cfg.Mode,
+		Limits:          cfg.Limits,
+	})
 }
 
 const governanceWorkerLeaseDuration = 2 * time.Minute
@@ -565,6 +590,7 @@ func buildAPIRuntime(ctx context.Context, cfg config.Config, deps apiRuntimeDepe
 	httpDeps.ProviderEnabled = cfg.Provider.Enabled
 	httpDeps.ProviderSchemaVersions = cfg.Provider.SchemaVersions
 	httpDeps.ProviderLimits = cfg.Provider.Limits
+	httpDeps.ReasoningCapabilities = buildReasoningCapability(cfg.Reasoning, deps.reasoningProvider)
 	httpDeps.MemorySession = memory.NewMemorySessionService(memory.MemorySessionServiceOptions{
 		Store:                repo,
 		ContextAssembler:     memorySessionContextAdapter{assembler: retrievalService},
@@ -694,6 +720,7 @@ func buildAPIRuntime(ctx context.Context, cfg config.Config, deps apiRuntimeDepe
 			return deps.bootstrapDatabase(ctx, pool)
 		}),
 		server:          deps.newServer(cfg.HTTPAddr, httpDeps),
+		reasoning:       buildReasoningCapability(cfg.Reasoning, deps.reasoningProvider),
 		shutdownTimeout: cfg.HTTP.ShutdownTimeout,
 		markDraining:    readiness.BeginDrain,
 		cleanup: func() {
@@ -905,6 +932,7 @@ func buildWorkerRuntime(ctx context.Context, cfg config.Config, deps workerRunti
 			PollInterval: cfg.Jobs.WorkerPollInterval,
 			ErrorBackoff: cfg.Jobs.WorkerErrorBackoff,
 		},
+		reasoning:  buildReasoningCapability(cfg.Reasoning, deps.reasoningProvider),
 		readiness:  runtimeReadinessChecker(config.ModeWorker, pool, embeddingRuntime, true, deps.observer),
 		authorizer: principalAuthorizerForRuntime(cfg, repo, now),
 		cleanup: func() {
@@ -1239,6 +1267,7 @@ func buildSchedulerRuntime(ctx context.Context, cfg config.Config, deps schedule
 			return deps.bootstrapDatabase(ctx, pool)
 		}),
 		scheduler:  scheduler,
+		reasoning:  buildReasoningCapability(cfg.Reasoning, deps.reasoningProvider),
 		readiness:  runtimeReadinessChecker(config.ModeScheduler, pool, embeddingRuntime, true, deps.observer),
 		authorizer: principalAuthorizerForRuntime(cfg, repo, now),
 		cleanup: func() {

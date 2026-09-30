@@ -21,6 +21,7 @@ import (
 	"github.com/FelixSeptem/stele/internal/memory"
 	"github.com/FelixSeptem/stele/internal/policy"
 	"github.com/FelixSeptem/stele/internal/provider"
+	"github.com/FelixSeptem/stele/internal/reasoning"
 	"github.com/FelixSeptem/stele/internal/retrieval"
 	"github.com/FelixSeptem/stele/internal/telemetry"
 	"github.com/FelixSeptem/stele/internal/workflow"
@@ -78,6 +79,7 @@ type HTTPDependencies struct {
 	ProviderAdapter           *provider.Adapter
 	ProviderSchemaVersions    []string
 	ProviderLimits            provider.ProviderLimits
+	ReasoningCapabilities     reasoning.Capability
 }
 
 type ContextProjectionAdminService interface {
@@ -809,6 +811,14 @@ func NewHTTPHandler(deps HTTPDependencies) http.Handler {
 	if deps.ProviderEnabled {
 		registerProviderRoutes(mux, deps)
 	}
+	reasoningCapabilities := auth.PrincipalMiddleware(deps.PrincipalAuthorizer, auth.PrincipalRolePublic)(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		doc := deps.ReasoningCapabilities
+		if err := doc.Validate(); err != nil {
+			doc = reasoning.Discover(reasoning.CapabilityInput{})
+		}
+		writeJSON(w, http.StatusOK, doc)
+	}))
+	mux.Handle("GET /v1/reasoning/capabilities", reasoningCapabilities)
 	mux.HandleFunc("GET /openapi.yaml", func(w http.ResponseWriter, r *http.Request) {
 		body := []byte(openapi.SpecYAMLWithMCPPath(deps.MCP.Path))
 		etag := fmt.Sprintf(`"%x"`, sha256.Sum256(body))

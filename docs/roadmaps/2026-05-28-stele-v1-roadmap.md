@@ -104,7 +104,7 @@ change an archived baseline.
 | P5 | Benchmark expansion and retrieval release evidence | Archived changes 025, 026, 035, and 039 | Implemented baseline; owned real-stack evidence remains a prerequisite for activation. |
 | P6 | Durable multi-scope maintenance and observability | Archived change 037 | Implemented baseline; retain regression, freshness, and SLO evidence. |
 | P7 | Agent runtime memory-provider contract | Archived change 038 | Implemented baseline; integration remains optional to the retrieval path. |
-| P8 | Optional adapters and governed experience insights | Governed insight baseline in changes 013/014; OpenAPI-backed MCP scope/profile adapter archived as change 044; scoped memory paths archived as change 046; agent self-model conventions are the active proposal | Keep MCP as an optional OpenAPI adapter and reuse projections/intents rather than creating a second memory system. |
+| P8 | Optional adapters and governed experience insights | Governed insight baseline in changes 013/014; OpenAPI-backed MCP scope/profile adapter archived as change 044; scoped memory paths archived as change 046; agent self-model conventions archived as change 047; reasoning-provider boundary is the active proposal | Keep MCP as an optional OpenAPI adapter and reuse projections/intents rather than creating a second memory system. |
 
 ### Critical path to provider readiness
 
@@ -1361,7 +1361,8 @@ Goal: add ecosystem ergonomics only after the core provider contract is stable.
 
 The OpenAPI-backed MCP scope/profile adapter is complete and archived as change
 044. Scoped memory path conventions are complete and archived as change 046.
-The active proposal is `scoped-agent-self-model-conventions` (P8.2b).
+Agent self-model conventions are complete and archived as change 047. The
+active proposal is `reasoning-provider-boundary` (P8.3).
 
 Candidate tasks for that bounded proposal:
 
@@ -1663,8 +1664,8 @@ Recommended execution order for the current product baseline and next frontier:
 9. RQ1–RQ4: retrieval-quality frontier (archived changes 040–043)
 10. P8.1: OpenAPI-backed MCP scope and profile-context adapter (archived change 044)
 11. P8.2: scoped memory path conventions (archived change 046)
-12. P8.2b: agent self-model conventions (active proposal) and later governed insight extensions
-13. P8.3: reasoning-provider boundary and offline/shadow progressive-context
+12. P8.2b: agent self-model conventions (archived change 047)
+13. P8.3: reasoning-provider boundary (active proposal) and offline/shadow progressive-context
     experiments
 
 The original Phase 1–5 order remains the build order for a fresh repository;
@@ -1750,9 +1751,10 @@ exact-scope summary plus separately governed activation.
 
 Change 044, `openapi-backed-mcp-scope-and-profile-context`, is complete and
 archived. Change 046, `scoped-memory-path-conventions`, is complete and
-archived. The immediate next proposal is P8.2b
-`scoped-agent-self-model-conventions`: an optional `agents/{agent-id}/self/{category}`
-convention inside one exact tenant/project/namespace. It reuses ordinary
-governed `profile` and `procedural` memories, explicit exact/prefix retrieval,
-and existing lifecycle and authority boundaries. The later reasoning-provider
-boundary remains a separate follow-up proposal.
+archived. Change 047, `scoped-agent-self-model-conventions`, is complete and
+archived. The immediate next proposal is P8.3
+`reasoning-provider-boundary`: a provider-independent, bounded, optional
+reasoning contract with exact scope, evidence, replay, fallback, and
+offline/shadow semantics. Concrete model adapters and automatic activation of
+reserved insight types remain separate follow-up proposals. Concrete model
+adapters remain separate follow-up proposals.

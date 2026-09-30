@@ -203,6 +203,39 @@ scope handshake, bounded metadata/citation contract, configuration, conformance,
 and rollback procedure are documented in
 [`docs/agent-runtime-memory-provider.md`](agent-runtime-memory-provider.md).
 
+### Reasoning provider boundary
+
+Optional model-assisted reasoning is disabled by default and is never required
+for API, worker, scheduler, retrieval, or context assembly startup. The
+reasoning boundary is provider-independent: a configured provider receives only
+bounded, scope-eligible evidence and returns a candidate or governed intent,
+not a direct canonical-memory mutation. Accepted candidates retain provenance,
+evidence citations, policy/provider versions, uncertainty, and replay identity
+before existing governance can review or admit them.
+
+Operators configure the boundary with `STELE_REASONING_ENABLED`,
+`STELE_REASONING_MODE` (`offline`, `shadow`, or `live`), and the bounded
+`STELE_REASONING_MAX_*` limits. A live or shadow capability stays disabled
+until its provider is registered; offline fixture replay needs no provider.
+Authorized callers can inspect the redacted, scope-bound capability document at
+`GET /v1/reasoning/capabilities`. The API, worker, and scheduler derive this
+same document from shared configuration.
+
+offline replay uses checksum-locked fixtures and deterministic normalized
+envelopes without remote provider calls. Opt-in shadow execution compares a
+provider result with the baseline but remains non-authoritative; disagreement,
+staleness, timeout, cancellation, malformed output, and provider-unavailable
+states preserve the baseline and produce bounded diagnostic categories. Retry
+and fallback behavior is idempotent and cannot expand scope, budgets, or
+deadlines. Conformance reports omit prompts, chain-of-thought, credentials,
+hidden identifiers, and raw provider payloads.
+
+This boundary does not activate `hypothesis`, `goal`, `contradiction`, or
+`causal_link` insights automatically. Concrete model adapters and model-routing
+policy remain separate changes. To roll back, disable the reasoning mode;
+offline/shadow evidence and candidate records remain auditable while ordinary
+memory governance continues unchanged.
+
 ## Principal Bootstrap And Scoped Access
 
 Protected requests are authenticated against PostgreSQL-backed principals. Every

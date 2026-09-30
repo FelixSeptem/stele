@@ -78,6 +78,26 @@ paths:
                 $ref: '#/components/schemas/ProviderCapabilityDocument'
         '404':
           description: Provider surface disabled
+  /v1/reasoning/capabilities:
+    get:
+      operationId: getReasoningCapabilities
+      summary: Discover the bounded reasoning provider contract
+      parameters:
+        - $ref: '#/components/parameters/PublicAPIKey'
+        - $ref: '#/components/parameters/TenantHeader'
+        - $ref: '#/components/parameters/ProjectHeader'
+        - $ref: '#/components/parameters/NamespaceHeader'
+      responses:
+        '200':
+          description: Bounded reasoning capabilities and execution limits
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ReasoningCapability'
+        '400':
+          description: Exact scope is missing or invalid
+        '403':
+          description: Authentication or scope grant denied
   /v1/provider/runtime:
     post:
       operationId: initializeProviderRuntime
@@ -4094,6 +4114,31 @@ components:
         scope_dimensions: {type: array, maxItems: 16, items: {type: string}}
         limits: {type: object, additionalProperties: {type: integer}}
         schema_digest: {type: string}
+    ReasoningCapability:
+      type: object
+      additionalProperties: false
+      required: [provider_version, service_version, build_id, schema_version, schema_digest, enabled, mode, operations, limits]
+      properties:
+        provider_version: {type: string, maxLength: 128}
+        service_version: {type: string, maxLength: 128}
+        build_id: {type: string, maxLength: 128}
+        schema_version: {type: string, maxLength: 128}
+        schema_digest: {type: string, maxLength: 128}
+        enabled: {type: boolean}
+        mode: {type: string, enum: [disabled, offline, shadow, live]}
+        operations: {type: array, maxItems: 16, items: {type: string, maxLength: 128}}
+        limits:
+          type: object
+          additionalProperties: false
+          required: [max_input_bytes, max_output_bytes, max_evidence, max_metadata_bytes, max_operation_bytes, max_concurrent, max_deadline_seconds]
+          properties:
+            max_input_bytes: {type: integer, minimum: 1, maximum: 1048576}
+            max_output_bytes: {type: integer, minimum: 1, maximum: 1048576}
+            max_evidence: {type: integer, minimum: 1, maximum: 1000}
+            max_metadata_bytes: {type: integer, minimum: 1, maximum: 1048576}
+            max_operation_bytes: {type: integer, minimum: 1, maximum: 1024}
+            max_concurrent: {type: integer, minimum: 1, maximum: 128}
+            max_deadline_seconds: {type: integer, minimum: 1, maximum: 3600}
     ProviderRuntimeInitialization:
       type: object
       additionalProperties: false

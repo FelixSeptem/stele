@@ -9,6 +9,7 @@ import (
 
 	"github.com/FelixSeptem/stele/internal/assurance"
 	"github.com/FelixSeptem/stele/internal/provider"
+	"github.com/FelixSeptem/stele/internal/reasoning"
 )
 
 type Mode string
@@ -47,6 +48,7 @@ type Config struct {
 	GraphTraversal                      GraphTraversalConfig
 	Evaluation                          EvaluationConfig
 	Provider                            ProviderConfig
+	Reasoning                           ReasoningConfig
 	ContextCalibration                  ContextCalibrationConfig
 	MCP                                 MCPConfig
 }
@@ -89,6 +91,17 @@ type ProviderConfig struct {
 	SchemaVersions  []string
 	Limits          provider.ProviderLimits
 	BindingLifetime time.Duration
+}
+
+// ReasoningConfig describes the optional provider-independent reasoning
+// boundary. It deliberately contains no credentials or prompt configuration;
+// concrete providers are registered by the runtime integration layer.
+type ReasoningConfig struct {
+	Enabled         bool
+	Mode            reasoning.Mode
+	ProviderVersion string
+	SchemaDigest    string
+	Limits          reasoning.Limits
 }
 
 type EvaluationConfig struct {
@@ -234,6 +247,10 @@ func LoadFromEnv() (Config, error) {
 		return Config{}, err
 	}
 	providerConfig, err := loadProviderConfig()
+	if err != nil {
+		return Config{}, err
+	}
+	reasoningConfig, err := loadReasoningConfig()
 	if err != nil {
 		return Config{}, err
 	}
@@ -540,6 +557,7 @@ func LoadFromEnv() (Config, error) {
 		MCP:                                 mcpConfig,
 		Evaluation:                          evaluationConfig,
 		Provider:                            providerConfig,
+		Reasoning:                           reasoningConfig,
 		Auth: AuthConfig{
 			BootstrapAdminKey: bootstrapAdminKey,
 			DefaultTenant:     defaultTenant,
@@ -652,6 +670,59 @@ func loadProviderConfig() (ProviderConfig, error) {
 		return ProviderConfig{}, fmt.Errorf("provider binding lifetime must be between 1m and 24h")
 	}
 	return ProviderConfig{Enabled: loadBoolEnv("STELE_PROVIDER_ENABLED"), SchemaVersions: versions, Limits: limits, BindingLifetime: lifetime}, nil
+}
+
+func loadReasoningConfig() (ReasoningConfig, error) {
+	limits := reasoning.DefaultLimits()
+	var err error
+	if limits.MaxInputBytes, err = loadIntWithDefault("STELE_REASONING_MAX_INPUT_BYTES", limits.MaxInputBytes); err != nil {
+		return ReasoningConfig{}, err
+	}
+	if limits.MaxOutputBytes, err = loadIntWithDefault("STELE_REASONING_MAX_OUTPUT_BYTES", limits.MaxOutputBytes); err != nil {
+		return ReasoningConfig{}, err
+	}
+	if limits.MaxEvidence, err = loadIntWithDefault("STELE_REASONING_MAX_EVIDENCE", limits.MaxEvidence); err != nil {
+		return ReasoningConfig{}, err
+	}
+	if limits.MaxMetadataBytes, err = loadIntWithDefault("STELE_REASONING_MAX_METADATA_BYTES", limits.MaxMetadataBytes); err != nil {
+		return ReasoningConfig{}, err
+	}
+	if limits.MaxOperationBytes, err = loadIntWithDefault("STELE_REASONING_MAX_OPERATION_BYTES", limits.MaxOperationBytes); err != nil {
+		return ReasoningConfig{}, err
+	}
+	if limits.MaxConcurrent, err = loadIntWithDefault("STELE_REASONING_MAX_CONCURRENT", limits.MaxConcurrent); err != nil {
+		return ReasoningConfig{}, err
+	}
+	if limits.MaxDeadlineSeconds, err = loadIntWithDefault("STELE_REASONING_MAX_DEADLINE_SECONDS", limits.MaxDeadlineSeconds); err != nil {
+		return ReasoningConfig{}, err
+	}
+	if err := limits.Validate(); err != nil {
+		return ReasoningConfig{}, err
+	}
+
+	enabled := loadBoolEnv("STELE_REASONING_ENABLED")
+	mode := reasoning.Mode(strings.TrimSpace(os.Getenv("STELE_REASONING_MODE")))
+	if mode == "" {
+		mode = reasoning.ModeDisabled
+	}
+	switch mode {
+	case reasoning.ModeDisabled, reasoning.ModeOffline, reasoning.ModeShadow, reasoning.ModeLive:
+	default:
+		return ReasoningConfig{}, fmt.Errorf("invalid reasoning mode %q", mode)
+	}
+	if !enabled {
+		mode = reasoning.ModeDisabled
+	}
+	if enabled && mode == reasoning.ModeDisabled {
+		return ReasoningConfig{}, fmt.Errorf("enabled reasoning configuration cannot use disabled mode")
+	}
+	return ReasoningConfig{
+		Enabled:         enabled,
+		Mode:            mode,
+		ProviderVersion: strings.TrimSpace(getEnvOrDefault("STELE_REASONING_PROVIDER_VERSION", "reasoning-provider-v1")),
+		SchemaDigest:    strings.TrimSpace(getEnvOrDefault("STELE_REASONING_SCHEMA_DIGEST", reasoning.SchemaVersionV1)),
+		Limits:          limits,
+	}, nil
 }
 
 func loadMCPConfig(mode Mode) (MCPConfig, error) {
