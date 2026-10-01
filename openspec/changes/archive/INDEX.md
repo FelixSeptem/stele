@@ -1,6 +1,6 @@
 # Archive Index
 
-Updated: 2026-10-01 19:35:10
+Updated: 2026-10-01 21:44:49
 
 - 001 -> bootstrap-foundation-and-event-ingestion
 - 002 -> governance-pipeline-and-memory-consolidation
@@ -55,3 +55,4 @@ Updated: 2026-10-01 19:35:10
 - 051 -> redacted-retrieval-trajectory-and-memory-integrity-evaluation
 - 052 -> mcp-adapter-real-stack-conformance-and-self-hosting-evidence
 - 053 -> retrieval-release-evidence-refresh-and-controlled-activation
+- 054 -> self-hosting-first-ten-minutes-smoke-path

@@ -462,6 +462,34 @@ docker run --rm -p 8080:8080 \
 
 ## Smoke Check
 
+### First-ten-minutes owned smoke path
+
+For a new checkout, use the owned quick path to verify the core self-hosting
+loop without preparing a running API or managing credentials by hand:
+
+```powershell
+pwsh -File scripts/stele-first-ten-minutes.ps1
+```
+
+The command owns an isolated Compose project, random host ports, temporary
+credentials, and cleanup. Its default deadline is **600 seconds** (10 minutes)
+and `-TimeoutSeconds` may raise it only up to **900 seconds** (15 minutes).
+The stable phases are `preflight`, `start`, `discovery`, `readiness`,
+`bootstrap`, `lifecycle`, `telemetry`, and `cleanup`. A successful run ends
+with `PASS`; a local machine without Docker or a reachable daemon returns
+`SKIP` with exit code `2`, which is not a pass. Set
+`STELE_FIRST_TEN_MINUTES_CI=1` in CI so the same missing prerequisite fails the
+job. Use `-KeepResources` only for bounded diagnostics; credentials are still
+removed and the output prints only the owned Compose project name.
+
+The path checks `/health`, `/readyz`, `/version`, `/openapi.yaml`, worker
+processing, scoped search, context assembly, and `/metrics`, while reusing
+`scripts/stele-bootstrap-smoke.ps1` for bootstrap and public lifecycle
+assertions. It redacts DSNs, API keys, scope values, record identifiers,
+request bodies, provider payloads, and raw process errors. It does not add an API route,
+alter PostgreSQL, run backup/restore or release-evidence checks, or
+replace the full product verification path below.
+
 ### First-ten-minutes operational loop
 
 Use this loop after `docker compose up --build -d` to prove the self-hosted `api`, `worker`, and `scheduler` modes are wired end to end. The loop uses explicit scope headers throughout; do not omit them or reuse data from another namespace.

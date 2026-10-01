@@ -100,4 +100,31 @@ Describe "openspec-archive-seq helpers" {
         Test-Path (Join-Path $archiveRoot "001-sample-change") | Should Be $true
         Assert-MockCalled Invoke-OpenSpecArchiveCommand -Times 1 -Exactly -Scope It
     }
+
+    It "archives skip-specs changes without requiring a delta spec" {
+        $repoRoot = Join-Path $TestDrive "repo-skip-specs"
+        $changesRoot = Join-Path $repoRoot "openspec\changes"
+        $archiveRoot = Join-Path $changesRoot "archive"
+        $activeDir = Join-Path $changesRoot "sample-change"
+        $dateArchiveDir = Join-Path $archiveRoot "2026-05-29-sample-change"
+
+        New-Item -ItemType Directory -Path $archiveRoot -Force | Out-Null
+        New-Item -ItemType Directory -Path $activeDir -Force | Out-Null
+        New-Item -ItemType Directory -Path $dateArchiveDir -Force | Out-Null
+
+        Set-Content -LiteralPath (Join-Path $activeDir ".openspec.yaml") -Value "schema: spec-driven`nskip_specs: true`n"
+        Set-Content -LiteralPath (Join-Path $activeDir "proposal.md") -Value "proposal"
+        Set-Content -LiteralPath (Join-Path $activeDir "tasks.md") -Value "tasks"
+        Set-Content -LiteralPath (Join-Path $dateArchiveDir ".openspec.yaml") -Value "schema: spec-driven`nskip_specs: true`n"
+        Set-Content -LiteralPath (Join-Path $dateArchiveDir "proposal.md") -Value "proposal"
+        Set-Content -LiteralPath (Join-Path $dateArchiveDir "tasks.md") -Value "tasks"
+
+        Mock Invoke-OpenSpecArchiveCommand {}
+
+        Archive-OneChange -Change "sample-change" -ChangesRoot $changesRoot -ArchiveRoot $archiveRoot -RepoRoot $repoRoot
+
+        Test-Path $activeDir | Should Be $false
+        Test-Path (Join-Path $archiveRoot "001-sample-change") | Should Be $true
+        Assert-MockCalled Invoke-OpenSpecArchiveCommand -Times 1 -Exactly -Scope It
+    }
 }

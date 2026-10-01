@@ -62,8 +62,8 @@ not be conflated:
   specifications. Active rollout remains unauthorized without fresh owned
   PostgreSQL + pgvector release evidence.
 - **Archived implementation**: P0–P7, RQ1–RQ4, and P8.1–P8.8 are archived
-  baselines. No P8 proposal is currently active; the next proposal must be
-  selected from the bounded post-v1 candidate backlog.
+  baselines. `self-hosting-first-ten-minutes-smoke-path` is the active bounded
+  post-v1 proposal; select another proposal only after this change is archived.
 - **Candidate expansion**: useful post-v1 ideas that must wait until the provider
   contract and quality gates are stable. This includes MCP adapters, namespace
   subtree conventions, agent self-model conventions, and autonomous reasoning
@@ -103,7 +103,7 @@ change an archived baseline.
 | P5 | Benchmark expansion and retrieval release evidence | Archived changes 025, 026, 035, and 039 | Implemented baseline; owned real-stack evidence remains a prerequisite for activation. |
 | P6 | Durable multi-scope maintenance and observability | Archived change 037 | Implemented baseline; retain regression, freshness, and SLO evidence. |
 | P7 | Agent runtime memory-provider contract | Archived change 038 | Implemented baseline; integration remains optional to the retrieval path. |
-| P8 | Optional adapters and governed experience insights | Governed insight baseline in changes 013/014; OpenAPI-backed MCP scope/profile adapter archived as change 044; scoped memory paths archived as change 046; agent self-model conventions archived as change 047; reasoning-provider boundary archived as change 048; OpenAI-compatible adapter archived as change 049; governed reserved-insight activation archived as change 050; redacted trajectory and memory-integrity evaluation archived as change 051; MCP real-stack conformance and self-hosting evidence archived as change 052; retrieval release evidence refresh and controlled activation archived as change 053; no active P8 proposal | Keep MCP as an optional OpenAPI adapter and reuse projections/intents rather than creating a second memory system. |
+| P8 | Optional adapters and governed experience insights | Governed insight baseline in changes 013/014; OpenAPI-backed MCP scope/profile adapter archived as change 044; scoped memory paths archived as change 046; agent self-model conventions archived as change 047; reasoning-provider boundary archived as change 048; OpenAI-compatible adapter archived as change 049; governed reserved-insight activation archived as change 050; redacted trajectory and memory-integrity evaluation archived as change 051; MCP real-stack conformance and self-hosting evidence archived as change 052; retrieval release evidence refresh and controlled activation archived as change 053; `self-hosting-first-ten-minutes-smoke-path` active bounded post-v1 proposal | Keep MCP as an optional OpenAPI adapter and reuse projections/intents rather than creating a second memory system. |
 
 ### Critical path to provider readiness
 
@@ -1411,7 +1411,8 @@ Exit signal:
 10. Stage 9 agent runtime memory-provider contract and adapter (P7, archived)
 11. RQ1–RQ4 retrieval-quality frontier (archived changes 040–043)
 12. Stage 10 optional adapters and governed experience insights (P8), with
-    P8.1–P8.8 archived; select the next P8 proposal from the bounded backlog
+    P8.1–P8.8 archived and `self-hosting-first-ten-minutes-smoke-path` active
+    as the bounded post-v1 proposal
 
 Reasoning:
 
@@ -1759,7 +1760,8 @@ Change 051, `redacted-retrieval-trajectory-and-memory-integrity-evaluation`, is
 complete and archived. Change 052,
 `mcp-adapter-real-stack-conformance-and-self-hosting-evidence`, and change 053,
 `retrieval-release-evidence-refresh-and-controlled-activation`, are complete
-and archived. There is no active P8 proposal; the next proposal must be
-selected from the bounded backlog. The archived P8.8 work does not add a
-second rollout system, change default retrieval or OpenAPI behavior, or widen
-the canonical authorization boundary.
+and archived. The active bounded post-v1 proposal is
+`self-hosting-first-ten-minutes-smoke-path`; select another proposal only after
+it is archived. The archived P8.8 work does not add a second rollout system,
+change default retrieval or OpenAPI behavior, or widen the canonical
+authorization boundary.

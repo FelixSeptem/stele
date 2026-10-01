@@ -251,22 +251,36 @@ function Archive-OneChange {
         }
     }
 
-    $activeSpecsDir = Join-Path $activeDir "specs"
-    if (Test-Path $activeSpecsDir) {
-        $activeSpecFiles = Get-ChildItem -Path $activeSpecsDir -Recurse -File -Filter "spec.md"
-        foreach ($spec in $activeSpecFiles) {
-            $relative = $spec.FullName.Substring($activeDir.Length).TrimStart('\', '/')
-            if (-not (Test-Path (Join-Path $archivedDir.FullName $relative))) {
-                Write-Warning ("archive incomplete for '" + $Change + "': missing " + $relative + "; skip cleanup.")
-                return
-            }
+    $skipSpecValidation = $SkipSpecs
+    $metadataPath = Join-Path $activeDir ".openspec.yaml"
+    if (-not (Test-Path $metadataPath)) {
+        $metadataPath = Join-Path $archivedDir.FullName ".openspec.yaml"
+    }
+    if (Test-Path $metadataPath) {
+        $metadata = Get-Content -Raw -LiteralPath $metadataPath
+        if ($metadata -match "(?m)^\s*skip_specs:\s*true\s*$") {
+            $skipSpecValidation = $true
         }
     }
 
-    $archivedSpecCount = (Get-ChildItem -Path $archivedDir.FullName -Recurse -File -Filter "spec.md" | Measure-Object).Count
-    if ($archivedSpecCount -eq 0) {
-        Write-Warning ("archive incomplete for '" + $Change + "': no spec.md found; skip cleanup.")
-        return
+    if (-not $skipSpecValidation) {
+        $activeSpecsDir = Join-Path $activeDir "specs"
+        if (Test-Path $activeSpecsDir) {
+            $activeSpecFiles = Get-ChildItem -Path $activeSpecsDir -Recurse -File -Filter "spec.md"
+            foreach ($spec in $activeSpecFiles) {
+                $relative = $spec.FullName.Substring($activeDir.Length).TrimStart('\', '/')
+                if (-not (Test-Path (Join-Path $archivedDir.FullName $relative))) {
+                    Write-Warning ("archive incomplete for '" + $Change + "': missing " + $relative + "; skip cleanup.")
+                    return
+                }
+            }
+        }
+
+        $archivedSpecCount = (Get-ChildItem -Path $archivedDir.FullName -Recurse -File -Filter "spec.md" | Measure-Object).Count
+        if ($archivedSpecCount -eq 0) {
+            Write-Warning ("archive incomplete for '" + $Change + "': no spec.md found; skip cleanup.")
+            return
+        }
     }
 
     if (Test-Path $activeDir) {

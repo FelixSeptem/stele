@@ -127,7 +127,8 @@ func TestRoadmapTracksCurrentP8Proposal(t *testing.T) {
 		"`governed-reserved-insight-activation`",
 		"MCP real-stack conformance and self-hosting evidence archived as change 052",
 		"retrieval release evidence refresh and controlled activation archived as change 053",
-		"no active P8 proposal",
+		"self-hosting-first-ten-minutes-smoke-path",
+		"active bounded post-v1 proposal",
 		"exact-scope activation",
 	} {
 		if !strings.Contains(roadmap, want) {
@@ -242,6 +243,50 @@ func TestBootstrapSmokeScriptIsDocumentedAndConstrained(t *testing.T) {
 	}
 }
 
+func TestFirstTenMinutesSmokeScriptIsBoundedAndRedacted(t *testing.T) {
+	contentBytes, err := os.ReadFile("../scripts/stele-first-ten-minutes.ps1")
+	if err != nil {
+		t.Fatalf("read first-ten-minutes smoke script: %v", err)
+	}
+	content := string(contentBytes)
+	for _, want := range []string{
+		"TimeoutSeconds",
+		"600",
+		"900",
+		"STELE_FIRST_TEN_MINUTES_CI",
+		"COMPOSE_PROJECT_NAME",
+		"^[a-z0-9][a-z0-9_-]{2,50}$",
+		"preflight",
+		"start",
+		"discovery",
+		"readiness",
+		"bootstrap",
+		"lifecycle",
+		"telemetry",
+		"cleanup",
+		"stele-bootstrap-smoke.ps1",
+		"/health",
+		"/readyz",
+		"/version",
+		"/openapi.yaml",
+		"/metrics",
+		"down --volumes --remove-orphans",
+		"KeepResources",
+		"missing_prerequisite",
+		"timeout",
+		"DSN",
+		"API key",
+		"raw process errors",
+	} {
+		if !strings.Contains(content, want) {
+			t.Fatalf("first-ten-minutes smoke script missing bounded contract %q", want)
+		}
+	}
+	if strings.Contains(content, "Write-Output $env:STELE_POSTGRES_PASSWORD") || strings.Contains(content, "Write-Output $env:STELE_AUTH_BOOTSTRAP_ADMIN_KEY") {
+		t.Fatal("first-ten-minutes smoke script must not print credentials")
+	}
+}
+
 func TestDeploymentContractRejectsObsoleteAuthAndRequiresBootstrapVariables(t *testing.T) {
 	compose, err := os.ReadFile("../docker-compose.yml")
 	if err != nil {
@@ -345,6 +390,33 @@ func TestProductVerificationEntryPointDocumentsPrerequisiteAndOwnershipGuards(t 
 	for _, want := range []string{"STELE_PRODUCT_VERIFY_CI", "SKIP:", "COMPOSE_PROJECT_NAME", "--build -d", "--volumes --remove-orphans", "KeepResources", "stele-bootstrap-smoke.ps1", "CREATE DATABASE", "STELE_TEST_POSTGRES_DSN", "TestMigrationRunnerSerializesConcurrentApply", "STELE_TEST_POSTGRES_UPGRADE_DSN", "TestMigrationRunnerUpgradesPopulatedPriorRelease", "$($migrationDatabase)?sslmode=disable", "docker compose", "stop -t", "readyz", "restart", "Idempotency-Key", "pending_raw_events", "pg_dump", "pg_restore", "targetDatabase", "sha256", "restored scoped behavior"} {
 		if !strings.Contains(content, want) {
 			t.Fatalf("product verification entrypoint missing %q", want)
+		}
+	}
+}
+
+func TestSelfHostingDocsIncludeFirstTenMinutesOwnedPath(t *testing.T) {
+	contentBytes, err := os.ReadFile("self-hosting.md")
+	if err != nil {
+		t.Fatalf("read self-hosting.md: %v", err)
+	}
+	content := string(contentBytes)
+	for _, want := range []string{
+		"First-ten-minutes owned smoke path",
+		"scripts/stele-first-ten-minutes.ps1",
+		"STELE_FIRST_TEN_MINUTES_CI=1",
+		"600 seconds",
+		"900 seconds",
+		"preflight",
+		"discovery",
+		"readiness",
+		"telemetry",
+		"SKIP",
+		"KeepResources",
+		"full product verification",
+		"does not add an API route",
+	} {
+		if !strings.Contains(content, want) {
+			t.Fatalf("self-hosting guide missing first-ten-minutes contract %q", want)
 		}
 	}
 }
