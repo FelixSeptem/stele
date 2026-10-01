@@ -1,0 +1,1 @@
+DROP TABLE IF EXISTS ranking_rollout_evidence_attestations;

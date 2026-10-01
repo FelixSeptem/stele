@@ -1,13 +1,25 @@
 [CmdletBinding()]
 param(
     [string]$TestDSN = $env:STELE_TEST_RETRIEVAL_EVALUATION_DSN,
-    [string]$ReportDirectory = $env:STELE_RETRIEVAL_EVALUATION_REPORT_DIR
+    [string]$ReportDirectory = $env:STELE_RETRIEVAL_EVALUATION_REPORT_DIR,
+    [int]$TimeoutSeconds = 300
 )
 
 $ErrorActionPreference = 'Stop'
 
 if ([string]::IsNullOrWhiteSpace($TestDSN)) {
     Write-Output 'SKIP_RETRIEVAL_EVALUATION_DSN_REQUIRED'
+    exit 2
+}
+
+if ($TimeoutSeconds -lt 30 -or $TimeoutSeconds -gt 900) {
+    Write-Error 'RETRIEVAL_EVALUATION_TIMEOUT_INVALID'
+    exit 1
+}
+
+$ownershipMarker = [string]$env:STELE_TEST_RETRIEVAL_EVALUATION_OWNED
+if ($ownershipMarker -notin @('true', 'TRUE', 'True')) {
+    Write-Output 'STELE_TEST_RETRIEVAL_EVALUATION_OWNERSHIP_REQUIRED'
     exit 2
 }
 
@@ -32,13 +44,19 @@ $env:STELE_TEST_RETRIEVAL_EVALUATION_OWNED = 'true'
 if ([string]::IsNullOrWhiteSpace($ReportDirectory)) {
     $ReportDirectory = Join-Path ([System.IO.Path]::GetTempPath()) ("stele-retrieval-evaluation-" + [guid]::NewGuid().ToString('N'))
 }
-$ReportDirectory = [System.IO.Path]::GetFullPath($ReportDirectory)
+$reportRoot = [System.IO.Path]::GetFullPath($ReportDirectory)
+$ReportDirectory = Join-Path $reportRoot ("run-" + [guid]::NewGuid().ToString('N'))
+New-Item -ItemType Directory -Path $ReportDirectory -Force | Out-Null
 $env:STELE_RETRIEVAL_EVALUATION_REPORT_DIR = $ReportDirectory
-go test ./internal/storage/postgres -run '^TestPlannerEvaluationFixtureRunsOwnedPostgresEvaluation$' -count=1 -v
+$evaluationFailed = $false
+$evaluationExitCode = 0
+$controlledSkip = $false
+go test ./internal/storage/postgres -run '^TestPlannerEvaluationFixtureRunsOwnedPostgresEvaluation$' -count=1 -timeout ("{0}s" -f $TimeoutSeconds) -v
 if ($LASTEXITCODE -ne 0) {
-    exit $LASTEXITCODE
+    $evaluationFailed = $true
+    $evaluationExitCode = $LASTEXITCODE
 }
-if ((Test-Path -LiteralPath (Join-Path $ReportDirectory 'baseline.json')) -and
+if (-not $evaluationFailed -and (Test-Path -LiteralPath (Join-Path $ReportDirectory 'baseline.json')) -and
     (Test-Path -LiteralPath (Join-Path $ReportDirectory 'candidate.json')) -and
     (Test-Path -LiteralPath (Join-Path $ReportDirectory 'gate.json'))) {
     $candidate = Get-Content -Raw -LiteralPath (Join-Path $ReportDirectory 'candidate.json') | ConvertFrom-Json
@@ -54,10 +72,23 @@ if ((Test-Path -LiteralPath (Join-Path $ReportDirectory 'baseline.json')) -and
         $candidate.release_eligible -eq $true
     if (-not $plannerEvidenceReady) {
         Write-Output 'RETRIEVAL_PLANNER_EVIDENCE_REQUIRED'
+        $evaluationFailed = $true
+        $controlledSkip = $true
+    }
+    if (-not $evaluationFailed) {
+        Write-Output "RETRIEVAL_PLANNER_EVALUATION_REPORT_DIR=$ReportDirectory"
+    }
+} elseif (-not $evaluationFailed) {
+    Write-Error 'retrieval evaluation completed without retaining required redacted reports'
+    $evaluationFailed = $true
+}
+if ($evaluationFailed) {
+    Remove-Item -LiteralPath $ReportDirectory -Recurse -Force -ErrorAction SilentlyContinue
+    if ($controlledSkip) {
         exit 2
     }
-    Write-Output "RETRIEVAL_PLANNER_EVALUATION_REPORT_DIR=$ReportDirectory"
-} else {
-    Write-Error 'retrieval evaluation completed without retaining required redacted reports'
+    if ($evaluationExitCode -ne 0) {
+        exit $evaluationExitCode
+    }
     exit 1
 }

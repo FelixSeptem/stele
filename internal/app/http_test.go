@@ -5439,7 +5439,7 @@ func TestNewHTTPHandlerServesRankingRolloutAPIs(t *testing.T) {
 		t.Fatalf("dry-run status = %d body=%s, want 200", dryRunResp.Code, dryRunResp.Body.String())
 	}
 
-	activateReq := httptest.NewRequest(http.MethodPost, "/v1/admin/ranking-rollouts/policy_1/activate", strings.NewReader(`{"actor":"operator-b","reason":"activate after dry-run"}`))
+	activateReq := httptest.NewRequest(http.MethodPost, "/v1/admin/ranking-rollouts/policy_1/activate", strings.NewReader(`{"actor":"operator-b","reason":"activate after dry-run","evidence":{"run_identity":"run:0123456789012345678901234567890123456789012345678901234567890123","policy_id":"policy_1","scope_hash":"scope:attested","policy_version":"release-v1","strategy_identity":"rrf-v1","source_watermark_hash":"watermark:0123456789012345678901234567890123456789012345678901234567890123","verdict":"passed","freshness":"fresh","real_stack":true,"deterministic_replay":true,"rollback_tested":true,"evaluated_at":"2026-07-12T09:00:00Z","expires_at":"2026-07-12T11:00:00Z"}}`))
 	setAdminScopeHeaders(activateReq)
 	activateResp := httptest.NewRecorder()
 	handler.ServeHTTP(activateResp, activateReq)
@@ -5477,6 +5477,9 @@ func TestNewHTTPHandlerServesRankingRolloutAPIs(t *testing.T) {
 	}
 	if service.gotActivate.PolicyID != "policy_1" || service.gotRollback.PolicyID != "policy_1" {
 		t.Fatalf("action inputs = %+v %+v, want policy_1", service.gotActivate, service.gotRollback)
+	}
+	if service.gotActivate.Gate.Evidence == nil || service.gotActivate.Gate.Evidence.RunIdentity == "" {
+		t.Fatalf("activation evidence = %+v, want request attestation forwarded", service.gotActivate.Gate.Evidence)
 	}
 	if service.gotImpact.PolicyID != "policy_1" || service.gotImpact.Scope != scope {
 		t.Fatalf("impact input = %+v, want scoped impact", service.gotImpact)

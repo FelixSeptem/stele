@@ -18,17 +18,24 @@ STELE_RETRIEVAL_EVALUATION_PROVIDER_PROFILE=canonical-v1
 STELE_RETRIEVAL_EVALUATION_REPORT_DIR=<optional local output directory>
 ```
 
-The ownership marker is mandatory for direct Go harness runs. It is an explicit
-assertion that the target is disposable and owned by the evaluation run; the
-harness rejects an absent marker and normalized reuse of `STELE_POSTGRES_DSN`
-before opening a connection or applying migrations. Each run also uses unique
-fixture namespaces and IDs, and cleanup deletes only records returned by that
-run's seed operation.
+The ownership marker is mandatory for both the wrapper and direct Go harness
+runs. It is an explicit assertion that the target is disposable and owned by
+the evaluation run; both entrypoints reject an absent marker and normalized
+reuse of `STELE_POSTGRES_DSN` before opening a connection or applying
+migrations. Each run also uses unique fixture namespaces and IDs, and cleanup
+deletes only records returned by that run's seed operation.
 
 The evaluation DSN must not equal `STELE_POSTGRES_DSN`. If it is absent, the
 workflow returns `SKIP_RETRIEVAL_EVALUATION_DSN_REQUIRED` and cannot authorize
 an active rollout. Synthetic or skipped runs are evidence for development only,
 not release passage.
+
+The wrapper enforces a 30-second to 15-minute timeout window and creates an
+isolated `run-<opaque-id>` report directory beneath the configured root. A
+missing ownership marker returns
+`STELE_TEST_RETRIEVAL_EVALUATION_OWNERSHIP_REQUIRED` (exit code `2`). A failed
+or incomplete run removes its partial directory; a completed run retains only
+the redacted baseline, candidate, gate, release-evidence, and summary artifacts.
 
 ## Evidence and gates
 
@@ -57,6 +64,11 @@ For CI and operator review, serialize the bounded machine report with
 forms contain only logical identities, scope hashes, aggregate counts, and
 failure categories; they do not contain connection strings, scope values,
 queries, content, raw scores, or provider payloads.
+
+The resulting `release-evidence.json` is an attestation input, not an
+activation command. An administrator must submit that redacted attestation in
+the exact-scope ranking-rollout activation request. Expiry, policy/dependency
+mismatch, disablement, and rollback all resolve to the approved baseline.
 
 The report records logical fixture, representation, fusion, ranking, embedding,
 reranker, analysis, and release-policy identities; protected recall, temporal

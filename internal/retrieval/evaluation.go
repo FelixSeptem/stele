@@ -505,6 +505,10 @@ type EvaluationReleasePolicy struct {
 	MaxStaleTokenRate             float64                        `json:"max_stale_token_rate,omitempty"`
 	MaxQualityPerBudgetRegression float64                        `json:"max_quality_per_budget_regression,omitempty"`
 	RequireDeterministicReplay    bool                           `json:"require_deterministic_replay,omitempty"`
+	RequireFreshEvidence          bool                           `json:"require_fresh_evidence,omitempty"`
+	RequireSemanticHit            bool                           `json:"require_semantic_hit,omitempty"`
+	RequireTrajectoryIntegrity    bool                           `json:"require_trajectory_integrity,omitempty"`
+	RequireResourceBudget         bool                           `json:"require_resource_budget,omitempty"`
 }
 
 type EvaluationPlannerReleasePolicy struct {

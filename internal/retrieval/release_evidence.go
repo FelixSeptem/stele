@@ -23,6 +23,10 @@ const (
 	ReleaseEvidenceRollbackFailure          = "RETRIEVAL_RELEASE_EVIDENCE_ROLLBACK_FAILURE"
 	ReleaseEvidenceQualityFailure           = "RETRIEVAL_RELEASE_EVIDENCE_QUALITY_FAILURE"
 	ReleaseEvidenceTemporalEvidenceRequired = "RETRIEVAL_RELEASE_EVIDENCE_TEMPORAL_REQUIRED"
+	ReleaseEvidenceStaleCategory            = "RETRIEVAL_RELEASE_EVIDENCE_STALE"
+	ReleaseEvidenceSemanticHitRequired      = "RETRIEVAL_RELEASE_EVIDENCE_SEMANTIC_HIT_REQUIRED"
+	ReleaseEvidenceTrajectoryRequired       = "RETRIEVAL_RELEASE_EVIDENCE_TRAJECTORY_REQUIRED"
+	ReleaseEvidenceResourceFailure          = "RETRIEVAL_RELEASE_EVIDENCE_RESOURCE_FAILURE"
 )
 
 type ReleaseEvidenceVerdict string
@@ -34,14 +38,25 @@ const (
 	ReleaseEvidenceRejected ReleaseEvidenceVerdict = "rejected"
 )
 
+type ReleaseEvidenceFreshness string
+
+const (
+	ReleaseEvidenceFresh   ReleaseEvidenceFreshness = "fresh"
+	ReleaseEvidenceStale   ReleaseEvidenceFreshness = "stale"
+	ReleaseEvidenceUnknown ReleaseEvidenceFreshness = "unknown"
+)
+
 type ReleaseEvidencePrerequisites struct {
-	EvaluationDSN     string
-	RuntimeDSN        string
-	PostgreSQLReady   bool
-	PGVectorReady     bool
-	FixtureCompatible bool
-	ProjectionFresh   bool
-	RollbackTested    bool
+	EvaluationDSN        string
+	RuntimeDSN           string
+	PostgreSQLReady      bool
+	PGVectorReady        bool
+	FixtureCompatible    bool
+	ProjectionFresh      bool
+	RollbackTested       bool
+	SemanticHitProven    bool
+	TrajectoryCompatible bool
+	ResourceWithinBounds bool
 }
 
 func (p ReleaseEvidencePrerequisites) Validate() error {
@@ -63,38 +78,50 @@ func (p ReleaseEvidencePrerequisites) Validate() error {
 }
 
 type ReleaseEvidenceInput struct {
-	Scope           memory.Scope
-	ProviderProfile string
-	Policy          EvaluationReleasePolicy
-	Baseline        EvaluationReport
-	Candidate       EvaluationReport
-	Progressive     ProgressiveContextEvaluationReport
-	ParentFirst     ParentFirstEvaluationReport
-	Prerequisites   ReleaseEvidencePrerequisites
-	Integrity       *evaluation.IntegrityReport
-	EvaluatedAt     time.Time
+	Scope                memory.Scope
+	ProviderProfile      string
+	Policy               EvaluationReleasePolicy
+	Baseline             EvaluationReport
+	Candidate            EvaluationReport
+	Progressive          ProgressiveContextEvaluationReport
+	ParentFirst          ParentFirstEvaluationReport
+	Prerequisites        ReleaseEvidencePrerequisites
+	Integrity            *evaluation.IntegrityReport
+	EvaluatedAt          time.Time
+	SourceWatermark      string
+	EvidenceExpiresAt    time.Time
+	DeterministicReplay  bool
+	SemanticHitProven    bool
+	TrajectoryCompatible bool
+	ResourceWithinBounds bool
 }
 
 // ReleaseEvidenceRunRequest is the explicit, bounded input accepted by the
 // release-evidence runner. DSNs are consumed for validation only and are never
 // copied into the resulting report.
 type ReleaseEvidenceRunRequest struct {
-	Scope             memory.Scope
-	EvaluationDSN     string
-	RuntimeDSN        string
-	ProviderProfile   string
-	Policy            EvaluationReleasePolicy
-	Baseline          EvaluationReport
-	Candidate         EvaluationReport
-	Progressive       ProgressiveContextEvaluationReport
-	ParentFirst       ParentFirstEvaluationReport
-	PostgreSQLReady   bool
-	PGVectorReady     bool
-	FixtureCompatible bool
-	ProjectionFresh   bool
-	RollbackTested    bool
-	Integrity         *evaluation.IntegrityReport
-	EvaluatedAt       time.Time
+	Scope                memory.Scope
+	EvaluationDSN        string
+	RuntimeDSN           string
+	ProviderProfile      string
+	Policy               EvaluationReleasePolicy
+	Baseline             EvaluationReport
+	Candidate            EvaluationReport
+	Progressive          ProgressiveContextEvaluationReport
+	ParentFirst          ParentFirstEvaluationReport
+	PostgreSQLReady      bool
+	PGVectorReady        bool
+	FixtureCompatible    bool
+	ProjectionFresh      bool
+	RollbackTested       bool
+	Integrity            *evaluation.IntegrityReport
+	EvaluatedAt          time.Time
+	SourceWatermark      string
+	EvidenceExpiresAt    time.Time
+	DeterministicReplay  bool
+	SemanticHitProven    bool
+	TrajectoryCompatible bool
+	ResourceWithinBounds bool
 }
 
 // RunOwnedReleaseEvidence evaluates one exact scope using explicitly owned
@@ -105,31 +132,42 @@ func RunOwnedReleaseEvidence(_ context.Context, req ReleaseEvidenceRunRequest) (
 		Scope: req.Scope, ProviderProfile: req.ProviderProfile, Policy: req.Policy,
 		Baseline: req.Baseline, Candidate: req.Candidate, Progressive: req.Progressive,
 		ParentFirst: req.ParentFirst, EvaluatedAt: req.EvaluatedAt,
-		Integrity: req.Integrity,
+		Integrity:       req.Integrity,
+		SourceWatermark: req.SourceWatermark, EvidenceExpiresAt: req.EvidenceExpiresAt,
+		DeterministicReplay: req.DeterministicReplay,
+		SemanticHitProven:   req.SemanticHitProven, TrajectoryCompatible: req.TrajectoryCompatible,
+		ResourceWithinBounds: req.ResourceWithinBounds,
 		Prerequisites: ReleaseEvidencePrerequisites{EvaluationDSN: req.EvaluationDSN, RuntimeDSN: req.RuntimeDSN,
 			PostgreSQLReady: req.PostgreSQLReady, PGVectorReady: req.PGVectorReady,
 			FixtureCompatible: req.FixtureCompatible, ProjectionFresh: req.ProjectionFresh,
-			RollbackTested: req.RollbackTested},
+			RollbackTested: req.RollbackTested, SemanticHitProven: req.SemanticHitProven,
+			TrajectoryCompatible: req.TrajectoryCompatible, ResourceWithinBounds: req.ResourceWithinBounds},
 	})
 }
 
 type ReleaseEvidenceReport struct {
-	ProviderProfile     string                 `json:"provider_profile"`
-	PolicyVersion       string                 `json:"policy_version"`
-	ScopeHash           string                 `json:"scope_hash"`
-	Verdict             ReleaseEvidenceVerdict `json:"verdict"`
-	ReleaseEligible     bool                   `json:"release_eligible"`
-	RealStack           bool                   `json:"real_stack"`
-	FailureCategories   []string               `json:"failure_categories,omitempty"`
-	ProgressiveLevels   int                    `json:"progressive_levels"`
-	ProgressiveEligible int                    `json:"progressive_eligible"`
-	ParentFirstEligible bool                   `json:"parent_first_eligible"`
-	QualityEligible     bool                   `json:"quality_eligible"`
-	ProgressiveFailures []string               `json:"progressive_failures,omitempty"`
-	ParentFirstFailures []string               `json:"parent_first_failures,omitempty"`
-	IntegrityEligible   bool                   `json:"integrity_eligible"`
-	IntegrityFailures   []string               `json:"integrity_failures,omitempty"`
-	GeneratedAt         time.Time              `json:"generated_at"`
+	RunIdentity         string                   `json:"run_identity"`
+	ProviderProfile     string                   `json:"provider_profile"`
+	PolicyVersion       string                   `json:"policy_version"`
+	ScopeHash           string                   `json:"scope_hash"`
+	SourceWatermarkHash string                   `json:"source_watermark_hash,omitempty"`
+	EvidenceFreshness   ReleaseEvidenceFreshness `json:"evidence_freshness"`
+	EvidenceExpiresAt   time.Time                `json:"evidence_expires_at,omitempty"`
+	DeterministicReplay bool                     `json:"deterministic_replay"`
+	RollbackTested      bool                     `json:"rollback_tested"`
+	Verdict             ReleaseEvidenceVerdict   `json:"verdict"`
+	ReleaseEligible     bool                     `json:"release_eligible"`
+	RealStack           bool                     `json:"real_stack"`
+	FailureCategories   []string                 `json:"failure_categories,omitempty"`
+	ProgressiveLevels   int                      `json:"progressive_levels"`
+	ProgressiveEligible int                      `json:"progressive_eligible"`
+	ParentFirstEligible bool                     `json:"parent_first_eligible"`
+	QualityEligible     bool                     `json:"quality_eligible"`
+	ProgressiveFailures []string                 `json:"progressive_failures,omitempty"`
+	ParentFirstFailures []string                 `json:"parent_first_failures,omitempty"`
+	IntegrityEligible   bool                     `json:"integrity_eligible"`
+	IntegrityFailures   []string                 `json:"integrity_failures,omitempty"`
+	GeneratedAt         time.Time                `json:"generated_at"`
 }
 
 // MarshalReleaseEvidenceReport is the redacted report boundary. The report
@@ -142,6 +180,15 @@ func MarshalReleaseEvidenceReport(report ReleaseEvidenceReport) ([]byte, error) 
 	}
 	if report.ScopeHash != "" && (!strings.HasPrefix(report.ScopeHash, "scope:") || len(report.ScopeHash) != len("scope:")+64) {
 		return nil, fmt.Errorf("scope hash is invalid")
+	}
+	if report.RunIdentity != "" && (!strings.HasPrefix(report.RunIdentity, "run:") || len(report.RunIdentity) != len("run:")+64) {
+		return nil, fmt.Errorf("run identity is invalid")
+	}
+	if report.SourceWatermarkHash != "" && (!strings.HasPrefix(report.SourceWatermarkHash, "watermark:") || len(report.SourceWatermarkHash) != len("watermark:")+64) {
+		return nil, fmt.Errorf("source watermark hash is invalid")
+	}
+	if report.EvidenceFreshness != "" && report.EvidenceFreshness != ReleaseEvidenceFresh && report.EvidenceFreshness != ReleaseEvidenceStale && report.EvidenceFreshness != ReleaseEvidenceUnknown {
+		return nil, fmt.Errorf("evidence freshness is invalid")
 	}
 	if report.ProgressiveLevels < 0 || report.ProgressiveEligible < 0 || report.ProgressiveEligible > report.ProgressiveLevels {
 		return nil, fmt.Errorf("progressive counts are invalid")
@@ -156,7 +203,7 @@ func RenderReleaseEvidenceSummary(report ReleaseEvidenceReport) string {
 	if report.ReleaseEligible {
 		status = "release eligible"
 	}
-	return fmt.Sprintf("retrieval release evidence: %s (verdict=%s, progressive=%d/%d, parent_first=%t, real_stack=%t)", status, report.Verdict, report.ProgressiveEligible, report.ProgressiveLevels, report.ParentFirstEligible, report.RealStack)
+	return fmt.Sprintf("retrieval release evidence: %s (run=%s, verdict=%s, freshness=%s, replay=%t, rollback=%t, progressive=%d/%d, parent_first=%t, real_stack=%t)", status, report.RunIdentity, report.Verdict, report.EvidenceFreshness, report.DeterministicReplay, report.RollbackTested, report.ProgressiveEligible, report.ProgressiveLevels, report.ParentFirstEligible, report.RealStack)
 }
 
 func EvaluateReleaseEvidence(in ReleaseEvidenceInput) (ReleaseEvidenceReport, error) {
@@ -182,7 +229,14 @@ func EvaluateReleaseEvidence(in ReleaseEvidenceInput) (ReleaseEvidenceReport, er
 	if now.IsZero() {
 		now = time.Now().UTC()
 	}
-	r := ReleaseEvidenceReport{ProviderProfile: in.ProviderProfile, PolicyVersion: in.Policy.Version, Verdict: ReleaseEvidencePassed, RealStack: true, GeneratedAt: now, ProgressiveLevels: len(in.Progressive.Levels), ParentFirstEligible: in.ParentFirst.Eligible}
+	freshness := ReleaseEvidenceFresh
+	if !in.EvidenceExpiresAt.IsZero() && !now.Before(in.EvidenceExpiresAt.UTC()) {
+		freshness = ReleaseEvidenceStale
+	}
+	r := ReleaseEvidenceReport{ProviderProfile: in.ProviderProfile, PolicyVersion: in.Policy.Version, Verdict: ReleaseEvidencePassed, RealStack: true, GeneratedAt: now, ProgressiveLevels: len(in.Progressive.Levels), ParentFirstEligible: in.ParentFirst.Eligible, EvidenceFreshness: freshness, EvidenceExpiresAt: in.EvidenceExpiresAt.UTC(), DeterministicReplay: in.DeterministicReplay || in.Candidate.DeterministicReplay, RollbackTested: in.Prerequisites.RollbackTested}
+	r.ScopeHash = scopeHash(in.Scope)
+	r.SourceWatermarkHash = sourceWatermarkHash(in.SourceWatermark)
+	r.RunIdentity = releaseEvidenceIdentity(in, r.ScopeHash, r.SourceWatermarkHash, now)
 	if err := in.Prerequisites.Validate(); err != nil {
 		r.ReleaseEligible = false
 		r.Verdict = ReleaseEvidenceSkipped
@@ -194,7 +248,36 @@ func EvaluateReleaseEvidence(in ReleaseEvidenceInput) (ReleaseEvidenceReport, er
 		}
 		return r, nil
 	}
-	r.ScopeHash = scopeHash(in.Scope)
+	if freshness == ReleaseEvidenceStale {
+		r.ReleaseEligible = false
+		r.Verdict = ReleaseEvidenceRejected
+		r.FailureCategories = []string{ReleaseEvidenceStaleCategory}
+		return r, nil
+	}
+	if in.Policy.RequireFreshEvidence && strings.TrimSpace(in.SourceWatermark) == "" {
+		r.EvidenceFreshness = ReleaseEvidenceUnknown
+		r.ReleaseEligible = false
+		r.Verdict = ReleaseEvidenceRejected
+		r.FailureCategories = appendUniqueCategory(r.FailureCategories, ReleaseEvidenceStaleCategory)
+	}
+	if in.Policy.RequireSemanticHit && !in.Prerequisites.SemanticHitProven {
+		r.ReleaseEligible = false
+		r.Verdict = ReleaseEvidenceRejected
+		r.FailureCategories = appendUniqueCategory(r.FailureCategories, ReleaseEvidenceSemanticHitRequired)
+	}
+	if in.Policy.RequireTrajectoryIntegrity && !in.Prerequisites.TrajectoryCompatible {
+		r.ReleaseEligible = false
+		r.Verdict = ReleaseEvidenceRejected
+		r.FailureCategories = appendUniqueCategory(r.FailureCategories, ReleaseEvidenceTrajectoryRequired)
+	}
+	if in.Policy.RequireResourceBudget && !in.Prerequisites.ResourceWithinBounds {
+		r.ReleaseEligible = false
+		r.Verdict = ReleaseEvidenceRejected
+		r.FailureCategories = appendUniqueCategory(r.FailureCategories, ReleaseEvidenceResourceFailure)
+	}
+	if r.Verdict != ReleaseEvidencePassed {
+		return r, nil
+	}
 	if temporalReleaseEvidenceRequired(in.Candidate) && !hasCompatibleTemporalReleaseEvidence(in.Candidate) {
 		r.ReleaseEligible = false
 		r.Verdict = ReleaseEvidenceRejected
@@ -284,6 +367,28 @@ func appendUniqueCategory(categories []string, category string) []string {
 
 func scopeHash(scope memory.Scope) string {
 	return fmt.Sprintf("scope:%x", stableHash(scope.Tenant+"\x00"+scope.Project+"\x00"+scope.Namespace))
+}
+
+func sourceWatermarkHash(watermark string) string {
+	if strings.TrimSpace(watermark) == "" {
+		return ""
+	}
+	return fmt.Sprintf("watermark:%x", stableHash(strings.TrimSpace(watermark)))
+}
+
+func releaseEvidenceIdentity(in ReleaseEvidenceInput, scopeHash, watermarkHash string, evaluatedAt time.Time) string {
+	parts := []string{
+		scopeHash, watermarkHash, in.ProviderProfile, in.Policy.Version,
+		in.Baseline.Metadata.FixtureVersion, in.Baseline.Metadata.RepresentationVersion,
+		in.Baseline.Metadata.RankingVersion, in.Baseline.Metadata.FusionStrategy,
+		in.Baseline.Metadata.CompatibleEmbeddingRevision, in.Baseline.Metadata.AnalysisVersion,
+		in.Candidate.Metadata.FixtureVersion, in.Candidate.Metadata.RepresentationVersion,
+		in.Candidate.Metadata.RankingVersion, in.Candidate.Metadata.FusionStrategy,
+		in.Candidate.Metadata.CompatibleEmbeddingRevision, in.Candidate.Metadata.AnalysisVersion,
+		in.Progressive.BaselineIdentity, in.ParentFirst.StrategyIdentity,
+		evaluatedAt.UTC().Format(time.RFC3339Nano),
+	}
+	return fmt.Sprintf("run:%x", stableHash(strings.Join(parts, "\x00")))
 }
 
 func stableHash(value string) [32]byte {

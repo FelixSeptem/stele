@@ -2096,13 +2096,15 @@ harness-owned DSN in `STELE_TEST_RETRIEVAL_EVALUATION_DSN`:
 ```powershell
 $env:STELE_TEST_RETRIEVAL_EVALUATION_DSN = '<owned-test-dsn>'
 $env:STELE_TEST_RETRIEVAL_EVALUATION_OWNED = 'true'
-pwsh -File scripts/retrieval-evaluation.ps1
+pwsh -File scripts/retrieval-evaluation.ps1 -TimeoutSeconds 300
 ```
 
-The ownership marker is required by direct Go harness runs before any database
-connection or bootstrap. The script sets it after validating its explicit DSN.
-The harness also rejects normalized equivalents of `STELE_POSTGRES_DSN`, uses a
-unique namespace per run, and cleans up only the run's exact seeded IDs.
+The ownership marker is required by both the wrapper and direct Go harness runs
+before any database connection or bootstrap. The wrapper validates the explicit
+DSN, applies a bounded 30-second to 15-minute timeout, and creates an isolated
+per-run report directory. The harness also rejects normalized equivalents of
+`STELE_POSTGRES_DSN`, uses a unique namespace per run, and cleans up only the
+run's exact seeded IDs.
 
 Without the DSN variable the command prints
 `SKIP_RETRIEVAL_EVALUATION_DSN_REQUIRED` and exits with code `2`; it never falls
@@ -2120,6 +2122,14 @@ results override all quality scores. Threshold edits require a new policy versio
 baseline and candidate reports must use compatible fixture and representation
 versions before comparison.
 
+Completed owned runs additionally retain `release-evidence.json` and
+`release-evidence.txt`. These contain only the opaque run identity,
+source-watermark hash, freshness/expiry, deterministic replay, rollback,
+compatibility, and aggregate gate fields. They never contain a DSN, raw scope,
+query, source text, memory/event identifier, raw score, credential, or provider
+payload. A missing DSN is a controlled skip, while a stale, rejected, or
+incompatible report cannot authorize activation.
+
 ## Stable fusion rollout and evaluator runbook
 
 Create and operate a ranking rollout as an authenticated administrator under one
@@ -2135,14 +2145,15 @@ infrastructure. These modes retain the currently approved retrieval behavior and
 produce only bounded authorized rollout/evaluation evidence.
 
 Do not activate a selection until the existing rollout gate records a successful
-dry run, recorded attribution, an evidence threshold of `satisfied`, and no
-blockers. Use `POST /v1/admin/ranking-rollouts/{policy_id}/dry-run` to run the
-controlled comparison and inspect the bounded result with
+dry run, recorded attribution, an evidence threshold of `satisfied`, no
+blockers, and a fresh matching release-evidence attestation. Use
+`POST /v1/admin/ranking-rollouts/{policy_id}/dry-run` to run the controlled
+comparison and inspect the bounded result with
 `GET /v1/admin/ranking-rollouts/{policy_id}/impact`. Only a policy with both
 `status=active_for_scope` and `mode=active_for_scope` changes real search or
 context retrieval, and it does so only for the exact policy scope. Activate it
-through `POST /v1/admin/ranking-rollouts/{policy_id}/activate` after the gate is
-satisfied.
+through `POST /v1/admin/ranking-rollouts/{policy_id}/activate` with the
+redacted `evidence` object after the gate is satisfied.
 
 To stop a rollout, use
 `POST /v1/admin/ranking-rollouts/{policy_id}/disable`. To restore the deployment

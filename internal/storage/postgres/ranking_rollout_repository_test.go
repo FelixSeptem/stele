@@ -2,7 +2,9 @@ package postgres
 
 import (
 	"context"
+	"crypto/sha256"
 	"database/sql"
+	"fmt"
 	"testing"
 	"time"
 
@@ -214,6 +216,7 @@ func TestRepositoryPersistsAndLoadsContextCalibrationRolloutByExactScope(t *test
 
 	mock.ExpectQuery("SELECT[\\s\\S]*FROM ranking_rollout_policies").WithArgs(scope.Tenant, scope.Project, scope.Namespace, memory.RankingRolloutPolicyStatusActiveForScope, string(memory.RankingRolloutSurfaceContext)).WillReturnRows(pgxmock.NewRows(rankingRolloutPolicyColumns()).AddRow(row...))
 	mock.ExpectQuery("SELECT session_id, user_id, payload[\\s\\S]*FROM context_calibration_rollout_policies").WithArgs(policy.ID, scope.Tenant, scope.Project, scope.Namespace).WillReturnRows(pgxmock.NewRows([]string{"session_id", "user_id", "payload"}).AddRow("session-a", "user-a", []byte(`{"schema_version":"context-calibration-rollout-v1","policy_version":"context-calibration-v1","summary_version":"summary-v1","minimum_evidence":2,"confidence_threshold":0.5,"decay_window_ns":3600000000000,"contribution_cap":0.25,"max_candidates":10,"max_context_items":10,"max_elapsed_ns":1000000,"expires_at":"2026-09-23T13:00:00Z"}`)))
+	mock.ExpectQuery("SELECT run_identity[\\s\\S]*FROM ranking_rollout_evidence_attestations").WithArgs(policy.ID, scope.Tenant, scope.Project, scope.Namespace).WillReturnError(sql.ErrNoRows)
 	loaded, err := NewRepository(mock).ReadActiveRankingRolloutPolicy(context.Background(), memory.ReadActiveRankingRolloutPolicyInput{Scope: scope, Surface: memory.RankingRolloutSurfaceContext})
 	if err != nil {
 		t.Fatalf("ReadActiveRankingRolloutPolicy() error = %v", err)
@@ -313,6 +316,9 @@ func TestRepositoryCreateActivateRollbackRankingRolloutPolicy(t *testing.T) {
 		WithArgs(scope.Tenant, scope.Project, scope.Namespace, policy.ID, memory.RankingRolloutPolicyStatusActiveForScope, "operator-b", "activate after dry-run", now.Add(time.Minute), memory.RankingRolloutThresholdStatusSatisfied, memory.RankingRolloutModeActiveForScope, memory.RankingRolloutPolicyStatusDisabled, memory.RankingRolloutPolicyStatusRolledBack).
 		WillReturnRows(pgxmock.NewRows(rankingRolloutPolicyColumns()).
 			AddRow(rankingRolloutPolicyRow(policy.ID, scope, memory.RankingRolloutPolicyStatusActiveForScope, memory.RankingRolloutModeActiveForScope, memory.RankingRolloutThresholdStatusSatisfied, policy.EvidenceMinimum, "operator-b", "activate after dry-run", "dry_run_1", memory.RankingRolloutThresholdStatusSatisfied, now.Add(time.Minute), nil, nil, now, now.Add(time.Minute))...))
+	mock.ExpectExec("INSERT INTO ranking_rollout_evidence_attestations").
+		WithArgs(policy.ID, scope.Tenant, scope.Project, scope.Namespace, pgxmock.AnyArg(), pgxmock.AnyArg(), pgxmock.AnyArg(), pgxmock.AnyArg(), pgxmock.AnyArg(), pgxmock.AnyArg(), pgxmock.AnyArg(), pgxmock.AnyArg(), pgxmock.AnyArg(), pgxmock.AnyArg(), pgxmock.AnyArg(), pgxmock.AnyArg()).
+		WillReturnResult(pgxmock.NewResult("INSERT", 1))
 	mock.ExpectExec("INSERT INTO ranking_rollout_policy_states").
 		WithArgs(policy.ID, scope.Tenant, scope.Project, scope.Namespace, memory.RankingRolloutPolicyStatusActiveForScope, "operator-b", "activate after dry-run", now.Add(time.Minute), nil, nil, now.Add(time.Minute)).
 		WillReturnResult(pgxmock.NewResult("INSERT", 1))
@@ -327,6 +333,14 @@ func TestRepositoryCreateActivateRollbackRankingRolloutPolicy(t *testing.T) {
 			DryRunSucceeded:         true,
 			EvidenceThresholdStatus: memory.RankingRolloutThresholdStatusSatisfied,
 			AttributionRecorded:     true,
+			Evidence: &memory.RankingRolloutEvidenceAttestation{
+				RunIdentity: "run:0123456789012345678901234567890123456789012345678901234567890123",
+				PolicyID:    policy.ID, ScopeHash: fmt.Sprintf("scope:%x", sha256.Sum256([]byte(scope.Tenant+"\x00"+scope.Project+"\x00"+scope.Namespace))),
+				PolicyVersion: "release-v1", StrategyIdentity: "rrf-v1",
+				SourceWatermarkHash: "watermark:0123456789012345678901234567890123456789012345678901234567890123",
+				Verdict:             "passed", Freshness: "fresh", RealStack: true, DeterministicReplay: true,
+				RollbackTested: true, EvaluatedAt: now, ExpiresAt: now.Add(time.Hour),
+			},
 		},
 	})
 	if err != nil {

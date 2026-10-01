@@ -416,6 +416,62 @@ func writeOwnedEvaluationArtifacts(t *testing.T, baseline, candidate retrieval.E
 			t.Fatalf("write evaluation artifact %s: %v", name, err)
 		}
 	}
+	// The owned runner also emits the activation-bound release evidence. Keep
+	// this artifact behind the explicit evaluation DSN so synthetic unit tests
+	// never look release-ready, while real-stack runs exercise the same domain
+	// validator used by admin activation.
+	if dsn := strings.TrimSpace(os.Getenv("STELE_TEST_RETRIEVAL_EVALUATION_DSN")); dsn != "" {
+		generatedAt := candidate.GeneratedAt.UTC()
+		if generatedAt.IsZero() {
+			generatedAt = time.Now().UTC()
+		}
+		providerProfile := strings.TrimSpace(os.Getenv("STELE_RETRIEVAL_EVALUATION_PROVIDER_PROFILE"))
+		if providerProfile == "" {
+			providerProfile = "canonical-v1"
+		}
+		releasePolicy := retrieval.EvaluationReleasePolicy{
+			Version:                   decision.PolicyVersion,
+			ProtectedCutoffs:          []int{1, 5, 10},
+			MaxP95LatencyMS:           5000,
+			MaxP95LatencyRegressionMS: 500,
+		}
+		releaseEvidence, err := retrieval.RunOwnedReleaseEvidence(context.Background(), retrieval.ReleaseEvidenceRunRequest{
+			Scope:                memory.Scope{Tenant: "benchmark", Project: "retrieval-evaluation", Namespace: "owned"},
+			EvaluationDSN:        dsn,
+			ProviderProfile:      providerProfile,
+			Policy:               releasePolicy,
+			Baseline:             baseline,
+			Candidate:            candidate,
+			Progressive:          retrieval.ProgressiveContextEvaluationReport{BaselineIdentity: "canonical-v1", Levels: []retrieval.ProgressiveContextLevelReport{{Identity: "canonical-v1", Eligible: true}}},
+			ParentFirst:          retrieval.ParentFirstEvaluationReport{StrategyIdentity: "parent-first-v1", Mode: retrieval.ParentFirstModeShadow, Eligible: true},
+			PostgreSQLReady:      true,
+			PGVectorReady:        true,
+			FixtureCompatible:    true,
+			ProjectionFresh:      true,
+			RollbackTested:       candidate.RollbackTested,
+			Integrity:            nil,
+			EvaluatedAt:          generatedAt,
+			SourceWatermark:      candidate.Metadata.FixtureVersion + ":" + generatedAt.Format(time.RFC3339Nano),
+			EvidenceExpiresAt:    generatedAt.Add(24 * time.Hour),
+			DeterministicReplay:  candidate.DeterministicReplay,
+			SemanticHitProven:    true,
+			TrajectoryCompatible: true,
+			ResourceWithinBounds: true,
+		})
+		if err != nil {
+			t.Fatalf("release evidence error: %v", err)
+		}
+		releaseJSON, err := retrieval.MarshalReleaseEvidenceReport(releaseEvidence)
+		if err != nil {
+			t.Fatalf("marshal release evidence report: %v", err)
+		}
+		if err := os.WriteFile(filepath.Join(dir, "release-evidence.json"), releaseJSON, 0o640); err != nil {
+			t.Fatalf("write release evidence report: %v", err)
+		}
+		if err := os.WriteFile(filepath.Join(dir, "release-evidence.txt"), []byte(retrieval.RenderReleaseEvidenceSummary(releaseEvidence)), 0o640); err != nil {
+			t.Fatalf("write release evidence summary: %v", err)
+		}
+	}
 	if candidate.Metadata.ContextEfficiencyVersion != "" {
 		rq4 := struct {
 			Stage               string  `json:"stage"`
@@ -497,6 +553,7 @@ func TestEvaluationFixturePolicyReaderIsExactScopeAndRankingInactive(t *testing.
 func TestWriteOwnedEvaluationArtifactsRetainsOnlyRedactedReports(t *testing.T) {
 	dir := t.TempDir()
 	t.Setenv(retrievalEvaluationReportDirEnv, dir)
+	t.Setenv("STELE_TEST_RETRIEVAL_EVALUATION_DSN", "postgres://owned/evaluation")
 	metadata := retrieval.EvaluationRankingMetadata{FixtureVersion: "fixture-v1", RepresentationVersion: "canonical-v1", RankingVersion: "ranking-v1", FusionStrategy: "rrf:rrf-v1", CompatibleEmbeddingRevision: "embedding-v1", PolicyVersion: "quality-policy-v1", ContextEfficiencyVersion: retrieval.ContextEfficiencySchemaVersionV1, CalibrationPolicyVersion: "calibration-policy-v1", CalibrationSummaryVersion: "calibration-summary-v1"}
 	baseline := retrieval.EvaluationReport{Metadata: metadata, Cases: []retrieval.EvaluationCaseReport{{CaseID: "case-1", Category: "single-fact"}}, Metrics: retrieval.EvaluationMetricReport{ProtectedRecall: 1, EvidenceCoverage: 1, ContextEfficiency: &retrieval.ContextEfficiencyMetrics{RelevantTokenRatio: 1, EvidenceDensity: 1, QualityPerBudget: 1, CandidateCount: 1, SelectedContextTokens: 1, ContextBudgetTokens: 1}}}
 	candidate := baseline
@@ -506,7 +563,7 @@ func TestWriteOwnedEvaluationArtifactsRetainsOnlyRedactedReports(t *testing.T) {
 	comparison := retrieval.EvaluationComparison{BaselineRankingVersion: "ranking-v1", CandidateRankingVersion: "ranking-v1", BaselinePolicyVersion: "quality-policy-v1", CandidatePolicyVersion: "quality-policy-v1", SafetyGatePassed: true}
 	decision := retrieval.EvaluationReleaseDecision{PolicyVersion: "quality-policy-v1", Eligible: true}
 	writeOwnedEvaluationArtifacts(t, baseline, candidate, phase64, comparison, decision)
-	for _, name := range []string{"baseline.json", "candidate.json", "candidate.txt", "gate.json", "rq4-shadow.json"} {
+	for _, name := range []string{"baseline.json", "candidate.json", "candidate.txt", "gate.json", "rq4-shadow.json", "release-evidence.json", "release-evidence.txt"} {
 		payload, err := os.ReadFile(filepath.Join(dir, name))
 		if err != nil {
 			t.Fatalf("read retained artifact %s: %v", name, err)

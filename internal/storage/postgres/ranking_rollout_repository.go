@@ -270,6 +270,32 @@ WHERE policy_id = $1 AND tenant = $2 AND project = $3 AND namespace = $4`
 	return nil
 }
 
+func attachRankingRolloutEvidenceAttestation(ctx context.Context, q queryRower, policy *memory.RankingRolloutPolicy) error {
+	if policy == nil || policy.Status != memory.RankingRolloutPolicyStatusActiveForScope {
+		return nil
+	}
+	const query = `
+SELECT run_identity, scope_hash, policy_version, strategy_identity, source_watermark_hash,
+       verdict, freshness, real_stack, deterministic_replay, rollback_tested, evaluated_at, expires_at
+FROM ranking_rollout_evidence_attestations
+WHERE policy_id = $1 AND tenant = $2 AND project = $3 AND namespace = $4
+ORDER BY created_at DESC, run_identity DESC
+LIMIT 1`
+	var attestation memory.RankingRolloutEvidenceAttestation
+	if err := q.QueryRow(ctx, query, policy.ID, policy.Scope.Tenant, policy.Scope.Project, policy.Scope.Namespace).Scan(
+		&attestation.RunIdentity, &attestation.ScopeHash, &attestation.PolicyVersion, &attestation.StrategyIdentity,
+		&attestation.SourceWatermarkHash, &attestation.Verdict, &attestation.Freshness, &attestation.RealStack,
+		&attestation.DeterministicReplay, &attestation.RollbackTested, &attestation.EvaluatedAt, &attestation.ExpiresAt); err != nil {
+		if errors.Is(err, pgx.ErrNoRows) || errors.Is(err, sql.ErrNoRows) {
+			return nil
+		}
+		return fmt.Errorf("read ranking rollout evidence attestation: %w", err)
+	}
+	attestation.PolicyID = policy.ID
+	policy.ReleaseEvidence = &attestation
+	return nil
+}
+
 func (r *Repository) ReadRankingRolloutPolicy(ctx context.Context, input memory.ReadRankingRolloutPolicyInput) (memory.RankingRolloutPolicy, error) {
 	if err := input.Validate(); err != nil {
 		return memory.RankingRolloutPolicy{}, err
@@ -293,6 +319,9 @@ WHERE tenant = $1 AND project = $2 AND namespace = $3 AND id = $4
 		return memory.RankingRolloutPolicy{}, fmt.Errorf("read ranking rollout policy: %w", err)
 	}
 	if err := attachContextCalibrationRollout(ctx, r.db, &policy); err != nil {
+		return memory.RankingRolloutPolicy{}, err
+	}
+	if err := attachRankingRolloutEvidenceAttestation(ctx, r.db, &policy); err != nil {
 		return memory.RankingRolloutPolicy{}, err
 	}
 	return policy, nil
@@ -330,6 +359,9 @@ LIMIT 1
 		if err := attachContextCalibrationRollout(ctx, r.db, &policy); err != nil {
 			return memory.RankingRolloutPolicy{}, err
 		}
+	}
+	if err := attachRankingRolloutEvidenceAttestation(ctx, r.db, &policy); err != nil {
+		return memory.RankingRolloutPolicy{}, err
 	}
 	return policy, nil
 }
@@ -407,6 +439,9 @@ LIMIT 1`
 	if updated.Valid {
 		p.UpdatedAt = updated.Time
 	}
+	if err := attachRankingRolloutEvidenceAttestation(ctx, r.db, &p); err != nil {
+		return memory.RankingRolloutPolicy{}, err
+	}
 	return p, nil
 }
 
@@ -479,6 +514,9 @@ LIMIT 1`
 	}
 	if updated.Valid {
 		policy.UpdatedAt = updated.Time
+	}
+	if err := attachRankingRolloutEvidenceAttestation(ctx, r.db, &policy); err != nil {
+		return memory.RankingRolloutPolicy{}, err
 	}
 	return policy, nil
 }
@@ -632,7 +670,7 @@ func (r *Repository) ActivateRankingRolloutPolicy(ctx context.Context, input mem
 		return memory.RankingRolloutPolicy{}, err
 	}
 	input.Scope = input.Scope.Normalized()
-	if !input.Gate.CanActivate() {
+	if !input.Gate.CanActivateFor(input.Scope, input.PolicyID, input.ActivatedAt) {
 		return memory.RankingRolloutPolicy{}, fmt.Errorf("ranking rollout activation gate not satisfied")
 	}
 
@@ -668,6 +706,9 @@ RETURNING id, tenant, project, namespace, status, mode, surfaces, signal_sources
 	if err != nil {
 		return memory.RankingRolloutPolicy{}, fmt.Errorf("activate ranking rollout policy: %w", err)
 	}
+	if err := persistRankingRolloutEvidenceAttestation(ctx, tx, input.PolicyID, input.Scope, input.Gate.Evidence); err != nil {
+		return memory.RankingRolloutPolicy{}, err
+	}
 	if err := upsertRankingRolloutPolicyState(ctx, tx, policy, policy.Status, input.Actor, input.Reason, input.ActivatedAt); err != nil {
 		return memory.RankingRolloutPolicy{}, err
 	}
@@ -676,6 +717,27 @@ RETURNING id, tenant, project, namespace, status, mode, surfaces, signal_sources
 		return memory.RankingRolloutPolicy{}, fmt.Errorf("commit ranking rollout activation transaction: %w", err)
 	}
 	return policy, nil
+}
+
+func persistRankingRolloutEvidenceAttestation(ctx context.Context, q queryRower, policyID string, scope memory.Scope, attestation *memory.RankingRolloutEvidenceAttestation) error {
+	if attestation == nil {
+		return fmt.Errorf("ranking rollout evidence attestation is required")
+	}
+	const query = `
+INSERT INTO ranking_rollout_evidence_attestations (
+    policy_id, tenant, project, namespace, run_identity, scope_hash,
+    policy_version, strategy_identity, source_watermark_hash, verdict, freshness,
+    real_stack, deterministic_replay, rollback_tested, evaluated_at, expires_at
+)
+VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16)`
+	if _, err := q.Exec(ctx, query, policyID, scope.Tenant, scope.Project, scope.Namespace,
+		attestation.RunIdentity, attestation.ScopeHash, attestation.PolicyVersion,
+		attestation.StrategyIdentity, attestation.SourceWatermarkHash, attestation.Verdict,
+		attestation.Freshness, attestation.RealStack, attestation.DeterministicReplay,
+		attestation.RollbackTested, attestation.EvaluatedAt, attestation.ExpiresAt); err != nil {
+		return fmt.Errorf("persist ranking rollout evidence attestation: %w", err)
+	}
+	return nil
 }
 
 func (r *Repository) DisableRankingRolloutPolicy(ctx context.Context, input memory.DisableRankingRolloutPolicyInput) (memory.RankingRolloutPolicy, error) {

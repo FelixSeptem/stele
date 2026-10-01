@@ -1,12 +1,4 @@
-# retrieval-release-evidence-run Specification
-
-## Purpose
-This capability runs an explicitly owned retrieval evaluation against real
-PostgreSQL and pgvector, compares progressive context and parent-first shadow
-strategies, and produces redacted evidence that can never authorize release
-when safety or prerequisite gates are incomplete.
-
-## Requirements
+## MODIFIED Requirements
 
 ### Requirement: Evaluation run is explicitly owned and fail-closed
 The service SHALL accept a release-evidence run only when the operator supplies
@@ -51,34 +43,6 @@ database DSN.
   outside its configured window
 - **THEN** the run records a stable stale/degraded category and cannot pass the
   release gate or authorize activation
-
-### Requirement: Progressive and parent-first results remain shadow-only
-
-The evaluator SHALL compare short retrieval projection, medium session/context
-overview, canonical/chunk evidence, and bounded parent-first expansion against
-the flat baseline on the same exact scope. These strategies MUST remain offline
-or shadow-only and MUST NOT alter default retrieval, canonical memory, or public
-search/context response behavior.
-
-#### Scenario: Progressive levels are comparable
-
-- **WHEN** a run evaluates all configured context levels
-- **THEN** each level has a separate identity, source watermark, freshness
-  category, budget, citation coverage, rebuild identity, and bounded metrics
-
-#### Scenario: Parent-first expansion is evaluated
-
-- **WHEN** parent-first shadow evaluation expands validated parents to children
-  or adjacent chunks
-- **THEN** expansion is exact-scope, bounded by candidate/latency limits, and
-  compared with flat fusion without changing production ranking
-
-#### Scenario: Experimental strategy would cross a safety boundary
-
-- **WHEN** progressive or parent-first output includes foreign, hidden, stale,
-  or lifecycle-ineligible evidence
-- **THEN** the level records a hard isolation/lifecycle/freshness failure and
-  remains ineligible regardless of quality metrics
 
 ### Requirement: Release evidence is redacted, reproducible, and reviewable
 The service SHALL emit machine-readable and human-readable reports containing

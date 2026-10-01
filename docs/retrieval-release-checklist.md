@@ -2,6 +2,11 @@
 
 - [ ] Owned PostgreSQL 18 + pgvector DSN is explicit and isolated from the
       runtime database.
+- [ ] The evaluator ownership marker is explicitly set, the run timeout is
+      bounded, and the report directory is isolated to one run.
+- [ ] The report contains a stable opaque run identity, source-watermark hash,
+      freshness verdict, expiry time, deterministic replay, and rollback
+      outcomes; no raw DSN or scope value is retained.
 - [ ] Fixture, representation, fusion, ranking, embedding, reranker, analysis,
       and release-policy identities are compatible with the immutable baseline.
 - [ ] Planner schema/planner/policy identities and analysis/fusion/ranking/
@@ -18,6 +23,8 @@
       all diagnostics are aggregate/redacted with low-cardinality labels.
 - [ ] Real-stack replay is passed; skipped/synthetic evidence is not treated as
       a release pass.
+- [ ] A redacted release-evidence attestation is bound to the exact scope,
+      policy, strategy, and dependency identities before activation.
 - [ ] Protected simple-fact recall, temporal coverage, multi-hop coverage,
       duplicate rate, candidate budget, latency, and isolation gates are green.
 - [ ] Progressive context levels have fresh watermarks, bounded costs,
@@ -29,5 +36,7 @@
 - [ ] Retention cleanup is tested and does not delete canonical source records.
 - [ ] Rebuild/re-index and rollback runbooks were exercised and append-only
       history is preserved.
+- [ ] Disablement and rollback return the approved baseline, preserve the
+      attestation/audit history, and do not rewrite canonical memory.
 - [ ] Threshold owner reviewed the versioned release policy and recorded the
       decision category.

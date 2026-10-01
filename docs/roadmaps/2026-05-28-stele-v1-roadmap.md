@@ -61,10 +61,9 @@ not be conflated:
   archived as change 040 with its delta specs synchronized to the main
   specifications. Active rollout remains unauthorized without fresh owned
   PostgreSQL + pgvector release evidence.
-- **Proposed / pending implementation**: OpenSpec artifacts exist, but the task
-  checklist and release evidence are not complete. P8.7 is the current
-  proposal target; P0–P7, RQ1–RQ4, and P8.1–P8.6 are archived baselines. It
-  no longer describes those archived baselines as pending work.
+- **Archived implementation**: P0–P7, RQ1–RQ4, and P8.1–P8.8 are archived
+  baselines. No P8 proposal is currently active; the next proposal must be
+  selected from the bounded post-v1 candidate backlog.
 - **Candidate expansion**: useful post-v1 ideas that must wait until the provider
   contract and quality gates are stable. This includes MCP adapters, namespace
   subtree conventions, agent self-model conventions, and autonomous reasoning
@@ -104,7 +103,7 @@ change an archived baseline.
 | P5 | Benchmark expansion and retrieval release evidence | Archived changes 025, 026, 035, and 039 | Implemented baseline; owned real-stack evidence remains a prerequisite for activation. |
 | P6 | Durable multi-scope maintenance and observability | Archived change 037 | Implemented baseline; retain regression, freshness, and SLO evidence. |
 | P7 | Agent runtime memory-provider contract | Archived change 038 | Implemented baseline; integration remains optional to the retrieval path. |
-| P8 | Optional adapters and governed experience insights | Governed insight baseline in changes 013/014; OpenAPI-backed MCP scope/profile adapter archived as change 044; scoped memory paths archived as change 046; agent self-model conventions archived as change 047; reasoning-provider boundary archived as change 048; OpenAI-compatible adapter archived as change 049; governed reserved-insight activation archived as change 050; redacted trajectory and memory-integrity evaluation archived as change 051; MCP real-stack conformance and self-hosting evidence is the current proposal | Keep MCP as an optional OpenAPI adapter and reuse projections/intents rather than creating a second memory system. |
+| P8 | Optional adapters and governed experience insights | Governed insight baseline in changes 013/014; OpenAPI-backed MCP scope/profile adapter archived as change 044; scoped memory paths archived as change 046; agent self-model conventions archived as change 047; reasoning-provider boundary archived as change 048; OpenAI-compatible adapter archived as change 049; governed reserved-insight activation archived as change 050; redacted trajectory and memory-integrity evaluation archived as change 051; MCP real-stack conformance and self-hosting evidence archived as change 052; retrieval release evidence refresh and controlled activation archived as change 053; no active P8 proposal | Keep MCP as an optional OpenAPI adapter and reuse projections/intents rather than creating a second memory system. |
 
 ### Critical path to provider readiness
 
@@ -1366,24 +1365,20 @@ reasoning provider boundary is complete and archived as change 048. The
 OpenAI-compatible adapter is complete and archived as change 049. The governed
 reserved-insight activation proposal is complete and archived as change 050.
 The redacted retrieval trajectory and memory-integrity evaluation is complete
-and archived as change 051 (P8.6). The current proposal target is
-`mcp-adapter-real-stack-conformance-and-self-hosting-evidence` (P8.7).
+and archived as change 051 (P8.6). The MCP adapter real-stack conformance and
+self-hosting evidence is complete and archived as change 052 (P8.7). The
+retrieval release evidence refresh and controlled activation work is complete
+and archived as change 053 (P8.8). Its bounded release-evidence, exact-scope
+attestation, exact-scope activation, rollback, and self-hosting contracts are now part of the archived
+baseline.
 
-Candidate tasks for the bounded P8.7 proposal:
+Follow-up candidates for a future P8 proposal:
 
-- exercise the enabled MCP adapter through a real Streamable HTTP client,
-  PostgreSQL, and pgvector using governed exact-scope fixtures;
-- verify capability discovery, identity, runtime-binding precedence, read-only
-  grants, retrieval/context/browse, temporal/lifecycle/path filtering, and
-  bounded response redaction;
-- verify remember idempotency, preview-bound forgetting, fixed-ID apply,
-  restart/replay/conflict behavior, and adapter disablement without changing
-  ordinary OpenAPI behavior or canonical PostgreSQL state;
-- provide an opt-in self-hosting wrapper with explicit DSN ownership, bounded
-  timeouts, exact cleanup, and allow-listed redacted evidence output;
-- keep progressive context, parent-first retrieval, reranking, and reserved
-  insight activation diagnostics-only or shadow-only until their existing
-  independent gates pass.
+- extend archived release evidence only for a narrowly identified governance or
+  regression gap;
+- add a new optional adapter or insight type only with its own OpenAPI,
+  exact-scope, lifecycle, replay, redaction, and rollback contract;
+- preserve the P0–P7 and P8.8 baseline while evaluating any new candidate.
 
 Later P8 candidates:
 
@@ -1416,7 +1411,7 @@ Exit signal:
 10. Stage 9 agent runtime memory-provider contract and adapter (P7, archived)
 11. RQ1–RQ4 retrieval-quality frontier (archived changes 040–043)
 12. Stage 10 optional adapters and governed experience insights (P8), with
-    P8.1–P8.5 archived and P8.6 redacted trajectory/integrity evaluation next
+    P8.1–P8.8 archived; select the next P8 proposal from the bounded backlog
 
 Reasoning:
 
@@ -1670,7 +1665,8 @@ Recommended execution order for the current product baseline and next frontier:
 14. P8.4: concrete OpenAI-compatible reasoning adapter (archived change 049)
 15. P8.5: governed reserved-insight activation (archived change 050)
 16. P8.6: redacted retrieval trajectory and memory-integrity evaluation (archived change 051)
-17. P8.7: MCP adapter real-stack conformance and self-hosting evidence (current proposal)
+17. P8.7: MCP adapter real-stack conformance and self-hosting evidence (archived change 052)
+18. P8.8: retrieval release evidence refresh and controlled activation (archived change 053)
 
 The original Phase 1–5 order remains the build order for a fresh repository;
 the P0–P7 sequence is the archived baseline and RQ1–RQ4 are the next
@@ -1760,8 +1756,10 @@ archived. Change 048, `reasoning-provider-boundary`, is complete and archived.
 Change 049, `reasoning-openai-compatible-adapter`, is complete and archived.
 Change 050, `governed-reserved-insight-activation`, is complete and archived.
 Change 051, `redacted-retrieval-trajectory-and-memory-integrity-evaluation`, is
-complete and archived. The immediate next proposal is P8.7
-`mcp-adapter-real-stack-conformance-and-self-hosting-evidence`: real-stack
-Streamable HTTP MCP conformance and self-hosting evidence for the existing
-optional adapter. It does not add MCP storage, change default retrieval or
-OpenAPI behavior, or widen the canonical authorization boundary.
+complete and archived. Change 052,
+`mcp-adapter-real-stack-conformance-and-self-hosting-evidence`, and change 053,
+`retrieval-release-evidence-refresh-and-controlled-activation`, are complete
+and archived. There is no active P8 proposal; the next proposal must be
+selected from the bounded backlog. The archived P8.8 work does not add a
+second rollout system, change default retrieval or OpenAPI behavior, or widen
+the canonical authorization boundary.

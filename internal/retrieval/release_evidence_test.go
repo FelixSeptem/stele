@@ -27,8 +27,8 @@ func TestRunOwnedReleaseEvidenceNeverFallsBackToRuntimeDSN(t *testing.T) {
 }
 
 func TestMarshalReleaseEvidenceReportIsBoundedAndRedacted(t *testing.T) {
-	report := validReleaseEvidenceInput(t)
-	evidence, err := EvaluateReleaseEvidence(report)
+	in := validReleaseEvidenceInput(t)
+	evidence, err := EvaluateReleaseEvidence(in)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -51,6 +51,19 @@ func TestMarshalReleaseEvidenceReportIsBoundedAndRedacted(t *testing.T) {
 	}
 	if got := RenderReleaseEvidenceSummary(evidence); !strings.Contains(got, "retrieval release evidence") {
 		t.Fatalf("summary=%q", got)
+	}
+	in.SourceWatermark = "source-watermark-v1"
+	in.EvidenceExpiresAt = in.EvaluatedAt.Add(time.Hour)
+	in.DeterministicReplay = true
+	evidence, err = EvaluateReleaseEvidence(in)
+	if err != nil {
+		t.Fatal(err)
+	}
+	summary := RenderReleaseEvidenceSummary(evidence)
+	for _, want := range []string{"run=run:", "freshness=fresh", "replay=true", "rollback=true"} {
+		if !strings.Contains(summary, want) {
+			t.Fatalf("summary=%q, missing %q", summary, want)
+		}
 	}
 }
 
@@ -112,6 +125,76 @@ func TestEvaluateReleaseEvidenceRequiresProgressiveAndParentFirstEligibility(t *
 	}
 	if report.ReleaseEligible || !containsString(report.FailureCategories, ReleaseEvidenceProgressiveFailure) || !containsString(report.FailureCategories, ReleaseEvidenceParentFirstFailure) {
 		t.Fatalf("report=%+v", report)
+	}
+}
+
+func TestReleaseEvidenceIdentityIsDeterministicAndRedacted(t *testing.T) {
+	in := validReleaseEvidenceInput(t)
+	in.SourceWatermark = "source-watermark-v1"
+	in.EvidenceExpiresAt = in.EvaluatedAt.Add(time.Hour)
+	in.DeterministicReplay = true
+	report, err := EvaluateReleaseEvidence(in)
+	if err != nil {
+		t.Fatal(err)
+	}
+	reportAgain, err := EvaluateReleaseEvidence(in)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if report.RunIdentity == "" || report.RunIdentity != reportAgain.RunIdentity {
+		t.Fatalf("run identity = %q/%q, want stable non-empty identity", report.RunIdentity, reportAgain.RunIdentity)
+	}
+	if report.SourceWatermarkHash == "" || report.EvidenceFreshness != ReleaseEvidenceFresh {
+		t.Fatalf("freshness metadata = %+v", report)
+	}
+	payload, err := MarshalReleaseEvidenceReport(report)
+	if err != nil {
+		t.Fatal(err)
+	}
+	encoded := string(payload)
+	for _, forbidden := range []string{"source-watermark-v1", "tenant-secret", "postgres://owned/eval"} {
+		if strings.Contains(encoded, forbidden) {
+			t.Fatalf("report leaked %q: %s", forbidden, encoded)
+		}
+	}
+}
+
+func TestReleaseEvidenceRejectsExpiredEvidence(t *testing.T) {
+	in := validReleaseEvidenceInput(t)
+	in.SourceWatermark = "source-watermark-v1"
+	in.EvidenceExpiresAt = in.EvaluatedAt.Add(-time.Nanosecond)
+	in.DeterministicReplay = true
+	report, err := EvaluateReleaseEvidence(in)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if report.ReleaseEligible || report.EvidenceFreshness != ReleaseEvidenceStale || !containsString(report.FailureCategories, ReleaseEvidenceStaleCategory) {
+		t.Fatalf("report=%+v, want stale evidence to be a hard non-pass", report)
+	}
+}
+
+func TestReleaseEvidenceFailsClosedForMissingOwnedEvidenceCategories(t *testing.T) {
+	in := validReleaseEvidenceInput(t)
+	in.Policy.RequireFreshEvidence = true
+	in.Policy.RequireSemanticHit = true
+	in.Policy.RequireTrajectoryIntegrity = true
+	in.Policy.RequireResourceBudget = true
+	in.SourceWatermark = "source-watermark-v1"
+	in.EvidenceExpiresAt = in.EvaluatedAt.Add(time.Hour)
+	in.Prerequisites.SemanticHitProven = false
+	in.Prerequisites.TrajectoryCompatible = false
+	in.Prerequisites.ResourceWithinBounds = false
+	report, err := EvaluateReleaseEvidence(in)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if report.ReleaseEligible || report.Verdict != ReleaseEvidenceRejected {
+		t.Fatalf("report=%+v, want rejected evidence", report)
+	}
+	for _, category := range []string{ReleaseEvidenceSemanticHitRequired, ReleaseEvidenceTrajectoryRequired, ReleaseEvidenceResourceFailure} {
+		if !containsString(report.FailureCategories, category) {
+			t.Fatalf("report=%+v, missing failure category %q", report, category)
+		}
 	}
 }
 

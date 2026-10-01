@@ -24,6 +24,38 @@ func TestRankingRolloutActivationGate(t *testing.T) {
 	}
 }
 
+func TestRankingRolloutActivationGateRequiresFreshExactScopeEvidence(t *testing.T) {
+	now := time.Date(2026, 10, 1, 12, 0, 0, 0, time.UTC)
+	scope := Scope{Tenant: "tenant-a", Project: "project-a", Namespace: "namespace-a"}
+	gate := RankingRolloutActivationGate{
+		DryRunSucceeded:         true,
+		EvidenceThresholdStatus: RankingRolloutThresholdStatusSatisfied,
+		AttributionRecorded:     true,
+		Evidence: &RankingRolloutEvidenceAttestation{
+			RunIdentity: "run:0123456789012345678901234567890123456789012345678901234567890123",
+			PolicyID:    "policy-1", ScopeHash: rankingRolloutScopeHash(scope), PolicyVersion: "release-v1",
+			StrategyIdentity: "rrf-v1", SourceWatermarkHash: "watermark:0123456789012345678901234567890123456789012345678901234567890123",
+			Verdict: "passed", Freshness: "fresh", RealStack: true, DeterministicReplay: true,
+			RollbackTested: true, EvaluatedAt: now.Add(-time.Minute), ExpiresAt: now.Add(time.Hour),
+		},
+	}
+	if !gate.CanActivateFor(scope, "policy-1", now) {
+		t.Fatal("CanActivateFor() = false, want valid exact-scope evidence to activate")
+	}
+	foreign := scope
+	foreign.Namespace = "other"
+	if gate.CanActivateFor(foreign, "policy-1", now) {
+		t.Fatal("CanActivateFor() = true, want foreign scope rejected")
+	}
+	if gate.CanActivateFor(scope, "policy-2", now) {
+		t.Fatal("CanActivateFor() = true, want mismatched policy rejected")
+	}
+	gate.Evidence.ExpiresAt = now
+	if gate.CanActivateFor(scope, "policy-1", now) {
+		t.Fatal("CanActivateFor() = true, want expired evidence rejected")
+	}
+}
+
 func TestRankingRolloutPolicyValidate(t *testing.T) {
 	policy := RankingRolloutPolicy{
 		ID:              "policy_1",
@@ -334,6 +366,38 @@ func TestResolveRetrievalPlannerRolloutFailsClosed(t *testing.T) {
 		if got.Stage != RetrievalPlannerRolloutStageBaseline || got.AffectsResults {
 			t.Fatalf("mutation %d resolution = %+v", index, got)
 		}
+	}
+}
+
+func TestResolveRetrievalPlannerRolloutRequiresFreshReleaseEvidence(t *testing.T) {
+	now := time.Date(2026, 10, 1, 12, 0, 0, 0, time.UTC)
+	scope := Scope{Tenant: "tenant-a", Project: "project-a", Namespace: "namespace-a"}
+	policy := validQueryAnalysisRolloutPolicyForTest(RankingRolloutPolicyStatusActiveForScope)
+	policy.ID = "planner-policy"
+	policy.Scope = scope
+	policy.Mode = RankingRolloutModeActiveForScope
+	policy.RetrievalPlannerSelector = RetrievalPlannerRolloutSelector{SessionID: "session-a", UserID: "user-a"}
+	policy.RetrievalPlanner = &RetrievalPlannerRolloutPolicy{
+		SchemaVersion: "retrieval-planner-rollout-v1", PlannerVersion: "retrieval-planner-v1", PolicyVersion: "retrieval-plan-policy-v1",
+		AnalysisPolicyVersion: QueryAnalysisPolicyVersionV1, FusionVersion: "rrf-v1", RankingVersion: "quality-feature-v1", RendererVersion: "context-renderer-v1",
+		MaxCandidates: 200, MaxCandidatesPerChannel: 100, MaxPasses: 2, MaxLatency: 5 * time.Second, MaxContextItems: 100, MaxRerankerHeadroom: 100,
+		ExpiresAt: now.Add(time.Hour),
+	}
+	policy.ReleaseEvidence = &RankingRolloutEvidenceAttestation{
+		RunIdentity: "run:0123456789012345678901234567890123456789012345678901234567890123",
+		PolicyID:    policy.ID, ScopeHash: rankingRolloutScopeHash(scope), PolicyVersion: "release-v1", StrategyIdentity: "rrf-v1",
+		SourceWatermarkHash: "watermark:0123456789012345678901234567890123456789012345678901234567890123",
+		Verdict:             "passed", Freshness: "fresh", RealStack: true, DeterministicReplay: true, RollbackTested: true,
+		EvaluatedAt: now.Add(-time.Minute), ExpiresAt: now.Add(time.Hour),
+	}
+	active := ResolveRetrievalPlannerRollout(&policy, ResolveRetrievalPlannerRolloutInput{Scope: scope, Surface: RankingRolloutSurfaceSearch, SessionID: "session-a", UserID: "user-a", Now: now, AnalysisPolicyVersion: QueryAnalysisPolicyVersionV1, FusionVersion: "rrf-v1", RankingVersion: "quality-feature-v1", RendererVersion: "context-renderer-v1"})
+	if active.Stage != RetrievalPlannerRolloutStageActive || !active.AffectsResults {
+		t.Fatalf("active resolution = %+v", active)
+	}
+	policy.ReleaseEvidence.ExpiresAt = now
+	stale := ResolveRetrievalPlannerRollout(&policy, ResolveRetrievalPlannerRolloutInput{Scope: scope, Surface: RankingRolloutSurfaceSearch, SessionID: "session-a", UserID: "user-a", Now: now, AnalysisPolicyVersion: QueryAnalysisPolicyVersionV1, FusionVersion: "rrf-v1", RankingVersion: "quality-feature-v1", RendererVersion: "context-renderer-v1"})
+	if stale.Stage != RetrievalPlannerRolloutStageBaseline || stale.AffectsResults {
+		t.Fatalf("stale resolution = %+v, want baseline", stale)
 	}
 }
 

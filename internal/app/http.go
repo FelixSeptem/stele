@@ -561,8 +561,9 @@ type rankingRolloutPolicyCreateRequest struct {
 }
 
 type rankingRolloutPolicyActionRequest struct {
-	Actor  string `json:"actor"`
-	Reason string `json:"reason"`
+	Actor    string                                    `json:"actor"`
+	Reason   string                                    `json:"reason"`
+	Evidence *memory.RankingRolloutEvidenceAttestation `json:"evidence,omitempty"`
 }
 
 type assuranceHealthEvaluationCreateRequest struct {
@@ -3585,6 +3586,7 @@ func handleAdminRankingRolloutAction(w http.ResponseWriter, r *http.Request, ser
 				DryRunSucceeded:         true,
 				EvidenceThresholdStatus: memory.RankingRolloutThresholdStatusSatisfied,
 				AttributionRecorded:     true,
+				Evidence:                req.Evidence,
 			},
 		})
 		if err != nil {

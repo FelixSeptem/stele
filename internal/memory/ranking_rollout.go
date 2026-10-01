@@ -1,6 +1,7 @@
 package memory
 
 import (
+	"crypto/sha256"
 	"fmt"
 	"math"
 	"strings"
@@ -215,14 +216,77 @@ func (c RankingRolloutImpactReasonCode) Valid() bool {
 }
 
 type RankingRolloutActivationGate struct {
-	DryRunSucceeded         bool                          `json:"dry_run_succeeded"`
-	EvidenceThresholdStatus RankingRolloutThresholdStatus `json:"evidence_threshold_status"`
-	BlockersPresent         bool                          `json:"blockers_present"`
-	AttributionRecorded     bool                          `json:"attribution_recorded"`
+	DryRunSucceeded         bool                               `json:"dry_run_succeeded"`
+	EvidenceThresholdStatus RankingRolloutThresholdStatus      `json:"evidence_threshold_status"`
+	BlockersPresent         bool                               `json:"blockers_present"`
+	AttributionRecorded     bool                               `json:"attribution_recorded"`
+	Evidence                *RankingRolloutEvidenceAttestation `json:"evidence,omitempty"`
 }
 
 func (g RankingRolloutActivationGate) CanActivate() bool {
 	return g.DryRunSucceeded && g.AttributionRecorded && g.EvidenceThresholdStatus == RankingRolloutThresholdStatusSatisfied && !g.BlockersPresent
+}
+
+// RankingRolloutEvidenceAttestation is the redacted, exact-scope proof that a
+// release evidence run passed. It contains no source records, queries, DSNs,
+// credentials, or raw provider output.
+type RankingRolloutEvidenceAttestation struct {
+	RunIdentity         string    `json:"run_identity"`
+	PolicyID            string    `json:"policy_id"`
+	ScopeHash           string    `json:"scope_hash"`
+	PolicyVersion       string    `json:"policy_version"`
+	StrategyIdentity    string    `json:"strategy_identity"`
+	SourceWatermarkHash string    `json:"source_watermark_hash"`
+	Verdict             string    `json:"verdict"`
+	Freshness           string    `json:"freshness"`
+	RealStack           bool      `json:"real_stack"`
+	DeterministicReplay bool      `json:"deterministic_replay"`
+	RollbackTested      bool      `json:"rollback_tested"`
+	EvaluatedAt         time.Time `json:"evaluated_at"`
+	ExpiresAt           time.Time `json:"expires_at"`
+}
+
+func (a RankingRolloutEvidenceAttestation) Validate(scope Scope, policyID string, now time.Time) error {
+	if strings.TrimSpace(a.RunIdentity) == "" || !strings.HasPrefix(a.RunIdentity, "run:") || len(a.RunIdentity) != len("run:")+64 {
+		return fmt.Errorf("release evidence run identity is invalid")
+	}
+	if strings.TrimSpace(a.PolicyID) == "" || a.PolicyID != strings.TrimSpace(policyID) {
+		return fmt.Errorf("release evidence policy identity is invalid")
+	}
+	if err := scope.Validate(); err != nil {
+		return err
+	}
+	if a.ScopeHash != rankingRolloutScopeHash(scope) {
+		return fmt.Errorf("release evidence scope identity is invalid")
+	}
+	if strings.TrimSpace(a.PolicyVersion) == "" || strings.TrimSpace(a.StrategyIdentity) == "" {
+		return fmt.Errorf("release evidence compatibility identity is missing")
+	}
+	if strings.TrimSpace(a.SourceWatermarkHash) == "" || !strings.HasPrefix(a.SourceWatermarkHash, "watermark:") || len(a.SourceWatermarkHash) != len("watermark:")+64 {
+		return fmt.Errorf("release evidence source watermark is invalid")
+	}
+	if a.Verdict != "passed" || a.Freshness != "fresh" || !a.RealStack || !a.DeterministicReplay || !a.RollbackTested {
+		return fmt.Errorf("release evidence hard gates are not satisfied")
+	}
+	if a.EvaluatedAt.IsZero() || a.ExpiresAt.IsZero() || !a.ExpiresAt.After(a.EvaluatedAt) {
+		return fmt.Errorf("release evidence validity window is invalid")
+	}
+	if now.IsZero() {
+		now = time.Now().UTC()
+	}
+	if a.EvaluatedAt.After(now.UTC()) || !a.ExpiresAt.After(now.UTC()) {
+		return fmt.Errorf("release evidence is stale")
+	}
+	return nil
+}
+
+func (g RankingRolloutActivationGate) CanActivateFor(scope Scope, policyID string, now time.Time) bool {
+	return g.CanActivate() && g.Evidence != nil && g.Evidence.Validate(scope.Normalized(), policyID, now) == nil
+}
+
+func rankingRolloutScopeHash(scope Scope) string {
+	scope = scope.Normalized()
+	return fmt.Sprintf("scope:%x", sha256.Sum256([]byte(scope.Tenant+"\x00"+scope.Project+"\x00"+scope.Namespace)))
 }
 
 type RankingRolloutPolicy struct {
@@ -250,26 +314,27 @@ type RankingRolloutPolicy struct {
 	RerankerMode              string                        `json:"reranker_mode,omitempty"`
 	// Diversity fields are optional as a complete bundle. When configured, all
 	// identity and bounded selection parameters must be present and valid.
-	DiversityPolicyName               string                           `json:"diversity_policy_name,omitempty"`
-	DiversityPolicyVersion            string                           `json:"diversity_policy_version,omitempty"`
-	DiversityMMRLambda                float64                          `json:"diversity_mmr_lambda,omitempty"`
-	DiversitySemanticThreshold        float64                          `json:"diversity_semantic_threshold,omitempty"`
-	DiversityMaxCandidates            int                              `json:"diversity_max_candidates,omitempty"`
-	DiversityMaxPairwiseComparisons   int                              `json:"diversity_max_pairwise_comparisons,omitempty"`
-	DiversityMaxEmbeddingDimensions   int                              `json:"diversity_max_embedding_dimensions,omitempty"`
-	DiversityMaxCitationsPerCandidate int                              `json:"diversity_max_citations_per_candidate,omitempty"`
-	DiversityCoverageWeights          map[string]float64               `json:"diversity_coverage_weights,omitempty"`
-	QueryAnalysisSelector             QueryAnalysisRolloutSelector     `json:"query_analysis_selector,omitempty"`
-	QueryAnalysis                     *QueryAnalysisRolloutPolicy      `json:"query_analysis,omitempty"`
-	RetrievalPlannerSelector          RetrievalPlannerRolloutSelector  `json:"retrieval_planner_selector,omitempty"`
-	RetrievalPlanner                  *RetrievalPlannerRolloutPolicy   `json:"retrieval_planner,omitempty"`
-	ContextCalibrationSelector        RetrievalPlannerRolloutSelector  `json:"context_calibration_selector,omitempty"`
-	ContextCalibration                *ContextCalibrationRolloutPolicy `json:"context_calibration,omitempty"`
-	ActivatedAt                       time.Time                        `json:"activated_at,omitempty"`
-	DisabledAt                        time.Time                        `json:"disabled_at,omitempty"`
-	RolledBackAt                      time.Time                        `json:"rolled_back_at,omitempty"`
-	CreatedAt                         time.Time                        `json:"created_at"`
-	UpdatedAt                         time.Time                        `json:"updated_at"`
+	DiversityPolicyName               string                             `json:"diversity_policy_name,omitempty"`
+	DiversityPolicyVersion            string                             `json:"diversity_policy_version,omitempty"`
+	DiversityMMRLambda                float64                            `json:"diversity_mmr_lambda,omitempty"`
+	DiversitySemanticThreshold        float64                            `json:"diversity_semantic_threshold,omitempty"`
+	DiversityMaxCandidates            int                                `json:"diversity_max_candidates,omitempty"`
+	DiversityMaxPairwiseComparisons   int                                `json:"diversity_max_pairwise_comparisons,omitempty"`
+	DiversityMaxEmbeddingDimensions   int                                `json:"diversity_max_embedding_dimensions,omitempty"`
+	DiversityMaxCitationsPerCandidate int                                `json:"diversity_max_citations_per_candidate,omitempty"`
+	DiversityCoverageWeights          map[string]float64                 `json:"diversity_coverage_weights,omitempty"`
+	QueryAnalysisSelector             QueryAnalysisRolloutSelector       `json:"query_analysis_selector,omitempty"`
+	QueryAnalysis                     *QueryAnalysisRolloutPolicy        `json:"query_analysis,omitempty"`
+	RetrievalPlannerSelector          RetrievalPlannerRolloutSelector    `json:"retrieval_planner_selector,omitempty"`
+	RetrievalPlanner                  *RetrievalPlannerRolloutPolicy     `json:"retrieval_planner,omitempty"`
+	ContextCalibrationSelector        RetrievalPlannerRolloutSelector    `json:"context_calibration_selector,omitempty"`
+	ContextCalibration                *ContextCalibrationRolloutPolicy   `json:"context_calibration,omitempty"`
+	ActivatedAt                       time.Time                          `json:"activated_at,omitempty"`
+	DisabledAt                        time.Time                          `json:"disabled_at,omitempty"`
+	RolledBackAt                      time.Time                          `json:"rolled_back_at,omitempty"`
+	ReleaseEvidence                   *RankingRolloutEvidenceAttestation `json:"release_evidence,omitempty"`
+	CreatedAt                         time.Time                          `json:"created_at"`
+	UpdatedAt                         time.Time                          `json:"updated_at"`
 }
 
 func (p RankingRolloutPolicy) Validate() error {
@@ -668,6 +733,15 @@ func ResolveRetrievalPlannerRollout(policy *RankingRolloutPolicy, input ResolveR
 	}
 	configured := policy.RetrievalPlanner
 	if !input.Now.Before(configured.ExpiresAt) || configured.AnalysisPolicyVersion != input.AnalysisPolicyVersion || configured.FusionVersion != input.FusionVersion || configured.RankingVersion != input.RankingVersion || configured.RendererVersion != input.RendererVersion || !queryAnalysisRolloutIncludesSurface(*policy, input.Surface) {
+		return fallback
+	}
+	// Newly activated policies are persisted with an attestation. Keep legacy
+	// in-memory policies usable for diagnostics and existing callers, while
+	// defensively rejecting any attestation that is present but stale or
+	// incompatible.
+	if policy.Status == RankingRolloutPolicyStatusActiveForScope &&
+		policy.ReleaseEvidence != nil &&
+		policy.ReleaseEvidence.Validate(input.Scope.Normalized(), policy.ID, input.Now) != nil {
 		return fallback
 	}
 	resolution := fallback

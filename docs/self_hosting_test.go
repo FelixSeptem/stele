@@ -122,10 +122,13 @@ func TestRoadmapTracksCurrentP8Proposal(t *testing.T) {
 		"P8.2b: agent self-model conventions (archived change 047)",
 		"P8.3: reasoning-provider boundary (archived change 048)",
 		"P8.5: governed reserved-insight activation (archived change 050)",
-		"The immediate next proposal is P8.6",
-		"`redacted-retrieval-trajectory-and-memory-integrity-evaluation`",
+		"P8.8",
+		"`retrieval-release-evidence-refresh-and-controlled-activation`",
 		"`governed-reserved-insight-activation`",
-		"information-integrity evidence",
+		"MCP real-stack conformance and self-hosting evidence archived as change 052",
+		"retrieval release evidence refresh and controlled activation archived as change 053",
+		"no active P8 proposal",
+		"exact-scope activation",
 	} {
 		if !strings.Contains(roadmap, want) {
 			t.Fatalf("roadmap missing reasoning proposal status %q", want)
@@ -677,6 +680,10 @@ func TestFusionContractAndRolloutRunbookAreDocumented(t *testing.T) {
 		"active_for_scope",
 		"STELE_TEST_RETRIEVAL_EVALUATION_DSN",
 		"STELE_TEST_RETRIEVAL_EVALUATION_OWNED",
+		"-TimeoutSeconds 300",
+		"release-evidence.json",
+		"redacted `evidence` object",
+		"SKIP_RETRIEVAL_EVALUATION_DSN_REQUIRED",
 	} {
 		if !strings.Contains(hosting, want) {
 			t.Fatalf("self-hosting guide missing fusion runbook contract %q", want)
