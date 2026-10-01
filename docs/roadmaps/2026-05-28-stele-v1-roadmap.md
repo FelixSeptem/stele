@@ -62,9 +62,9 @@ not be conflated:
   specifications. Active rollout remains unauthorized without fresh owned
   PostgreSQL + pgvector release evidence.
 - **Proposed / pending implementation**: OpenSpec artifacts exist, but the task
-  checklist and release evidence are not complete. RQ4 is the current proposal
-  target; RQ2 and RQ3 are archived baselines. It no longer describes the
-  archived P0–P7 or RQ1–RQ3 baselines.
+  checklist and release evidence are not complete. P8.6 is the current
+  proposal target; P0–P7, RQ1–RQ4, and P8.1–P8.5 are archived baselines. It
+  no longer describes those archived baselines as pending work.
 - **Candidate expansion**: useful post-v1 ideas that must wait until the provider
   contract and quality gates are stable. This includes MCP adapters, namespace
   subtree conventions, agent self-model conventions, and autonomous reasoning
@@ -104,7 +104,7 @@ change an archived baseline.
 | P5 | Benchmark expansion and retrieval release evidence | Archived changes 025, 026, 035, and 039 | Implemented baseline; owned real-stack evidence remains a prerequisite for activation. |
 | P6 | Durable multi-scope maintenance and observability | Archived change 037 | Implemented baseline; retain regression, freshness, and SLO evidence. |
 | P7 | Agent runtime memory-provider contract | Archived change 038 | Implemented baseline; integration remains optional to the retrieval path. |
-| P8 | Optional adapters and governed experience insights | Governed insight baseline in changes 013/014; OpenAPI-backed MCP scope/profile adapter archived as change 044; scoped memory paths archived as change 046; agent self-model conventions archived as change 047; reasoning-provider boundary archived as change 048; OpenAI-compatible adapter archived as change 049; governed reserved-insight activation is the active proposal | Keep MCP as an optional OpenAPI adapter and reuse projections/intents rather than creating a second memory system. |
+| P8 | Optional adapters and governed experience insights | Governed insight baseline in changes 013/014; OpenAPI-backed MCP scope/profile adapter archived as change 044; scoped memory paths archived as change 046; agent self-model conventions archived as change 047; reasoning-provider boundary archived as change 048; OpenAI-compatible adapter archived as change 049; governed reserved-insight activation archived as change 050; redacted trajectory and memory-integrity evaluation is the current proposal | Keep MCP as an optional OpenAPI adapter and reuse projections/intents rather than creating a second memory system. |
 
 ### Critical path to provider readiness
 
@@ -167,7 +167,7 @@ explicitly owned PostgreSQL + pgvector release run is still required. Without
 that DSN, evaluation is a controlled non-pass and rollout remains at
 diagnostics/shadow maximum.
 
-### RQ2: Bi-temporal fact validity — current proposal target
+### RQ2: Bi-temporal fact validity — archived baseline (change 041)
 
 Separate recorded time from fact-valid time with append-only canonical
 versions, explicit validity intervals, and provenance propagation through
@@ -176,7 +176,7 @@ must hide expired validity by default; historical intervals require an explicit
 temporal plan. Acceptance requires deterministic current/historical evidence,
 no stale-fact wins, and zero scope/lifecycle regression.
 
-### RQ3: Bounded graph-distance retrieval and evidence paths — pending
+### RQ3: Bounded graph-distance retrieval and evidence paths — archived baseline (change 042)
 
 Use PostgreSQL relation projections as an enhancement layer for entity and
 multi-hop queries. Seed expansion from authorized hits, cap traversal at one or
@@ -185,7 +185,7 @@ reliability, and preserve citations as rebuildable evidence paths. No graph
 database or second source of record is introduced; every expansion step keeps
 the same scope, lifecycle, candidate, time, and context limits.
 
-### RQ4: Context efficiency and feedback calibration — pending
+### RQ4: Context efficiency and feedback calibration — archived baseline (change 043)
 
 Measure relevant-token ratio, evidence density, duplicate/stale token rates,
 quality per context budget, and pass-specific model/reranker cost. Calibrate
@@ -1363,33 +1363,32 @@ The OpenAPI-backed MCP scope/profile adapter is complete and archived as change
 044. Scoped memory path conventions are complete and archived as change 046.
 Agent self-model conventions are complete and archived as change 047. The
 reasoning provider boundary is complete and archived as change 048. The
-OpenAI-compatible adapter is complete and archived as change 049. The active
-proposal is `governed-reserved-insight-activation` (P8.5).
+OpenAI-compatible adapter is complete and archived as change 049. The governed
+reserved-insight activation proposal is complete and archived as change 050.
+The current proposal target is
+`redacted-retrieval-trajectory-and-memory-integrity-evaluation` (P8.6).
 
-Candidate tasks for the bounded P8.5 proposal:
+Candidate tasks for the bounded P8.6 proposal:
 
-- build an optional OpenAPI-backed MCP adapter that preserves principal, grant,
-  exact `tenant`/`project`/`namespace` scope, lifecycle, idempotency, and audit
-  behavior; MCP remains a transport adapter rather than an authorization or
-  persistence boundary;
-- expose separate, bounded tool contracts for server-resolved runtime identity
-  and grants, query-relevant memory search, and already-authorized assembled
-  context/profile projections; ordinary retrieval must not expose raw scores,
-  candidate pools, feedback, calibration state, hidden IDs, or diagnostic
-  trajectories;
-- route `remember`, update, and forget requests through existing governed
-  memory intents; a semantic bulk forget must preview candidates first and
-  apply only the caller-reviewed, exact bounded ID set in an auditable batch;
-- allow a runtime/session "active scope" only as a server-resolved default for
-  a request. An explicit authorized scope takes precedence, and active-scope
-  state must never widen grants or become a second canonical memory store;
-- derive profile-like stable/recent context from existing profile memories,
-  valid temporal evidence, and context projections. Do not create an
-  independently mutable profile database or new canonical memory class.
+- add low-cardinality, redacted retrieval trajectory aggregates for authorized
+  evaluation/admin runs without exposing queries, scope values, identifiers,
+  hidden candidates, scores, provider payloads, or credentials;
+- produce separate action-success and information-integrity outcomes for
+  consolidation, merge, reclassification, reflection, and projection
+  changes, with integrity failures treated as hard non-pass results;
+- persist append-only, exact-scope, compatible evidence envelopes in
+  PostgreSQL and support deterministic replay, retention cleanup, and rollback
+  evidence without changing canonical memory or default retrieval;
+- expose bounded report inspection and lifecycle telemetry through existing
+  admin/OpenAPI and observability boundaries;
+- keep progressive context, parent-first retrieval, reranking, and reserved
+  insight activation diagnostics-only or shadow-only until their existing
+  independent gates pass.
 
 Later P8 candidates:
 
-- define scoped agent self-model conventions as ordinary governed memories;
+- extend the archived scoped agent self-model conventions only where a
+  narrowly identified governance or regression gap is found;
 - extend the archived governed-insight baseline only where a new insight type
   has its own provenance, lifecycle, replay, feedback, and context-evidence
   contract;
@@ -1416,8 +1415,8 @@ Exit signal:
 9. Stage 8 durable multi-scope maintenance and retrieval observability (P6, archived)
 10. Stage 9 agent runtime memory-provider contract and adapter (P7, archived)
 11. RQ1–RQ4 retrieval-quality frontier (archived changes 040–043)
-12. Stage 10 optional adapters and governed experience insights (P8 candidates),
-    beginning with the OpenAPI-backed MCP scope/profile-context adapter
+12. Stage 10 optional adapters and governed experience insights (P8), with
+    P8.1–P8.5 archived and P8.6 redacted trajectory/integrity evaluation next
 
 Reasoning:
 
@@ -1631,8 +1630,8 @@ scoped P8.1 MCP adapter):
    `tenant/project/namespace`, with exact matching by default and explicit,
    bounded prefix retrieval that cannot cross scope boundaries.
 
-3. Agent self-model conventions (active proposal, P8.2b):
-   Standardize scoped memory conventions for capabilities, limits, preferences, and lessons learned while keeping them ordinary governed memories.
+3. Agent self-model conventions (archived change 047, P8.2b):
+   Standardize scoped memory conventions for capabilities, limits, preferences, and lessons learned while keeping them ordinary governed memories; future work is limited to identified gaps.
 
 4. Self-hosting first-ten-minutes smoke path:
    Improve operator onboarding with a short path covering startup, ingest, worker processing, retrieval, context assembly, readiness, and metrics.
@@ -1669,7 +1668,8 @@ Recommended execution order for the current product baseline and next frontier:
 12. P8.2b: agent self-model conventions (archived change 047)
 13. P8.3: reasoning-provider boundary (archived change 048)
 14. P8.4: concrete OpenAI-compatible reasoning adapter (archived change 049)
-15. P8.5: governed reserved-insight activation (current proposal)
+15. P8.5: governed reserved-insight activation (archived change 050)
+16. P8.6: redacted retrieval trajectory and memory-integrity evaluation (current proposal)
 
 The original Phase 1–5 order remains the build order for a fresh repository;
 the P0–P7 sequence is the archived baseline and RQ1–RQ4 are the next
@@ -1757,8 +1757,11 @@ archived. Change 046, `scoped-memory-path-conventions`, is complete and
 archived. Change 047, `scoped-agent-self-model-conventions`, is complete and
 archived. Change 048, `reasoning-provider-boundary`, is complete and archived.
 Change 049, `reasoning-openai-compatible-adapter`, is complete and archived.
-The immediate next proposal is P8.5
-`governed-reserved-insight-activation`: a disabled-by-default, exact-scope
-admission path for evidence-backed reserved reasoning insights. The initial
-activation policy is limited to reviewed `hypothesis` candidates; `goal`,
-`contradiction`, and `causal_link` remain separately disabled.
+Change 050, `governed-reserved-insight-activation`, is complete and archived.
+The immediate next proposal is P8.6
+`redacted-retrieval-trajectory-and-memory-integrity-evaluation`: bounded,
+redacted retrieval-path aggregates and separate action-success versus
+information-integrity evidence for memory organization changes. It remains
+diagnostics/evaluation-only and does not activate new retrieval strategies,
+change default retrieval or context behavior, or widen reserved-insight
+activation.
