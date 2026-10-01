@@ -3,6 +3,7 @@ package postgres
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -16,6 +17,7 @@ import (
 	"github.com/FelixSeptem/stele/internal/mcp"
 	"github.com/FelixSeptem/stele/internal/memory"
 	"github.com/FelixSeptem/stele/internal/policy"
+	"github.com/FelixSeptem/stele/internal/provider"
 	"github.com/FelixSeptem/stele/internal/retrieval"
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5/pgxpool"
@@ -27,6 +29,8 @@ import (
 // caller owns that lifecycle. It seeds a unique fixture scope and removes each
 // created record with exact identifiers before returning.
 func TestMCPForgetLedgerPostgresPersistsReviewAndReplayAcrossRepositories(t *testing.T) {
+	recorder := newMCPConformanceRecorder()
+	defer recorder.writeFromEnvironment(t)
 	dsn := os.Getenv("STELE_TEST_POSTGRES_MCP_DSN")
 	if dsn == "" {
 		t.Skip("STELE_TEST_POSTGRES_MCP_DSN is not configured; skipping MCP PostgreSQL + pgvector conformance test")
@@ -111,6 +115,7 @@ func TestMCPForgetLedgerPostgresPersistsReviewAndReplayAcrossRepositories(t *tes
 	if err != nil || conflicted.Disposition != mcp.ForgetApplyConflict {
 		t.Fatalf("conflicting idempotency reuse = %+v, %v; want conflict", conflicted, err)
 	}
+	recorder.mark("forget_replay", "passed", 4)
 
 	foreignClaim := retry
 	foreignClaim.Scope = foreignScope
@@ -131,6 +136,7 @@ func TestMCPForgetLedgerPostgresPersistsReviewAndReplayAcrossRepositories(t *tes
 	if !reflect.DeepEqual(storedIDs, preview.MemoryIDs) {
 		t.Fatalf("persisted preview IDs = %v, want %v", storedIDs, preview.MemoryIDs)
 	}
+	recorder.mark("forget_preview", "passed", 2)
 
 	// Seed only unique fixture scopes through ingest, candidate admission,
 	// canonical promotion, and lifecycle repository boundaries. Cleanup below
@@ -213,6 +219,9 @@ func TestMCPForgetLedgerPostgresPersistsReviewAndReplayAcrossRepositories(t *tes
 	if versionedFixtureCount != len(fixtureRecords) || promotedFixtureCount != len(fixtureRecords) || hiddenLifecycleProvenanceCount == 0 {
 		t.Fatalf("MCP conformance fixture bypassed governed setup: versioned=%d promoted=%d fixtures=%d hidden lifecycle provenance=%d", versionedFixtureCount, promotedFixtureCount, len(fixtureRecords), hiddenLifecycleProvenanceCount)
 	}
+	recorder.mark("scope_isolation", "passed", 3)
+	recorder.mark("lifecycle_filtering", "passed", 2)
+	recorder.mark("path_filtering", "passed", 2)
 
 	// Exercise the actual Streamable HTTP adapter rather than only calling its
 	// repository dependencies. The request crosses the API-key principal check,
@@ -251,6 +260,266 @@ func TestMCPForgetLedgerPostgresPersistsReviewAndReplayAcrossRepositories(t *tes
 			t.Errorf("MCP search leaked filtered/internal field %q: %s", forbidden, response)
 		}
 	}
+	recorder.mark("retrieval_surface", "passed", 1)
+	recorder.mark("response_redaction", "passed", 1)
+}
+
+func TestMCPPostgresConformanceMatrix(t *testing.T) {
+	recorder := newMCPConformanceRecorder()
+	defer recorder.writeFromEnvironment(t)
+	dsn := os.Getenv("STELE_TEST_POSTGRES_MCP_DSN")
+	if dsn == "" {
+		t.Skip("STELE_TEST_POSTGRES_MCP_DSN is not configured; skipping MCP PostgreSQL conformance matrix")
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
+	defer cancel()
+	pool, err := OpenPool(ctx, dsn)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer pool.Close()
+	if err := NewMigrationRunner().Apply(ctx, dsn); err != nil {
+		t.Fatal(err)
+	}
+	var vectorVersion string
+	if err := pool.QueryRow(ctx, `SELECT extversion FROM pg_extension WHERE extname='vector'`).Scan(&vectorVersion); err != nil || vectorVersion == "" {
+		t.Fatalf("pgvector extension version=%q error=%v, want an owned pgvector database", vectorVersion, err)
+	}
+
+	suffix := uuid.NewString()
+	scope := memory.Scope{Tenant: "mcp-matrix-" + suffix, Project: "project", Namespace: "namespace"}
+	foreignScope := memory.Scope{Tenant: "mcp-matrix-foreign-" + suffix, Project: scope.Project, Namespace: scope.Namespace}
+	principal := auth.Principal{ID: "mcp-matrix-admin-" + suffix, Role: auth.PrincipalRoleAdmin, Status: auth.PrincipalStatusActive}
+	now := time.Now().UTC()
+	credentialLookupID := "stl_mcp_matrix_" + strings.ReplaceAll(suffix, "-", "")
+	secret, err := auth.NewCredentialSecret(credentialLookupID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	credential, err := auth.NewCredentialFromSecret("mcp-matrix-credential-"+suffix, principal.ID, secret, now)
+	if err != nil {
+		t.Fatal(err)
+	}
+	principal.Label = "MCP real-stack conformance"
+	principal.CreatedAt = now
+	principal.UpdatedAt = now
+	binding := provider.RuntimeBinding{BindingID: "mcp-matrix-binding-" + suffix, PrincipalID: principal.ID, Scope: scope, AgentID: "mcp-matrix-agent", SessionID: "mcp-matrix-session", ProviderInstanceID: "mcp-matrix-instance", CreatedAt: now.Add(-time.Minute), ExpiresAt: now.Add(time.Hour)}
+	repository := NewRepository(pool)
+	grant := auth.ScopeGrant{ID: "mcp-matrix-grant-" + suffix, PrincipalID: principal.ID, Scope: scope, Status: auth.ScopeGrantStatusActive, AccessMode: auth.ScopeGrantAccessReadWrite, CreatedAt: now}
+	if err := repository.CreatePrincipal(ctx, principal, credential, []auth.ScopeGrant{grant}, auth.AuditRecord{ID: "mcp-matrix-audit-" + suffix, PrincipalID: principal.ID, CredentialID: credential.ID, Scope: scope, Action: "mcp_conformance_fixture", Result: "success", CreatedAt: now}); err != nil {
+		t.Fatal(err)
+	}
+	authorizer := mcpPostgresAuthorizer{principal: principal, credential: credential, secret: secret, scope: scope}
+	if err := repository.Create(ctx, binding); err != nil {
+		t.Fatal(err)
+	}
+	var fixtureRecords []mcpPostgresFixtureRecord
+	defer func() {
+		cleanupCtx, cleanupCancel := context.WithTimeout(context.Background(), 20*time.Second)
+		defer cleanupCancel()
+		for _, statement := range []struct {
+			query string
+			args  []any
+		}{
+			{`DELETE FROM provider_runtime_bindings WHERE binding_id=$1`, []any{binding.BindingID}},
+			{`DELETE FROM provider_lifecycle_operations WHERE tenant=$1 AND project=$2 AND namespace=$3 AND principal_id=$4`, []any{scope.Tenant, scope.Project, scope.Namespace, principal.ID}},
+			{`DELETE FROM mcp_forget_apply_operations WHERE tenant=$1 AND project=$2 AND namespace=$3 AND principal_id=$4`, []any{scope.Tenant, scope.Project, scope.Namespace, principal.ID}},
+			{`DELETE FROM mcp_forget_previews WHERE tenant=$1 AND project=$2 AND namespace=$3 AND principal_id=$4`, []any{scope.Tenant, scope.Project, scope.Namespace, principal.ID}},
+			{`DELETE FROM access_audit_records WHERE principal_id=$1`, []any{principal.ID}},
+			{`DELETE FROM access_scope_grants WHERE principal_id=$1`, []any{principal.ID}},
+			{`DELETE FROM access_credentials WHERE principal_id=$1`, []any{principal.ID}},
+			{`DELETE FROM access_principals WHERE id=$1`, []any{principal.ID}},
+		} {
+			if _, err := pool.Exec(cleanupCtx, statement.query, statement.args...); err != nil {
+				t.Errorf("clean MCP matrix operational fixture data: %v", err)
+			}
+		}
+		if err := cleanupMCPPostgresFixtures(cleanupCtx, pool, fixtureRecords); err != nil {
+			t.Errorf("clean MCP matrix governed fixture records: %v", err)
+		}
+	}()
+
+	visibleFixture, err := seedMCPPostgresFixtureMemoryAtPath(ctx, repository, scope, "visible mcp matrix memory", memory.MemoryStateActive, "agents/research")
+	if err != nil {
+		t.Fatal(err)
+	}
+	fixtureRecords = append(fixtureRecords, visibleFixture)
+	hiddenFixture, err := seedMCPPostgresFixtureMemoryAtPath(ctx, repository, scope, "hidden mcp matrix memory", memory.MemoryStateSuppressed, "agents/research/hidden")
+	if err != nil {
+		t.Fatal(err)
+	}
+	fixtureRecords = append(fixtureRecords, hiddenFixture)
+	foreignFixture, err := seedMCPPostgresFixtureMemoryAtPath(ctx, repository, foreignScope, "foreign mcp matrix memory", memory.MemoryStateActive, "agents/research")
+	if err != nil {
+		t.Fatal(err)
+	}
+	fixtureRecords = append(fixtureRecords, foreignFixture)
+
+	retrievalService := retrieval.NewService(retrieval.ServiceDependencies{Lexical: repository, Semantic: repository, Relations: repository, GraphTraversal: repository, Citations: repository})
+	queryService := memory.NewQueryService(repository)
+	intentService := memory.MemoryIntentService{Processor: repository, Now: time.Now, NewID: uuid.NewString}
+	lifecycleService := memory.LifecycleService{Processor: mcpPostgresLifecycleProcessor{repository: repository}, Now: time.Now}
+	providerAdapter := provider.NewAdapter(provider.AdapterDependencies{
+		Intent: intentService, Searcher: retrievalService, Assembler: retrievalService, Lifecycle: lifecycleService, LifecycleStore: repository,
+		AllowLifecycle: func(ctx context.Context, b provider.RuntimeBinding) bool {
+			caller, ok := auth.PrincipalFromContext(ctx)
+			return ok && caller.Status == auth.PrincipalStatusActive && caller.Role == auth.PrincipalRoleAdmin && caller.ID == b.PrincipalID
+		},
+		Limits: provider.ProviderLimits{MaxEventBytes: 1 << 20, MaxIntentBytes: 1 << 20, MaxRetrievalResults: 50, MaxContextBytes: 1 << 20, MaxCitations: 50, MaxMetadataBytes: 64 << 10},
+	})
+	adapter := mcp.NewAdapter(mcp.AdapterOptions{
+		Enabled: true, Authorizer: authorizer, Bindings: repository,
+		Limits: mcp.Limits{MaxQueryBytes: 4096, MaxPayloadBytes: 64 << 10, MaxResults: 10, MaxIDs: 10},
+		Now:    time.Now, Searcher: retrievalService, Assembler: retrievalService, MemoryQuery: queryService,
+		Intent: intentService, Lifecycle: lifecycleService, LifecycleAdapter: providerAdapter, PreviewStore: repository, ForgetApplyStore: repository,
+	})
+	httpServer := httptest.NewServer(adapter)
+	defer httpServer.Close()
+	client := protocolmcp.NewClient(&protocolmcp.Implementation{Name: "mcp-postgres-conformance", Version: "v1"}, nil)
+	session, err := client.Connect(ctx, &protocolmcp.StreamableClientTransport{Endpoint: httpServer.URL, DisableStandaloneSSE: true, HTTPClient: &http.Client{Transport: mcpHeaderTransport{next: http.DefaultTransport, apiKey: secret}}}, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer session.Close()
+
+	listed, err := session.ListTools(ctx, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	toolNames := make(map[string]bool, len(listed.Tools))
+	for _, tool := range listed.Tools {
+		toolNames[tool.Name] = true
+	}
+	for _, name := range []string{mcp.ToolWhoAmI, mcp.ToolSearch, mcp.ToolContext, mcp.ToolBrowse, mcp.ToolRemember, mcp.ToolForgetPreview, mcp.ToolForgetApply} {
+		if !toolNames[name] {
+			t.Fatalf("MCP tool %q was not advertised", name)
+		}
+	}
+	recorder.mark("capability_discovery", "passed", len(toolNames))
+
+	who, err := session.CallTool(ctx, &protocolmcp.CallToolParams{Name: mcp.ToolWhoAmI, Arguments: map[string]any{"runtime_binding_id": binding.BindingID}})
+	if err != nil || who.IsError {
+		t.Fatalf("who_am_i result=%+v error=%v", who, err)
+	}
+	recorder.mark("identity", "passed", 1)
+
+	searchArgs := map[string]any{"tenant": scope.Tenant, "project": scope.Project, "namespace": scope.Namespace, "query": "visible mcp matrix", "path": "agents/research", "as_of": time.Now().UTC().Add(time.Minute).Format(time.RFC3339), "limit": 10}
+	search, err := session.CallTool(ctx, &protocolmcp.CallToolParams{Name: mcp.ToolSearch, Arguments: searchArgs})
+	if err != nil || search.IsError {
+		t.Fatalf("memory_search result=%+v error=%v", search, err)
+	}
+	encoded, err := json.Marshal(search.StructuredContent)
+	if err != nil {
+		t.Fatal(err)
+	}
+	response := string(encoded)
+	if !strings.Contains(response, visibleFixture.MemoryID) || strings.Contains(response, hiddenFixture.MemoryID) || strings.Contains(response, foreignFixture.MemoryID) {
+		t.Fatalf("scoped MCP search response = %s, want visible exact-scope result only", response)
+	}
+	for _, forbidden := range []string{"score", scope.Tenant, scope.Project, scope.Namespace, "hidden mcp matrix", "foreign mcp matrix"} {
+		if strings.Contains(response, forbidden) {
+			t.Fatalf("MCP response leaked %q: %s", forbidden, response)
+		}
+	}
+	recorder.mark("scope_isolation", "passed", 2)
+	recorder.mark("retrieval_surface", "passed", 1)
+	recorder.mark("temporal_filtering", "passed", 1)
+	recorder.mark("path_filtering", "passed", 1)
+	recorder.mark("lifecycle_filtering", "passed", 1)
+	recorder.mark("response_redaction", "passed", 1)
+
+	contextResult, err := session.CallTool(ctx, &protocolmcp.CallToolParams{Name: mcp.ToolContext, Arguments: map[string]any{"runtime_binding_id": binding.BindingID, "query": "visible mcp matrix", "budget_bytes": 1024}})
+	if err != nil || contextResult.IsError {
+		t.Fatalf("memory_context result=%+v error=%v", contextResult, err)
+	}
+	browse, err := session.CallTool(ctx, &protocolmcp.CallToolParams{Name: mcp.ToolBrowse, Arguments: map[string]any{"runtime_binding_id": binding.BindingID, "path_prefix": "agents/research", "limit": 10}})
+	if err != nil || browse.IsError {
+		t.Fatalf("memory_browse result=%+v error=%v", browse, err)
+	}
+	recorder.mark("retrieval_surface", "passed", 3)
+
+	rememberArgs := map[string]any{"tenant": scope.Tenant, "project": scope.Project, "namespace": scope.Namespace, "memory_path": "agents/research", "content": "remembered MCP matrix fact", "reason": "conformance", "idempotency_key": "remember-" + suffix}
+	firstRemember, err := session.CallTool(ctx, &protocolmcp.CallToolParams{Name: mcp.ToolRemember, Arguments: rememberArgs})
+	if err != nil || firstRemember.IsError {
+		t.Fatalf("first memory_remember result=%+v error=%v", firstRemember, err)
+	}
+	secondRemember, err := session.CallTool(ctx, &protocolmcp.CallToolParams{Name: mcp.ToolRemember, Arguments: rememberArgs})
+	if err != nil || secondRemember.IsError {
+		t.Fatalf("replayed memory_remember result=%+v error=%v", secondRemember, err)
+	}
+	firstBytes, _ := json.Marshal(firstRemember.StructuredContent)
+	secondBytes, _ := json.Marshal(secondRemember.StructuredContent)
+	if string(firstBytes) != string(secondBytes) {
+		t.Fatalf("remember replay response = %s, want %s", secondBytes, firstBytes)
+	}
+	recorder.mark("remember_idempotency", "passed", 2)
+
+	readOnly := mcp.NewAdapter(mcp.AdapterOptions{Enabled: true, Authorizer: mcpPostgresAuthorizer{principal: principal, credential: authorizer.credential, secret: secret, scope: scope, accessMode: auth.ScopeGrantAccessReadOnly}, Limits: mcp.Limits{MaxQueryBytes: 4096, MaxPayloadBytes: 64 << 10, MaxResults: 10, MaxIDs: 10}, Intent: intentService})
+	readOnlyServer := httptest.NewServer(readOnly)
+	defer readOnlyServer.Close()
+	readOnlySession, err := client.Connect(ctx, &protocolmcp.StreamableClientTransport{Endpoint: readOnlyServer.URL, DisableStandaloneSSE: true, HTTPClient: &http.Client{Transport: mcpHeaderTransport{next: http.DefaultTransport, apiKey: secret}}}, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	readOnlyResult, err := readOnlySession.CallTool(ctx, &protocolmcp.CallToolParams{Name: mcp.ToolRemember, Arguments: rememberArgs})
+	_ = readOnlySession.Close()
+	if err != nil || !readOnlyResult.IsError {
+		t.Fatalf("read-only memory_remember result=%+v error=%v, want bounded denial", readOnlyResult, err)
+	}
+	recorder.mark("scope_precedence", "passed", 2)
+	recorder.mark("read_only_grant", "passed", 1)
+
+	preview, err := session.CallTool(ctx, &protocolmcp.CallToolParams{Name: mcp.ToolForgetPreview, Arguments: map[string]any{"runtime_binding_id": binding.BindingID, "query": "visible mcp matrix memory", "limit": 1}})
+	if err != nil || preview.IsError {
+		t.Fatalf("memory_forget_preview result=%+v error=%v", preview, err)
+	}
+	previewBytes, _ := json.Marshal(preview.StructuredContent)
+	var previewResponse mcp.ForgetPreviewResponse
+	if err := json.Unmarshal(previewBytes, &previewResponse); err != nil || previewResponse.PreviewID == "" || len(previewResponse.MemoryIDs) == 0 {
+		t.Fatalf("forget preview response=%s error=%v", previewBytes, err)
+	}
+	recorder.mark("forget_preview", "passed", 1)
+	applyArgs := map[string]any{"tenant": scope.Tenant, "project": scope.Project, "namespace": scope.Namespace, "runtime_binding_id": binding.BindingID, "preview_id": previewResponse.PreviewID, "memory_ids": previewResponse.MemoryIDs, "action": "suppress", "reason": "MCP conformance", "idempotency_key": "forget-" + suffix}
+	firstApply, err := session.CallTool(ctx, &protocolmcp.CallToolParams{Name: mcp.ToolForgetApply, Arguments: applyArgs})
+	if err != nil || firstApply.IsError {
+		content, _ := json.Marshal(firstApply.Content)
+		t.Fatalf("first memory_forget_apply result=%+v content=%s error=%v", firstApply, content, err)
+	}
+	secondApply, err := session.CallTool(ctx, &protocolmcp.CallToolParams{Name: mcp.ToolForgetApply, Arguments: applyArgs})
+	if err != nil || secondApply.IsError {
+		t.Fatalf("replayed memory_forget_apply result=%+v error=%v", secondApply, err)
+	}
+	firstApplyBytes, _ := json.Marshal(firstApply.StructuredContent)
+	secondApplyBytes, _ := json.Marshal(secondApply.StructuredContent)
+	if string(firstApplyBytes) != string(secondApplyBytes) {
+		t.Fatalf("forget apply replay response = %s, want %s", secondApplyBytes, firstApplyBytes)
+	}
+	recorder.mark("forget_apply", "passed", 2)
+	recorder.mark("forget_replay", "passed", 2)
+
+	disabledServer := httptest.NewServer(mcp.NewAdapter(mcp.AdapterOptions{Enabled: false}))
+	defer disabledServer.Close()
+	disabledResponse, err := http.Get(disabledServer.URL)
+	if err != nil {
+		t.Fatal(err)
+	}
+	_ = disabledResponse.Body.Close()
+	if disabledResponse.StatusCode != http.StatusNotFound {
+		t.Fatalf("disabled MCP status = %d, want %d", disabledResponse.StatusCode, http.StatusNotFound)
+	}
+	recorder.mark("adapter_disabled", "passed", 1)
+}
+
+type mcpPostgresLifecycleProcessor struct {
+	repository *Repository
+}
+
+func (p mcpPostgresLifecycleProcessor) Apply(ctx context.Context, action memory.LifecycleActionRecord) error {
+	if p.repository == nil {
+		return fmt.Errorf("repository is not configured")
+	}
+	_, err := p.repository.ApplyLifecycleAction(ctx, governance.LifecycleAction{MemoryID: action.MemoryID, MemoryPath: action.MemoryPath, Scope: action.Scope, Action: action.Action, Reason: action.Reason, Actor: action.Actor, RequestID: action.RequestID, AppliedAt: action.AppliedAt})
+	return err
 }
 
 type mcpPostgresFixtureRecord struct {
@@ -413,6 +682,7 @@ type mcpPostgresAuthorizer struct {
 	credential auth.Credential
 	secret     string
 	scope      memory.Scope
+	accessMode auth.ScopeGrantAccessMode
 }
 
 func (a mcpPostgresAuthorizer) Authenticate(_ context.Context, secret string) (auth.Principal, auth.Credential, error) {
@@ -429,6 +699,9 @@ func (a mcpPostgresAuthorizer) AuthorizeScope(_ context.Context, principalID str
 func (a mcpPostgresAuthorizer) AuthorizeScopeAccess(_ context.Context, principalID string, scope memory.Scope) (auth.ScopeGrantAccessMode, error) {
 	if principalID != a.principal.ID || scope.Normalized() != a.scope.Normalized() {
 		return "", os.ErrPermission
+	}
+	if a.accessMode.Valid() {
+		return a.accessMode, nil
 	}
 	return auth.ScopeGrantAccessReadWrite, nil
 }

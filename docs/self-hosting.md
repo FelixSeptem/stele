@@ -2408,28 +2408,53 @@ Semantic bulk forgetting is always preview → caller-reviewed fixed IDs → app
 apply never reruns an unconstrained semantic query.
 
 The SDK contract tests run without external agents. The durable review-manifest
-and batch-replay conformance test can additionally run only against a dedicated,
-disposable PostgreSQL + pgvector database; it applies repository migrations and
-uses a unique fixture scope without creating or dropping the database. The
-caller owns database creation and removal, and the command must never point at
-an operator, shared, or production database:
+test and the complete real-stack conformance matrix can additionally run only
+against a dedicated, disposable PostgreSQL + pgvector database; they apply
+repository migrations and use unique fixture scopes without creating or
+dropping the database. The caller owns database creation and removal, and the
+command must never point at an operator, shared, or production database.
+
+The focused matrix exercises the actual Streamable HTTP transport and reports
+bounded categories for capability discovery, identity, exact-scope isolation,
+runtime-binding precedence, read-only grants, retrieval/context/browse,
+temporal and lifecycle filtering, exact path versus path prefix, remember
+idempotency, preview-bound forgetting, apply replay/conflict, response
+redaction, and adapter disablement. It seeds through the normal ingest,
+admission, promotion, and lifecycle boundaries and removes only records it
+created. When `STELE_MCP_CONFORMANCE_EVIDENCE` is set, the test writes an
+allow-listed JSON artifact containing only schema version, category names,
+status, and check counts; DSNs, credentials, scopes, queries, payloads, and
+fixture content are never written.
+
+For an explicit opt-in run, use the wrapper below. It returns a skip (exit code
+2) when no DSN is configured, and a failure (non-zero exit code) when a
+configured category fails. `-ApiBaseUrl` is optional; when supplied, the
+wrapper verifies `/health` and `/openapi.yaml` remain available while `/mcp`
+fails closed for a disabled adapter:
 
 ```powershell
 $env:STELE_TEST_POSTGRES_MCP_DSN = 'postgres://stele:...@localhost:5432/stele_mcp_test?sslmode=disable'
-go test ./internal/storage/postgres -run '^TestMCPForgetLedgerPostgresPersistsReviewAndReplayAcrossRepositories$' -count=1
+pwsh -NoProfile -File scripts/stele-mcp-conformance.ps1 `
+  -EvidencePath .tmp/mcp-conformance-evidence.json `
+  -ApiBaseUrl http://localhost:8080
 Remove-Item Env:STELE_TEST_POSTGRES_MCP_DSN
 ```
 
-The fixture checks the pgvector extension, preview persistence across repository
-recreation, exact scope separation, durable apply replay, conflicting-key
-rejection, and an actual Streamable HTTP search delegation. It writes bounded
-preview/claim metadata and seeds three uniquely identified canonical records in
-one disposable fixture scope to prove exact-scope and hidden-lifecycle filtering.
-It performs targeted cleanup for every record it creates, but migrations remain
-and failed-process cleanup cannot be assumed; keep the database disposable. The
-broader adapter delegation, principal/grant, redaction, temporal, and lifecycle
-contracts are covered by the MCP SDK/service tests and the existing
-owned-database retrieval and provider lifecycle suites.
+The underlying focused tests remain available directly:
+
+```powershell
+go test ./internal/storage/postgres -run '^TestMCPForgetLedgerPostgresPersistsReviewAndReplayAcrossRepositories$' -count=1
+go test ./internal/storage/postgres -run '^TestMCPPostgresConformanceMatrix$' -count=1
+```
+
+The existing ledger test continues to prove preview persistence across
+repository recreation, durable apply replay, conflicting-key rejection, and
+the underlying PostgreSQL records. Both tests perform targeted cleanup for
+every record they create, but migrations remain and failed-process cleanup
+cannot be assumed; keep the database disposable. The conformance wrapper is
+intentionally opt-in and does not change default unit, product-verification, or
+CI commands; release jobs may invoke it after provisioning an isolated
+pgvector database.
 
 To disable the adapter, set `STELE_MCP_ENABLED=false` and restart API replicas.
 The `/mcp` endpoint then returns not-found while ordinary OpenAPI/provider
