@@ -2467,6 +2467,38 @@ paths:
           description: Invalid request
         '401':
           description: Missing or invalid admin API key
+  /v1/admin/retrieval/integrity-reports:
+    get:
+      operationId: listAdminRetrievalIntegrityReports
+      parameters:
+        - $ref: '#/components/parameters/AdminAPIKey'
+        - $ref: '#/components/parameters/TenantHeader'
+        - $ref: '#/components/parameters/ProjectHeader'
+        - $ref: '#/components/parameters/NamespaceHeader'
+        - in: query
+          name: limit
+          required: false
+          schema:
+            type: integer
+            minimum: 1
+            maximum: 100
+      responses:
+        '200':
+          description: Scoped redacted retrieval trajectory and information-integrity reports
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/RetrievalIntegrityReportListResponse'
+        '400':
+          description: Invalid request
+        '401':
+          description: Missing or invalid admin API key
+        '403':
+          description: Authenticated principal lacks the required admin role or exact scope grant
+        '500':
+          description: Retrieval integrity evidence could not be listed
+        '503':
+          description: Retrieval integrity inspection is not configured
   /v1/admin/derived-insights:
     get:
       operationId: listAdminDerivedInsights
@@ -6374,6 +6406,95 @@ components:
             $ref: '#/components/schemas/ActivationDecision'
         scope:
           $ref: '#/components/schemas/Scope'
+        limit:
+          type: integer
+    RetrievalIntegrityReport:
+      type: object
+      required:
+        - scope_hash
+        - identity
+        - action
+        - action_success
+        - integrity_success
+        - verdict
+        - findings
+        - created_at
+      properties:
+        scope_hash:
+          type: string
+        identity:
+          $ref: '#/components/schemas/RetrievalIntegrityIdentity'
+        action:
+          type: string
+        action_success:
+          type: boolean
+        integrity_success:
+          type: boolean
+        verdict:
+          type: string
+          enum: [passed, degraded, skipped, rejected]
+        findings:
+          type: object
+          additionalProperties: false
+          properties:
+            expected-recall:
+              type: integer
+            missing:
+              type: integer
+            altered:
+              type: integer
+            unexpected-duplicate:
+              type: integer
+            misplaced:
+              type: integer
+            foreign-scope:
+              type: integer
+            hidden-lifecycle:
+              type: integer
+            stale-watermark:
+              type: integer
+            nondeterministic:
+              type: integer
+            rollback-incomplete:
+              type: integer
+            unknown:
+              type: integer
+        created_at:
+          type: string
+          format: date-time
+    RetrievalIntegrityIdentity:
+      type: object
+      additionalProperties: false
+      required:
+        - fixture_version
+        - policy_version
+        - strategy
+        - renderer
+        - provider
+        - source_watermark
+      properties:
+        fixture_version:
+          type: string
+        policy_version:
+          type: string
+        strategy:
+          type: string
+        renderer:
+          type: string
+        provider:
+          type: string
+        source_watermark:
+          type: string
+    RetrievalIntegrityReportListResponse:
+      type: object
+      required:
+        - items
+        - limit
+      properties:
+        items:
+          type: array
+          items:
+            $ref: '#/components/schemas/RetrievalIntegrityReport'
         limit:
           type: integer
     DerivedInsightLifecycleRecord:

@@ -16,6 +16,7 @@ import (
 	"github.com/FelixSeptem/stele/internal/assurance"
 	"github.com/FelixSeptem/stele/internal/auth"
 	"github.com/FelixSeptem/stele/internal/config"
+	"github.com/FelixSeptem/stele/internal/evaluation"
 	"github.com/FelixSeptem/stele/internal/governance"
 	"github.com/FelixSeptem/stele/internal/insights"
 	"github.com/FelixSeptem/stele/internal/jobs"
@@ -61,6 +62,7 @@ type HTTPDependencies struct {
 	DerivedInsightAdmin       DerivedInsightAdminService
 	DerivedInsightReplayAdmin DerivedInsightReplayAdminService
 	ActivationDecisionAdmin   ActivationDecisionAdminService
+	RetrievalIntegrityAdmin   RetrievalIntegrityAdminService
 	QualityAdmin              QualityAdminService
 	ScopeProofAdmin           ScopeProofAdminService
 	MemorySession             MemorySessionService
@@ -209,6 +211,10 @@ type DerivedInsightReplayAdminService interface {
 
 type ActivationDecisionAdminService interface {
 	ListActivationDecisions(ctx context.Context, scope memory.Scope, limit int) ([]insights.ActivationDecisionRecord, error)
+}
+
+type RetrievalIntegrityAdminService interface {
+	ListRetrievalIntegrityReports(ctx context.Context, scope memory.Scope, limit int) ([]evaluation.RedactedIntegrityReport, error)
 }
 
 type QualityAdminService interface {
@@ -1192,6 +1198,15 @@ func NewHTTPHandler(deps HTTPDependencies) http.Handler {
 		),
 	)
 	mux.Handle("GET /v1/admin/reasoning/activation-decisions", adminActivationDecisions)
+
+	adminRetrievalIntegrity := auth.APIKeyMiddleware(deps.AdminAPIKeys)(
+		auth.ScopeMiddleware()(
+			http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				handleAdminRetrievalIntegrity(w, r, deps.RetrievalIntegrityAdmin)
+			}),
+		),
+	)
+	mux.Handle("GET /v1/admin/retrieval/integrity-reports", adminRetrievalIntegrity)
 
 	adminDerivedInsightDetail := auth.APIKeyMiddleware(deps.AdminAPIKeys)(
 		auth.ScopeMiddleware()(
@@ -4039,6 +4054,37 @@ func handleAdminActivationDecisions(w http.ResponseWriter, r *http.Request, serv
 		return
 	}
 	writeJSON(w, http.StatusOK, map[string]any{"items": items, "scope": scope, "limit": limit})
+}
+
+func handleAdminRetrievalIntegrity(w http.ResponseWriter, r *http.Request, service RetrievalIntegrityAdminService) {
+	if service == nil {
+		http.Error(w, "retrieval integrity admin service is not configured", http.StatusServiceUnavailable)
+		return
+	}
+	scope, ok := auth.ScopeFromContext(r.Context())
+	if !ok {
+		http.Error(w, "scope context is missing", http.StatusInternalServerError)
+		return
+	}
+	limit := 50
+	if raw := strings.TrimSpace(r.URL.Query().Get("limit")); raw != "" {
+		parsed, err := strconv.Atoi(raw)
+		if err != nil || parsed <= 0 {
+			http.Error(w, "invalid limit", http.StatusBadRequest)
+			return
+		}
+		if parsed > 100 {
+			parsed = 100
+		}
+		limit = parsed
+	}
+	items, err := service.ListRetrievalIntegrityReports(r.Context(), scope, limit)
+	if err != nil {
+		http.Error(w, "failed to list retrieval integrity reports", http.StatusInternalServerError)
+		return
+	}
+	// Do not echo the resolved scope: the report items carry only scope hashes.
+	writeJSON(w, http.StatusOK, map[string]any{"items": items, "limit": limit})
 }
 
 func handleAdminDerivedInsightDetail(w http.ResponseWriter, r *http.Request, service DerivedInsightAdminService) {

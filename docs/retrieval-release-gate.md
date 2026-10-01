@@ -65,6 +65,26 @@ categories, safety outcomes, and bounded latency. It never records DSNs,
 endpoints, keys, prompts, source text, raw provider payloads, hidden IDs, or raw
 scores.
 
+## Redacted trajectory and information integrity
+
+Evaluation and shadow runs may attach bounded retrieval trajectory aggregates
+and memory-organization integrity reports. These artifacts contain only
+low-cardinality channel, candidate/expansion, fallback, freshness, budget,
+latency, disposition, and integrity-finding categories. They never contain raw
+queries, tenant/project/namespace values, memory or event identifiers, hidden
+candidates, raw scores, prompts, provider payloads, credentials, or unbounded
+plans.
+
+Action success is evaluated separately from information integrity for
+consolidation, merge, reclassification, reflection, and context projection.
+Missing, altered, unexpectedly duplicated, misplaced, foreign-scope,
+hidden-lifecycle, stale-watermark, nondeterministic, or rollback-incomplete
+evidence is a hard non-pass result; quality gains cannot offset it. Reports
+are append-only PostgreSQL-derived artifacts and may be inspected only through
+the authorized exact-scope `GET /v1/admin/retrieval/integrity-reports` route.
+Retention removes only expired derived artifacts and never rewrites canonical
+memory or changes ordinary retrieval/context behavior.
+
 For query-adaptive planning, the same report must additionally record the
 planner schema/planner/policy identities and compatible analysis, fusion,
 ranking, and renderer identities. Family-level results must cover all seven

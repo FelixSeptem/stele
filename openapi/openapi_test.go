@@ -10,7 +10,7 @@ import (
 func TestSpecYAMLContainsBaselineEndpoints(t *testing.T) {
 	spec := SpecYAML()
 
-	for _, want := range []string{"/health", "/ready", "/livez", "/readyz", "/metrics", "/v1/events", "/v1/memories/search", "/v1/context/assemble", "/v1/admin/jobs/governance/status", "/v1/admin/jobs/status", "/v1/admin/memories/{memory_id}/history", "/v1/admin/embedding/rebuilds", "/v1/admin/memories/{memory_id}/embedding"} {
+	for _, want := range []string{"/health", "/ready", "/livez", "/readyz", "/metrics", "/v1/events", "/v1/memories/search", "/v1/context/assemble", "/v1/admin/jobs/governance/status", "/v1/admin/jobs/status", "/v1/admin/memories/{memory_id}/history", "/v1/admin/embedding/rebuilds", "/v1/admin/memories/{memory_id}/embedding", "/v1/admin/retrieval/integrity-reports"} {
 		if !strings.Contains(spec, want) {
 			t.Fatalf("SpecYAML() missing path %q", want)
 		}

@@ -9,6 +9,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/FelixSeptem/stele/internal/evaluation"
 	"github.com/FelixSeptem/stele/internal/memory"
 )
 
@@ -70,6 +71,7 @@ type ReleaseEvidenceInput struct {
 	Progressive     ProgressiveContextEvaluationReport
 	ParentFirst     ParentFirstEvaluationReport
 	Prerequisites   ReleaseEvidencePrerequisites
+	Integrity       *evaluation.IntegrityReport
 	EvaluatedAt     time.Time
 }
 
@@ -91,6 +93,7 @@ type ReleaseEvidenceRunRequest struct {
 	FixtureCompatible bool
 	ProjectionFresh   bool
 	RollbackTested    bool
+	Integrity         *evaluation.IntegrityReport
 	EvaluatedAt       time.Time
 }
 
@@ -102,6 +105,7 @@ func RunOwnedReleaseEvidence(_ context.Context, req ReleaseEvidenceRunRequest) (
 		Scope: req.Scope, ProviderProfile: req.ProviderProfile, Policy: req.Policy,
 		Baseline: req.Baseline, Candidate: req.Candidate, Progressive: req.Progressive,
 		ParentFirst: req.ParentFirst, EvaluatedAt: req.EvaluatedAt,
+		Integrity: req.Integrity,
 		Prerequisites: ReleaseEvidencePrerequisites{EvaluationDSN: req.EvaluationDSN, RuntimeDSN: req.RuntimeDSN,
 			PostgreSQLReady: req.PostgreSQLReady, PGVectorReady: req.PGVectorReady,
 			FixtureCompatible: req.FixtureCompatible, ProjectionFresh: req.ProjectionFresh,
@@ -123,6 +127,8 @@ type ReleaseEvidenceReport struct {
 	QualityEligible     bool                   `json:"quality_eligible"`
 	ProgressiveFailures []string               `json:"progressive_failures,omitempty"`
 	ParentFirstFailures []string               `json:"parent_first_failures,omitempty"`
+	IntegrityEligible   bool                   `json:"integrity_eligible"`
+	IntegrityFailures   []string               `json:"integrity_failures,omitempty"`
 	GeneratedAt         time.Time              `json:"generated_at"`
 }
 
@@ -230,7 +236,28 @@ func EvaluateReleaseEvidence(in ReleaseEvidenceInput) (ReleaseEvidenceReport, er
 	if r.Verdict == ReleaseEvidencePassed {
 		r.ReleaseEligible = true
 	}
+	r = ApplyIntegrityEvidence(r, in.Integrity)
 	return r, nil
+}
+
+// ApplyIntegrityEvidence overlays the independent information-integrity gate
+// onto a release report. Integrity can only block eligibility; it can never
+// turn a skipped or rejected report into a pass.
+func ApplyIntegrityEvidence(report ReleaseEvidenceReport, integrity *evaluation.IntegrityReport) ReleaseEvidenceReport {
+	if integrity == nil {
+		report.IntegrityEligible = true
+		return report
+	}
+	report.IntegrityEligible = integrity.IntegritySuccess && integrity.Verdict == evaluation.VerdictPassed
+	if !report.IntegrityEligible {
+		report.ReleaseEligible = false
+		if report.Verdict == ReleaseEvidencePassed {
+			report.Verdict = ReleaseEvidenceRejected
+		}
+		report.IntegrityFailures = append(report.IntegrityFailures, "information_integrity_failure")
+		report.FailureCategories = appendUniqueCategory(report.FailureCategories, "RETRIEVAL_RELEASE_EVIDENCE_INTEGRITY_FAILURE")
+	}
+	return report
 }
 
 func temporalReleaseEvidenceRequired(report EvaluationReport) bool {

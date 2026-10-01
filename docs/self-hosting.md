@@ -278,6 +278,41 @@ preserving prior insight versions, evidence, and audit history. Existing
 insights must use normal governed suppression/expiry transitions rather than a
 destructive delete or canonical-memory rewrite.
 
+### Redacted retrieval trajectory and memory-integrity evaluation
+
+Retrieval trajectory and memory-integrity evidence is an evaluation-only,
+disabled-by-default diagnostic layer. It records bounded channel availability,
+candidate/expansion/budget/latency buckets, freshness, fallback and disposition
+categories. It also records action success separately from information
+integrity for consolidation, merge, reclassification, reflection, and context
+projection work.
+
+Release and evaluation reports represent this second gate as an
+`information-integrity` outcome, independent from whether the requested
+organization action completed.
+
+The service never stores raw query text, tenant/project/namespace values,
+memory or event identifiers, hidden candidates, raw scores, prompt text,
+provider payloads, credentials, or unbounded execution plans in this evidence.
+Scope is represented by a hash in admin output; authorization still resolves
+the exact caller scope before a report is read. Authorized operators can list
+bounded reports at `GET /v1/admin/retrieval/integrity-reports` with the normal
+admin API key and exact scope headers.
+
+Missing, altered, unexpectedly duplicated, misplaced, foreign-scope,
+hidden-lifecycle, stale-watermark, nondeterministic, or rollback-incomplete
+evidence is a hard non-pass result. A quality gain or a successful organization
+action cannot override it. The layer does not activate progressive context,
+parent-first retrieval, reranking, reserved insights, default retrieval, or
+context assembly.
+
+Reports are append-only derived PostgreSQL records. Collection runs only for
+explicit evaluation or shadow work; a collection failure is degraded evidence
+and does not fail an ordinary search/context request. Retention cleanup deletes
+only expired derived report artifacts and emits bounded cleanup telemetry; it
+never deletes or rewrites canonical source memory. Disable collection or report
+comparison to roll back. Existing reports remain inspectable until expiry.
+
 ## Principal Bootstrap And Scoped Access
 
 Protected requests are authenticated against PostgreSQL-backed principals. Every

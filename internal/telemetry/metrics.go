@@ -85,6 +85,20 @@ type ContextCalibrationEvent struct {
 	AggregateCount   int
 }
 
+func (o *MetricsObserver) RecordRetrievalIntegrity(ctx context.Context, event RetrievalIntegrityEvent) {
+	if o == nil {
+		return
+	}
+	o.addCounter("stele_retrieval_integrity_total", map[string]string{
+		"operation":         retrievalIntegrityOperation(event.Operation),
+		"result":            retrievalIntegrityResult(event.Result),
+		"component":         retrievalIntegrityComponent(event.Component),
+		"verdict":           retrievalIntegrityVerdict(event.Verdict),
+		"finding_category":  retrievalIntegrityFinding(event.FindingCategory),
+		"artifact_category": retrievalIntegrityArtifact(event.ArtifactCategory),
+	}, 1)
+}
+
 // RetrievalFusionEvent carries bounded retrieval-fusion health telemetry only.
 // It intentionally excludes scope, query, candidate identity, and raw scores.
 type RetrievalFusionEvent struct {
@@ -890,6 +904,7 @@ func (o *MetricsObserver) RenderPrometheus() string {
 	writeMetricFamilyHeader(&builder, "stele_retrieval_planner_changed_ranks", "gauge", "Bounded count of rank positions changed by shadow retrieval planning.")
 	writeMetricFamilyHeader(&builder, "stele_retrieval_planner_diagnostic_failure_total", "counter", "Private retrieval planner diagnostic construction failures by bounded category.")
 	writeMetricFamilyHeader(&builder, "stele_retrieval_evaluation_total", "counter", "Retrieval release-gate outcomes by bounded categories.")
+	writeMetricFamilyHeader(&builder, "stele_retrieval_integrity_total", "counter", "Redacted retrieval trajectory and information-integrity outcomes by bounded categories.")
 	writeMetricFamilyHeader(&builder, "stele_derived_insight_replay_total", "counter", "Derived insight replay outcomes by low-cardinality categories.")
 	writeMetricFamilyHeader(&builder, "stele_quality_evaluation_total", "counter", "Memory quality evaluation outcomes.")
 	writeMetricFamilyHeader(&builder, "stele_quality_repair_actions_total", "counter", "Memory quality repair action outcomes.")

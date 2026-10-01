@@ -112,7 +112,7 @@ func TestSelfHostingDocsDescribeOpenAICompatibleReasoningAdapter(t *testing.T) {
 	}
 }
 
-func TestRoadmapTracksReasoningProviderAsNextProposal(t *testing.T) {
+func TestRoadmapTracksCurrentP8Proposal(t *testing.T) {
 	roadmapBytes, err := os.ReadFile("roadmaps/2026-05-28-stele-v1-roadmap.md")
 	if err != nil {
 		t.Fatalf("read v1 roadmap: %v", err)
@@ -121,13 +121,34 @@ func TestRoadmapTracksReasoningProviderAsNextProposal(t *testing.T) {
 	for _, want := range []string{
 		"P8.2b: agent self-model conventions (archived change 047)",
 		"P8.3: reasoning-provider boundary (archived change 048)",
-		"The immediate next proposal is P8.5",
+		"P8.5: governed reserved-insight activation (archived change 050)",
+		"The immediate next proposal is P8.6",
+		"`redacted-retrieval-trajectory-and-memory-integrity-evaluation`",
 		"`governed-reserved-insight-activation`",
-		"reserved-insight activation",
-		"separately disabled.",
+		"information-integrity evidence",
 	} {
 		if !strings.Contains(roadmap, want) {
 			t.Fatalf("roadmap missing reasoning proposal status %q", want)
+		}
+	}
+}
+
+func TestSelfHostingDocsDescribeRedactedRetrievalIntegrityEvaluation(t *testing.T) {
+	contentBytes, err := os.ReadFile("self-hosting.md")
+	if err != nil {
+		t.Fatalf("read self-hosting.md: %v", err)
+	}
+	content := string(contentBytes)
+	for _, want := range []string{
+		"Redacted retrieval trajectory and memory-integrity evaluation",
+		"GET /v1/admin/retrieval/integrity-reports",
+		"raw query text",
+		"information-integrity",
+		"hard non-pass result",
+		"append-only derived PostgreSQL records",
+	} {
+		if !strings.Contains(content, want) {
+			t.Fatalf("self-hosting docs missing retrieval integrity guidance %q", want)
 		}
 	}
 }

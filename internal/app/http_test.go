@@ -17,6 +17,7 @@ import (
 	"github.com/FelixSeptem/stele/internal/auth"
 	"github.com/FelixSeptem/stele/internal/config"
 	"github.com/FelixSeptem/stele/internal/diagnostics"
+	"github.com/FelixSeptem/stele/internal/evaluation"
 	"github.com/FelixSeptem/stele/internal/governance"
 	"github.com/FelixSeptem/stele/internal/jobs"
 	"github.com/FelixSeptem/stele/internal/memory"
@@ -29,6 +30,19 @@ import (
 
 type stubReadinessChecker struct {
 	err error
+}
+
+type stubRetrievalIntegrityAdminService struct {
+	gotScope memory.Scope
+	gotLimit int
+	reports  []evaluation.RedactedIntegrityReport
+	err      error
+}
+
+func (s *stubRetrievalIntegrityAdminService) ListRetrievalIntegrityReports(_ context.Context, scope memory.Scope, limit int) ([]evaluation.RedactedIntegrityReport, error) {
+	s.gotScope = scope
+	s.gotLimit = limit
+	return s.reports, s.err
 }
 
 type stubContextProjectionAdminService struct {
@@ -1241,6 +1255,98 @@ func TestNewHTTPHandlerRebuildsContextProjectionOnlyForAdminScope(t *testing.T) 
 	wantScope := memory.Scope{Tenant: "tenant-a", Project: "project-a", Namespace: "namespace-a"}
 	if service.got.Scope != wantScope || service.got.Kind != memory.ContextProjectionKindAlwaysVisible || service.got.Limit != 12 || service.got.Policy.Version != "policy-v1" {
 		t.Fatalf("rebuild request = %+v, want exact scoped operator request", service.got)
+	}
+}
+
+func TestNewHTTPHandlerListsOnlyRedactedRetrievalIntegrityReportsForAdminScope(t *testing.T) {
+	scope := memory.Scope{Tenant: "tenant-a", Project: "project-a", Namespace: "namespace-a"}
+	report, err := evaluation.EvaluateIntegrity(evaluation.IntegrityInput{
+		ID: "internal-report-123", Scope: scope,
+		Identity: evaluation.CompatibilityIdentity{FixtureVersion: "fixture-v1", PolicyVersion: "policy-v1", Strategy: "strategy-v1", Renderer: "renderer-v1", Provider: "provider-v1", SourceWatermark: "watermark-v1"},
+		Action:   "consolidation", ActionSuccess: true,
+		Findings:  map[evaluation.FindingCategory]int{evaluation.FindingExpectedRecall: 1},
+		CreatedAt: time.Date(2026, 10, 1, 14, 0, 0, 0, time.UTC),
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	service := &stubRetrievalIntegrityAdminService{reports: []evaluation.RedactedIntegrityReport{report.Redacted()}}
+	handler := NewHTTPHandler(HTTPDependencies{
+		AdminAPIKeys:            auth.StaticAPIKeys{"admin-key": {}},
+		RetrievalIntegrityAdmin: service,
+	})
+	req := httptest.NewRequest(http.MethodGet, "/v1/admin/retrieval/integrity-reports?limit=999", nil)
+	setAdminScopeHeaders(req)
+	resp := httptest.NewRecorder()
+	handler.ServeHTTP(resp, req)
+	if resp.Code != http.StatusOK {
+		t.Fatalf("status=%d body=%s, want 200", resp.Code, resp.Body.String())
+	}
+	if service.gotScope != scope || service.gotLimit != 100 {
+		t.Fatalf("service scope=%+v limit=%d, want exact scope and cap 100", service.gotScope, service.gotLimit)
+	}
+	for _, forbidden := range []string{scope.Tenant, scope.Project, scope.Namespace, report.ID, report.Fingerprint} {
+		if strings.Contains(resp.Body.String(), forbidden) {
+			t.Fatalf("response leaks %q: %s", forbidden, resp.Body.String())
+		}
+	}
+	for _, required := range []string{"scope_hash", "fixture_version", "expected-recall"} {
+		if !strings.Contains(resp.Body.String(), required) {
+			t.Fatalf("response omits %q: %s", required, resp.Body.String())
+		}
+	}
+}
+
+func TestNewHTTPHandlerProtectsRetrievalIntegrityAdminSurface(t *testing.T) {
+	service := &stubRetrievalIntegrityAdminService{err: errors.New("tenant-a private provider payload")}
+	handler := NewHTTPHandler(HTTPDependencies{
+		AdminAPIKeys:            auth.StaticAPIKeys{"admin-key": {}},
+		RetrievalIntegrityAdmin: service,
+	})
+
+	unauthorized := httptest.NewRequest(http.MethodGet, "/v1/admin/retrieval/integrity-reports", nil)
+	unauthorizedResp := httptest.NewRecorder()
+	handler.ServeHTTP(unauthorizedResp, unauthorized)
+	if unauthorizedResp.Code != http.StatusUnauthorized || service.gotLimit != 0 {
+		t.Fatalf("unauthorized status=%d calls=%d, want 401 and no service call", unauthorizedResp.Code, service.gotLimit)
+	}
+
+	missingScope := httptest.NewRequest(http.MethodGet, "/v1/admin/retrieval/integrity-reports", nil)
+	missingScope.Header.Set("X-API-Key", "admin-key")
+	missingScopeResp := httptest.NewRecorder()
+	handler.ServeHTTP(missingScopeResp, missingScope)
+	if missingScopeResp.Code != http.StatusBadRequest || service.gotLimit != 0 {
+		t.Fatalf("missing scope status=%d calls=%d, want 400 and no service call", missingScopeResp.Code, service.gotLimit)
+	}
+
+	serviceUnavailable := NewHTTPHandler(HTTPDependencies{AdminAPIKeys: auth.StaticAPIKeys{"admin-key": {}}})
+	unavailableReq := httptest.NewRequest(http.MethodGet, "/v1/admin/retrieval/integrity-reports", nil)
+	setAdminScopeHeaders(unavailableReq)
+	unavailableResp := httptest.NewRecorder()
+	serviceUnavailable.ServeHTTP(unavailableResp, unavailableReq)
+	if unavailableResp.Code != http.StatusServiceUnavailable {
+		t.Fatalf("unconfigured status=%d body=%s, want 503", unavailableResp.Code, unavailableResp.Body.String())
+	}
+
+	failingReq := httptest.NewRequest(http.MethodGet, "/v1/admin/retrieval/integrity-reports?limit=bad", nil)
+	setAdminScopeHeaders(failingReq)
+	failingResp := httptest.NewRecorder()
+	handler.ServeHTTP(failingResp, failingReq)
+	if failingResp.Code != http.StatusBadRequest || service.gotLimit != 0 {
+		t.Fatalf("invalid limit status=%d calls=%d, want 400 and no service call", failingResp.Code, service.gotLimit)
+	}
+
+	serviceReq := httptest.NewRequest(http.MethodGet, "/v1/admin/retrieval/integrity-reports", nil)
+	setAdminScopeHeaders(serviceReq)
+	serviceResp := httptest.NewRecorder()
+	handler.ServeHTTP(serviceResp, serviceReq)
+	if serviceResp.Code != http.StatusInternalServerError {
+		t.Fatalf("service error status=%d body=%s, want 500", serviceResp.Code, serviceResp.Body.String())
+	}
+	for _, forbidden := range []string{"tenant-a", "private provider payload"} {
+		if strings.Contains(serviceResp.Body.String(), forbidden) {
+			t.Fatalf("service error leaks %q: %s", forbidden, serviceResp.Body.String())
+		}
 	}
 }
 
