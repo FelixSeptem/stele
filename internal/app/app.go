@@ -680,6 +680,7 @@ func buildAPIRuntime(ctx context.Context, cfg config.Config, deps apiRuntimeDepe
 	httpDeps.GovernanceAdmin = repo
 	httpDeps.ContextProjectionAdmin = memory.NewContextProjectionMaintenanceService(repo)
 	httpDeps.DerivedInsightAdmin = repo
+	httpDeps.ActivationDecisionAdmin = repo
 	httpDeps.UsefulnessFeedback = repo
 	replayService := insights.ReplayService{
 		Store:           repo,

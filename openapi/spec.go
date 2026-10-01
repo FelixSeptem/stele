@@ -2441,6 +2441,32 @@ paths:
                 $ref: '#/components/schemas/MemoryHistory'
         '401':
           description: Missing or invalid admin API key
+  /v1/admin/reasoning/activation-decisions:
+    get:
+      operationId: listAdminReasoningActivationDecisions
+      parameters:
+        - $ref: '#/components/parameters/AdminAPIKey'
+        - $ref: '#/components/parameters/TenantHeader'
+        - $ref: '#/components/parameters/ProjectHeader'
+        - $ref: '#/components/parameters/NamespaceHeader'
+        - in: query
+          name: limit
+          required: false
+          schema:
+            type: integer
+            minimum: 1
+            maximum: 100
+      responses:
+        '200':
+          description: Bounded scoped activation decisions without provider payloads or secrets
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ActivationDecisionListResponse'
+        '400':
+          description: Invalid request
+        '401':
+          description: Missing or invalid admin API key
   /v1/admin/derived-insights:
     get:
       operationId: listAdminDerivedInsights
@@ -6299,6 +6325,57 @@ components:
           type: array
           items:
             $ref: '#/components/schemas/DerivedInsight'
+    ActivationDecision:
+      type: object
+      required:
+        - id
+        - scope
+        - policy_version
+        - candidate_fingerprint
+        - insight_type
+        - disposition
+        - reason
+        - created_at
+      properties:
+        id:
+          type: string
+        scope:
+          $ref: '#/components/schemas/Scope'
+        policy_version:
+          type: string
+        candidate_fingerprint:
+          type: string
+        idempotency_key:
+          type: string
+        insight_type:
+          $ref: '#/components/schemas/DerivedInsightType'
+        disposition:
+          type: string
+          enum: [activated, would_activate, rejected, quarantined, type_disabled, stale, duplicate]
+        insight_id:
+          type: string
+        reason:
+          type: string
+        source_watermark:
+          type: string
+        created_at:
+          type: string
+          format: date-time
+    ActivationDecisionListResponse:
+      type: object
+      required:
+        - items
+        - scope
+        - limit
+      properties:
+        items:
+          type: array
+          items:
+            $ref: '#/components/schemas/ActivationDecision'
+        scope:
+          $ref: '#/components/schemas/Scope'
+        limit:
+          type: integer
     DerivedInsightLifecycleRecord:
       type: object
       required:
@@ -6485,6 +6562,11 @@ components:
         - suppress
         - preserve
         - skip
+        - would_activate
+        - quarantine
+        - reject
+        - stale
+        - incomplete
     DerivedInsightReplayReason:
       type: string
       enum:
@@ -6496,6 +6578,10 @@ components:
         - out_of_scope
         - idempotent_duplicate
         - execution_failed
+        - activation_policy_stale
+        - activation_incompatible
+        - activation_would_apply
+        - activation_quarantined
     DerivedInsightReplayRequest:
       type: object
       required:
@@ -6522,6 +6608,12 @@ components:
           type: string
         reason:
           type: string
+        activation_policy_version:
+          type: string
+        activation_provider_version:
+          type: string
+        activation_source_watermark:
+          type: string
         idempotency_key:
           type: string
         metadata:
@@ -6543,6 +6635,14 @@ components:
         skipped:
           type: integer
         failed:
+          type: integer
+        would_activate:
+          type: integer
+        quarantined:
+          type: integer
+        stale:
+          type: integer
+        incomplete:
           type: integer
     DerivedInsightReplayDecision:
       type: object

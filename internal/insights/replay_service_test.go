@@ -321,13 +321,32 @@ func TestReplayServiceExecuteRecordsFailureReplayMetrics(t *testing.T) {
 	}
 }
 
-func TestReplayServicePlanRejectsUnsupportedReservedType(t *testing.T) {
+func TestReplayServicePlanEvaluatesReservedCandidateAsWouldActivateWithoutMutation(t *testing.T) {
 	request := replayRequest(memory.DerivedInsightReplayModeDryRun)
 	request.InsightTypes = []memory.DerivedInsightType{memory.DerivedInsightTypeHypothesis}
-	service := ReplayService{Store: &stubReplayStore{}}
+	request.ActivationPolicyVersion = ReservedInsightActivationPolicyVersion
+	request.ActivationSourceWatermark = "watermark-1"
+	scope := request.Scope
+	policy := DefaultReservedInsightActivationPolicy(scope)
+	policy.Enabled = true
+	policy.EnabledTypes[memory.DerivedInsightTypeHypothesis] = true
+	policy.ExpiresAt = time.Date(2026, 8, 1, 0, 0, 0, 0, time.UTC)
+	policy.SourceWatermark = "watermark-1"
+	candidate := testHypothesisCandidate(scope)
+	service := ReplayService{Store: &stubReplayStore{}, ActivationPolicy: &policy, ActivationCandidates: []memory.DerivedInsight{candidate}, Now: func() time.Time { return time.Date(2026, 7, 11, 10, 0, 0, 0, time.UTC) }}
 
-	if _, err := service.PlanDerivedInsightReplay(context.Background(), request); err == nil {
-		t.Fatal("PlanDerivedInsightReplay() error = nil, want unsupported type error")
+	report, err := service.PlanDerivedInsightReplay(context.Background(), request)
+	if err != nil {
+		t.Fatalf("PlanDerivedInsightReplay() error = %v", err)
+	}
+	if report.Counters.WouldActivate != 1 {
+		t.Fatalf("counters = %+v, want one would_activate", report.Counters)
+	}
+	if len(report.Decisions) != 1 || report.Decisions[0].Decision != memory.DerivedInsightReplayDecisionWouldActivate {
+		t.Fatalf("decisions = %+v, want one would_activate decision", report.Decisions)
+	}
+	if len(service.Store.(*stubReplayStore).upserted) != 0 {
+		t.Fatal("shadow replay mutated derived insight store")
 	}
 }
 

@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"strings"
+	"time"
 
 	"github.com/FelixSeptem/stele/internal/insights"
 	"github.com/FelixSeptem/stele/internal/memory"
@@ -680,6 +681,213 @@ func (r *Repository) SummarizeDerivedInsightFeedback(ctx context.Context, input 
 		return memory.DerivedInsightFeedbackSummary{}, err
 	}
 	return memory.SummarizeDerivedInsightFeedback(items), nil
+}
+
+func (r *Repository) CreateActivationDecision(ctx context.Context, record insights.ActivationDecisionRecord, evidence []insights.ActivationDecisionEvidence) error {
+	if err := record.Validate(); err != nil {
+		return err
+	}
+	metadata, err := marshalDerivedInsightJSON(record.Metadata)
+	if err != nil {
+		return fmt.Errorf("marshal activation decision metadata: %w", err)
+	}
+	tx, err := r.tx.BeginTx(ctx, pgxTxOptions())
+	if err != nil {
+		return fmt.Errorf("begin activation decision transaction: %w", err)
+	}
+	defer tx.Rollback(ctx)
+	const insertDecision = `
+INSERT INTO reserved_insight_activation_decisions (
+ id, tenant, project, namespace, policy_version, candidate_fingerprint,
+ idempotency_key, insight_type, disposition, insight_id, reason,
+ source_watermark, metadata, created_at
+)
+VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14)
+ON CONFLICT (tenant, project, namespace, candidate_fingerprint) DO NOTHING`
+	if _, err := tx.Exec(ctx, insertDecision, record.ID, record.Scope.Tenant, record.Scope.Project, record.Scope.Namespace,
+		record.PolicyVersion, record.CandidateFingerprint, nullableString(record.IdempotencyKey), record.InsightType,
+		record.Disposition, nullableString(record.InsightID), record.Reason, nullableString(record.SourceWatermark), metadata, record.CreatedAt); err != nil {
+		return fmt.Errorf("insert activation decision: %w", err)
+	}
+	const insertEvidence = `
+INSERT INTO reserved_insight_activation_evidence (
+ decision_id, tenant, project, namespace, evidence_kind, evidence_id, relation, observed_at
+)
+VALUES ($1,$2,$3,$4,$5,$6,$7,$8)
+ON CONFLICT DO NOTHING`
+	for _, item := range evidence {
+		if err := item.Validate(); err != nil {
+			return err
+		}
+		if item.Scope != record.Scope {
+			return fmt.Errorf("activation evidence scope must match decision scope")
+		}
+		if _, err := tx.Exec(ctx, insertEvidence, item.DecisionID, item.Scope.Tenant, item.Scope.Project, item.Scope.Namespace, item.Kind, item.ID, item.Relation, nullableTime(item.ObservedAt)); err != nil {
+			return fmt.Errorf("insert activation decision evidence: %w", err)
+		}
+	}
+	if err := tx.Commit(ctx); err != nil {
+		return fmt.Errorf("commit activation decision transaction: %w", err)
+	}
+	return nil
+}
+
+func (r *Repository) UpsertActivationPolicy(ctx context.Context, policy insights.ReservedInsightActivationPolicy, reason string, updatedAt time.Time) error {
+	validationPolicy := policy
+	if policy.RolledBack {
+		validationPolicy.Enabled = false
+		validationPolicy.RolledBack = false
+	}
+	if err := validationPolicy.ValidateAt(updatedAt); err != nil && policy.Enabled && !policy.RolledBack {
+		return err
+	}
+	if err := policy.Scope.Validate(); err != nil {
+		return err
+	}
+	if updatedAt.IsZero() {
+		updatedAt = time.Now().UTC()
+	}
+	types := make(map[string]bool, len(policy.EnabledTypes))
+	for key, enabled := range policy.EnabledTypes {
+		types[string(key)] = enabled
+	}
+	typesJSON, err := json.Marshal(types)
+	if err != nil {
+		return fmt.Errorf("marshal activation policy types: %w", err)
+	}
+	const query = `
+INSERT INTO reserved_insight_activation_policies (
+ tenant, project, namespace, policy_version, owner, enabled, enabled_types,
+ provider_contract_version, schema_version, min_evidence, min_confidence,
+ max_evidence, max_candidate_bytes, expires_at, source_watermark, rolled_back,
+ reason, updated_at
+)
+VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18)
+ON CONFLICT (tenant, project, namespace, policy_version) DO UPDATE SET
+ owner=EXCLUDED.owner, enabled=EXCLUDED.enabled, enabled_types=EXCLUDED.enabled_types,
+ provider_contract_version=EXCLUDED.provider_contract_version, schema_version=EXCLUDED.schema_version,
+ min_evidence=EXCLUDED.min_evidence, min_confidence=EXCLUDED.min_confidence,
+ max_evidence=EXCLUDED.max_evidence, max_candidate_bytes=EXCLUDED.max_candidate_bytes,
+ expires_at=EXCLUDED.expires_at, source_watermark=EXCLUDED.source_watermark,
+ rolled_back=EXCLUDED.rolled_back, reason=EXCLUDED.reason, updated_at=EXCLUDED.updated_at`
+	if _, err := r.db.Exec(ctx, query, policy.Scope.Tenant, policy.Scope.Project, policy.Scope.Namespace, policy.Version,
+		policy.Owner, policy.Enabled, typesJSON, nullableString(policy.ProviderContractVersion), nullableString(policy.SchemaVersion),
+		policy.MinEvidence, policy.MinConfidence, policy.MaxEvidence, policy.MaxCandidateBytes, nullableTime(policy.ExpiresAt),
+		nullableString(policy.SourceWatermark), policy.RolledBack, reason, updatedAt); err != nil {
+		return fmt.Errorf("upsert activation policy: %w", err)
+	}
+	return nil
+}
+
+func (r *Repository) ReadActivationPolicy(ctx context.Context, scope memory.Scope, version string) (insights.ReservedInsightActivationPolicy, error) {
+	if err := scope.Validate(); err != nil {
+		return insights.ReservedInsightActivationPolicy{}, err
+	}
+	if strings.TrimSpace(version) == "" {
+		return insights.ReservedInsightActivationPolicy{}, fmt.Errorf("activation policy version is required")
+	}
+	const query = `
+SELECT policy_version, owner, enabled, enabled_types, provider_contract_version,
+ schema_version, min_evidence, min_confidence, max_evidence, max_candidate_bytes,
+ expires_at, source_watermark, rolled_back
+FROM reserved_insight_activation_policies
+WHERE tenant=$1 AND project=$2 AND namespace=$3 AND policy_version=$4`
+	var policy insights.ReservedInsightActivationPolicy
+	var typesJSON []byte
+	var providerVersion, schemaVersion, sourceWatermark sql.NullString
+	var typesJSONMap map[string]bool
+	if err := r.db.QueryRow(ctx, query, scope.Tenant, scope.Project, scope.Namespace, version).Scan(
+		&policy.Version, &policy.Owner, &policy.Enabled, &typesJSON, &providerVersion, &schemaVersion,
+		&policy.MinEvidence, &policy.MinConfidence, &policy.MaxEvidence, &policy.MaxCandidateBytes,
+		&policy.ExpiresAt, &sourceWatermark, &policy.RolledBack); err != nil {
+		return insights.ReservedInsightActivationPolicy{}, err
+	}
+	policy.Scope = scope.Normalized()
+	if providerVersion.Valid {
+		policy.ProviderContractVersion = providerVersion.String
+	}
+	if schemaVersion.Valid {
+		policy.SchemaVersion = schemaVersion.String
+	}
+	if sourceWatermark.Valid {
+		policy.SourceWatermark = sourceWatermark.String
+	}
+	if err := json.Unmarshal(typesJSON, &typesJSONMap); err != nil {
+		return insights.ReservedInsightActivationPolicy{}, fmt.Errorf("decode activation policy types: %w", err)
+	}
+	policy.EnabledTypes = map[memory.DerivedInsightType]bool{}
+	for key, enabled := range typesJSONMap {
+		policy.EnabledTypes[memory.DerivedInsightType(key)] = enabled
+	}
+	return policy, nil
+}
+
+func (r *Repository) FindActivationDecision(ctx context.Context, scope memory.Scope, candidateFingerprint string) (insights.ActivationDecisionRecord, error) {
+	if err := scope.Validate(); err != nil {
+		return insights.ActivationDecisionRecord{}, err
+	}
+	if strings.TrimSpace(candidateFingerprint) == "" {
+		return insights.ActivationDecisionRecord{}, fmt.Errorf("candidate fingerprint is required")
+	}
+	const query = `
+SELECT id, tenant, project, namespace, policy_version, candidate_fingerprint,
+ COALESCE(idempotency_key, ''), insight_type, disposition, COALESCE(insight_id, ''), reason,
+ COALESCE(source_watermark, ''), metadata, created_at
+FROM reserved_insight_activation_decisions
+WHERE tenant=$1 AND project=$2 AND namespace=$3 AND candidate_fingerprint=$4`
+	var record insights.ActivationDecisionRecord
+	var idempotencyKey, insightID, sourceWatermark string
+	var metadata []byte
+	if err := r.db.QueryRow(ctx, query, scope.Tenant, scope.Project, scope.Namespace, candidateFingerprint).Scan(
+		&record.ID, &record.Scope.Tenant, &record.Scope.Project, &record.Scope.Namespace, &record.PolicyVersion,
+		&record.CandidateFingerprint, &idempotencyKey, &record.InsightType, &record.Disposition, &insightID,
+		&record.Reason, &sourceWatermark, &metadata, &record.CreatedAt); err != nil {
+		return insights.ActivationDecisionRecord{}, err
+	}
+	record.IdempotencyKey = idempotencyKey
+	record.InsightID = insightID
+	record.SourceWatermark = sourceWatermark
+	if len(metadata) > 0 {
+		if err := json.Unmarshal(metadata, &record.Metadata); err != nil {
+			return insights.ActivationDecisionRecord{}, fmt.Errorf("decode activation decision metadata: %w", err)
+		}
+	}
+	return record, nil
+}
+
+func (r *Repository) ListActivationDecisions(ctx context.Context, scope memory.Scope, limit int) ([]insights.ActivationDecisionRecord, error) {
+	if err := scope.Validate(); err != nil {
+		return nil, err
+	}
+	if limit <= 0 {
+		return nil, fmt.Errorf("limit must be greater than zero")
+	}
+	const query = `
+SELECT id, tenant, project, namespace, policy_version, candidate_fingerprint,
+ COALESCE(idempotency_key, ''), insight_type, disposition, COALESCE(insight_id, ''), reason,
+ COALESCE(source_watermark, ''), metadata, created_at
+FROM reserved_insight_activation_decisions
+WHERE tenant=$1 AND project=$2 AND namespace=$3
+ORDER BY created_at DESC, id DESC LIMIT $4`
+	rows, err := r.db.Query(ctx, query, scope.Tenant, scope.Project, scope.Namespace, limit)
+	if err != nil {
+		return nil, fmt.Errorf("list activation decisions: %w", err)
+	}
+	defer rows.Close()
+	items := make([]insights.ActivationDecisionRecord, 0)
+	for rows.Next() {
+		var record insights.ActivationDecisionRecord
+		if err := rows.Scan(&record.ID, &record.Scope.Tenant, &record.Scope.Project, &record.Scope.Namespace, &record.PolicyVersion,
+			&record.CandidateFingerprint, &record.IdempotencyKey, &record.InsightType, &record.Disposition, &record.InsightID,
+			&record.Reason, &record.SourceWatermark, &record.Metadata, &record.CreatedAt); err != nil {
+			return nil, fmt.Errorf("scan activation decision: %w", err)
+		}
+		items = append(items, record)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("iterate activation decisions: %w", err)
+	}
+	return items, nil
 }
 
 func (r *Repository) ListFailureEvidence(ctx context.Context, scope memory.Scope, limit int) ([]insights.FailureEvidence, error) {

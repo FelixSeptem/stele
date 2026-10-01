@@ -2,7 +2,9 @@
 
 ## Purpose
 Persist derived experience insights as scoped, governed, and auditable records.
+
 ## Requirements
+
 ### Requirement: Derived insights are governed records
 The service SHALL persist derived experience insights as governed records with explicit scope, insight type, lifecycle state, confidence, derivation metadata, evidence citations, and audit history.
 
@@ -48,15 +50,32 @@ The service MUST preserve lifecycle transitions for derived insights without del
 - **THEN** the service appends or records an auditable update rather than silently replacing the prior state
 
 ### Requirement: Reserved insight vocabulary is non-active
-The service SHALL reserve `hypothesis`, `goal`, `contradiction`, and `causal_link` vocabulary without performing autonomous inference for those types in this change.
+
+The service SHALL reserve `hypothesis`, `goal`, `contradiction`, and
+`causal_link` vocabulary and SHALL keep each type disabled unless a separate
+versioned, exact-scope activation policy defines its evidence, provenance,
+lifecycle, replay, feedback, and rollback rules. A provider or replay runner
+MUST NOT autonomously activate a reserved type outside that policy.
 
 #### Scenario: Unsupported insight type is requested for derivation
-- **WHEN** the derivation job encounters a request to autonomously infer `hypothesis`, `goal`, `contradiction`, or `causal_link`
-- **THEN** the service skips that derivation path and records no active insight of those types
+
+- **WHEN** the derivation job encounters a request to infer a reserved type without a compatible activation policy
+- **THEN** the service skips or quarantines that derivation path and records no active insight of that type
+
+#### Scenario: Policy-gated insight is admitted
+
+- **WHEN** a reserved candidate satisfies the enabled type policy, exact scope, evidence, provenance, confidence, and idempotency checks
+- **THEN** the service creates the insight through the governed derived-insight lifecycle and preserves the admission decision and audit history
+
+#### Scenario: Policy is stale or rolled back
+
+- **WHEN** a reserved insight policy is stale, expired, disabled, or rolled back
+- **THEN** the service does not activate new candidates and preserves prior insight versions and evidence history
 
 #### Scenario: Future insight type is represented in schema
+
 - **WHEN** a future change adds support for another insight type
-- **THEN** the existing derived insight substrate can preserve scope, lifecycle, confidence, evidence, and audit semantics for that type
+- **THEN** the existing derived insight substrate can preserve scope, lifecycle, confidence, evidence, policy, and audit semantics for that type
 
 ### Requirement: Derived insight governance accounts for quality feedback
 The service SHALL use governed quality feedback as an input to derived insight lifecycle, confidence, and derivation decisions without rewriting insight evidence in place.

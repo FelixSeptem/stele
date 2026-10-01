@@ -48,11 +48,16 @@ func (s DerivedInsightReplayStatus) Valid() bool {
 type DerivedInsightReplayDecisionKind string
 
 const (
-	DerivedInsightReplayDecisionCreate   DerivedInsightReplayDecisionKind = "create"
-	DerivedInsightReplayDecisionUpdate   DerivedInsightReplayDecisionKind = "update"
-	DerivedInsightReplayDecisionSuppress DerivedInsightReplayDecisionKind = "suppress"
-	DerivedInsightReplayDecisionPreserve DerivedInsightReplayDecisionKind = "preserve"
-	DerivedInsightReplayDecisionSkip     DerivedInsightReplayDecisionKind = "skip"
+	DerivedInsightReplayDecisionCreate        DerivedInsightReplayDecisionKind = "create"
+	DerivedInsightReplayDecisionUpdate        DerivedInsightReplayDecisionKind = "update"
+	DerivedInsightReplayDecisionSuppress      DerivedInsightReplayDecisionKind = "suppress"
+	DerivedInsightReplayDecisionPreserve      DerivedInsightReplayDecisionKind = "preserve"
+	DerivedInsightReplayDecisionSkip          DerivedInsightReplayDecisionKind = "skip"
+	DerivedInsightReplayDecisionWouldActivate DerivedInsightReplayDecisionKind = "would_activate"
+	DerivedInsightReplayDecisionQuarantine    DerivedInsightReplayDecisionKind = "quarantine"
+	DerivedInsightReplayDecisionReject        DerivedInsightReplayDecisionKind = "reject"
+	DerivedInsightReplayDecisionStale         DerivedInsightReplayDecisionKind = "stale"
+	DerivedInsightReplayDecisionIncomplete    DerivedInsightReplayDecisionKind = "incomplete"
 )
 
 func (d DerivedInsightReplayDecisionKind) Valid() bool {
@@ -61,7 +66,12 @@ func (d DerivedInsightReplayDecisionKind) Valid() bool {
 		DerivedInsightReplayDecisionUpdate,
 		DerivedInsightReplayDecisionSuppress,
 		DerivedInsightReplayDecisionPreserve,
-		DerivedInsightReplayDecisionSkip:
+		DerivedInsightReplayDecisionSkip,
+		DerivedInsightReplayDecisionWouldActivate,
+		DerivedInsightReplayDecisionQuarantine,
+		DerivedInsightReplayDecisionReject,
+		DerivedInsightReplayDecisionStale,
+		DerivedInsightReplayDecisionIncomplete:
 		return true
 	default:
 		return false
@@ -71,14 +81,18 @@ func (d DerivedInsightReplayDecisionKind) Valid() bool {
 type DerivedInsightReplayReason string
 
 const (
-	DerivedInsightReplayReasonRepeatedEvidence     DerivedInsightReplayReason = "repeated_evidence"
-	DerivedInsightReplayReasonInsufficientEvidence DerivedInsightReplayReason = "insufficient_evidence"
-	DerivedInsightReplayReasonUnsupportedType      DerivedInsightReplayReason = "unsupported_type"
-	DerivedInsightReplayReasonFeedbackPolicy       DerivedInsightReplayReason = "feedback_policy"
-	DerivedInsightReplayReasonLifecycleHidden      DerivedInsightReplayReason = "lifecycle_hidden"
-	DerivedInsightReplayReasonOutOfScope           DerivedInsightReplayReason = "out_of_scope"
-	DerivedInsightReplayReasonIdempotentDuplicate  DerivedInsightReplayReason = "idempotent_duplicate"
-	DerivedInsightReplayReasonExecutionFailed      DerivedInsightReplayReason = "execution_failed"
+	DerivedInsightReplayReasonRepeatedEvidence       DerivedInsightReplayReason = "repeated_evidence"
+	DerivedInsightReplayReasonInsufficientEvidence   DerivedInsightReplayReason = "insufficient_evidence"
+	DerivedInsightReplayReasonUnsupportedType        DerivedInsightReplayReason = "unsupported_type"
+	DerivedInsightReplayReasonFeedbackPolicy         DerivedInsightReplayReason = "feedback_policy"
+	DerivedInsightReplayReasonLifecycleHidden        DerivedInsightReplayReason = "lifecycle_hidden"
+	DerivedInsightReplayReasonOutOfScope             DerivedInsightReplayReason = "out_of_scope"
+	DerivedInsightReplayReasonIdempotentDuplicate    DerivedInsightReplayReason = "idempotent_duplicate"
+	DerivedInsightReplayReasonExecutionFailed        DerivedInsightReplayReason = "execution_failed"
+	DerivedInsightReplayReasonActivationPolicyStale  DerivedInsightReplayReason = "activation_policy_stale"
+	DerivedInsightReplayReasonActivationIncompatible DerivedInsightReplayReason = "activation_incompatible"
+	DerivedInsightReplayReasonActivationWouldApply   DerivedInsightReplayReason = "activation_would_apply"
+	DerivedInsightReplayReasonActivationQuarantined  DerivedInsightReplayReason = "activation_quarantined"
 )
 
 func (r DerivedInsightReplayReason) Valid() bool {
@@ -90,7 +104,11 @@ func (r DerivedInsightReplayReason) Valid() bool {
 		DerivedInsightReplayReasonLifecycleHidden,
 		DerivedInsightReplayReasonOutOfScope,
 		DerivedInsightReplayReasonIdempotentDuplicate,
-		DerivedInsightReplayReasonExecutionFailed:
+		DerivedInsightReplayReasonExecutionFailed,
+		DerivedInsightReplayReasonActivationPolicyStale,
+		DerivedInsightReplayReasonActivationIncompatible,
+		DerivedInsightReplayReasonActivationWouldApply,
+		DerivedInsightReplayReasonActivationQuarantined:
 		return true
 	default:
 		return false
@@ -98,17 +116,20 @@ func (r DerivedInsightReplayReason) Valid() bool {
 }
 
 type DerivedInsightReplayRequest struct {
-	Scope               Scope                    `json:"scope"`
-	Mode                DerivedInsightReplayMode `json:"mode"`
-	InsightTypes        []DerivedInsightType     `json:"insight_types,omitempty"`
-	EvidenceWindowStart time.Time                `json:"evidence_window_start"`
-	EvidenceWindowEnd   time.Time                `json:"evidence_window_end"`
-	EvidenceLimit       int                      `json:"evidence_limit"`
-	Actor               string                   `json:"actor"`
-	Reason              string                   `json:"reason"`
-	IdempotencyKey      string                   `json:"idempotency_key,omitempty"`
-	RequestedAt         time.Time                `json:"requested_at"`
-	Metadata            map[string]any           `json:"metadata,omitempty"`
+	Scope                     Scope                    `json:"scope"`
+	Mode                      DerivedInsightReplayMode `json:"mode"`
+	InsightTypes              []DerivedInsightType     `json:"insight_types,omitempty"`
+	EvidenceWindowStart       time.Time                `json:"evidence_window_start"`
+	EvidenceWindowEnd         time.Time                `json:"evidence_window_end"`
+	EvidenceLimit             int                      `json:"evidence_limit"`
+	Actor                     string                   `json:"actor"`
+	Reason                    string                   `json:"reason"`
+	IdempotencyKey            string                   `json:"idempotency_key,omitempty"`
+	RequestedAt               time.Time                `json:"requested_at"`
+	ActivationPolicyVersion   string                   `json:"activation_policy_version,omitempty"`
+	ActivationProviderVersion string                   `json:"activation_provider_version,omitempty"`
+	ActivationSourceWatermark string                   `json:"activation_source_watermark,omitempty"`
+	Metadata                  map[string]any           `json:"metadata,omitempty"`
 }
 
 func (r DerivedInsightReplayRequest) Validate() error {
@@ -137,8 +158,8 @@ func (r DerivedInsightReplayRequest) Validate() error {
 		if !insightType.Valid() {
 			return fmt.Errorf("derived insight type %q is invalid", insightType)
 		}
-		if !insightType.ActiveSupported() {
-			return fmt.Errorf("derived insight type %q is not supported for replay", insightType)
+		if !insightType.ActiveSupported() && r.Mode == DerivedInsightReplayModeApply {
+			return fmt.Errorf("derived insight type %q is not supported for replay apply", insightType)
 		}
 	}
 	return nil
@@ -152,10 +173,14 @@ type DerivedInsightReplayCounters struct {
 	Preserved         int `json:"preserved"`
 	Skipped           int `json:"skipped"`
 	Failed            int `json:"failed"`
+	WouldActivate     int `json:"would_activate"`
+	Quarantined       int `json:"quarantined"`
+	Stale             int `json:"stale"`
+	Incomplete        int `json:"incomplete"`
 }
 
 func (c DerivedInsightReplayCounters) Validate() error {
-	if c.EvidenceEvaluated < 0 || c.Created < 0 || c.Updated < 0 || c.Suppressed < 0 || c.Preserved < 0 || c.Skipped < 0 || c.Failed < 0 {
+	if c.EvidenceEvaluated < 0 || c.Created < 0 || c.Updated < 0 || c.Suppressed < 0 || c.Preserved < 0 || c.Skipped < 0 || c.Failed < 0 || c.WouldActivate < 0 || c.Quarantined < 0 || c.Stale < 0 || c.Incomplete < 0 {
 		return fmt.Errorf("replay counters must be greater than or equal to zero")
 	}
 	return nil

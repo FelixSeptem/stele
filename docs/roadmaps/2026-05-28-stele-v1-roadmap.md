@@ -104,7 +104,7 @@ change an archived baseline.
 | P5 | Benchmark expansion and retrieval release evidence | Archived changes 025, 026, 035, and 039 | Implemented baseline; owned real-stack evidence remains a prerequisite for activation. |
 | P6 | Durable multi-scope maintenance and observability | Archived change 037 | Implemented baseline; retain regression, freshness, and SLO evidence. |
 | P7 | Agent runtime memory-provider contract | Archived change 038 | Implemented baseline; integration remains optional to the retrieval path. |
-| P8 | Optional adapters and governed experience insights | Governed insight baseline in changes 013/014; OpenAPI-backed MCP scope/profile adapter archived as change 044; scoped memory paths archived as change 046; agent self-model conventions archived as change 047; reasoning-provider boundary is the active proposal | Keep MCP as an optional OpenAPI adapter and reuse projections/intents rather than creating a second memory system. |
+| P8 | Optional adapters and governed experience insights | Governed insight baseline in changes 013/014; OpenAPI-backed MCP scope/profile adapter archived as change 044; scoped memory paths archived as change 046; agent self-model conventions archived as change 047; reasoning-provider boundary archived as change 048; OpenAI-compatible adapter archived as change 049; governed reserved-insight activation is the active proposal | Keep MCP as an optional OpenAPI adapter and reuse projections/intents rather than creating a second memory system. |
 
 ### Critical path to provider readiness
 
@@ -1362,10 +1362,11 @@ Goal: add ecosystem ergonomics only after the core provider contract is stable.
 The OpenAPI-backed MCP scope/profile adapter is complete and archived as change
 044. Scoped memory path conventions are complete and archived as change 046.
 Agent self-model conventions are complete and archived as change 047. The
-reasoning provider boundary is complete and archived as change 048. The active
-proposal is `reasoning-openai-compatible-adapter` (P8.4).
+reasoning provider boundary is complete and archived as change 048. The
+OpenAI-compatible adapter is complete and archived as change 049. The active
+proposal is `governed-reserved-insight-activation` (P8.5).
 
-Candidate tasks for that bounded proposal:
+Candidate tasks for the bounded P8.5 proposal:
 
 - build an optional OpenAPI-backed MCP adapter that preserves principal, grant,
   exact `tenant`/`project`/`namespace` scope, lifecycle, idempotency, and audit
@@ -1666,8 +1667,9 @@ Recommended execution order for the current product baseline and next frontier:
 10. P8.1: OpenAPI-backed MCP scope and profile-context adapter (archived change 044)
 11. P8.2: scoped memory path conventions (archived change 046)
 12. P8.2b: agent self-model conventions (archived change 047)
-13. P8.3: reasoning-provider boundary (archived change 048), followed by the
-    P8.4 concrete OpenAI-compatible reasoning adapter proposal
+13. P8.3: reasoning-provider boundary (archived change 048)
+14. P8.4: concrete OpenAI-compatible reasoning adapter (archived change 049)
+15. P8.5: governed reserved-insight activation (current proposal)
 
 The original Phase 1–5 order remains the build order for a fresh repository;
 the P0–P7 sequence is the archived baseline and RQ1–RQ4 are the next
@@ -1753,8 +1755,10 @@ exact-scope summary plus separately governed activation.
 Change 044, `openapi-backed-mcp-scope-and-profile-context`, is complete and
 archived. Change 046, `scoped-memory-path-conventions`, is complete and
 archived. Change 047, `scoped-agent-self-model-conventions`, is complete and
-archived. The immediate next proposal is P8.4
-`reasoning-openai-compatible-adapter`: an optional, bounded, secret-safe
-OpenAI-compatible HTTP adapter that exercises the archived reasoning boundary
-through offline and shadow-safe execution. Automatic activation of reserved
-insight types remains a separate follow-up proposal.
+archived. Change 048, `reasoning-provider-boundary`, is complete and archived.
+Change 049, `reasoning-openai-compatible-adapter`, is complete and archived.
+The immediate next proposal is P8.5
+`governed-reserved-insight-activation`: a disabled-by-default, exact-scope
+admission path for evidence-backed reserved reasoning insights. The initial
+activation policy is limited to reviewed `hypothesis` candidates; `goal`,
+`contradiction`, and `causal_link` remain separately disabled.

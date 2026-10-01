@@ -2,7 +2,9 @@
 
 ## Purpose
 Provide bounded, administrator-authorized dry-run planning for derived-insight replay.
+
 ## Requirements
+
 ### Requirement: Derived insight replay planning is bounded and admin-only
 The service SHALL provide an admin-only dry-run capability that plans derived insight replay for an authorized scope, bounded evidence window, and explicit execution limits without mutating derived insights or canonical memory.
 
@@ -26,15 +28,28 @@ The service MUST execute replay apply or backfill through durable background wor
 - **THEN** the service uses replay identity and insight fingerprints to avoid duplicate insight records or duplicate lifecycle transitions
 
 ### Requirement: Replay reports explain outcomes
-The service SHALL persist replay reports that explain replay selection, decisions, skipped records, failures, and feedback-influenced lifecycle effects.
+
+The service SHALL persist replay reports that explain replay selection,
+decisions, skipped records, failures, feedback-influenced lifecycle effects,
+and reserved-insight activation-policy compatibility. Reports MUST distinguish
+non-authoritative would-activate dispositions from applied lifecycle changes
+and MUST retain the policy, provider contract, source watermark, and reason
+versions used for the decision.
 
 #### Scenario: Replay completes
+
 - **WHEN** a replay run finishes
-- **THEN** the service stores counters for evidence evaluated, insights created, insights updated, insights suppressed, insights preserved, records skipped, and failures, together with stable reason codes
+- **THEN** the service stores counters for evidence evaluated, insights created, insights updated, insights suppressed, insights preserved, records skipped, non-authoritative would-activate candidates, and failures, together with stable reason codes and compatibility versions
 
 #### Scenario: Replay skips an insight
-- **WHEN** replay excludes a candidate because of scope, lifecycle, unsupported type, insufficient evidence, feedback policy, or idempotency
+
+- **WHEN** replay excludes a candidate because of scope, lifecycle, unsupported type, insufficient evidence, feedback policy, stale activation policy, incompatibility, or idempotency
 - **THEN** the replay report records the skip category without requiring direct PostgreSQL inspection
+
+#### Scenario: Replay evaluates a reserved candidate
+
+- **WHEN** replay evaluates a reserved insight candidate under an enabled policy
+- **THEN** the report records whether the candidate would be rejected, quarantined, or admitted while the replay itself leaves active insight state unchanged
 
 ### Requirement: Replay preserves canonical memory and evidence history
 The service MUST keep replay limited to derived insight evaluation and SHALL NOT rewrite raw events, canonical memories, memory versions, vector revisions, or existing provenance in place.

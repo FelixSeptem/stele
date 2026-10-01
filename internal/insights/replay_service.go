@@ -26,11 +26,13 @@ type ReplayStore interface {
 }
 
 type ReplayService struct {
-	Store           ReplayStore
-	MinimumEvidence int
-	Now             func() time.Time
-	NewRunID        func() string
-	Observer        derivedInsightReplayObserver
+	Store                ReplayStore
+	MinimumEvidence      int
+	Now                  func() time.Time
+	NewRunID             func() string
+	Observer             derivedInsightReplayObserver
+	ActivationPolicy     *ReservedInsightActivationPolicy
+	ActivationCandidates []memory.DerivedInsight
 }
 
 type derivedInsightReplayObserver interface {
@@ -113,6 +115,7 @@ func (s ReplayService) PlanDerivedInsightReplay(ctx context.Context, input memor
 			report.Counters.Created++
 		}
 	}
+	s.appendReservedActivationDecisions(&report, input, requested, current)
 	if len(evidence) > 0 && len(report.Decisions) == 0 {
 		report.Decisions = append(report.Decisions, memory.DerivedInsightReplayDecision{
 			InsightType:   memory.DerivedInsightTypeFailurePattern,
@@ -130,6 +133,88 @@ func (s ReplayService) PlanDerivedInsightReplay(ctx context.Context, input memor
 	}
 	s.recordReplayMetric(ctx, input.Mode, result, report)
 	return report, nil
+}
+
+func (s ReplayService) appendReservedActivationDecisions(report *memory.DerivedInsightReplayReport, input memory.DerivedInsightReplayRequest, requested map[memory.DerivedInsightType]bool, current time.Time) {
+	reservedRequested := false
+	for _, insightType := range []memory.DerivedInsightType{memory.DerivedInsightTypeHypothesis, memory.DerivedInsightTypeGoal, memory.DerivedInsightTypeContradiction, memory.DerivedInsightTypeCausalLink} {
+		if requested[insightType] {
+			reservedRequested = true
+		}
+	}
+	if !reservedRequested {
+		return
+	}
+	if s.ActivationPolicy == nil {
+		report.Decisions = append(report.Decisions, memory.DerivedInsightReplayDecision{
+			InsightType: memory.DerivedInsightTypeHypothesis,
+			Fingerprint: "activation:missing_policy",
+			Decision:    memory.DerivedInsightReplayDecisionQuarantine,
+			Reason:      memory.DerivedInsightReplayReasonActivationPolicyStale,
+		})
+		report.Counters.Quarantined++
+		return
+	}
+	policy := *s.ActivationPolicy
+	if input.ActivationPolicyVersion != "" && input.ActivationPolicyVersion != policy.Version {
+		report.Decisions = append(report.Decisions, memory.DerivedInsightReplayDecision{InsightType: memory.DerivedInsightTypeHypothesis, Fingerprint: "activation:policy_version_mismatch", Decision: memory.DerivedInsightReplayDecisionStale, Reason: memory.DerivedInsightReplayReasonActivationPolicyStale})
+		report.Counters.Stale++
+		return
+	}
+	if policy.ProviderContractVersion != "" && input.ActivationProviderVersion != "" && policy.ProviderContractVersion != input.ActivationProviderVersion {
+		report.Decisions = append(report.Decisions, memory.DerivedInsightReplayDecision{InsightType: memory.DerivedInsightTypeHypothesis, Fingerprint: "activation:provider_version_mismatch", Decision: memory.DerivedInsightReplayDecisionStale, Reason: memory.DerivedInsightReplayReasonActivationIncompatible})
+		report.Counters.Stale++
+		return
+	}
+	candidateCount := 0
+	for _, candidate := range s.ActivationCandidates {
+		if candidate.Scope.Normalized() != input.Scope.Normalized() || !requested[candidate.Type] {
+			continue
+		}
+		candidateCount++
+		result := AdmitReservedInsight(ActivationInput{
+			Policy:             policy,
+			Candidate:          candidate,
+			AuthorizedEvidence: candidate.Evidence,
+			PolicyVersion:      input.ActivationPolicyVersion,
+			SourceWatermark:    input.ActivationSourceWatermark,
+			Shadow:             true,
+			Now:                current,
+		})
+		decision := memory.DerivedInsightReplayDecision{
+			InsightID:     candidate.ID,
+			InsightType:   candidate.Type,
+			Fingerprint:   candidate.Derivation.Fingerprint,
+			EvidenceCount: len(candidate.Evidence),
+			Reason:        memory.DerivedInsightReplayReasonActivationQuarantined,
+		}
+		switch result.Disposition {
+		case ActivationDispositionWouldActivate:
+			decision.Decision = memory.DerivedInsightReplayDecisionWouldActivate
+			decision.Reason = memory.DerivedInsightReplayReasonActivationWouldApply
+			report.Counters.WouldActivate++
+		case ActivationDispositionStale:
+			decision.Decision = memory.DerivedInsightReplayDecisionStale
+			decision.Reason = memory.DerivedInsightReplayReasonActivationPolicyStale
+			report.Counters.Stale++
+		case ActivationDispositionTypeDisabled, ActivationDispositionRejected:
+			decision.Decision = memory.DerivedInsightReplayDecisionReject
+			report.Counters.Skipped++
+		default:
+			decision.Decision = memory.DerivedInsightReplayDecisionQuarantine
+			report.Counters.Quarantined++
+		}
+		report.Decisions = append(report.Decisions, decision)
+	}
+	if candidateCount == 0 {
+		report.Decisions = append(report.Decisions, memory.DerivedInsightReplayDecision{
+			InsightType: memory.DerivedInsightTypeHypothesis,
+			Fingerprint: "activation:missing_candidate",
+			Decision: memory.DerivedInsightReplayDecisionIncomplete,
+			Reason: memory.DerivedInsightReplayReasonActivationIncompatible,
+		})
+		report.Counters.Incomplete++
+	}
 }
 
 func (s ReplayService) ApplyDerivedInsightReplay(ctx context.Context, input memory.DerivedInsightReplayRequest) (memory.DerivedInsightReplayRun, error) {

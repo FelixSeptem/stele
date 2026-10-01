@@ -216,7 +216,9 @@ func (i DerivedInsight) Validate() error {
 		return fmt.Errorf("derived insight state %q is invalid", i.State)
 	}
 	if i.State == DerivedInsightStateActive && !i.Type.ActiveSupported() {
-		return fmt.Errorf("derived insight type %q is reserved and cannot be active in this change", i.Type)
+		if i.Derivation.Metadata == nil || strings.TrimSpace(fmt.Sprint(i.Derivation.Metadata["activation_policy_version"])) == "" || i.Derivation.Metadata["activation_decision"] != "activated" {
+			return fmt.Errorf("derived insight type %q is reserved and cannot be active in this change without governed activation", i.Type)
+		}
 	}
 	if strings.TrimSpace(i.Title) == "" {
 		return fmt.Errorf("derived insight title is required")

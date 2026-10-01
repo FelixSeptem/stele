@@ -252,6 +252,32 @@ policy remain separate changes. To roll back, disable the reasoning mode;
 offline/shadow evidence and candidate records remain auditable while ordinary
 memory governance continues unchanged.
 
+### Governed reserved-insight activation
+
+Reserved insight activation is a separate, disabled-by-default policy layer.
+The initial policy can admit only reviewed `hypothesis` candidates; `goal`,
+`contradiction`, and `causal_link` remain disabled until each type has its own
+evidence and release contract. A provider or replay run can return only a
+candidate. Exact scope, evidence subset, provenance, confidence/uncertainty,
+provider/schema version, source watermark, and idempotency checks run before an
+activation decision.
+
+Use offline replay or shadow first. Shadow and replay report bounded
+`would_activate`, `quarantine`, `stale`, `incomplete`, or `reject` categories
+and never create active insights or alter default retrieval/context behavior.
+Activation decisions and evidence links are append-only and inspectable on the
+authorized `GET /v1/admin/reasoning/activation-decisions` route. The response
+contains only scope-bound versions, fingerprints, disposition categories,
+reason codes, and bounded timestamps; it does not expose prompts,
+chain-of-thought, credentials, raw provider payloads, hidden identifiers, or
+foreign scope values.
+
+Stop a policy by disabling it. Roll back by persisting the same exact-scope
+policy version with `rolled_back=true`; this prevents new admissions while
+preserving prior insight versions, evidence, and audit history. Existing
+insights must use normal governed suppression/expiry transitions rather than a
+destructive delete or canonical-memory rewrite.
+
 ## Principal Bootstrap And Scoped Access
 
 Protected requests are authenticated against PostgreSQL-backed principals. Every

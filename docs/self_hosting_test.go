@@ -121,10 +121,10 @@ func TestRoadmapTracksReasoningProviderAsNextProposal(t *testing.T) {
 	for _, want := range []string{
 		"P8.2b: agent self-model conventions (archived change 047)",
 		"P8.3: reasoning-provider boundary (archived change 048)",
-		"The immediate next proposal is P8.4",
-		"`reasoning-openai-compatible-adapter`",
-		"OpenAI-compatible HTTP adapter",
-		"separate follow-up proposal.",
+		"The immediate next proposal is P8.5",
+		"`governed-reserved-insight-activation`",
+		"reserved-insight activation",
+		"separately disabled.",
 	} {
 		if !strings.Contains(roadmap, want) {
 			t.Fatalf("roadmap missing reasoning proposal status %q", want)

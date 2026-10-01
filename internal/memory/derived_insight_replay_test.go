@@ -28,16 +28,20 @@ func TestDerivedInsightReplayRequestValidateRejectsMissingBounds(t *testing.T) {
 	}
 }
 
-func TestDerivedInsightReplayRequestValidateRejectsReservedActiveType(t *testing.T) {
+func TestDerivedInsightReplayRequestValidateAllowsReservedTypeForDryRun(t *testing.T) {
 	input := validDerivedInsightReplayRequest()
+	input.Mode = DerivedInsightReplayModeDryRun
 	input.InsightTypes = []DerivedInsightType{DerivedInsightTypeHypothesis}
 
-	err := input.Validate()
-	if err == nil {
-		t.Fatal("Validate() error = nil, want unsupported type error")
+	if err := input.Validate(); err != nil {
+		t.Fatalf("Validate() error = %v, want bounded dry-run acceptance", err)
 	}
-	if !strings.Contains(err.Error(), "not supported for replay") {
-		t.Fatalf("error = %q, want unsupported type", err)
+
+	input.Mode = DerivedInsightReplayModeApply
+	if err := input.Validate(); err == nil {
+		t.Fatal("Validate() error = nil for reserved replay apply")
+	} else if !strings.Contains(err.Error(), "not supported for replay apply") {
+		t.Fatalf("error = %q, want replay apply restriction", err)
 	}
 }
 

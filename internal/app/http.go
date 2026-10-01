@@ -17,6 +17,7 @@ import (
 	"github.com/FelixSeptem/stele/internal/auth"
 	"github.com/FelixSeptem/stele/internal/config"
 	"github.com/FelixSeptem/stele/internal/governance"
+	"github.com/FelixSeptem/stele/internal/insights"
 	"github.com/FelixSeptem/stele/internal/jobs"
 	"github.com/FelixSeptem/stele/internal/memory"
 	"github.com/FelixSeptem/stele/internal/policy"
@@ -59,6 +60,7 @@ type HTTPDependencies struct {
 	GovernanceAdmin           GovernanceAdminService
 	DerivedInsightAdmin       DerivedInsightAdminService
 	DerivedInsightReplayAdmin DerivedInsightReplayAdminService
+	ActivationDecisionAdmin   ActivationDecisionAdminService
 	QualityAdmin              QualityAdminService
 	ScopeProofAdmin           ScopeProofAdminService
 	MemorySession             MemorySessionService
@@ -203,6 +205,10 @@ type DerivedInsightReplayAdminService interface {
 	ListDerivedInsightReplayRuns(ctx context.Context, input memory.ListDerivedInsightReplayRunsInput) ([]memory.DerivedInsightReplayRun, error)
 	ReadDerivedInsightReplayRun(ctx context.Context, input memory.ReadDerivedInsightReplayRunInput) (memory.DerivedInsightReplayRun, error)
 	ReadDerivedInsightReplayReport(ctx context.Context, input memory.ReadDerivedInsightReplayRunInput) (memory.DerivedInsightReplayReport, error)
+}
+
+type ActivationDecisionAdminService interface {
+	ListActivationDecisions(ctx context.Context, scope memory.Scope, limit int) ([]insights.ActivationDecisionRecord, error)
 }
 
 type QualityAdminService interface {
@@ -1177,6 +1183,15 @@ func NewHTTPHandler(deps HTTPDependencies) http.Handler {
 		),
 	)
 	mux.Handle("GET /v1/admin/derived-insights", adminDerivedInsightList)
+
+	adminActivationDecisions := auth.APIKeyMiddleware(deps.AdminAPIKeys)(
+		auth.ScopeMiddleware()(
+			http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				handleAdminActivationDecisions(w, r, deps.ActivationDecisionAdmin)
+			}),
+		),
+	)
+	mux.Handle("GET /v1/admin/reasoning/activation-decisions", adminActivationDecisions)
 
 	adminDerivedInsightDetail := auth.APIKeyMiddleware(deps.AdminAPIKeys)(
 		auth.ScopeMiddleware()(
@@ -3994,6 +4009,36 @@ func handleAdminDerivedInsightList(w http.ResponseWriter, r *http.Request, servi
 	}
 
 	writeJSON(w, http.StatusOK, map[string]any{"items": items})
+}
+
+func handleAdminActivationDecisions(w http.ResponseWriter, r *http.Request, service ActivationDecisionAdminService) {
+	if service == nil {
+		http.Error(w, "activation decision admin service is not configured", http.StatusServiceUnavailable)
+		return
+	}
+	scope, ok := auth.ScopeFromContext(r.Context())
+	if !ok {
+		http.Error(w, "scope context is missing", http.StatusInternalServerError)
+		return
+	}
+	limit := 50
+	if raw := strings.TrimSpace(r.URL.Query().Get("limit")); raw != "" {
+		parsed, err := strconv.Atoi(raw)
+		if err != nil || parsed <= 0 {
+			http.Error(w, "invalid limit", http.StatusBadRequest)
+			return
+		}
+		if parsed > 100 {
+			parsed = 100
+		}
+		limit = parsed
+	}
+	items, err := service.ListActivationDecisions(r.Context(), scope, limit)
+	if err != nil {
+		http.Error(w, "failed to list activation decisions", http.StatusInternalServerError)
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"items": items, "scope": scope, "limit": limit})
 }
 
 func handleAdminDerivedInsightDetail(w http.ResponseWriter, r *http.Request, service DerivedInsightAdminService) {
