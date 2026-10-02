@@ -130,6 +130,7 @@ func TestRoadmapTracksCurrentP8Proposal(t *testing.T) {
 		"self-hosting-first-ten-minutes-smoke-path",
 		"governed-autonomous-reasoning-insights",
 		"governed-contradiction-insights",
+		"governed-memory-intents",
 		"next bounded post-v1 proposal",
 		"exact-scope activation",
 	} {

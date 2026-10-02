@@ -65,7 +65,7 @@ not be conflated:
   baselines. Changes 054, 055, 056, and the reflection/compaction durable work
   closure are archived; change 059, `governed-autonomous-reasoning-insights`,
   is now archived. The next bounded post-v1 proposal is
-  `governed-contradiction-insights`.
+  `governed-memory-intents`.
 - **Candidate expansion**: useful post-v1 ideas that must wait until the provider
   contract and quality gates are stable. This includes MCP adapters, namespace
   subtree conventions, agent self-model conventions, and later autonomous
@@ -1421,7 +1421,7 @@ Exit signal:
 11. RQ1–RQ4 retrieval-quality frontier (archived changes 040–043)
 12. Stage 10 optional adapters and governed experience insights (P8), with
     P8.1–P8.8 and changes 054–059 archived;
-    `governed-contradiction-insights` is the next bounded post-v1 proposal
+    `governed-memory-intents` is the next bounded post-v1 proposal
 
 Reasoning:
 
@@ -1779,7 +1779,7 @@ archived. Change 055, `retrieval-release-evidence-operational-closure`, and
 change 056, `durable-scheduler-run-history-operational-closure`, and change 057,
 `reflection-compaction-durable-work-closure`, are also archived. Change 059,
 `governed-autonomous-reasoning-insights`, is now archived. The next bounded
-post-v1 proposal is `governed-contradiction-insights`. The archived P8.8
+post-v1 proposal is `governed-memory-intents`. The archived P8.8
 work does not
 add a second rollout system,
 change default retrieval or OpenAPI behavior, or widen the canonical
