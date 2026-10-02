@@ -63,6 +63,27 @@ func TestMetricsObserverExportsBoundedMaintenanceEvent(t *testing.T) {
 	}
 }
 
+func TestMetricsObserverExportsProgressiveExperimentWithBoundedLabels(t *testing.T) {
+	observer := NewMetricsObserver()
+	observer.RecordProgressiveExperiment(context.Background(), ProgressiveExperimentEvent{
+		Level: "l0", Strategy: "parent-first", Mode: "shadow", Result: "completed",
+		Freshness: "fresh", Fallback: "none", Budget: "within_budget", Rollback: "passed", Eligibility: "shadow",
+	})
+	observer.RecordProgressiveExperiment(context.Background(), ProgressiveExperimentEvent{
+		Level: "tenant-a query text", Strategy: "postgres://secret", Mode: "raw", Result: "raw-error",
+		Freshness: "scope-value", Fallback: "memory-id", Budget: "raw-score", Rollback: "secret", Eligibility: "query",
+	})
+	metrics := observer.RenderPrometheus()
+	if !strings.Contains(metrics, `stele_retrieval_progressive_experiment_total{budget="within_budget",eligibility="shadow",fallback="none",freshness="fresh",level="l0",mode="shadow",result="completed",rollback="passed",strategy="parent-first"} 1`) {
+		t.Fatalf("progressive experiment metric missing:\n%s", metrics)
+	}
+	for _, forbidden := range []string{"tenant-a", "postgres://", "scope-value", "memory-id", "raw-score", "raw-error", `level="query"`} {
+		if strings.Contains(metrics, forbidden) {
+			t.Fatalf("progressive experiment telemetry leaked %q:\n%s", forbidden, metrics)
+		}
+	}
+}
+
 func TestMetricsObserverMaintenanceTelemetryDoesNotEmitRawSensitiveValues(t *testing.T) {
 	observer := NewMetricsObserver()
 	observer.RecordMaintenance(context.Background(), MaintenanceEvent{JobClass: "query text tenant-a", Outcome: "https://secret.invalid/provider", LeaseOutcome: "memory-id-1", Freshness: "scope-value", SLO: "raw-score-0.99", LatencyBucket: "plan details", CandidateBucket: "postgres://secret"})

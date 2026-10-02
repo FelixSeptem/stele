@@ -114,6 +114,22 @@ type RetrievalEvaluationEvent struct {
 	Error    string
 }
 
+// ProgressiveExperimentEvent carries only fixed-category experiment health.
+// It intentionally has no scope, query, source, identifier, DSN, or score
+// fields, so callers cannot accidentally turn experiment telemetry into a
+// high-cardinality or sensitive channel.
+type ProgressiveExperimentEvent struct {
+	Level       string
+	Strategy    string
+	Mode        string
+	Result      string
+	Freshness   string
+	Fallback    string
+	Budget      string
+	Rollback    string
+	Eligibility string
+}
+
 // RetrievalPlannerEvent carries only bounded planner execution categories.
 // It intentionally excludes query text, scope values, identifiers, provider
 // payloads, credentials, and raw scores.

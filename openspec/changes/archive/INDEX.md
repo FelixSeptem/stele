@@ -1,6 +1,6 @@
 # Archive Index
 
-Updated: 2026-10-02 13:52:59
+Updated: 2026-10-02 15:11:19
 
 - 001 -> bootstrap-foundation-and-event-ingestion
 - 002 -> governance-pipeline-and-memory-consolidation
@@ -59,3 +59,4 @@ Updated: 2026-10-02 13:52:59
 - 055 -> retrieval-release-evidence-operational-closure
 - 056 -> durable-scheduler-run-history-operational-closure
 - 057 -> reflection-compaction-durable-work-closure
+- 058 -> progressive-context-hierarchical-retrieval-experiments

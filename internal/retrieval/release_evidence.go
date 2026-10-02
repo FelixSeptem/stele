@@ -252,6 +252,23 @@ type ReleaseEvidenceInput struct {
 	SemanticHitProven    bool
 	TrajectoryCompatible bool
 	ResourceWithinBounds bool
+	Experiment           *ProgressiveExperimentReport
+}
+
+func ValidateProgressiveExperimentEvidence(scope memory.Scope, report *ProgressiveExperimentReport) error {
+	if report == nil {
+		return nil
+	}
+	if report.ScopeHash != scopeHash(scope) {
+		return fmt.Errorf("progressive experiment scope mismatch")
+	}
+	if report.SelectedStrategy != ParentFirstFlatStrategy {
+		return fmt.Errorf("progressive experiment baseline fallback mismatch")
+	}
+	if report.Verdict == ProgressiveExperimentNonPass || report.RollbackRequired {
+		return fmt.Errorf("progressive experiment is non-pass")
+	}
+	return nil
 }
 
 // ReleaseEvidenceRunRequest is the explicit, bounded input accepted by the
@@ -282,6 +299,7 @@ type ReleaseEvidenceRunRequest struct {
 	SemanticHitProven    bool
 	TrajectoryCompatible bool
 	ResourceWithinBounds bool
+	Experiment           *ProgressiveExperimentReport
 }
 
 // RunOwnedReleaseEvidence evaluates one exact scope using explicitly owned
@@ -314,6 +332,7 @@ func RunOwnedReleaseEvidence(_ context.Context, req ReleaseEvidenceRunRequest) (
 		DeterministicReplay: req.DeterministicReplay,
 		SemanticHitProven:   req.SemanticHitProven, TrajectoryCompatible: req.TrajectoryCompatible,
 		ResourceWithinBounds: req.ResourceWithinBounds,
+		Experiment:           req.Experiment,
 		Prerequisites: ReleaseEvidencePrerequisites{EvaluationDSN: req.EvaluationDSN, RuntimeDSN: req.RuntimeDSN,
 			OwnershipMarker: req.OwnershipMarker, TargetDistinct: req.TargetDistinct,
 			PostgreSQLReady: req.PostgreSQLReady, PGVectorReady: req.PGVectorReady,
@@ -410,6 +429,9 @@ func EvaluateReleaseEvidence(in ReleaseEvidenceInput) (ReleaseEvidenceReport, er
 	}
 	if strings.TrimSpace(in.ParentFirst.StrategyIdentity) == "" || !evaluationSafeIdentity(in.ParentFirst.StrategyIdentity) {
 		return ReleaseEvidenceReport{}, fmt.Errorf("parent-first strategy identity is invalid")
+	}
+	if err := ValidateProgressiveExperimentEvidence(in.Scope, in.Experiment); err != nil {
+		return ReleaseEvidenceReport{}, err
 	}
 	now := in.EvaluatedAt.UTC()
 	if now.IsZero() {

@@ -1,0 +1,4 @@
+DROP TRIGGER IF EXISTS progressive_experiment_reports_append_only ON progressive_experiment_reports;
+DROP INDEX IF EXISTS progressive_experiment_reports_retention_idx;
+DROP INDEX IF EXISTS progressive_experiment_reports_scope_created_idx;
+DROP TABLE IF EXISTS progressive_experiment_reports;

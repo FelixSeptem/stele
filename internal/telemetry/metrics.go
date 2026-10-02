@@ -138,6 +138,32 @@ func (o *MetricsObserver) RecordRetrievalEvaluation(ctx context.Context, event R
 	}, 1)
 }
 
+func (o *MetricsObserver) RecordProgressiveExperiment(ctx context.Context, event ProgressiveExperimentEvent) {
+	if o == nil {
+		return
+	}
+	o.addCounter("stele_retrieval_progressive_experiment_total", map[string]string{
+		"level":       boundedProgressiveLabel(event.Level, "l0", "l1", "l2"),
+		"strategy":    boundedProgressiveLabel(event.Strategy, "flat-fusion", "parent-first", "progressive"),
+		"mode":        boundedProgressiveLabel(event.Mode, "offline", "shadow"),
+		"result":      boundedProgressiveLabel(event.Result, "completed", "skipped", "degraded", "failed", "timed_out"),
+		"freshness":   boundedProgressiveLabel(event.Freshness, "fresh", "stale", "unknown"),
+		"fallback":    boundedProgressiveLabel(event.Fallback, "none", "baseline", "level_safety_failure", "parent_first_safety_failure"),
+		"budget":      boundedProgressiveLabel(event.Budget, "within_budget", "over_budget", "unknown"),
+		"rollback":    boundedProgressiveLabel(event.Rollback, "passed", "failed", "unknown"),
+		"eligibility": boundedProgressiveLabel(event.Eligibility, "shadow", "eligible", "non_pass", "disabled"),
+	}, 1)
+}
+
+func boundedProgressiveLabel(value string, allowed ...string) string {
+	for _, candidate := range allowed {
+		if value == candidate {
+			return candidate
+		}
+	}
+	return "unknown"
+}
+
 func (o *MetricsObserver) RecordReleaseEvidenceOperational(ctx context.Context, event ReleaseEvidenceOperationalEvent) {
 	if o == nil {
 		return
@@ -963,6 +989,7 @@ func (o *MetricsObserver) RenderPrometheus() string {
 	writeMetricFamilyHeader(&builder, "stele_retrieval_planner_changed_ranks", "gauge", "Bounded count of rank positions changed by shadow retrieval planning.")
 	writeMetricFamilyHeader(&builder, "stele_retrieval_planner_diagnostic_failure_total", "counter", "Private retrieval planner diagnostic construction failures by bounded category.")
 	writeMetricFamilyHeader(&builder, "stele_retrieval_evaluation_total", "counter", "Retrieval release-gate outcomes by bounded categories.")
+	writeMetricFamilyHeader(&builder, "stele_retrieval_progressive_experiment_total", "counter", "Progressive context and parent-first experiment outcomes by bounded categories.")
 	writeMetricFamilyHeader(&builder, "stele_retrieval_release_evidence_operational_total", "counter", "Retrieval release-evidence operational lifecycle outcomes.")
 	writeMetricFamilyHeader(&builder, "stele_retrieval_integrity_total", "counter", "Redacted retrieval trajectory and information-integrity outcomes by bounded categories.")
 	writeMetricFamilyHeader(&builder, "stele_derived_insight_replay_total", "counter", "Derived insight replay outcomes by low-cardinality categories.")
