@@ -186,6 +186,31 @@ func (o *MetricsObserver) RecordSchedulerRun(ctx context.Context, event Schedule
 	}, 1)
 }
 
+func (o *MetricsObserver) RecordDerivedWork(ctx context.Context, event DerivedWorkEvent) {
+	if o == nil {
+		return
+	}
+	o.addCounter("stele_derived_work_total", map[string]string{
+		"operation": boundedDerivedWorkLabel(event.Operation, "enqueue", "duplicate", "claim", "renew", "reclaim", "checkpoint", "flush", "drop", "retry", "exhaustion", "completion", "freshness"),
+		"result":    boundedDerivedWorkLabel(event.Result, "accepted", "buffered", "durable", "conflict", "failed", "completed", "dropped", "exhausted", "stale"),
+		"kind":      boundedDerivedWorkLabel(event.Kind, "reflection", "compaction", "projection_rebuild", "insight_maintenance", "freshness_retention"),
+		"state":     boundedDerivedWorkLabel(event.State, "queued", "running", "retry", "completed", "exhausted", "cancelled", "dropped"),
+		"retry":     boundedDerivedWorkLabel(event.Retry, "none", "eligible", "backoff", "exhausted"),
+		"loss":      boundedDerivedWorkLabel(event.Loss, "none", "overflow", "evicted", "flush_failure", "process_loss"),
+		"freshness": boundedDerivedWorkLabel(event.Freshness, "fresh", "stale", "divergent", "missing", "unknown"),
+		"slo":       boundedDerivedWorkLabel(event.SLO, "within_budget", "over_budget", "unknown"),
+	}, 1)
+}
+
+func boundedDerivedWorkLabel(value string, allowed ...string) string {
+	for _, candidate := range allowed {
+		if value == candidate {
+			return candidate
+		}
+	}
+	return "unknown"
+}
+
 func maintenanceLabel(value string, allowed []string) string {
 	for _, candidate := range allowed {
 		if value == candidate {

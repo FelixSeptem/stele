@@ -34,20 +34,25 @@ const MaxCompactionRecentTailReferences = 32
 // It is deliberately a derived record: it references canonical/raw sources
 // but never contains authority to mutate them.
 type CompactionEvidence struct {
-	ID                      string                     `json:"id"`
-	Scope                   Scope                      `json:"scope"`
-	Trigger                 string                     `json:"trigger"`
-	SourceWatermark         ContextProjectionWatermark `json:"source_watermark"`
-	RawEventReferences      []ContextProjectionSource  `json:"raw_event_references,omitempty"`
-	CanonicalVersionRefs    []ContextProjectionSource  `json:"canonical_version_refs,omitempty"`
-	DerivationVersion       string                     `json:"derivation_version"`
-	SummaryVersion          string                     `json:"summary_version"`
-	InputTokenEstimate      int                        `json:"input_token_estimate,omitempty"`
-	OutputTokenEstimate     int                        `json:"output_token_estimate,omitempty"`
-	EvidenceCoverage        float64                    `json:"evidence_coverage"`
-	RecentTailReferences    []ContextProjectionSource  `json:"recent_tail_references,omitempty"`
-	State                   CompactionEvidenceState    `json:"state"`
-	FollowUpReflectionRunID string                     `json:"follow_up_reflection_run_id,omitempty"`
+	ID                      string                      `json:"id"`
+	Scope                   Scope                       `json:"scope"`
+	Trigger                 string                      `json:"trigger"`
+	SourceWatermark         ContextProjectionWatermark  `json:"source_watermark"`
+	RawEventReferences      []ContextProjectionSource   `json:"raw_event_references,omitempty"`
+	CanonicalVersionRefs    []ContextProjectionSource   `json:"canonical_version_refs,omitempty"`
+	DerivationVersion       string                      `json:"derivation_version"`
+	SummaryVersion          string                      `json:"summary_version"`
+	InputTokenEstimate      int                         `json:"input_token_estimate,omitempty"`
+	OutputTokenEstimate     int                         `json:"output_token_estimate,omitempty"`
+	EvidenceCoverage        float64                     `json:"evidence_coverage"`
+	RecentTailReferences    []ContextProjectionSource   `json:"recent_tail_references,omitempty"`
+	State                   CompactionEvidenceState     `json:"state"`
+	FollowUpReflectionRunID string                      `json:"follow_up_reflection_run_id,omitempty"`
+	FreshnessCategory       ProjectionFreshnessCategory `json:"freshness_category,omitempty"`
+	FreshnessSLO            ProjectionSLOBucket         `json:"freshness_slo,omitempty"`
+	FreshnessEligible       bool                        `json:"freshness_eligible,omitempty"`
+	DerivedWorkID           string                      `json:"derived_work_id,omitempty"`
+	CheckpointSequence      int64                       `json:"checkpoint_sequence,omitempty"`
 }
 
 func (e CompactionEvidence) Validate() error {
@@ -78,6 +83,12 @@ func (e CompactionEvidence) Validate() error {
 	if !e.State.Valid() {
 		return fmt.Errorf("invalid compaction evidence state %q", e.State)
 	}
+	if e.FreshnessCategory != "" && !e.FreshnessCategory.Valid() {
+		return fmt.Errorf("invalid compaction freshness category %q", e.FreshnessCategory)
+	}
+	if e.FreshnessSLO != "" && e.FreshnessSLO != ProjectionSLOWithinBudget && e.FreshnessSLO != ProjectionSLOOverBudget && e.FreshnessSLO != ProjectionSLOUnknown {
+		return fmt.Errorf("invalid compaction freshness slo %q", e.FreshnessSLO)
+	}
 	if len(e.RecentTailReferences) > MaxCompactionRecentTailReferences {
 		return fmt.Errorf("compaction recent-tail references exceed %d", MaxCompactionRecentTailReferences)
 	}
@@ -100,6 +111,15 @@ func (e CompactionEvidence) Validate() error {
 	if strings.TrimSpace(e.FollowUpReflectionRunID) != "" && len(e.FollowUpReflectionRunID) > 256 {
 		return fmt.Errorf("follow-up reflection run id is too long")
 	}
+	if len(e.DerivedWorkID) > 256 {
+		return fmt.Errorf("derived work id is too long")
+	}
+	if e.CheckpointSequence < 0 {
+		return fmt.Errorf("compaction checkpoint sequence cannot be negative")
+	}
+	if e.State == CompactionEvidenceStateActive && strings.TrimSpace(e.DerivedWorkID) != "" && e.CheckpointSequence <= 0 {
+		return fmt.Errorf("active compaction evidence requires a checkpoint sequence")
+	}
 	return nil
 }
 
@@ -107,6 +127,12 @@ func (e CompactionEvidence) Validate() error {
 // projection. Stale, superseded and failed records fail closed.
 func (e CompactionEvidence) ProjectionEligible(scope Scope) bool {
 	if e.State != CompactionEvidenceStateActive || e.EvidenceCoverage <= 0 {
+		return false
+	}
+	if e.FreshnessCategory != "" && e.FreshnessCategory != ProjectionFreshnessFresh {
+		return false
+	}
+	if e.FreshnessSLO == ProjectionSLOOverBudget || (e.FreshnessCategory != "" && !e.FreshnessEligible) {
 		return false
 	}
 	if e.Scope.Normalized() != scope.Normalized() || e.Validate() != nil {

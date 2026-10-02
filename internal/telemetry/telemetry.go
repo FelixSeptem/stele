@@ -55,6 +55,19 @@ type SchedulerRunEvent struct {
 	DurationBucket string
 }
 
+// DerivedWorkEvent contains only fixed queue lifecycle categories. It is safe
+// to emit from workers without exposing work keys, scope values or payloads.
+type DerivedWorkEvent struct {
+	Operation string
+	Result    string
+	Kind      string
+	State     string
+	Retry     string
+	Loss      string
+	Freshness string
+	SLO       string
+}
+
 func LogSchedulerRunLifecycle(logger *log.Logger, event SchedulerRunEvent) {
 	if logger == nil {
 		return

@@ -2309,6 +2309,51 @@ paths:
                 $ref: '#/components/schemas/JobExecutionListResponse'
         '401':
           description: Missing or invalid admin API key
+  /v1/admin/derived-work/status:
+    get:
+      operationId: getAdminDerivedWorkStatus
+      parameters:
+        - $ref: '#/components/parameters/AdminAPIKey'
+        - $ref: '#/components/parameters/TenantHeader'
+        - $ref: '#/components/parameters/ProjectHeader'
+        - $ref: '#/components/parameters/NamespaceHeader'
+      responses:
+        '200':
+          description: Exact-scope bounded derived queue status
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/DerivedWorkStatus'
+        '401':
+          description: Missing or invalid admin API key
+        '404':
+          description: Queue status unavailable for the requested scope
+  /v1/admin/derived-work:
+    get:
+      operationId: listAdminDerivedWork
+      parameters:
+        - $ref: '#/components/parameters/AdminAPIKey'
+        - $ref: '#/components/parameters/TenantHeader'
+        - $ref: '#/components/parameters/ProjectHeader'
+        - $ref: '#/components/parameters/NamespaceHeader'
+        - in: query
+          name: limit
+          schema:
+            type: integer
+            maximum: 100
+        - in: query
+          name: cursor
+          schema:
+            type: string
+      responses:
+        '200':
+          description: Exact-scope paginated derived work detail
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/DerivedWorkPage'
+        '401':
+          description: Missing or invalid admin API key
   /v1/admin/jobs/run-history:
     get:
       operationId: listAdminSchedulerRunHistory
@@ -8475,6 +8520,60 @@ components:
           type: array
           items:
             $ref: '#/components/schemas/JobExecutionRecord'
+    DerivedWorkStatus:
+      type: object
+      required: [mode, depth, queued, running, retry, completed, exhausted, cancelled, dropped, observed_at]
+      properties:
+        mode:
+          type: string
+          enum: [postgres_durable, memory_buffer]
+        depth:
+          type: integer
+        queued:
+          type: integer
+        running:
+          type: integer
+        retry:
+          type: integer
+        completed:
+          type: integer
+        exhausted:
+          type: integer
+        cancelled:
+          type: integer
+        dropped:
+          type: integer
+        oldest_pending_at:
+          type: string
+          format: date-time
+        observed_at:
+          type: string
+          format: date-time
+    DerivedWorkPage:
+      type: object
+      required: [items]
+      properties:
+        items:
+          type: array
+          items:
+            type: object
+            required: [id, work_key, kind, watermark, state, attempt_count, max_attempts]
+            properties:
+              id: {type: string}
+              work_key: {type: string}
+              kind: {type: string}
+              watermark: {type: string}
+              state: {type: string}
+              attempt_count: {type: integer}
+              max_attempts: {type: integer}
+              failure_category: {type: string}
+              loss_disposition: {type: string}
+              created_at: {type: string, format: date-time}
+              updated_at: {type: string, format: date-time}
+              terminal_at: {type: string, format: date-time}
+              detail_expires_at: {type: string, format: date-time}
+        next_cursor:
+          type: string
     SchedulerRunSummary:
       type: object
       required: [run_key, job_class, scope, state, attempt_count, recovery, freshness, slo, cleanup_state, observed_at]

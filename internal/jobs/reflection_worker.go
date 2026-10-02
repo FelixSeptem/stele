@@ -51,6 +51,12 @@ func (w ReflectionRunWorker) RunOnce(ctx context.Context) (processed int, err er
 		return 0, err
 	}
 	for _, run := range claims {
+		if run.Scope.Normalized() != w.Scope.Normalized() || strings.TrimSpace(run.LeaseOwner) != strings.TrimSpace(w.WorkerID) {
+			// A claim returned outside the exact scope or without our lease is not
+			// executable. The store remains the authority and will reject any
+			// attempted mutation, so skip it before invoking derived execution.
+			continue
+		}
 		offset, candidates, evidence, execErr := w.Executor.ExecuteReflection(ctx, run, run.ProcessedOffset)
 		if execErr != nil {
 			category := memory.ReflectionFailureTransient
@@ -66,10 +72,27 @@ func (w ReflectionRunWorker) RunOnce(ctx context.Context) (processed int, err er
 			}
 			continue
 		}
-		if err := w.Store.CheckpointReflectionRun(ctx, memory.CheckpointReflectionRunInput{Scope: run.Scope, RunID: run.ID, WorkerID: w.WorkerID, ProcessedOffset: offset, OutputCandidateIDs: candidates, EvidenceReferences: evidence, UpdatedAt: now}); err != nil {
+		if err := memory.ValidateProcessedOffsetAdvance(run.ProcessedOffset, offset); err != nil {
+			if failErr := w.Store.FailReflectionRun(ctx, memory.FailReflectionRunInput{
+				Scope:    run.Scope,
+				RunID:    run.ID,
+				WorkerID: w.WorkerID,
+				Category: memory.ReflectionFailureInvalidInput,
+				Message:  truncateError(err.Error(), 512),
+				FailedAt: now,
+			}); failErr != nil {
+				return processed, failErr
+			}
+			continue
+		}
+		checkpointSequence := run.CheckpointSequence + 1
+		if checkpointSequence <= 0 {
+			checkpointSequence = 1
+		}
+		if err := w.Store.CheckpointReflectionRun(ctx, memory.CheckpointReflectionRunInput{Scope: run.Scope, RunID: run.ID, WorkerID: w.WorkerID, ProcessedOffset: offset, CheckpointSequence: checkpointSequence, InputWatermark: run.InputWatermark, OutputCandidateIDs: candidates, EvidenceReferences: evidence, UpdatedAt: now}); err != nil {
 			return processed, err
 		}
-		if err := w.Store.CompleteReflectionRun(ctx, memory.CompleteReflectionRunInput{Scope: run.Scope, RunID: run.ID, WorkerID: w.WorkerID, ProcessedOffset: offset, OutputCandidateIDs: candidates, EvidenceReferences: evidence, CompletedAt: now}); err != nil {
+		if err := w.Store.CompleteReflectionRun(ctx, memory.CompleteReflectionRunInput{Scope: run.Scope, RunID: run.ID, WorkerID: w.WorkerID, ProcessedOffset: offset, CheckpointSequence: checkpointSequence, OutputCandidateIDs: candidates, EvidenceReferences: evidence, CompletedAt: now}); err != nil {
 			return processed, err
 		}
 		processed++

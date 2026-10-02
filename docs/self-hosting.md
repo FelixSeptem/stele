@@ -2499,3 +2499,34 @@ To disable the adapter, set `STELE_MCP_ENABLED=false` and restart API replicas.
 The `/mcp` endpoint then returns not-found while ordinary OpenAPI/provider
 routes and canonical PostgreSQL state remain unchanged. Do not expose the MCP
 listener without the same network controls used for the API surface.
+
+## Derived work queue durability
+
+Reflection, compaction, projection rebuild, insight maintenance, and freshness
+work share one bounded queue. Production defaults should use PostgreSQL durable
+mode; `memory_buffer` is an explicit low-latency mode where unflushed derived
+work may be lost on overflow, flush failure, or process restart. Raw events,
+canonical memory versions, review decisions, checkpoints, and committed
+compaction evidence are never buffered through this lossy path.
+
+Queue mode is selected at process startup. Switching from memory to durable mode
+requires draining and recording the loss report first; switching from durable to
+memory leaves existing PostgreSQL work claimable and does not copy it into the
+buffer. Inspect exact-scope status with the admin endpoints:
+
+```powershell
+curl.exe -H "X-Admin-API-Key: $env:STELE_ADMIN_API_KEY" `
+  -H "X-Stele-Tenant: tenant-a" -H "X-Stele-Project: project-a" `
+  -H "X-Stele-Namespace: default" `
+  http://localhost:8080/v1/admin/derived-work/status
+curl.exe -H "X-Admin-API-Key: $env:STELE_ADMIN_API_KEY" `
+  -H "X-Stele-Tenant: tenant-a" -H "X-Stele-Project: project-a" `
+  -H "X-Stele-Namespace: default" `
+  'http://localhost:8080/v1/admin/derived-work?limit=20'
+```
+
+The status response exposes only bounded mode, depth, retry, terminal, loss,
+and freshness categories. Detail pages use an opaque cursor and exact scope
+predicates; foreign scopes reveal neither queue existence nor counts. Retry
+exhaustion is terminal until an authorized recovery action explicitly requeues
+the work.

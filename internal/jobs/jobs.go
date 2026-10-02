@@ -17,6 +17,7 @@ import (
 	"github.com/FelixSeptem/stele/internal/memory"
 	"github.com/FelixSeptem/stele/internal/telemetry"
 	"github.com/FelixSeptem/stele/internal/workflow"
+	"github.com/FelixSeptem/stele/internal/workqueue"
 	"github.com/jackc/pgx/v5"
 )
 
@@ -1568,6 +1569,7 @@ type ContextProjectionRebuildJob struct {
 	Policy          memory.ContextProjectionPolicy
 	RendererVersion string
 	Observer        telemetry.Observer
+	Queue           workqueue.QueueAdapter
 }
 
 func (j ContextProjectionRebuildJob) Name() string { return "context_projection_rebuild" }
@@ -1586,7 +1588,15 @@ func (j ContextProjectionRebuildJob) Run(ctx context.Context) (int, error) {
 	if limit <= 0 {
 		limit = 100
 	}
-	_, err := j.Service.RebuildContextProjection(ctx, memory.ContextProjectionRebuildRequest{Scope: j.Scope.Normalized(), Kind: j.Kind, Limit: limit, SchemaVersion: j.SchemaVersion, Policy: j.Policy, RendererVersion: j.RendererVersion})
+	request := memory.ContextProjectionRebuildRequest{Scope: j.Scope.Normalized(), Kind: j.Kind, Limit: limit, SchemaVersion: j.SchemaVersion, Policy: j.Policy, RendererVersion: j.RendererVersion}
+	if j.Queue != nil {
+		_, err := (ProjectionWorkDispatcher{Queue: j.Queue}).Dispatch(ctx, request, fmt.Sprintf("projection:%s:%s", request.Kind, request.Policy.Version))
+		if err != nil {
+			return 0, err
+		}
+		return 1, nil
+	}
+	_, err := j.Service.RebuildContextProjection(ctx, request)
 	if err != nil {
 		if observer, ok := j.Observer.(interface {
 			RecordMaintenance(context.Context, telemetry.MaintenanceEvent)

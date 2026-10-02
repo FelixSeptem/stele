@@ -52,3 +52,20 @@ func TestCompactionEvidenceRejectsHiddenSourceLifecycle(t *testing.T) {
 		t.Fatal("expected hidden source lifecycle to fail validation")
 	}
 }
+
+func TestCompactionEvidenceFreshnessAndSLOFailClosed(t *testing.T) {
+	scope := Scope{Tenant: "t", Project: "p", Namespace: "n"}
+	evidence := CompactionEvidence{ID: "compact-fresh", Scope: scope, Trigger: "pressure", SourceWatermark: ContextProjectionWatermark{RawEventIDs: []string{"event-1"}}, DerivationVersion: "d1", SummaryVersion: "s1", EvidenceCoverage: 1, State: CompactionEvidenceStateActive, RawEventReferences: []ContextProjectionSource{{Kind: ContextProjectionSourceRawEvent, ID: "event-1", Scope: scope}}, FreshnessCategory: ProjectionFreshnessFresh, FreshnessSLO: ProjectionSLOWithinBudget, FreshnessEligible: true}
+	if !evidence.ProjectionEligible(scope) {
+		t.Fatal("fresh within-budget evidence was not eligible")
+	}
+	evidence.FreshnessCategory = ProjectionFreshnessDivergent
+	if evidence.ProjectionEligible(scope) {
+		t.Fatal("divergent evidence was eligible")
+	}
+	evidence.FreshnessCategory = ProjectionFreshnessFresh
+	evidence.FreshnessSLO = ProjectionSLOOverBudget
+	if evidence.ProjectionEligible(scope) {
+		t.Fatal("over-budget evidence was eligible")
+	}
+}

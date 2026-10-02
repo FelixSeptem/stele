@@ -10,6 +10,7 @@ import (
 	"github.com/FelixSeptem/stele/internal/assurance"
 	"github.com/FelixSeptem/stele/internal/provider"
 	"github.com/FelixSeptem/stele/internal/reasoning"
+	"github.com/FelixSeptem/stele/internal/workqueue"
 )
 
 type Mode string
@@ -51,6 +52,7 @@ type Config struct {
 	Reasoning                           ReasoningConfig
 	ContextCalibration                  ContextCalibrationConfig
 	MCP                                 MCPConfig
+	DerivedWork                         workqueue.QueueConfig
 }
 
 // MCPConfig contains the optional API-mode MCP adapter guard and protocol
@@ -257,6 +259,10 @@ func LoadFromEnv() (Config, error) {
 		return Config{}, err
 	}
 	reasoningConfig, err := loadReasoningConfig()
+	if err != nil {
+		return Config{}, err
+	}
+	derivedWorkConfig, err := loadDerivedWorkConfig()
 	if err != nil {
 		return Config{}, err
 	}
@@ -564,6 +570,7 @@ func LoadFromEnv() (Config, error) {
 		Evaluation:                          evaluationConfig,
 		Provider:                            providerConfig,
 		Reasoning:                           reasoningConfig,
+		DerivedWork:                         derivedWorkConfig,
 		Auth: AuthConfig{
 			BootstrapAdminKey: bootstrapAdminKey,
 			DefaultTenant:     defaultTenant,
@@ -625,6 +632,47 @@ func LoadFromEnv() (Config, error) {
 			AlertRetryBackoff:        alertRetryBackoff,
 		},
 	}, nil
+}
+
+func loadDerivedWorkConfig() (workqueue.QueueConfig, error) {
+	mode := workqueue.QueueMode(getEnvOrDefault("STELE_DERIVED_WORK_QUEUE_MODE", string(workqueue.QueueModePostgresDurable)))
+	capacity, err := loadIntWithDefault("STELE_DERIVED_WORK_QUEUE_CAPACITY", 1024)
+	if err != nil {
+		return workqueue.QueueConfig{}, err
+	}
+	batchSize, err := loadIntWithDefault("STELE_DERIVED_WORK_QUEUE_BATCH_SIZE", 100)
+	if err != nil {
+		return workqueue.QueueConfig{}, err
+	}
+	flushInterval, err := loadDurationWithDefault("STELE_DERIVED_WORK_QUEUE_FLUSH_INTERVAL", time.Second)
+	if err != nil {
+		return workqueue.QueueConfig{}, err
+	}
+	leaseDuration, err := loadDurationWithDefault("STELE_DERIVED_WORK_QUEUE_LEASE_DURATION", time.Minute)
+	if err != nil {
+		return workqueue.QueueConfig{}, err
+	}
+	maxAttempts, err := loadIntWithDefault("STELE_DERIVED_WORK_QUEUE_MAX_ATTEMPTS", 5)
+	if err != nil {
+		return workqueue.QueueConfig{}, err
+	}
+	retention, err := loadDurationWithDefault("STELE_DERIVED_WORK_QUEUE_RETENTION", 7*24*time.Hour)
+	if err != nil {
+		return workqueue.QueueConfig{}, err
+	}
+	config := workqueue.QueueConfig{
+		Mode:          mode,
+		Capacity:      capacity,
+		BatchSize:     batchSize,
+		FlushInterval: flushInterval,
+		LeaseDuration: leaseDuration,
+		MaxAttempts:   maxAttempts,
+		Retention:     retention,
+	}
+	if err := config.Validate(); err != nil {
+		return workqueue.QueueConfig{}, fmt.Errorf("invalid derived work queue configuration: %w", err)
+	}
+	return config, nil
 }
 
 func loadProviderConfig() (ProviderConfig, error) {

@@ -10,10 +10,10 @@ func TestMigrationAssetsExposeImmutableInitialMigration(t *testing.T) {
 	if err != nil {
 		t.Fatalf("MigrationAssets() error = %v", err)
 	}
-	if len(migrations) != 46 {
-		t.Fatalf("migration assets = %v, want twenty-three up/down migration pairs", migrations)
+	if len(migrations) != 48 {
+		t.Fatalf("migration assets = %v, want twenty-four up/down migration pairs", migrations)
 	}
-	if migrations[0] != "0001_base_schema.down.sql" || migrations[1] != "0001_base_schema.up.sql" || migrations[36] != "0019_scoped_memory_paths.down.sql" || migrations[37] != "0019_scoped_memory_paths.up.sql" || migrations[38] != "0020_reserved_insight_activation.down.sql" || migrations[39] != "0020_reserved_insight_activation.up.sql" || migrations[40] != "0021_retrieval_integrity_evidence.down.sql" || migrations[41] != "0021_retrieval_integrity_evidence.up.sql" || migrations[42] != "0022_ranking_rollout_evidence_attestations.down.sql" || migrations[43] != "0022_ranking_rollout_evidence_attestations.up.sql" || migrations[44] != "0023_scheduler_run_history.down.sql" || migrations[45] != "0023_scheduler_run_history.up.sql" {
+	if migrations[0] != "0001_base_schema.down.sql" || migrations[1] != "0001_base_schema.up.sql" || migrations[36] != "0019_scoped_memory_paths.down.sql" || migrations[37] != "0019_scoped_memory_paths.up.sql" || migrations[38] != "0020_reserved_insight_activation.down.sql" || migrations[39] != "0020_reserved_insight_activation.up.sql" || migrations[40] != "0021_retrieval_integrity_evidence.down.sql" || migrations[41] != "0021_retrieval_integrity_evidence.up.sql" || migrations[42] != "0022_ranking_rollout_evidence_attestations.down.sql" || migrations[43] != "0022_ranking_rollout_evidence_attestations.up.sql" || migrations[44] != "0023_scheduler_run_history.down.sql" || migrations[45] != "0023_scheduler_run_history.up.sql" || migrations[46] != "0024_derived_work_queue.down.sql" || migrations[47] != "0024_derived_work_queue.up.sql" {
 		t.Fatalf("migration assets = %v, want stable migration names", migrations)
 	}
 }

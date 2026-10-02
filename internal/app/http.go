@@ -27,6 +27,7 @@ import (
 	"github.com/FelixSeptem/stele/internal/retrieval"
 	"github.com/FelixSeptem/stele/internal/telemetry"
 	"github.com/FelixSeptem/stele/internal/workflow"
+	"github.com/FelixSeptem/stele/internal/workqueue"
 	"github.com/FelixSeptem/stele/openapi"
 	"github.com/jackc/pgx/v5"
 )
@@ -76,6 +77,7 @@ type HTTPDependencies struct {
 	JobExecutionRead          JobExecutionReader
 	SchedulerRunHistoryRead   jobs.SchedulerRunHistoryReader
 	SchedulerRunActions       jobs.SchedulerRunAdminActions
+	DerivedQueueRead          DerivedQueueReader
 	Metrics                   MetricsRecorder
 	Logger                    *log.Logger
 	ProviderEnabled           bool
@@ -129,6 +131,14 @@ type GovernanceStatus = jobs.GovernanceStatus
 
 type GovernanceStatusReader interface {
 	ReadGovernanceStatus(ctx context.Context) (GovernanceStatus, error)
+}
+
+// DerivedQueueReader is the authorized, exact-scope inspection boundary for
+// unified derived work. Implementations must enforce scope predicates before
+// returning status or detail.
+type DerivedQueueReader interface {
+	ReadDerivedWorkStatus(context.Context, memory.Scope, time.Time) (workqueue.Status, error)
+	ListDerivedWork(context.Context, workqueue.ListInput) (workqueue.WorkPage, error)
 }
 
 type MemoryHistoryReader interface {
@@ -1174,6 +1184,16 @@ func NewHTTPHandler(deps HTTPDependencies) http.Handler {
 		),
 	)
 	mux.Handle("GET /v1/admin/jobs/status", adminJobStatus)
+
+	adminDerivedQueue := auth.APIKeyMiddleware(deps.AdminAPIKeys)(
+		auth.ScopeMiddleware()(
+			http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				handleDerivedQueueInspection(w, r, deps.DerivedQueueRead)
+			}),
+		),
+	)
+	mux.Handle("GET /v1/admin/derived-work", adminDerivedQueue)
+	mux.Handle("GET /v1/admin/derived-work/status", adminDerivedQueue)
 
 	adminSchedulerRunHistory := auth.APIKeyMiddleware(deps.AdminAPIKeys)(
 		auth.ScopeMiddleware()(
@@ -5519,6 +5539,59 @@ func handleSchedulerRunHistory(w http.ResponseWriter, r *http.Request, reader jo
 		return
 	}
 	writeJSON(w, http.StatusOK, page)
+}
+
+func handleDerivedQueueInspection(w http.ResponseWriter, r *http.Request, reader DerivedQueueReader) {
+	if reader == nil {
+		http.Error(w, "derived queue reader is not configured", http.StatusServiceUnavailable)
+		return
+	}
+	scope, ok := auth.ScopeFromContext(r.Context())
+	if !ok {
+		http.Error(w, "scope context is missing", http.StatusInternalServerError)
+		return
+	}
+	if strings.HasSuffix(strings.TrimSuffix(r.URL.Path, "/"), "/status") {
+		status, err := reader.ReadDerivedWorkStatus(r.Context(), scope, time.Now().UTC())
+		if err != nil {
+			// Do not reveal whether a foreign scope has queue records.
+			http.Error(w, "derived queue status unavailable", http.StatusNotFound)
+			return
+		}
+		writeJSON(w, http.StatusOK, status)
+		return
+	}
+	limit := 20
+	if raw := strings.TrimSpace(r.URL.Query().Get("limit")); raw != "" {
+		parsed, err := strconv.Atoi(raw)
+		if err != nil || parsed <= 0 {
+			http.Error(w, "invalid limit", http.StatusBadRequest)
+			return
+		}
+		if parsed > 100 {
+			parsed = 100
+		}
+		limit = parsed
+	}
+	page, err := reader.ListDerivedWork(r.Context(), workqueue.ListInput{Scope: scope, Limit: limit, Cursor: strings.TrimSpace(r.URL.Query().Get("cursor"))})
+	if err != nil {
+		http.Error(w, "failed to read derived queue detail", http.StatusBadRequest)
+		return
+	}
+	// Keep scope values out of the response; the authorization middleware and
+	// repository predicate already establish the exact scope boundary.
+	items := make([]map[string]any, 0, len(page.Items))
+	for _, item := range page.Items {
+		items = append(items, map[string]any{
+			"id": item.ID, "work_key": item.WorkKey, "kind": item.Kind,
+			"watermark": item.Watermark, "state": item.State,
+			"attempt_count": item.AttemptCount, "max_attempts": item.MaxAttempts,
+			"failure_category": item.FailureCategory, "loss_disposition": item.LossDisposition,
+			"created_at": item.CreatedAt, "updated_at": item.UpdatedAt,
+			"terminal_at": item.TerminalAt, "detail_expires_at": item.DetailExpiresAt,
+		})
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"items": items, "next_cursor": page.NextCursor})
 }
 
 func handleSchedulerRunAction(w http.ResponseWriter, r *http.Request, actions jobs.SchedulerRunAdminActions) {

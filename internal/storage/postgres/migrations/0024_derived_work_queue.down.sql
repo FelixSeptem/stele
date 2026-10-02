@@ -1,0 +1,9 @@
+DROP INDEX IF EXISTS derived_work_terminal_scope_idx;
+DROP INDEX IF EXISTS derived_work_checkpoint_idx;
+DROP INDEX IF EXISTS derived_work_detail_retention_idx;
+DROP INDEX IF EXISTS derived_work_claim_idx;
+DROP INDEX IF EXISTS derived_work_scope_identity_idx;
+DROP TABLE IF EXISTS derived_work_terminal_summaries;
+DROP TABLE IF EXISTS derived_work_attempts;
+DROP TABLE IF EXISTS derived_work_checkpoints;
+DROP TABLE IF EXISTS derived_work_items;

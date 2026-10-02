@@ -2,10 +2,25 @@ package memory
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"strings"
 	"time"
 )
+
+var ErrReflectionOffsetRegression = errors.New("reflection processed offset regressed")
+
+// ValidateProcessedOffsetAdvance is shared by stores before their lease-owned
+// compare-and-set update. Equal offsets are idempotent; lower offsets are not.
+func ValidateProcessedOffsetAdvance(current, next int64) error {
+	if current < 0 || next < 0 {
+		return fmt.Errorf("processed offset cannot be negative")
+	}
+	if next < current {
+		return ErrReflectionOffsetRegression
+	}
+	return nil
+}
 
 type ReflectionTrigger string
 
@@ -101,6 +116,7 @@ type ReflectionRun struct {
 	InputWatermark          string
 	TranscriptSchemaVersion string
 	ProcessedOffset         int64
+	CheckpointSequence      int64
 	LeaseOwner              string
 	LeaseUntil              time.Time
 	Attempt                 int
@@ -148,6 +164,8 @@ type CheckpointReflectionRunInput struct {
 	Scope                                  Scope
 	RunID, WorkerID                        string
 	ProcessedOffset                        int64
+	CheckpointSequence                     int64
+	InputWatermark                         string
 	OutputCandidateIDs, EvidenceReferences []string
 	UpdatedAt                              time.Time
 }
@@ -155,6 +173,7 @@ type CompleteReflectionRunInput struct {
 	Scope                                  Scope
 	RunID, WorkerID                        string
 	ProcessedOffset                        int64
+	CheckpointSequence                     int64
 	OutputCandidateIDs, EvidenceReferences []string
 	CompletedAt                            time.Time
 }
@@ -166,6 +185,48 @@ type FailReflectionRunInput struct {
 	RetryAt         time.Time
 	FailedAt        time.Time
 }
+
+func (i CheckpointReflectionRunInput) Validate(currentOffset, currentSequence int64) error {
+	if err := i.Scope.Validate(); err != nil {
+		return err
+	}
+	if strings.TrimSpace(i.RunID) == "" || strings.TrimSpace(i.WorkerID) == "" {
+		return fmt.Errorf("run id and worker id are required")
+	}
+	if i.UpdatedAt.IsZero() || i.ProcessedOffset < 0 || i.CheckpointSequence <= 0 {
+		return fmt.Errorf("checkpoint input is invalid")
+	}
+	if err := ValidateProcessedOffsetAdvance(currentOffset, i.ProcessedOffset); err != nil {
+		return err
+	}
+	if i.CheckpointSequence < currentSequence {
+		return fmt.Errorf("reflection checkpoint sequence regressed")
+	}
+	if i.InputWatermark != "" && len([]byte(i.InputWatermark)) > 256 {
+		return fmt.Errorf("reflection input watermark is too long")
+	}
+	return nil
+}
+
+func (i CompleteReflectionRunInput) Validate(currentOffset, currentSequence int64) error {
+	if err := i.Scope.Validate(); err != nil {
+		return err
+	}
+	if strings.TrimSpace(i.RunID) == "" || strings.TrimSpace(i.WorkerID) == "" {
+		return fmt.Errorf("run id and worker id are required")
+	}
+	if i.CompletedAt.IsZero() || i.ProcessedOffset < 0 || i.CheckpointSequence < 0 {
+		return fmt.Errorf("completion input is invalid")
+	}
+	if err := ValidateProcessedOffsetAdvance(currentOffset, i.ProcessedOffset); err != nil {
+		return err
+	}
+	if i.CheckpointSequence < currentSequence {
+		return fmt.Errorf("reflection checkpoint sequence regressed")
+	}
+	return nil
+}
+
 type ReplayReflectionRunInput struct {
 	Scope                                                                               Scope
 	OriginalRunID, InputWatermark, TranscriptSchemaVersion, IdempotencyKey, RequestedBy string

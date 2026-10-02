@@ -26,6 +26,7 @@ import (
 	"github.com/FelixSeptem/stele/internal/storage/postgres"
 	"github.com/FelixSeptem/stele/internal/telemetry"
 	"github.com/FelixSeptem/stele/internal/workflow"
+	"github.com/FelixSeptem/stele/internal/workqueue"
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgconn"
 )
@@ -527,6 +528,7 @@ func defaultSchedulerRuntimeDependencies() schedulerRuntimeDependencies {
 }
 
 func buildAPIRuntime(ctx context.Context, cfg config.Config, deps apiRuntimeDependencies) (apiRuntime, error) {
+	cfg.DerivedWork = normalizedDerivedWorkConfig(cfg.DerivedWork)
 	var err error
 	deps.reasoningProvider, err = resolveReasoningProvider(cfg.Reasoning, deps.reasoningProvider)
 	if err != nil {
@@ -561,6 +563,14 @@ func buildAPIRuntime(ctx context.Context, cfg config.Config, deps apiRuntimeDepe
 	}
 
 	repo := postgres.NewRepositoryWithEmbeddingRouter(pool, embeddingRuntime.Router)
+	derivedQueue, err := workqueue.NewAdapter(cfg.DerivedWork, repo)
+	if err != nil {
+		pool.Close()
+		return apiRuntime{}, fmt.Errorf("initialize derived work queue: %w", err)
+	}
+	if flusher, ok := derivedQueue.(workqueue.BackgroundFlusher); ok {
+		flusher.Start(ctx)
+	}
 	ingestor := memory.NewService(repo, time.Now, deps.observer)
 	queryService := memory.NewQueryService(repo)
 	lifecycleService := memory.LifecycleService{
@@ -684,10 +694,13 @@ func buildAPIRuntime(ctx context.Context, cfg config.Config, deps apiRuntimeDepe
 	httpDeps.RetrievalIntegrityAdmin = repo
 	httpDeps.UsefulnessFeedback = repo
 	replayService := insights.ReplayService{
-		Store:           repo,
-		MinimumEvidence: cfg.Jobs.DerivedInsightMinimumEvidence,
-		Now:             time.Now,
-		NewRunID:        newReplayID,
+		Store:            repo,
+		MinimumEvidence:  cfg.Jobs.DerivedInsightMinimumEvidence,
+		Now:              time.Now,
+		NewRunID:         newReplayID,
+		Queue:            derivedQueue,
+		QueueMaxAttempts: cfg.DerivedWork.MaxAttempts,
+		QueueRetention:   cfg.DerivedWork.Retention,
 	}
 	if observer, ok := deps.observer.(interface {
 		RecordDerivedInsightReplay(context.Context, telemetry.DerivedInsightReplayEvent)
@@ -739,6 +752,7 @@ func buildAPIRuntime(ctx context.Context, cfg config.Config, deps apiRuntimeDepe
 	})
 	httpDeps.SchedulerRunHistoryRead = repo
 	httpDeps.SchedulerRunActions = repo
+	httpDeps.DerivedQueueRead = repo
 
 	return apiRuntime{
 		bootstrapper: bootstrapperFunc(func(ctx context.Context) error {
@@ -749,6 +763,7 @@ func buildAPIRuntime(ctx context.Context, cfg config.Config, deps apiRuntimeDepe
 		shutdownTimeout: cfg.HTTP.ShutdownTimeout,
 		markDraining:    readiness.BeginDrain,
 		cleanup: func() {
+			derivedQueue.Close()
 			pool.Close()
 		},
 		observer: deps.observer,
@@ -756,6 +771,7 @@ func buildAPIRuntime(ctx context.Context, cfg config.Config, deps apiRuntimeDepe
 }
 
 func buildWorkerRuntime(ctx context.Context, cfg config.Config, deps workerRuntimeDependencies) (workerRuntime, error) {
+	cfg.DerivedWork = normalizedDerivedWorkConfig(cfg.DerivedWork)
 	var err error
 	deps.reasoningProvider, err = resolveReasoningProvider(cfg.Reasoning, deps.reasoningProvider)
 	if err != nil {
@@ -790,6 +806,14 @@ func buildWorkerRuntime(ctx context.Context, cfg config.Config, deps workerRunti
 	}
 
 	repo := postgres.NewRepositoryWithEmbeddingRouter(pool, embeddingRuntime.Router)
+	derivedQueue, err := workqueue.NewAdapter(cfg.DerivedWork, repo)
+	if err != nil {
+		pool.Close()
+		return workerRuntime{}, fmt.Errorf("initialize derived work queue: %w", err)
+	}
+	if flusher, ok := derivedQueue.(workqueue.BackgroundFlusher); ok {
+		flusher.Start(ctx)
+	}
 	now := deps.now
 	scope := memory.Scope{
 		Tenant:    cfg.Auth.DefaultTenant,
@@ -863,10 +887,13 @@ func buildWorkerRuntime(ctx context.Context, cfg config.Config, deps workerRunti
 		Observer:           deps.observer,
 	}
 	replayService := insights.ReplayService{
-		Store:           repo,
-		MinimumEvidence: cfg.Jobs.DerivedInsightMinimumEvidence,
-		Now:             now,
-		NewRunID:        newReplayID,
+		Store:            repo,
+		MinimumEvidence:  cfg.Jobs.DerivedInsightMinimumEvidence,
+		Now:              now,
+		NewRunID:         newReplayID,
+		Queue:            derivedQueue,
+		QueueMaxAttempts: cfg.DerivedWork.MaxAttempts,
+		QueueRetention:   cfg.DerivedWork.Retention,
 	}
 	if observer, ok := deps.observer.(interface {
 		RecordDerivedInsightReplay(context.Context, telemetry.DerivedInsightReplayEvent)
@@ -966,6 +993,7 @@ func buildWorkerRuntime(ctx context.Context, cfg config.Config, deps workerRunti
 		readiness:  runtimeReadinessChecker(config.ModeWorker, pool, embeddingRuntime, true, deps.observer),
 		authorizer: principalAuthorizerForRuntime(cfg, repo, now),
 		cleanup: func() {
+			derivedQueue.Close()
 			pool.Close()
 		},
 		observer: deps.observer,
@@ -973,6 +1001,7 @@ func buildWorkerRuntime(ctx context.Context, cfg config.Config, deps workerRunti
 }
 
 func buildSchedulerRuntime(ctx context.Context, cfg config.Config, deps schedulerRuntimeDependencies) (schedulerRuntime, error) {
+	cfg.DerivedWork = normalizedDerivedWorkConfig(cfg.DerivedWork)
 	var err error
 	deps.reasoningProvider, err = resolveReasoningProvider(cfg.Reasoning, deps.reasoningProvider)
 	if err != nil {
@@ -1017,12 +1046,23 @@ func buildSchedulerRuntime(ctx context.Context, cfg config.Config, deps schedule
 	}
 
 	repo := postgres.NewRepositoryWithEmbeddingRouter(pool, embeddingRuntime.Router)
+	derivedQueue, err := workqueue.NewAdapter(cfg.DerivedWork, repo)
+	if err != nil {
+		pool.Close()
+		return schedulerRuntime{}, fmt.Errorf("initialize derived work queue: %w", err)
+	}
+	if flusher, ok := derivedQueue.(workqueue.BackgroundFlusher); ok {
+		flusher.Start(ctx)
+	}
 	now := deps.now
 	replayService := insights.ReplayService{
-		Store:           repo,
-		MinimumEvidence: cfg.Jobs.DerivedInsightMinimumEvidence,
-		Now:             now,
-		NewRunID:        newReplayID,
+		Store:            repo,
+		MinimumEvidence:  cfg.Jobs.DerivedInsightMinimumEvidence,
+		Now:              now,
+		NewRunID:         newReplayID,
+		Queue:            derivedQueue,
+		QueueMaxAttempts: cfg.DerivedWork.MaxAttempts,
+		QueueRetention:   cfg.DerivedWork.Retention,
 	}
 	if observer, ok := deps.observer.(interface {
 		RecordDerivedInsightReplay(context.Context, telemetry.DerivedInsightReplayEvent)
@@ -1235,7 +1275,7 @@ func buildSchedulerRuntime(ctx context.Context, cfg config.Config, deps schedule
 			jobs.ScopeDispatchJob{
 				NameValue: "context_projection_rebuild_dispatch", ScopeSource: repo, ScopeBatchLimit: cfg.Jobs.MaintenanceScopeBatchLimit, FallbackScope: scope,
 				Dispatch: func(scope memory.Scope) jobs.MaintenanceJob {
-					return jobs.ContextProjectionRebuildJob{Scope: scope, Service: memory.NewContextProjectionMaintenanceService(repo), Kind: memory.ContextProjectionKindAlwaysVisible, Limit: 100, SchemaVersion: "schema-v1", Policy: memory.DefaultContextProjectionPolicy("policy-v1"), RendererVersion: "renderer-v1", Observer: deps.observer}
+					return jobs.ContextProjectionRebuildJob{Scope: scope, Service: memory.NewContextProjectionMaintenanceService(repo), Queue: derivedQueue, Kind: memory.ContextProjectionKindAlwaysVisible, Limit: 100, SchemaVersion: "schema-v1", Policy: memory.DefaultContextProjectionPolicy("policy-v1"), RendererVersion: "renderer-v1", Observer: deps.observer}
 				},
 			},
 			jobs.SchedulerRunHistoryRetentionJob{
@@ -1313,10 +1353,26 @@ func buildSchedulerRuntime(ctx context.Context, cfg config.Config, deps schedule
 		readiness:  runtimeReadinessChecker(config.ModeScheduler, pool, embeddingRuntime, true, deps.observer),
 		authorizer: principalAuthorizerForRuntime(cfg, repo, now),
 		cleanup: func() {
+			derivedQueue.Close()
 			pool.Close()
 		},
 		observer: deps.observer,
 	}, nil
+}
+
+func normalizedDerivedWorkConfig(cfg workqueue.QueueConfig) workqueue.QueueConfig {
+	if cfg.Mode != "" {
+		return cfg
+	}
+	return workqueue.QueueConfig{
+		Mode:          workqueue.QueueModePostgresDurable,
+		Capacity:      1024,
+		BatchSize:     64,
+		FlushInterval: 5 * time.Second,
+		LeaseDuration: 1 * time.Minute,
+		MaxAttempts:   3,
+		Retention:     7 * 24 * time.Hour,
+	}
 }
 
 func embeddingRouterFromConfig(cfg config.EmbeddingConfig) embedding.Router {

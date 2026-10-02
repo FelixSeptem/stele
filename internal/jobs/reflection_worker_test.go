@@ -47,6 +47,12 @@ func (s reflectionExecutorStub) ExecuteReflection(ctx context.Context, run memor
 	return offset + 1, []string{"candidate-1"}, []string{"event-1"}, nil
 }
 
+type regressionReflectionExecutor struct{}
+
+func (regressionReflectionExecutor) ExecuteReflection(context.Context, memory.ReflectionRun, int64) (int64, []string, []string, error) {
+	return 0, []string{"candidate-should-not-publish"}, nil, nil
+}
+
 func TestReflectionRunWorkerCheckpointsAndCompletes(t *testing.T) {
 	now := time.Date(2026, 9, 6, 0, 0, 0, 0, time.UTC)
 	store := &reflectionStoreStub{claims: []memory.ReflectionRun{{ID: "run-1", Scope: memory.Scope{Tenant: "t", Project: "p", Namespace: "n"}, Status: memory.ReflectionRunRunning, ProcessedOffset: 2, Attempt: 1, MaxAttempts: 3, LeaseOwner: "worker-1"}}}
@@ -71,5 +77,30 @@ func TestReflectionRunWorkerRecordsBoundedRetryFailure(t *testing.T) {
 	}
 	if len(store.failed) != 1 || store.failed[0].Category != memory.ReflectionFailureTransient || !store.failed[0].RetryAt.Equal(now.Add(time.Minute)) {
 		t.Fatalf("failure=%+v", store.failed)
+	}
+}
+
+func TestReflectionRunWorkerRejectsOffsetRegressionBeforeCheckpoint(t *testing.T) {
+	now := time.Date(2026, 9, 6, 0, 0, 0, 0, time.UTC)
+	scope := memory.Scope{Tenant: "t", Project: "p", Namespace: "n"}
+	store := &reflectionStoreStub{claims: []memory.ReflectionRun{{ID: "run-1", Scope: scope, Status: memory.ReflectionRunRunning, ProcessedOffset: 2, Attempt: 1, MaxAttempts: 3, LeaseOwner: "worker-1"}}}
+	w := ReflectionRunWorker{Store: store, Executor: regressionReflectionExecutor{}, Scope: scope, WorkerID: "worker-1", Now: func() time.Time { return now }}
+	if _, err := w.RunOnce(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	if len(store.checkpoints) != 0 || len(store.failed) != 1 || store.failed[0].Category != memory.ReflectionFailureInvalidInput {
+		t.Fatalf("checkpoint=%+v failed=%+v", store.checkpoints, store.failed)
+	}
+}
+
+func TestReflectionRunWorkerSkipsReclaimedLeaseBeforeDerivedExecution(t *testing.T) {
+	scope := memory.Scope{Tenant: "t", Project: "p", Namespace: "n"}
+	store := &reflectionStoreStub{claims: []memory.ReflectionRun{{ID: "run-1", Scope: scope, Status: memory.ReflectionRunRunning, ProcessedOffset: 2, Attempt: 2, LeaseOwner: "other-worker"}}}
+	w := ReflectionRunWorker{Store: store, Executor: reflectionExecutorStub{}, Scope: scope, WorkerID: "worker-1"}
+	if n, err := w.RunOnce(context.Background()); err != nil || n != 0 {
+		t.Fatalf("RunOnce()=%d,%v", n, err)
+	}
+	if len(store.checkpoints) != 0 || len(store.completed) != 0 {
+		t.Fatalf("stale worker published checkpoint=%+v completion=%+v", store.checkpoints, store.completed)
 	}
 }

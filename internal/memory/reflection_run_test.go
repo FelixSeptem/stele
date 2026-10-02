@@ -82,3 +82,15 @@ func TestReflectionTriggerServicePreservesTriggerAndScope(t *testing.T) {
 		t.Fatalf("captured input=%+v", store.input)
 	}
 }
+
+func TestReflectionProcessedOffsetAdvanceIsMonotonic(t *testing.T) {
+	if err := ValidateProcessedOffsetAdvance(4, 4); err != nil {
+		t.Fatalf("equal offset rejected: %v", err)
+	}
+	if err := ValidateProcessedOffsetAdvance(4, 9); err != nil {
+		t.Fatalf("forward offset rejected: %v", err)
+	}
+	if err := ValidateProcessedOffsetAdvance(4, 3); err == nil {
+		t.Fatal("offset regression accepted")
+	}
+}

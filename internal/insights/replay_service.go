@@ -9,6 +9,7 @@ import (
 
 	"github.com/FelixSeptem/stele/internal/memory"
 	"github.com/FelixSeptem/stele/internal/telemetry"
+	"github.com/FelixSeptem/stele/internal/workqueue"
 	"github.com/jackc/pgx/v5"
 )
 
@@ -33,6 +34,12 @@ type ReplayService struct {
 	Observer             derivedInsightReplayObserver
 	ActivationPolicy     *ReservedInsightActivationPolicy
 	ActivationCandidates []memory.DerivedInsight
+	// Queue is optional for compatibility. When configured, apply requests are
+	// persisted as pending runs and dispatched through the unified derived work
+	// queue instead of relying on an inline execution path.
+	Queue            workqueue.QueueAdapter
+	QueueMaxAttempts int
+	QueueRetention   time.Duration
 }
 
 type derivedInsightReplayObserver interface {
@@ -210,8 +217,8 @@ func (s ReplayService) appendReservedActivationDecisions(report *memory.DerivedI
 		report.Decisions = append(report.Decisions, memory.DerivedInsightReplayDecision{
 			InsightType: memory.DerivedInsightTypeHypothesis,
 			Fingerprint: "activation:missing_candidate",
-			Decision: memory.DerivedInsightReplayDecisionIncomplete,
-			Reason: memory.DerivedInsightReplayReasonActivationIncompatible,
+			Decision:    memory.DerivedInsightReplayDecisionIncomplete,
+			Reason:      memory.DerivedInsightReplayReasonActivationIncompatible,
 		})
 		report.Counters.Incomplete++
 	}
@@ -253,7 +260,53 @@ func (s ReplayService) ApplyDerivedInsightReplay(ctx context.Context, input memo
 		CreatedAt: now,
 		UpdatedAt: now,
 	}
-	return s.Store.CreateDerivedInsightReplayRun(ctx, run)
+	created, err := s.Store.CreateDerivedInsightReplayRun(ctx, run)
+	if err != nil || s.Queue == nil {
+		return created, err
+	}
+	now = s.now()
+	maxAttempts := s.QueueMaxAttempts
+	if maxAttempts <= 0 {
+		maxAttempts = 3
+	}
+	retention := s.QueueRetention
+	if retention <= 0 {
+		retention = 7 * 24 * time.Hour
+	}
+	watermark := strings.TrimSpace(input.ActivationSourceWatermark)
+	if watermark == "" {
+		watermark = fmt.Sprintf("%d:%d:%d", input.EvidenceWindowStart.UnixNano(), input.EvidenceWindowEnd.UnixNano(), input.EvidenceLimit)
+	}
+	idempotency := strings.TrimSpace(input.IdempotencyKey)
+	if idempotency == "" {
+		idempotency = "replay:" + created.ID
+	}
+	reference := input.Actor + ":" + input.Reason
+	if len([]byte(reference)) > workqueue.MaxReferenceBytes {
+		reference = string([]rune(reference)[:minRunes(reference, workqueue.MaxReferenceBytes)])
+	}
+	_, queueErr := s.Queue.Enqueue(ctx, workqueue.EnqueueInput{
+		DerivedWorkInput: workqueue.DerivedWorkInput{Scope: input.Scope.Normalized(), Kind: workqueue.WorkKindInsightMaintenance, Watermark: watermark, Idempotency: idempotency, Reference: reference},
+		MaxAttempts:      maxAttempts, Now: now, DetailExpiresAt: now.Add(retention),
+	})
+	if queueErr != nil {
+		return created, queueErr
+	}
+	return created, nil
+}
+
+func minRunes(value string, maxBytes int) int {
+	used := 0
+	count := 0
+	for _, r := range value {
+		size := len(string(r))
+		if used+size > maxBytes {
+			break
+		}
+		used += size
+		count++
+	}
+	return count
 }
 
 func (s ReplayService) ExecuteDerivedInsightReplay(ctx context.Context, run memory.DerivedInsightReplayRun) (memory.DerivedInsightReplayReport, error) {
