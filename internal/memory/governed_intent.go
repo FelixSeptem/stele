@@ -29,17 +29,21 @@ func (t MemoryIntentType) Valid() bool {
 type MemoryIntentStatus string
 
 const (
+	MemoryIntentStatusPending    MemoryIntentStatus = "pending"
 	MemoryIntentStatusAccepted   MemoryIntentStatus = "accepted"
 	MemoryIntentStatusCandidate  MemoryIntentStatus = "candidate"
 	MemoryIntentStatusActive     MemoryIntentStatus = "active"
 	MemoryIntentStatusSuppressed MemoryIntentStatus = "suppressed"
 	MemoryIntentStatusRejected   MemoryIntentStatus = "rejected"
 	MemoryIntentStatusFailed     MemoryIntentStatus = "failed"
+	MemoryIntentStatusReplayed   MemoryIntentStatus = "replayed"
 )
 
 func (s MemoryIntentStatus) Valid() bool {
 	switch s {
 	case MemoryIntentStatusAccepted, MemoryIntentStatusCandidate, MemoryIntentStatusActive, MemoryIntentStatusSuppressed, MemoryIntentStatusRejected, MemoryIntentStatusFailed:
+		return true
+	case MemoryIntentStatusPending, MemoryIntentStatusReplayed:
 		return true
 	default:
 		return false
@@ -47,18 +51,20 @@ func (s MemoryIntentStatus) Valid() bool {
 }
 
 type MemoryIntentInput struct {
-	Scope          Scope
-	MemoryPath     string
-	Type           MemoryIntentType
-	TargetMemoryID string
-	TargetVersion  int64
-	Content        string
-	Actor          string
-	Reason         string
-	Provenance     map[string]any
-	RequestID      string
-	OperationID    string
-	IdempotencyKey string
+	Scope           Scope
+	MemoryPath      string
+	Type            MemoryIntentType
+	TargetMemoryID  string
+	TargetVersion   int64
+	Content         string
+	Actor           string
+	Reason          string
+	Provenance      map[string]any
+	RequestID       string
+	OperationID     string
+	IdempotencyKey  string
+	TargetInsightID string
+	Evidence        []MemoryIntentEvidence
 }
 
 func (i MemoryIntentInput) Validate() error {
@@ -84,6 +90,9 @@ func (i MemoryIntentInput) Validate() error {
 	case len(i.IdempotencyKey) > 256:
 		return fmt.Errorf("idempotency key must be at most 256 bytes")
 	}
+	if len(i.Content) > MemoryIntentMaxContentBytes {
+		return fmt.Errorf("intent content exceeds %d bytes", MemoryIntentMaxContentBytes)
+	}
 	if i.Type == MemoryIntentRemember || i.Type == MemoryIntentUpdate || i.Type == MemoryIntentFeedback {
 		if strings.TrimSpace(i.Content) == "" {
 			return fmt.Errorf("content is required for %s intent", i.Type)
@@ -97,25 +106,33 @@ func (i MemoryIntentInput) Validate() error {
 			return fmt.Errorf("target version must be greater than zero for %s intent", i.Type)
 		}
 	}
+	if i.Type == MemoryIntentFeedback && strings.TrimSpace(i.TargetInsightID) == "" {
+		return fmt.Errorf("feedback target insight id is required")
+	}
 	return nil
 }
 
 type MemoryIntentRecord struct {
-	ID             string
-	Scope          Scope
-	MemoryPath     string
-	Type           MemoryIntentType
-	TargetMemoryID string
-	TargetVersion  int64
-	Content        string
-	Actor          string
-	Reason         string
-	Provenance     map[string]any
-	RequestID      string
-	OperationID    string
-	IdempotencyKey string
-	Status         MemoryIntentStatus
-	CreatedAt      time.Time
+	ID                 string
+	Scope              Scope
+	MemoryPath         string
+	Type               MemoryIntentType
+	TargetMemoryID     string
+	TargetVersion      int64
+	Content            string
+	Actor              string
+	Reason             string
+	Provenance         map[string]any
+	RequestID          string
+	OperationID        string
+	IdempotencyKey     string
+	TargetInsightID    string
+	Evidence           []MemoryIntentEvidence
+	OutcomeReference   string
+	RequestFingerprint string
+	PolicyVersion      string
+	Status             MemoryIntentStatus
+	CreatedAt          time.Time
 }
 
 type MemoryIntentProcessor interface {
@@ -129,6 +146,10 @@ type MemoryIntentEnqueuer interface {
 	EnqueueMemoryIntent(context.Context, MemoryIntentRecord) error
 }
 
+type MemoryIntentTransitionWriter interface {
+	AppendMemoryIntentTransition(context.Context, MemoryIntentTransition) error
+}
+
 // MemoryIntentTargetValidator lets the canonical store enforce existence,
 // scope, lifecycle, and expected-version checks before the ledger write is
 // handed to downstream governance work.
@@ -138,16 +159,39 @@ type MemoryIntentTargetValidator interface {
 
 type MemoryIntentService struct {
 	Processor MemoryIntentProcessor
+	Policy    MemoryIntentPolicyGate
 	Now       func() time.Time
 	NewID     func() string
 }
 
 func (s MemoryIntentService) Submit(ctx context.Context, input MemoryIntentInput) (MemoryIntentRecord, error) {
-	if err := input.Validate(); err != nil {
+	if err := input.ValidateGoverned(); err != nil {
+		return MemoryIntentRecord{}, err
+	}
+	fingerprint, err := input.CanonicalFingerprint()
+	if err != nil {
 		return MemoryIntentRecord{}, err
 	}
 	if s.Processor == nil {
 		return MemoryIntentRecord{}, fmt.Errorf("memory intent processor is not configured")
+	}
+	policyVersion := ""
+	if s.Policy != nil {
+		decision, err := s.Policy.EvaluateMemoryIntent(ctx, input)
+		if err != nil {
+			return MemoryIntentRecord{}, fmt.Errorf("evaluate memory intent policy: %w", err)
+		}
+		if !decision.Enabled {
+			category := decision.Category
+			if !category.Valid() {
+				category = MemoryIntentDiagnosticPolicyDisabled
+			}
+			return MemoryIntentRecord{}, fmt.Errorf("memory intent policy %s: processing disabled", category)
+		}
+		policyVersion = strings.TrimSpace(decision.PolicyVersion)
+		if policyVersion == "" {
+			return MemoryIntentRecord{}, fmt.Errorf("memory intent policy version is required")
+		}
 	}
 	if validator, ok := s.Processor.(MemoryIntentTargetValidator); ok {
 		if err := validator.ValidateMemoryIntentTarget(ctx, input); err != nil {
@@ -167,13 +211,24 @@ func (s MemoryIntentService) Submit(ctx context.Context, input MemoryIntentInput
 		TargetVersion: input.TargetVersion, Content: input.Content, Actor: strings.TrimSpace(input.Actor),
 		Reason: input.Reason, Provenance: input.Provenance, RequestID: strings.TrimSpace(input.RequestID),
 		OperationID: strings.TrimSpace(input.OperationID), IdempotencyKey: strings.TrimSpace(input.IdempotencyKey),
+		TargetInsightID: strings.TrimSpace(input.TargetInsightID), Evidence: input.Evidence, RequestFingerprint: fingerprint, PolicyVersion: policyVersion,
 		Status: MemoryIntentStatusAccepted, CreatedAt: now,
 	}
 	created, err := s.Processor.AppendMemoryIntent(ctx, record)
 	if err != nil {
 		return MemoryIntentRecord{}, err
 	}
-	if enqueuer, ok := s.Processor.(MemoryIntentEnqueuer); ok && created.Status == MemoryIntentStatusAccepted {
+	acceptedOrReplay := created.Status == MemoryIntentStatusAccepted || created.Status == MemoryIntentStatusReplayed
+	if writer, ok := s.Processor.(MemoryIntentTransitionWriter); ok && acceptedOrReplay {
+		if err := writer.AppendMemoryIntentTransition(ctx, MemoryIntentTransition{
+			IntentID: created.ID, Scope: created.Scope, Sequence: 1, To: MemoryIntentStatusAccepted,
+			Actor: created.Actor, Reason: created.Reason, DiagnosticCategory: MemoryIntentDiagnosticAccepted,
+			OccurredAt: created.CreatedAt,
+		}); err != nil {
+			return MemoryIntentRecord{}, fmt.Errorf("record memory intent transition: %w", err)
+		}
+	}
+	if enqueuer, ok := s.Processor.(MemoryIntentEnqueuer); ok && acceptedOrReplay {
 		if err := enqueuer.EnqueueMemoryIntent(ctx, created); err != nil {
 			return MemoryIntentRecord{}, fmt.Errorf("enqueue memory intent: %w", err)
 		}

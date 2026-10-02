@@ -31,6 +31,7 @@ type DerivedWorkWorker struct {
 	BatchSize     int
 	LeaseDuration time.Duration
 	RetryBackoff  time.Duration
+	Kind          *workqueue.WorkKind
 	Now           func() time.Time
 }
 
@@ -53,7 +54,7 @@ func (w DerivedWorkWorker) RunOnce(ctx context.Context) (int, error) {
 	if lease <= 0 {
 		lease = time.Minute
 	}
-	items, err := w.Store.ClaimDerivedWork(ctx, workqueue.ClaimInput{Scope: w.Scope, WorkerID: w.WorkerID, Now: now, LeaseDuration: lease, Limit: limit})
+	items, err := w.Store.ClaimDerivedWork(ctx, workqueue.ClaimInput{Scope: w.Scope, WorkerID: w.WorkerID, Now: now, LeaseDuration: lease, Limit: limit, Kind: w.Kind})
 	if err != nil {
 		return 0, err
 	}

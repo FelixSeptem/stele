@@ -174,6 +174,7 @@ WITH claimed AS (
         SELECT id FROM derived_work_items
         WHERE tenant = $1 AND project = $2 AND namespace = $3
           AND state IN ('queued','retry','claimed','running')
+          AND ($8::text IS NULL OR kind = $8)
           AND next_attempt_at <= $5
           AND (lease_until IS NULL OR lease_until <= $5)
         ORDER BY created_at ASC, id ASC
@@ -185,7 +186,11 @@ WITH claimed AS (
       loss_disposition, created_at, updated_at, terminal_at, detail_expires_at
 )
 SELECT * FROM claimed ORDER BY created_at ASC, id ASC`
-	rows, err := r.db.Query(ctx, query, input.Scope.Tenant, input.Scope.Project, input.Scope.Namespace, input.WorkerID, input.Now, input.Now.Add(input.LeaseDuration), input.Limit)
+	var kind any
+	if input.Kind != nil {
+		kind = string(*input.Kind)
+	}
+	rows, err := r.db.Query(ctx, query, input.Scope.Tenant, input.Scope.Project, input.Scope.Namespace, input.WorkerID, input.Now, input.Now.Add(input.LeaseDuration), input.Limit, kind)
 	if err != nil {
 		return nil, fmt.Errorf("claim derived work: %w", err)
 	}

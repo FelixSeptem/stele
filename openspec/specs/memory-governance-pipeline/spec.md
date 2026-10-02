@@ -2,7 +2,9 @@
 
 ## Purpose
 Process raw events into governed memory through an asynchronous worker pipeline.
+
 ## Requirements
+
 ### Requirement: Worker-driven governance pipeline
 The service SHALL process raw events into governed memory through an asynchronous worker-driven pipeline rather than the synchronous ingest request path.
 
@@ -24,3 +26,14 @@ The service MUST persist candidate memory as a first-class lifecycle state with 
 #### Scenario: Candidate retains governance audit context
 - **WHEN** a candidate memory is written
 - **THEN** the service stores enough provenance and governance fields to explain later promotion, suppression, or expiry decisions
+
+### Requirement: Accepted intents enter asynchronous governance
+The governance pipeline MUST be able to consume accepted memory intents as durable work items and MUST apply the same scope, lifecycle, provenance, candidate, retry, and audit controls used for raw-event governance.
+
+#### Scenario: Worker claims an accepted intent
+- **WHEN** an accepted intent is queued and its lease is available
+- **THEN** a worker claims it within the owning scope and emits candidate or lifecycle work through the existing governance path
+
+#### Scenario: Intent processing exceeds retry budget
+- **WHEN** an intent repeatedly fails a bounded dependency or processing step
+- **THEN** the worker records a failed or suppressed outcome and stops retrying after the configured budget

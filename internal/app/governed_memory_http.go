@@ -9,15 +9,17 @@ import (
 )
 
 type memoryIntentRequest struct {
-	Type           memory.MemoryIntentType `json:"type"`
-	MemoryPath     string                  `json:"memory_path,omitempty"`
-	TargetMemoryID string                  `json:"target_memory_id,omitempty"`
-	TargetVersion  int64                   `json:"target_version,omitempty"`
-	Content        string                  `json:"content,omitempty"`
-	Reason         string                  `json:"reason"`
-	Provenance     map[string]any          `json:"provenance,omitempty"`
-	OperationID    string                  `json:"operation_id"`
-	IdempotencyKey string                  `json:"idempotency_key"`
+	Type            memory.MemoryIntentType       `json:"type"`
+	MemoryPath      string                        `json:"memory_path,omitempty"`
+	TargetMemoryID  string                        `json:"target_memory_id,omitempty"`
+	TargetVersion   int64                         `json:"target_version,omitempty"`
+	Content         string                        `json:"content,omitempty"`
+	Reason          string                        `json:"reason"`
+	Provenance      map[string]any                `json:"provenance,omitempty"`
+	OperationID     string                        `json:"operation_id"`
+	IdempotencyKey  string                        `json:"idempotency_key"`
+	TargetInsightID string                        `json:"target_insight_id,omitempty"`
+	Evidence        []memory.MemoryIntentEvidence `json:"evidence,omitempty"`
 }
 
 func handleMemoryIntentCreate(w http.ResponseWriter, r *http.Request, service MemoryIntentAPI) {
@@ -38,7 +40,7 @@ func handleMemoryIntentCreate(w http.ResponseWriter, r *http.Request, service Me
 		Scope: scope, Type: req.Type, MemoryPath: req.MemoryPath, TargetMemoryID: strings.TrimSpace(req.TargetMemoryID), TargetVersion: req.TargetVersion,
 		Content: req.Content, Actor: strings.TrimSpace(r.Header.Get("X-Stele-Actor")), Reason: req.Reason,
 		Provenance: req.Provenance, RequestID: strings.TrimSpace(r.Header.Get("X-Request-ID")), OperationID: req.OperationID,
-		IdempotencyKey: req.IdempotencyKey,
+		IdempotencyKey: req.IdempotencyKey, TargetInsightID: strings.TrimSpace(req.TargetInsightID), Evidence: req.Evidence,
 	}
 	if err := input.Validate(); err != nil {
 		http.Error(w, err.Error(), http.StatusBadRequest)
@@ -50,6 +52,24 @@ func handleMemoryIntentCreate(w http.ResponseWriter, r *http.Request, service Me
 		return
 	}
 	writeJSON(w, http.StatusAccepted, record)
+}
+
+func handleAdminMemoryIntentHistory(w http.ResponseWriter, r *http.Request, reader MemoryIntentHistoryReader) {
+	if reader == nil {
+		http.Error(w, "memory intent history reader is not configured", http.StatusServiceUnavailable)
+		return
+	}
+	scope, ok := auth.ScopeFromContext(r.Context())
+	if !ok {
+		http.Error(w, "scope context is missing", http.StatusInternalServerError)
+		return
+	}
+	history, err := reader.ReadMemoryIntentHistory(r.Context(), scope, r.PathValue("intent_id"))
+	if err != nil {
+		writeGovernedMemoryHTTPError(w, err, "failed to read memory intent history")
+		return
+	}
+	writeJSON(w, http.StatusOK, history)
 }
 
 type reflectionReviewRequest struct {

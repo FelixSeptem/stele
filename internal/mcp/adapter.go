@@ -45,6 +45,10 @@ type ForgetPreviewStore interface {
 	LoadForgetPreview(context.Context, string) (ForgetPreviewRecord, error)
 }
 
+type memoryIntentForgetHistoryReader interface {
+	GetMemoryHistory(context.Context, memory.Scope, string) (memory.MemoryHistory, error)
+}
+
 type ForgetApplyDisposition string
 
 const (
@@ -310,10 +314,14 @@ func (a *Adapter) serverForRequest(r *http.Request) *protocolmcp.Server {
 		if action == "" {
 			action = string(policy.ForgettingActionSuppress)
 		}
-		_, err = a.applyForgetLifecycle(ctx, state.principal, binding, ForgetApplyRequest{
+		forgetRequest := ForgetApplyRequest{
 			PreviewID: "single-" + input.IdempotencyKey, MemoryIDs: []string{strings.TrimSpace(input.MemoryID)},
 			Path: input.Path, Action: action, Reason: input.Reason, IdempotencyKey: input.IdempotencyKey,
-		})
+		}
+		if err := a.submitForgetIntents(ctx, state, dispatch.Scope, forgetRequest); err != nil {
+			return nil, ForgetResponse{}, err
+		}
+		_, err = a.applyForgetLifecycle(ctx, state.principal, binding, forgetRequest)
 		if err != nil {
 			return nil, ForgetResponse{}, err
 		}
@@ -450,6 +458,9 @@ func (a *Adapter) applyForgetRequest(ctx context.Context, state requestState, in
 	if err != nil || preview.Principal != state.principal.ID || preview.ExpiresAt.Before(a.now().UTC()) || preview.Scope != dispatch.Scope || !sameIDs(preview.MemoryIDs, input.MemoryIDs) {
 		return ForgetApplyResponse{}, releaseClaim(mcpError(ErrorValidation, "preview_invalid"))
 	}
+	if err := a.submitForgetIntents(ctx, state, dispatch.Scope, input); err != nil {
+		return ForgetApplyResponse{}, releaseClaim(err)
+	}
 	response, err := a.applyForgetLifecycle(ctx, state.principal, binding, input)
 	if err != nil {
 		return ForgetApplyResponse{}, releaseClaim(err)
@@ -458,6 +469,41 @@ func (a *Adapter) applyForgetRequest(ctx context.Context, state requestState, in
 		return ForgetApplyResponse{}, releaseClaim(mcpError(ErrorRetryable, "forget_apply_completion_failed"))
 	}
 	return response, nil
+}
+
+func (a *Adapter) submitForgetIntents(ctx context.Context, state requestState, scope memory.Scope, input ForgetApplyRequest) error {
+	if a.intent == nil {
+		return nil
+	}
+	historyReader, ok := a.memoryQuery.(memoryIntentForgetHistoryReader)
+	if !ok {
+		return nil
+	}
+	for _, memoryID := range input.MemoryIDs {
+		history, err := historyReader.GetMemoryHistory(ctx, scope, memoryID)
+		if err != nil {
+			return mcpError(ErrorValidation, "forget_target_unavailable")
+		}
+		version := int64(0)
+		if len(history.Versions) > 0 {
+			version = history.Versions[len(history.Versions)-1].Version
+		}
+		if version <= 0 {
+			return mcpError(ErrorValidation, "forget_target_stale")
+		}
+		requestID := lifecycleOperationToken("intent-request", input.PreviewID, memoryID)
+		operationID := lifecycleOperationToken("intent-operation", input.PreviewID, memoryID)
+		_, err = a.intent.Submit(ctx, memory.MemoryIntentInput{
+			Scope: scope, Type: memory.MemoryIntentForget, MemoryPath: input.Path,
+			TargetMemoryID: strings.TrimSpace(memoryID), TargetVersion: version,
+			Actor: state.principal.ID, Reason: input.Reason, RequestID: requestID,
+			OperationID: operationID, IdempotencyKey: lifecycleIdempotencyKey(input.IdempotencyKey, memoryID),
+		})
+		if err != nil {
+			return mcpError(ErrorValidation, "forget_intent_rejected")
+		}
+	}
+	return nil
 }
 
 func (a *Adapter) bindingForLifecycle(ctx context.Context, principal auth.Principal, scope memory.Scope, bindingID string) (provider.RuntimeBinding, error) {

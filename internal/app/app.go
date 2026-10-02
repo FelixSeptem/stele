@@ -27,6 +27,7 @@ import (
 	"github.com/FelixSeptem/stele/internal/telemetry"
 	"github.com/FelixSeptem/stele/internal/workflow"
 	"github.com/FelixSeptem/stele/internal/workqueue"
+	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgconn"
 )
@@ -216,6 +217,71 @@ const governanceWorkerLeaseDuration = 2 * time.Minute
 
 type lifecycleProcessorAdapter struct {
 	processor governance.ForgettingProcessor
+}
+
+// memoryIntentGovernanceRouter applies accepted remember/update/forget intents
+// through the existing candidate, canonical-version, and lifecycle stores.
+// Contradiction and feedback remain review-only outcomes until their reserved
+// policies explicitly authorize activation.
+type memoryIntentGovernanceRouter struct {
+	repo *postgres.Repository
+	now  func() time.Time
+}
+
+func (r memoryIntentGovernanceRouter) ProcessRememberOrUpdate(ctx context.Context, record memory.MemoryIntentRecord) (memory.MemoryIntentOutcome, error) {
+	if r.repo == nil {
+		return memory.MemoryIntentOutcome{}, fmt.Errorf("memory intent repository is required")
+	}
+	now := time.Now().UTC()
+	if r.now != nil {
+		now = r.now().UTC()
+	}
+	event, err := r.repo.WriteRawEvent(ctx, memory.IngestEventInput{Scope: record.Scope, MemoryPath: record.MemoryPath, EventType: "conversation.message", Content: record.Content, Metadata: map[string]any{"intent_id": record.ID, "intent_type": string(record.Type)}, SourceTimestamp: now})
+	if err != nil {
+		return memory.MemoryIntentOutcome{}, err
+	}
+	candidate := governance.CandidateMemory{ID: uuid.NewString(), SourceRawEventID: event.ID, Scope: record.Scope, MemoryPath: record.MemoryPath, Class: memory.MemoryClassEpisodic, Content: record.Content, Confidence: 1, Importance: 0.5, Freshness: 1, Sensitivity: governance.SensitivityLow, Mutability: governance.MutabilityMutable, RetentionClass: policy.RetentionClassDurable, Status: governance.CandidateStatusPending, CreatedAt: now, UpdatedAt: now}
+	created, err := r.repo.CreateCandidate(ctx, candidate, memory.ProvenanceRecord{ID: uuid.NewString(), Scope: record.Scope, RawEventID: event.ID, CandidateMemoryID: candidate.ID, Actor: record.Actor, Operation: "memory_intent_candidate", CreatedAt: now, SourceContext: map[string]any{"intent_id": record.ID}})
+	if err != nil {
+		return memory.MemoryIntentOutcome{}, err
+	}
+	memoryID := ""
+	if record.Type == memory.MemoryIntentUpdate {
+		memoryID = record.TargetMemoryID
+	}
+	if memoryID == "" {
+		memoryID = uuid.NewString()
+	}
+	if _, _, err := r.repo.PromoteCandidate(ctx, governance.CanonicalPromotion{Candidate: created, MemoryID: memoryID, VersionID: uuid.NewString(), Version: 1, CreatedAt: now}); err != nil {
+		return memory.MemoryIntentOutcome{}, err
+	}
+	if _, err := r.repo.TransitionCandidateStatus(ctx, governance.CandidateStatusTransition{CandidateID: created.ID, ToStatus: governance.CandidateStatusPromoted, UpdatedAt: now}, memory.ProvenanceRecord{ID: uuid.NewString(), Scope: record.Scope, RawEventID: event.ID, CandidateMemoryID: created.ID, MemoryID: memoryID, Actor: record.Actor, Operation: "memory_intent_promote", CreatedAt: now, SourceContext: map[string]any{"intent_id": record.ID}}); err != nil {
+		return memory.MemoryIntentOutcome{}, err
+	}
+	return memory.MemoryIntentOutcome{Status: memory.MemoryIntentStatusActive, DiagnosticCategory: memory.MemoryIntentDiagnosticAccepted, OutcomeReference: memoryID, CandidateReference: created.ID}, nil
+}
+
+func (r memoryIntentGovernanceRouter) ProcessForget(ctx context.Context, record memory.MemoryIntentRecord) (memory.MemoryIntentOutcome, error) {
+	processor := governance.ForgettingProcessor{Repository: r.repo, Now: r.now}
+	if err := processor.Apply(ctx, governance.LifecycleAction{MemoryID: record.TargetMemoryID, MemoryPath: record.MemoryPath, Scope: record.Scope, Action: policy.ForgettingActionSuppress, Reason: record.Reason, Actor: record.Actor, RequestID: record.RequestID, AppliedAt: r.nowUTC()}); err != nil {
+		return memory.MemoryIntentOutcome{}, err
+	}
+	return memory.MemoryIntentOutcome{Status: memory.MemoryIntentStatusSuppressed, DiagnosticCategory: memory.MemoryIntentDiagnosticSuppressed, OutcomeReference: record.TargetMemoryID}, nil
+}
+
+func (r memoryIntentGovernanceRouter) ProcessContradiction(context.Context, memory.MemoryIntentRecord) (memory.MemoryIntentOutcome, error) {
+	return memory.MemoryIntentOutcome{Status: memory.MemoryIntentStatusSuppressed, DiagnosticCategory: memory.MemoryIntentDiagnosticSuppressed}, nil
+}
+
+func (r memoryIntentGovernanceRouter) ProcessFeedback(context.Context, memory.MemoryIntentRecord) (memory.MemoryIntentOutcome, error) {
+	return memory.MemoryIntentOutcome{Status: memory.MemoryIntentStatusCandidate, DiagnosticCategory: memory.MemoryIntentDiagnosticPending}, nil
+}
+
+func (r memoryIntentGovernanceRouter) nowUTC() time.Time {
+	if r.now != nil {
+		return r.now().UTC()
+	}
+	return time.Now().UTC()
 }
 
 func (a lifecycleProcessorAdapter) Apply(ctx context.Context, action memory.LifecycleActionRecord) error {
@@ -974,10 +1040,24 @@ func buildWorkerRuntime(ctx context.Context, cfg config.Config, deps workerRunti
 		Now:           now,
 		Observer:      deps.observer,
 	}
+	intentKind := workqueue.WorkKindMemoryIntent
+	intentWorker := jobs.DerivedWorkWorker{
+		Store: repo,
+		Executor: jobs.MemoryIntentWorkExecutor{
+			Reader:   repo,
+			History:  repo,
+			Worker:   memory.MemoryIntentWorker{Router: memoryIntentGovernanceRouter{repo: repo, now: now}, Validator: repo},
+			Recorder: repo,
+		},
+		Scope: scope, WorkerID: "stele-memory-intent-worker", BatchSize: 16,
+		LeaseDuration: governanceWorkerLeaseDuration, RetryBackoff: cfg.Jobs.GovernanceRetryBackoff,
+		Now: now, Kind: &intentKind,
+	}
 	workers := []jobs.LoopWorker{worker}
 	if err := scope.Validate(); err == nil {
 		workers = append(workers, repairWorker)
 		workers = append(workers, proofWorker, sessionVerificationWorker, alertDeliveryWorker)
+		workers = append(workers, intentWorker)
 	}
 
 	return workerRuntime{

@@ -443,6 +443,27 @@ paths:
         '401': {description: Unauthorized}
         '403': {description: Scope or role denied}
         '404': {description: Intent not found in the authorized scope}
+  /v1/admin/memory-intents/{intent_id}/history:
+    get:
+      operationId: getAdminMemoryIntentHistory
+      parameters:
+        - $ref: '#/components/parameters/AdminAPIKey'
+        - $ref: '#/components/parameters/TenantHeader'
+        - $ref: '#/components/parameters/ProjectHeader'
+        - $ref: '#/components/parameters/NamespaceHeader'
+        - name: intent_id
+          in: path
+          required: true
+          schema: {type: string}
+      responses:
+        '200':
+          description: Ordered, redacted intent transition history in the authorized scope
+          content:
+            application/json:
+              schema: {$ref: '#/components/schemas/MemoryIntentHistory'}
+        '401': {description: Unauthorized}
+        '403': {description: Scope or role denied}
+        '404': {description: Intent not found in the authorized scope}
   /v1/admin/reflection-runs/{run_id}:
     get:
       operationId: getAdminReflectionRun
@@ -4915,6 +4936,11 @@ components:
         provenance:
           type: object
           additionalProperties: true
+        target_insight_id: {type: string, maxLength: 256}
+        evidence:
+          type: array
+          maxItems: 16
+          items: {$ref: '#/components/schemas/MemoryIntentEvidence'}
     MemoryIntentRecord:
       type: object
       required: [id, scope, type, status, actor, reason, request_id, operation_id, idempotency_key, created_at]
@@ -4922,7 +4948,7 @@ components:
         id: {type: string}
         scope: {$ref: '#/components/schemas/Scope'}
         type: {type: string, enum: [remember, update, forget, contradiction, feedback]}
-        status: {type: string, enum: [accepted, candidate, active, suppressed, rejected, failed]}
+        status: {type: string, enum: [pending, accepted, candidate, active, suppressed, rejected, failed, replayed]}
         target_memory_id: {type: string}
         target_version: {type: integer}
         content: {type: string}
@@ -4931,7 +4957,41 @@ components:
         request_id: {type: string}
         operation_id: {type: string}
         idempotency_key: {type: string}
+        target_insight_id: {type: string}
+        request_fingerprint: {type: string}
+        evidence: {type: array, items: {$ref: '#/components/schemas/MemoryIntentEvidence'}}
         created_at: {type: string, format: date-time}
+    MemoryIntentEvidence:
+      type: object
+      required: [scope, kind, id]
+      properties:
+        scope: {$ref: '#/components/schemas/Scope'}
+        kind: {type: string, maxLength: 256}
+        id: {type: string, maxLength: 256}
+        version: {type: integer, minimum: 0}
+    MemoryIntentHistory:
+      type: object
+      required: [intent, transitions]
+      properties:
+        intent: {$ref: '#/components/schemas/MemoryIntentRecord'}
+        transitions:
+          type: array
+          items: {$ref: '#/components/schemas/MemoryIntentTransition'}
+    MemoryIntentTransition:
+      type: object
+      required: [intent_id, scope, sequence, to_status, actor, reason, diagnostic_category, occurred_at]
+      properties:
+        intent_id: {type: string}
+        scope: {$ref: '#/components/schemas/Scope'}
+        sequence: {type: integer, minimum: 1}
+        from_status: {type: string}
+        to_status: {type: string, enum: [pending, accepted, candidate, active, suppressed, rejected, failed, replayed]}
+        actor: {type: string, maxLength: 256}
+        reason: {type: string, maxLength: 2048}
+        diagnostic_category: {type: string, enum: [accepted, pending, rejected, suppressed, failed, replayed, scope_denied, target_stale, evidence_incomplete, policy_disabled, retry_exhausted, rolled_back]}
+        work_reference: {type: string, maxLength: 256}
+        outcome_reference: {type: string, maxLength: 256}
+        occurred_at: {type: string, format: date-time}
     ReflectionReviewRequest:
       type: object
       required: [candidate_id, decision, reason, policy_version]

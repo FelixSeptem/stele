@@ -185,6 +185,10 @@ type MemoryIntentReader interface {
 	ReadMemoryIntent(context.Context, memory.Scope, string) (memory.MemoryIntentRecord, error)
 }
 
+type MemoryIntentHistoryReader interface {
+	ReadMemoryIntentHistory(context.Context, memory.Scope, string) (memory.MemoryIntentHistory, error)
+}
+
 type ReflectionReviewAPI interface {
 	Decide(context.Context, memory.ReflectionReviewInput) (memory.ReflectionReviewRecord, error)
 }
@@ -1105,6 +1109,19 @@ func NewHTTPHandler(deps HTTPDependencies) http.Handler {
 		),
 	)
 	mux.Handle("GET /v1/admin/memory-intents/{intent_id}", adminMemoryIntentDetail)
+	adminMemoryIntentHistory := auth.APIKeyMiddleware(deps.AdminAPIKeys)(
+		auth.ScopeMiddleware()(
+			http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				historyReader, ok := deps.MemoryIntentRead.(MemoryIntentHistoryReader)
+				if !ok {
+					http.Error(w, "memory intent history reader is not configured", http.StatusServiceUnavailable)
+					return
+				}
+				handleAdminMemoryIntentHistory(w, r, historyReader)
+			}),
+		),
+	)
+	mux.Handle("GET /v1/admin/memory-intents/{intent_id}/history", adminMemoryIntentHistory)
 
 	adminReflectionReview := auth.APIKeyMiddleware(deps.AdminAPIKeys)(
 		auth.ScopeMiddleware()(

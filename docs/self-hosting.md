@@ -2446,6 +2446,27 @@ one explicit memory ID and requires the existing privileged lifecycle surface.
 Semantic bulk forgetting is always preview → caller-reviewed fixed IDs → apply;
 apply never reruns an unconstrained semantic query.
 
+### Governed memory intents
+
+`POST /v1/memory-intents` is the OpenAPI-first write boundary for `remember`,
+`update`, `forget`, `contradiction`, and `feedback`. Every request is bound to
+the authenticated `tenant/project/namespace` scope and must include an actor,
+reason, request identity, and idempotency key. `contradiction` carries at least
+two in-scope evidence references; `feedback` names an existing insight target.
+
+Submission persists an immutable request and hands only its stable reference to
+the PostgreSQL durable work queue. It does not mutate canonical memory inline.
+Equivalent retries return the original request identity; a different normalized
+payload under the same scoped idempotency key is rejected as a conflict.
+
+Authorized operators can read `GET /v1/admin/memory-intents/{intent_id}` and
+the ordered redacted transition ledger at
+`GET /v1/admin/memory-intents/{intent_id}/history`. History contains bounded
+status categories and references, never raw provider errors, credentials,
+prompts, claims, or foreign-scope data. Disabling a policy holds or rejects
+new work while preserving submitted requests and their audit history; a later
+compatible policy may resume only eligible pending work.
+
 The SDK contract tests run without external agents. The durable review-manifest
 test and the complete real-stack conformance matrix can additionally run only
 against a dedicated, disposable PostgreSQL + pgvector database; they apply

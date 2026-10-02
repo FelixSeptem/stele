@@ -32,11 +32,12 @@ const (
 	WorkKindProjectionRebuild  WorkKind = "projection_rebuild"
 	WorkKindInsightMaintenance WorkKind = "insight_maintenance"
 	WorkKindFreshnessRetention WorkKind = "freshness_retention"
+	WorkKindMemoryIntent       WorkKind = "memory_intent"
 )
 
 func (k WorkKind) Valid() bool {
 	switch k {
-	case WorkKindReflection, WorkKindCompaction, WorkKindProjectionRebuild, WorkKindInsightMaintenance, WorkKindFreshnessRetention:
+	case WorkKindReflection, WorkKindCompaction, WorkKindProjectionRebuild, WorkKindInsightMaintenance, WorkKindFreshnessRetention, WorkKindMemoryIntent:
 		return true
 	default:
 		return false
@@ -253,11 +254,15 @@ type ClaimInput struct {
 	Now           time.Time
 	LeaseDuration time.Duration
 	Limit         int
+	Kind          *WorkKind
 }
 
 func (i ClaimInput) Validate() error {
 	if err := i.Scope.Validate(); err != nil {
 		return err
+	}
+	if i.Kind != nil && !i.Kind.Valid() {
+		return fmt.Errorf("claim kind %q is invalid", *i.Kind)
 	}
 	if strings.TrimSpace(i.WorkerID) == "" || i.Now.IsZero() || i.LeaseDuration <= 0 || i.Limit <= 0 {
 		return fmt.Errorf("claim input is invalid")

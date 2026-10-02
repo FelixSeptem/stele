@@ -146,6 +146,34 @@ type ReasoningInsightEvent struct {
 	Review              string
 }
 
+// MemoryIntentEvent is deliberately category-only. It never accepts scope,
+// payload, request identifiers, claims, credentials, or provider errors.
+type MemoryIntentEvent struct {
+	Operation string
+	Type      string
+	Status    string
+	Outcome   string
+	Retry     string
+	Rollback  string
+}
+
+func LogMemoryIntentLifecycle(logger *log.Logger, event MemoryIntentEvent) {
+	if logger == nil { return }
+	logger.Printf("component=memory_intent operation=%s type=%s status=%s outcome=%s retry=%s rollback=%s",
+		boundedIntentLabel(event.Operation, "submit", "replay", "queue", "outcome", "retry", "rollback", "inspect"),
+		boundedIntentLabel(event.Type, "remember", "update", "forget", "contradiction", "feedback"),
+		boundedIntentLabel(event.Status, "pending", "accepted", "candidate", "active", "suppressed", "rejected", "failed", "replayed"),
+		boundedIntentLabel(event.Outcome, "accepted", "rejected", "suppressed", "failed", "scope_denied", "target_stale", "evidence_incomplete", "policy_disabled", "retry_exhausted", "rolled_back"),
+		boundedIntentLabel(event.Retry, "none", "eligible", "backoff", "exhausted"),
+		boundedIntentLabel(event.Rollback, "none", "disabled", "held", "resumed"),
+	)
+}
+
+func boundedIntentLabel(value string, allowed ...string) string {
+	for _, candidate := range allowed { if value == candidate { return candidate } }
+	return "unknown"
+}
+
 func LogReasoningInsightLifecycle(logger *log.Logger, event ReasoningInsightEvent) {
 	if logger == nil {
 		return
