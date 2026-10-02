@@ -77,6 +77,24 @@ categories, safety outcomes, and bounded latency. It never records DSNs,
 endpoints, keys, prompts, source text, raw provider payloads, hidden IDs, or raw
 scores.
 
+## Operational closure
+
+Evaluation preflight and run lifecycle outcomes use stable categories for a
+missing DSN, missing ownership marker, runtime-target reuse, unavailable
+PostgreSQL/pgvector prerequisites, fixture incompatibility, timeout, and
+incomplete cleanup. The wrapper keeps each `run-*` directory isolated; a
+skipped, failed, cancelled, timed-out, or incomplete run is cleaned and cannot
+be consumed as release evidence. Only completed redacted artifacts remain
+retained, with append-only history.
+
+Activation eligibility requires a matching handoff for the stable run identity,
+exact-scope hash, source-watermark hash/freshness, fixture and policy versions,
+integrity summary, and rollback verdict. The handoff is evidence, not an
+authorization grant. A stale or mismatched handoff fails closed. Disablement
+and rollback record bounded redacted lifecycle outcomes and return selection to
+the previously approved baseline without rewriting canonical memory or source
+records. Metrics and logs expose only fixed categories and duration/age buckets.
+
 ## Redacted trajectory and information integrity
 
 Evaluation and shadow runs may attach bounded retrieval trajectory aggregates

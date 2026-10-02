@@ -1,7 +1,9 @@
 package telemetry
 
 import (
+	"bytes"
 	"context"
+	"log"
 	"strings"
 	"testing"
 )
@@ -20,5 +22,22 @@ func TestRetrievalEvaluationTelemetryIsLowCardinalityAndRedacted(t *testing.T) {
 		if strings.Contains(strings.ToLower(output), forbidden) {
 			t.Fatalf("metrics output contains forbidden field %q: %s", forbidden, output)
 		}
+	}
+}
+
+func TestReleaseEvidenceOperationalTelemetryUsesBoundedCategories(t *testing.T) {
+	observer := NewMetricsObserver()
+	observer.RecordReleaseEvidenceOperational(context.Background(), ReleaseEvidenceOperationalEvent{
+		Operation: "attestation", Result: "mismatch", State: "completed",
+		Cleanup: "complete", Freshness: "stale", Rollback: "failed", DurationBucket: "1s_10s",
+	})
+	output := observer.RenderPrometheus()
+	if !strings.Contains(output, "stele_retrieval_release_evidence_operational_total") || !strings.Contains(output, "attestation") {
+		t.Fatalf("metrics output = %s", output)
+	}
+	var logs bytes.Buffer
+	LogReleaseEvidenceOperationalLifecycle(log.New(&logs, "", 0), ReleaseEvidenceOperationalEvent{Operation: "rollback", Result: "failed", State: "completed", Cleanup: "complete", Rollback: "failed"})
+	if strings.Contains(strings.ToLower(logs.String()), "tenant") || !strings.Contains(logs.String(), "component=retrieval_release_evidence") {
+		t.Fatalf("logs=%s", logs.String())
 	}
 }

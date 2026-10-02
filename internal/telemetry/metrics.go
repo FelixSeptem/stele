@@ -138,6 +138,21 @@ func (o *MetricsObserver) RecordRetrievalEvaluation(ctx context.Context, event R
 	}, 1)
 }
 
+func (o *MetricsObserver) RecordReleaseEvidenceOperational(ctx context.Context, event ReleaseEvidenceOperationalEvent) {
+	if o == nil {
+		return
+	}
+	o.addCounter("stele_retrieval_release_evidence_operational_total", map[string]string{
+		"operation":       boundedReleaseEvidenceLabel(event.Operation, "preflight", "run", "cleanup", "attestation", "disablement", "rollback"),
+		"result":          boundedReleaseEvidenceLabel(event.Result, "accepted", "completed", "skipped", "degraded", "failed", "mismatch", "deleted"),
+		"state":           boundedReleaseEvidenceLabel(event.State, "skipped", "degraded", "failed", "timed_out", "completed"),
+		"cleanup":         boundedReleaseEvidenceLabel(event.Cleanup, "pending", "complete", "incomplete"),
+		"freshness":       boundedReleaseEvidenceLabel(event.Freshness, "fresh", "stale", "unknown"),
+		"rollback":        boundedReleaseEvidenceLabel(event.Rollback, "passed", "failed", "unknown"),
+		"duration_bucket": boundedReleaseEvidenceLabel(event.DurationBucket, "lt_1s", "1s_10s", "gt_10s", "unknown"),
+	}, 1)
+}
+
 func (o *MetricsObserver) RecordMaintenance(ctx context.Context, event MaintenanceEvent) {
 	if o == nil {
 		return
@@ -904,6 +919,7 @@ func (o *MetricsObserver) RenderPrometheus() string {
 	writeMetricFamilyHeader(&builder, "stele_retrieval_planner_changed_ranks", "gauge", "Bounded count of rank positions changed by shadow retrieval planning.")
 	writeMetricFamilyHeader(&builder, "stele_retrieval_planner_diagnostic_failure_total", "counter", "Private retrieval planner diagnostic construction failures by bounded category.")
 	writeMetricFamilyHeader(&builder, "stele_retrieval_evaluation_total", "counter", "Retrieval release-gate outcomes by bounded categories.")
+	writeMetricFamilyHeader(&builder, "stele_retrieval_release_evidence_operational_total", "counter", "Retrieval release-evidence operational lifecycle outcomes.")
 	writeMetricFamilyHeader(&builder, "stele_retrieval_integrity_total", "counter", "Redacted retrieval trajectory and information-integrity outcomes by bounded categories.")
 	writeMetricFamilyHeader(&builder, "stele_derived_insight_replay_total", "counter", "Derived insight replay outcomes by low-cardinality categories.")
 	writeMetricFamilyHeader(&builder, "stele_quality_evaluation_total", "counter", "Memory quality evaluation outcomes.")

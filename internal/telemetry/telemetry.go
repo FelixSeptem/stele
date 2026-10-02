@@ -111,6 +111,42 @@ type RetrievalIntegrityEvent struct {
 	ArtifactCategory string
 }
 
+// ReleaseEvidenceOperationalEvent contains only fixed lifecycle categories.
+// It is safe for metrics and structured operator logs.
+type ReleaseEvidenceOperationalEvent struct {
+	Operation      string
+	Result         string
+	State          string
+	Cleanup        string
+	Freshness      string
+	Rollback       string
+	DurationBucket string
+}
+
+func LogReleaseEvidenceOperationalLifecycle(logger *log.Logger, event ReleaseEvidenceOperationalEvent) {
+	if logger == nil {
+		return
+	}
+	logger.Printf("component=retrieval_release_evidence operation=%s result=%s state=%s cleanup=%s freshness=%s rollback=%s duration_bucket=%s",
+		boundedReleaseEvidenceLabel(event.Operation, "preflight", "run", "cleanup", "attestation", "disablement", "rollback"),
+		boundedReleaseEvidenceLabel(event.Result, "accepted", "completed", "skipped", "degraded", "failed", "mismatch", "deleted"),
+		boundedReleaseEvidenceLabel(event.State, "skipped", "degraded", "failed", "timed_out", "completed"),
+		boundedReleaseEvidenceLabel(event.Cleanup, "pending", "complete", "incomplete"),
+		boundedReleaseEvidenceLabel(event.Freshness, "fresh", "stale", "unknown"),
+		boundedReleaseEvidenceLabel(event.Rollback, "passed", "failed", "unknown"),
+		boundedReleaseEvidenceLabel(event.DurationBucket, "lt_1s", "1s_10s", "gt_10s", "unknown"),
+	)
+}
+
+func boundedReleaseEvidenceLabel(value string, allowed ...string) string {
+	for _, candidate := range allowed {
+		if value == candidate {
+			return candidate
+		}
+	}
+	return "unknown"
+}
+
 // LogRetrievalIntegrityLifecycle records one bounded lifecycle entry for the
 // evaluation-only evidence path. It deliberately accepts no scope, query,
 // identifier, provider payload, credential, or free-form reason fields.

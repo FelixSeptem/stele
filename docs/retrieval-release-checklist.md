@@ -40,3 +40,14 @@
       attestation/audit history, and do not rewrite canonical memory.
 - [ ] Threshold owner reviewed the versioned release policy and recorded the
       decision category.
+- [ ] Preflight outcome is one of the stable bounded categories: DSN required,
+      ownership required, runtime DSN reuse, prerequisite unavailable, fixture
+      incompatible, timeout, or incomplete cleanup.
+- [ ] Every completed report has an operational outcome marked `completed` /
+      `complete` and a matching run/scope/watermark/policy attestation; skipped,
+      timed-out, failed, or incompletely cleaned runs are non-consumable.
+- [ ] Disablement and rollback lifecycle records are redacted, append-only, and
+      verify that the approved baseline remains selected until separately
+      authorized activation.
+- [ ] Operator metrics and logs use only bounded operation/result/state,
+      cleanup, freshness, rollback, and duration categories.

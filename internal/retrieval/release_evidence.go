@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"net/url"
+	"os"
 	"strings"
 	"time"
 
@@ -29,6 +30,155 @@ const (
 	ReleaseEvidenceResourceFailure          = "RETRIEVAL_RELEASE_EVIDENCE_RESOURCE_FAILURE"
 )
 
+// ReleaseEvidenceOperationalCategory is the bounded vocabulary shared by
+// evaluation reports, operator summaries, and telemetry. Values are part of
+// the self-hosted operator contract and must remain stable.
+type ReleaseEvidenceOperationalCategory string
+
+const (
+	ReleaseEvidenceCategoryDSNRequired             ReleaseEvidenceOperationalCategory = "dsn_required"
+	ReleaseEvidenceCategoryOwnershipRequired       ReleaseEvidenceOperationalCategory = "ownership_required"
+	ReleaseEvidenceCategoryRuntimeDSNReuse         ReleaseEvidenceOperationalCategory = "runtime_dsn_reuse"
+	ReleaseEvidenceCategoryPrerequisiteUnavailable ReleaseEvidenceOperationalCategory = "prerequisite_unavailable"
+	ReleaseEvidenceCategoryFixtureIncompatible     ReleaseEvidenceOperationalCategory = "fixture_incompatible"
+	ReleaseEvidenceCategoryTimeout                 ReleaseEvidenceOperationalCategory = "timeout"
+	ReleaseEvidenceCategoryIncompleteCleanup       ReleaseEvidenceOperationalCategory = "incomplete_cleanup"
+	ReleaseEvidenceCategoryAttestationMismatch     ReleaseEvidenceOperationalCategory = "attestation_mismatch"
+	ReleaseEvidenceCategoryAttestationStale        ReleaseEvidenceOperationalCategory = "attestation_stale"
+	ReleaseEvidenceCategoryRollbackFailed          ReleaseEvidenceOperationalCategory = "rollback_failed"
+)
+
+type ReleaseEvidenceRunState string
+
+const (
+	ReleaseEvidenceRunSkipped   ReleaseEvidenceRunState = "skipped"
+	ReleaseEvidenceRunDegraded  ReleaseEvidenceRunState = "degraded"
+	ReleaseEvidenceRunFailed    ReleaseEvidenceRunState = "failed"
+	ReleaseEvidenceRunTimedOut  ReleaseEvidenceRunState = "timed_out"
+	ReleaseEvidenceRunCompleted ReleaseEvidenceRunState = "completed"
+)
+
+type ReleaseEvidenceCleanupState string
+
+const (
+	ReleaseEvidenceCleanupPending    ReleaseEvidenceCleanupState = "pending"
+	ReleaseEvidenceCleanupComplete   ReleaseEvidenceCleanupState = "complete"
+	ReleaseEvidenceCleanupIncomplete ReleaseEvidenceCleanupState = "incomplete"
+)
+
+type ReleaseEvidenceRollbackVerdict string
+
+const (
+	ReleaseEvidenceRollbackPassed  ReleaseEvidenceRollbackVerdict = "passed"
+	ReleaseEvidenceRollbackFailed  ReleaseEvidenceRollbackVerdict = "failed"
+	ReleaseEvidenceRollbackUnknown ReleaseEvidenceRollbackVerdict = "unknown"
+)
+
+type ReleaseEvidenceLifecycleOperation string
+
+const (
+	ReleaseEvidenceLifecycleDisablement ReleaseEvidenceLifecycleOperation = "disablement"
+	ReleaseEvidenceLifecycleRollback    ReleaseEvidenceLifecycleOperation = "rollback"
+)
+
+type ReleaseEvidenceLifecycleRecord struct {
+	Operation       ReleaseEvidenceLifecycleOperation `json:"operation"`
+	Result          string                            `json:"result"`
+	RunIdentity     string                            `json:"run_identity"`
+	PolicyVersion   string                            `json:"policy_version"`
+	RollbackVerdict ReleaseEvidenceRollbackVerdict    `json:"rollback_verdict"`
+}
+
+func (r ReleaseEvidenceLifecycleRecord) Validate() error {
+	if r.Operation != ReleaseEvidenceLifecycleDisablement && r.Operation != ReleaseEvidenceLifecycleRollback {
+		return fmt.Errorf("invalid lifecycle operation")
+	}
+	if r.Result != "completed" && r.Result != "failed" {
+		return fmt.Errorf("invalid lifecycle result")
+	}
+	if !strings.HasPrefix(r.RunIdentity, "run:") || len(r.RunIdentity) != len("run:")+64 || !evaluationSafeIdentity(r.PolicyVersion) {
+		return fmt.Errorf("invalid lifecycle identity")
+	}
+	return nil
+}
+
+// DisableReleaseEvidence and RollbackReleaseEvidence only close eligibility;
+// a separately authorized activation operation is still required to change
+// the active retrieval policy.
+func DisableReleaseEvidence(report ReleaseEvidenceReport) ReleaseEvidenceReport {
+	report.ReleaseEligible = false
+	report.Verdict = ReleaseEvidenceRejected
+	report.FailureCategories = appendUniqueCategory(report.FailureCategories, "RETRIEVAL_RELEASE_EVIDENCE_DISABLED")
+	report.OperationalOutcome.Consumable = false
+	return report
+}
+
+func RollbackReleaseEvidence(report ReleaseEvidenceReport) ReleaseEvidenceReport {
+	report.ReleaseEligible = false
+	report.Verdict = ReleaseEvidenceRejected
+	report.FailureCategories = appendUniqueCategory(report.FailureCategories, ReleaseEvidenceRollbackFailure)
+	report.OperationalOutcome.Consumable = false
+	return report
+}
+
+type ReleaseEvidenceOperationalOutcome struct {
+	State      ReleaseEvidenceRunState     `json:"state"`
+	Cleanup    ReleaseEvidenceCleanupState `json:"cleanup"`
+	Consumable bool                        `json:"consumable"`
+}
+
+// Normalize prevents partial or interrupted runs from becoming consumable.
+func (o *ReleaseEvidenceOperationalOutcome) Normalize() {
+	if o == nil {
+		return
+	}
+	if o.State != ReleaseEvidenceRunCompleted || o.Cleanup != ReleaseEvidenceCleanupComplete {
+		o.Consumable = false
+	}
+}
+
+type ReleaseEvidenceAttestation struct {
+	RunIdentity         string                         `json:"run_identity"`
+	ScopeHash           string                         `json:"scope_hash"`
+	SourceWatermarkHash string                         `json:"source_watermark_hash"`
+	PolicyVersion       string                         `json:"policy_version"`
+	FixtureVersion      string                         `json:"fixture_version"`
+	IntegrityIdentity   string                         `json:"integrity_identity"`
+	RollbackVerdict     ReleaseEvidenceRollbackVerdict `json:"rollback_verdict"`
+	Freshness           ReleaseEvidenceFreshness       `json:"freshness"`
+	IssuedAt            time.Time                      `json:"issued_at"`
+	ExpiresAt           time.Time                      `json:"expires_at"`
+}
+
+func (a ReleaseEvidenceAttestation) ValidateFor(report ReleaseEvidenceReport, now time.Time) error {
+	if a.RunIdentity != report.RunIdentity || a.ScopeHash != report.ScopeHash ||
+		a.SourceWatermarkHash != report.SourceWatermarkHash || a.PolicyVersion != report.PolicyVersion ||
+		a.FixtureVersion != report.FixtureVersion || a.RollbackVerdict != ReleaseEvidenceRollbackPassed {
+		return fmt.Errorf("%s", ReleaseEvidenceCategoryAttestationMismatch)
+	}
+	if a.Freshness != ReleaseEvidenceFresh || a.IssuedAt.IsZero() || a.ExpiresAt.IsZero() || !a.ExpiresAt.After(now.UTC()) ||
+		report.EvidenceFreshness != ReleaseEvidenceFresh || !report.EvidenceExpiresAt.After(now.UTC()) {
+		return fmt.Errorf("%s", ReleaseEvidenceCategoryAttestationStale)
+	}
+	return nil
+}
+
+// ReleaseEvidenceHandoffEligible is the final evidence-only gate. It does not
+// grant activation; callers must still perform the existing authorization.
+func ReleaseEvidenceHandoffEligible(report ReleaseEvidenceReport, now time.Time) (bool, string) {
+	if !report.ReleaseEligible || report.Verdict != ReleaseEvidencePassed || !report.OperationalOutcome.Consumable ||
+		report.OperationalOutcome.State != ReleaseEvidenceRunCompleted || report.OperationalOutcome.Cleanup != ReleaseEvidenceCleanupComplete {
+		return false, string(ReleaseEvidenceCategoryIncompleteCleanup)
+	}
+	if report.Attestation == nil {
+		return false, string(ReleaseEvidenceCategoryAttestationMismatch)
+	}
+	if err := report.Attestation.ValidateFor(report, now); err != nil {
+		return false, err.Error()
+	}
+	return true, ""
+}
+
 type ReleaseEvidenceVerdict string
 
 const (
@@ -49,6 +199,8 @@ const (
 type ReleaseEvidencePrerequisites struct {
 	EvaluationDSN        string
 	RuntimeDSN           string
+	OwnershipMarker      bool
+	TargetDistinct       bool
 	PostgreSQLReady      bool
 	PGVectorReady        bool
 	FixtureCompatible    bool
@@ -64,8 +216,14 @@ func (p ReleaseEvidencePrerequisites) Validate() error {
 	if dsn == "" {
 		return fmt.Errorf("%s", ReleaseEvidenceSkipDSN)
 	}
+	if !p.OwnershipMarker && p.TargetDistinct {
+		return fmt.Errorf("%s", ReleaseEvidenceCategoryOwnershipRequired)
+	}
 	if strings.TrimSpace(p.RuntimeDSN) != "" && dsn == strings.TrimSpace(p.RuntimeDSN) {
-		return fmt.Errorf("evaluation DSN must not reuse runtime DSN")
+		return fmt.Errorf("%s", ReleaseEvidenceCategoryRuntimeDSNReuse)
+	}
+	if p.TargetDistinct && strings.TrimSpace(p.RuntimeDSN) == "" {
+		return fmt.Errorf("%s", ReleaseEvidenceCategoryRuntimeDSNReuse)
 	}
 	u, err := url.Parse(dsn)
 	if err != nil || (u.Scheme != "postgres" && u.Scheme != "postgresql") || u.Host == "" {
@@ -103,6 +261,8 @@ type ReleaseEvidenceRunRequest struct {
 	Scope                memory.Scope
 	EvaluationDSN        string
 	RuntimeDSN           string
+	OwnershipMarker      bool
+	TargetDistinct       bool
 	ProviderProfile      string
 	Policy               EvaluationReleasePolicy
 	Baseline             EvaluationReport
@@ -128,6 +288,23 @@ type ReleaseEvidenceRunRequest struct {
 // evidence. The context is reserved for future real-stack adapters; this
 // function performs no canonical writes and never falls back to RuntimeDSN.
 func RunOwnedReleaseEvidence(_ context.Context, req ReleaseEvidenceRunRequest) (ReleaseEvidenceReport, error) {
+	baseOperationalReport := func(category ReleaseEvidenceOperationalCategory) ReleaseEvidenceReport {
+		return ReleaseEvidenceReport{ProviderProfile: req.ProviderProfile, PolicyVersion: req.Policy.Version, FixtureVersion: req.Candidate.Metadata.FixtureVersion, Verdict: ReleaseEvidenceSkipped, FailureCategories: []string{string(category)}, OperationalOutcome: ReleaseEvidenceOperationalOutcome{State: ReleaseEvidenceRunSkipped, Cleanup: ReleaseEvidenceCleanupComplete}}
+	}
+	if strings.TrimSpace(req.EvaluationDSN) == "" {
+		report := baseOperationalReport(ReleaseEvidenceCategoryDSNRequired)
+		report.FailureCategories = []string{ReleaseEvidenceSkipDSN}
+		return report, nil
+	}
+	ownershipEnv := strings.TrimSpace(os.Getenv("STELE_TEST_RETRIEVAL_EVALUATION_OWNED"))
+	ownedByHarness := req.OwnershipMarker || strings.EqualFold(ownershipEnv, "true")
+	if ownershipEnv != "" && !ownedByHarness {
+		return baseOperationalReport(ReleaseEvidenceCategoryOwnershipRequired), nil
+	}
+	targetDistinct := req.TargetDistinct || ownedByHarness
+	if ownershipEnv != "" && !targetDistinct {
+		return baseOperationalReport(ReleaseEvidenceCategoryRuntimeDSNReuse), nil
+	}
 	return EvaluateReleaseEvidence(ReleaseEvidenceInput{
 		Scope: req.Scope, ProviderProfile: req.ProviderProfile, Policy: req.Policy,
 		Baseline: req.Baseline, Candidate: req.Candidate, Progressive: req.Progressive,
@@ -138,6 +315,7 @@ func RunOwnedReleaseEvidence(_ context.Context, req ReleaseEvidenceRunRequest) (
 		SemanticHitProven:   req.SemanticHitProven, TrajectoryCompatible: req.TrajectoryCompatible,
 		ResourceWithinBounds: req.ResourceWithinBounds,
 		Prerequisites: ReleaseEvidencePrerequisites{EvaluationDSN: req.EvaluationDSN, RuntimeDSN: req.RuntimeDSN,
+			OwnershipMarker: req.OwnershipMarker, TargetDistinct: req.TargetDistinct,
 			PostgreSQLReady: req.PostgreSQLReady, PGVectorReady: req.PGVectorReady,
 			FixtureCompatible: req.FixtureCompatible, ProjectionFresh: req.ProjectionFresh,
 			RollbackTested: req.RollbackTested, SemanticHitProven: req.SemanticHitProven,
@@ -146,28 +324,31 @@ func RunOwnedReleaseEvidence(_ context.Context, req ReleaseEvidenceRunRequest) (
 }
 
 type ReleaseEvidenceReport struct {
-	RunIdentity         string                   `json:"run_identity"`
-	ProviderProfile     string                   `json:"provider_profile"`
-	PolicyVersion       string                   `json:"policy_version"`
-	ScopeHash           string                   `json:"scope_hash"`
-	SourceWatermarkHash string                   `json:"source_watermark_hash,omitempty"`
-	EvidenceFreshness   ReleaseEvidenceFreshness `json:"evidence_freshness"`
-	EvidenceExpiresAt   time.Time                `json:"evidence_expires_at,omitempty"`
-	DeterministicReplay bool                     `json:"deterministic_replay"`
-	RollbackTested      bool                     `json:"rollback_tested"`
-	Verdict             ReleaseEvidenceVerdict   `json:"verdict"`
-	ReleaseEligible     bool                     `json:"release_eligible"`
-	RealStack           bool                     `json:"real_stack"`
-	FailureCategories   []string                 `json:"failure_categories,omitempty"`
-	ProgressiveLevels   int                      `json:"progressive_levels"`
-	ProgressiveEligible int                      `json:"progressive_eligible"`
-	ParentFirstEligible bool                     `json:"parent_first_eligible"`
-	QualityEligible     bool                     `json:"quality_eligible"`
-	ProgressiveFailures []string                 `json:"progressive_failures,omitempty"`
-	ParentFirstFailures []string                 `json:"parent_first_failures,omitempty"`
-	IntegrityEligible   bool                     `json:"integrity_eligible"`
-	IntegrityFailures   []string                 `json:"integrity_failures,omitempty"`
-	GeneratedAt         time.Time                `json:"generated_at"`
+	RunIdentity         string                            `json:"run_identity"`
+	ProviderProfile     string                            `json:"provider_profile"`
+	PolicyVersion       string                            `json:"policy_version"`
+	FixtureVersion      string                            `json:"fixture_version,omitempty"`
+	ScopeHash           string                            `json:"scope_hash"`
+	SourceWatermarkHash string                            `json:"source_watermark_hash,omitempty"`
+	EvidenceFreshness   ReleaseEvidenceFreshness          `json:"evidence_freshness"`
+	EvidenceExpiresAt   time.Time                         `json:"evidence_expires_at,omitempty"`
+	DeterministicReplay bool                              `json:"deterministic_replay"`
+	RollbackTested      bool                              `json:"rollback_tested"`
+	Verdict             ReleaseEvidenceVerdict            `json:"verdict"`
+	ReleaseEligible     bool                              `json:"release_eligible"`
+	RealStack           bool                              `json:"real_stack"`
+	FailureCategories   []string                          `json:"failure_categories,omitempty"`
+	ProgressiveLevels   int                               `json:"progressive_levels"`
+	ProgressiveEligible int                               `json:"progressive_eligible"`
+	ParentFirstEligible bool                              `json:"parent_first_eligible"`
+	QualityEligible     bool                              `json:"quality_eligible"`
+	ProgressiveFailures []string                          `json:"progressive_failures,omitempty"`
+	ParentFirstFailures []string                          `json:"parent_first_failures,omitempty"`
+	IntegrityEligible   bool                              `json:"integrity_eligible"`
+	IntegrityFailures   []string                          `json:"integrity_failures,omitempty"`
+	GeneratedAt         time.Time                         `json:"generated_at"`
+	OperationalOutcome  ReleaseEvidenceOperationalOutcome `json:"operational_outcome,omitempty"`
+	Attestation         *ReleaseEvidenceAttestation       `json:"attestation,omitempty"`
 }
 
 // MarshalReleaseEvidenceReport is the redacted report boundary. The report
@@ -193,6 +374,11 @@ func MarshalReleaseEvidenceReport(report ReleaseEvidenceReport) ([]byte, error) 
 	if report.ProgressiveLevels < 0 || report.ProgressiveEligible < 0 || report.ProgressiveEligible > report.ProgressiveLevels {
 		return nil, fmt.Errorf("progressive counts are invalid")
 	}
+	outcome := report.OperationalOutcome
+	outcome.Normalize()
+	if report.OperationalOutcome.State != "" && outcome != report.OperationalOutcome {
+		return nil, fmt.Errorf("operational outcome is not consumable")
+	}
 	return json.Marshal(report)
 }
 
@@ -203,7 +389,7 @@ func RenderReleaseEvidenceSummary(report ReleaseEvidenceReport) string {
 	if report.ReleaseEligible {
 		status = "release eligible"
 	}
-	return fmt.Sprintf("retrieval release evidence: %s (run=%s, verdict=%s, freshness=%s, replay=%t, rollback=%t, progressive=%d/%d, parent_first=%t, real_stack=%t)", status, report.RunIdentity, report.Verdict, report.EvidenceFreshness, report.DeterministicReplay, report.RollbackTested, report.ProgressiveEligible, report.ProgressiveLevels, report.ParentFirstEligible, report.RealStack)
+	return fmt.Sprintf("retrieval release evidence: %s (run=%s, verdict=%s, freshness=%s, replay=%t, rollback=%t, progressive=%d/%d, parent_first=%t, real_stack=%t, operational_state=%s, cleanup=%s)", status, report.RunIdentity, report.Verdict, report.EvidenceFreshness, report.DeterministicReplay, report.RollbackTested, report.ProgressiveEligible, report.ProgressiveLevels, report.ParentFirstEligible, report.RealStack, report.OperationalOutcome.State, report.OperationalOutcome.Cleanup)
 }
 
 func EvaluateReleaseEvidence(in ReleaseEvidenceInput) (ReleaseEvidenceReport, error) {
@@ -233,7 +419,7 @@ func EvaluateReleaseEvidence(in ReleaseEvidenceInput) (ReleaseEvidenceReport, er
 	if !in.EvidenceExpiresAt.IsZero() && !now.Before(in.EvidenceExpiresAt.UTC()) {
 		freshness = ReleaseEvidenceStale
 	}
-	r := ReleaseEvidenceReport{ProviderProfile: in.ProviderProfile, PolicyVersion: in.Policy.Version, Verdict: ReleaseEvidencePassed, RealStack: true, GeneratedAt: now, ProgressiveLevels: len(in.Progressive.Levels), ParentFirstEligible: in.ParentFirst.Eligible, EvidenceFreshness: freshness, EvidenceExpiresAt: in.EvidenceExpiresAt.UTC(), DeterministicReplay: in.DeterministicReplay || in.Candidate.DeterministicReplay, RollbackTested: in.Prerequisites.RollbackTested}
+	r := ReleaseEvidenceReport{ProviderProfile: in.ProviderProfile, PolicyVersion: in.Policy.Version, FixtureVersion: in.Candidate.Metadata.FixtureVersion, Verdict: ReleaseEvidencePassed, RealStack: true, GeneratedAt: now, ProgressiveLevels: len(in.Progressive.Levels), ParentFirstEligible: in.ParentFirst.Eligible, EvidenceFreshness: freshness, EvidenceExpiresAt: in.EvidenceExpiresAt.UTC(), DeterministicReplay: in.DeterministicReplay || in.Candidate.DeterministicReplay, RollbackTested: in.Prerequisites.RollbackTested, OperationalOutcome: ReleaseEvidenceOperationalOutcome{State: ReleaseEvidenceRunCompleted, Cleanup: ReleaseEvidenceCleanupComplete, Consumable: true}}
 	r.ScopeHash = scopeHash(in.Scope)
 	r.SourceWatermarkHash = sourceWatermarkHash(in.SourceWatermark)
 	r.RunIdentity = releaseEvidenceIdentity(in, r.ScopeHash, r.SourceWatermarkHash, now)
@@ -241,7 +427,11 @@ func EvaluateReleaseEvidence(in ReleaseEvidenceInput) (ReleaseEvidenceReport, er
 		r.ReleaseEligible = false
 		r.Verdict = ReleaseEvidenceSkipped
 		r.RealStack = false
-		if err.Error() == ReleaseEvidenceSkipDSN || err.Error() == ReleaseEvidenceSkipPrerequisite {
+		if strings.HasPrefix(err.Error(), string(ReleaseEvidenceCategoryRuntimeDSNReuse)) {
+			r.FailureCategories = []string{ReleaseEvidenceIncompatible, err.Error()}
+		} else if strings.HasPrefix(err.Error(), string(ReleaseEvidenceCategoryOwnershipRequired)) {
+			r.FailureCategories = []string{err.Error()}
+		} else if err.Error() == ReleaseEvidenceSkipDSN || err.Error() == ReleaseEvidenceSkipPrerequisite {
 			r.FailureCategories = []string{err.Error()}
 		} else {
 			r.FailureCategories = []string{ReleaseEvidenceIncompatible}
@@ -320,6 +510,15 @@ func EvaluateReleaseEvidence(in ReleaseEvidenceInput) (ReleaseEvidenceReport, er
 		r.ReleaseEligible = true
 	}
 	r = ApplyIntegrityEvidence(r, in.Integrity)
+	if r.ReleaseEligible && r.EvidenceFreshness == ReleaseEvidenceFresh && r.RollbackTested {
+		r.Attestation = &ReleaseEvidenceAttestation{
+			RunIdentity: r.RunIdentity, ScopeHash: r.ScopeHash,
+			SourceWatermarkHash: r.SourceWatermarkHash, PolicyVersion: r.PolicyVersion,
+			FixtureVersion: r.FixtureVersion, IntegrityIdentity: "integrity:verified",
+			RollbackVerdict: ReleaseEvidenceRollbackPassed, Freshness: ReleaseEvidenceFresh,
+			IssuedAt: r.GeneratedAt, ExpiresAt: r.EvidenceExpiresAt,
+		}
+	}
 	return r, nil
 }
 

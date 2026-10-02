@@ -9,7 +9,7 @@ $ErrorActionPreference = 'Stop'
 
 if ([string]::IsNullOrWhiteSpace($TestDSN)) {
     Write-Output 'SKIP_RETRIEVAL_EVALUATION_DSN_REQUIRED'
-    exit 2
+	exit 2
 }
 
 if ($TimeoutSeconds -lt 30 -or $TimeoutSeconds -gt 900) {
@@ -20,7 +20,7 @@ if ($TimeoutSeconds -lt 30 -or $TimeoutSeconds -gt 900) {
 $ownershipMarker = [string]$env:STELE_TEST_RETRIEVAL_EVALUATION_OWNED
 if ($ownershipMarker -notin @('true', 'TRUE', 'True')) {
     Write-Output 'STELE_TEST_RETRIEVAL_EVALUATION_OWNERSHIP_REQUIRED'
-    exit 2
+	exit 2
 }
 
 # Real-stack evaluation must be explicitly opted into with the harness-owned
@@ -51,7 +51,13 @@ $env:STELE_RETRIEVAL_EVALUATION_REPORT_DIR = $ReportDirectory
 $evaluationFailed = $false
 $evaluationExitCode = 0
 $controlledSkip = $false
-go test ./internal/storage/postgres -run '^TestPlannerEvaluationFixtureRunsOwnedPostgresEvaluation$' -count=1 -timeout ("{0}s" -f $TimeoutSeconds) -v
+try {
+    go test ./internal/storage/postgres -run '^TestPlannerEvaluationFixtureRunsOwnedPostgresEvaluation$' -count=1 -timeout ("{0}s" -f $TimeoutSeconds) -v
+} catch {
+    Write-Error 'RETRIEVAL_RELEASE_EVIDENCE_RUN_FAILED'
+    $evaluationFailed = $true
+    $evaluationExitCode = 1
+}
 if ($LASTEXITCODE -ne 0) {
     $evaluationFailed = $true
     $evaluationExitCode = $LASTEXITCODE
@@ -83,6 +89,11 @@ if (-not $evaluationFailed -and (Test-Path -LiteralPath (Join-Path $ReportDirect
     $evaluationFailed = $true
 }
 if ($evaluationFailed) {
+    if ($evaluationExitCode -eq 124 -or $evaluationExitCode -eq 137) {
+        Write-Output 'RETRIEVAL_RELEASE_EVIDENCE_TIMEOUT'
+    } else {
+        Write-Output 'RETRIEVAL_RELEASE_EVIDENCE_INCOMPLETE_CLEANUP'
+    }
     Remove-Item -LiteralPath $ReportDirectory -Recurse -Force -ErrorAction SilentlyContinue
     if ($controlledSkip) {
         exit 2
