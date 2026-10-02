@@ -130,6 +130,45 @@ type ProgressiveExperimentEvent struct {
 	Eligibility string
 }
 
+// ReasoningInsightEvent carries only bounded categories for provider-backed
+// insight derivation and replay. It deliberately excludes scope, prompts,
+// candidate identifiers, source content, provider payloads, and raw errors.
+type ReasoningInsightEvent struct {
+	Operation   string
+	Mode        string
+	InsightType string
+	Result      string
+	Eligibility string
+	Freshness   string
+	Fallback    string
+	Duration    string
+}
+
+func LogReasoningInsightLifecycle(logger *log.Logger, event ReasoningInsightEvent) {
+	if logger == nil {
+		return
+	}
+	logger.Printf("component=reasoning_insight operation=%s mode=%s insight_type=%s result=%s eligibility=%s freshness=%s fallback=%s duration_bucket=%s",
+		boundedReasoningLabel(event.Operation, "derive", "replay", "shadow", "handoff", "rollback"),
+		boundedReasoningLabel(event.Mode, "offline", "shadow", "apply"),
+		boundedReasoningLabel(event.InsightType, "hypothesis", "goal", "contradiction", "causal_link", "unknown"),
+		boundedReasoningLabel(event.Result, "candidate", "would_activate", "rejected", "quarantined", "stale", "fallback", "completed", "failed"),
+		boundedReasoningLabel(event.Eligibility, "eligible", "ineligible", "disabled", "unknown"),
+		boundedReasoningLabel(event.Freshness, "fresh", "stale", "missing", "unknown"),
+		boundedReasoningLabel(event.Fallback, "none", "provider", "budget", "compatibility", "validation", "unknown"),
+		boundedReasoningLabel(event.Duration, "lt_1s", "1s_10s", "gt_10s", "unknown"),
+	)
+}
+
+func boundedReasoningLabel(value string, allowed ...string) string {
+	for _, candidate := range allowed {
+		if value == candidate {
+			return candidate
+		}
+	}
+	return "unknown"
+}
+
 // RetrievalPlannerEvent carries only bounded planner execution categories.
 // It intentionally excludes query text, scope values, identifiers, provider
 // payloads, credentials, and raw scores.

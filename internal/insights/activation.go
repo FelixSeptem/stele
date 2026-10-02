@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"github.com/FelixSeptem/stele/internal/memory"
+	"github.com/FelixSeptem/stele/internal/reasoning"
 )
 
 const ReservedInsightActivationPolicyVersion = "reserved-insight-activation-v1"
@@ -211,6 +212,56 @@ type ActivationDecisionStore interface {
 	CreateActivationDecision(ctx context.Context, record ActivationDecisionRecord, evidence []ActivationDecisionEvidence) error
 }
 
+// AdmitReasoningCandidate converts the non-authoritative provider envelope
+// into the ordinary candidate lifecycle. It never activates directly: the
+// existing policy, evidence subset, compatibility, confidence, idempotency,
+// and shadow checks still run through AdmitReservedInsight.
+func AdmitReasoningCandidate(candidate reasoning.InsightCandidate, policy ReservedInsightActivationPolicy, authorizedEvidence []memory.DerivedInsightEvidenceRef, input ActivationInput) ActivationResult {
+	if err := candidate.Validate(reasoning.DefaultLimits()); err != nil {
+		return ActivationResult{Disposition: ActivationDispositionQuarantined, CandidateFingerprint: candidate.ReplayID, Reason: err.Error(), Err: err}
+	}
+	if input.CandidateFingerprint == "" {
+		input.CandidateFingerprint = candidate.ReplayID
+	}
+	if input.PolicyVersion == "" {
+		input.PolicyVersion = candidate.PolicyVersion
+	}
+	if input.SourceWatermark == "" {
+		input.SourceWatermark = candidate.SourceWatermark
+	}
+	input.Policy = policy
+	input.AuthorizedEvidence = authorizedEvidence
+	input.Candidate = memory.DerivedInsight{
+		ID:         candidate.ID,
+		Scope:      candidate.Scope,
+		Type:       candidate.InsightType,
+		State:      memory.DerivedInsightStateCandidate,
+		Title:      candidate.Title,
+		Summary:    candidate.Summary,
+		Confidence: memory.DerivedInsightConfidence{Score: 1 - candidate.Uncertainty, Method: "reasoning_uncertainty"},
+		Derivation: memory.DerivedInsightDerivation{
+			Source:      "reasoning_provider",
+			Fingerprint: candidate.ReplayID,
+			DerivedAt:   candidate.CreatedAt,
+			Metadata: map[string]any{
+				"provider_version":     candidate.ProviderVersion,
+				"schema_version":       candidate.SchemaVersion,
+				"policy_version":       candidate.PolicyVersion,
+				"source_watermark":     candidate.SourceWatermark,
+				"scope_proof":          candidate.ScopeProof,
+				"lifecycle_visibility": candidate.LifecycleVisibility,
+				"redaction_policy":     candidate.RedactionPolicy,
+				"reasoning_mode":       string(candidate.Mode),
+				"reasoning_candidate":  true,
+			},
+		},
+		Evidence:  candidate.Evidence,
+		CreatedAt: candidate.CreatedAt,
+		UpdatedAt: candidate.CreatedAt,
+	}
+	return AdmitReservedInsight(input)
+}
+
 type ReservedInsightActivationService struct {
 	Store ReservedInsightActivationStore
 }
@@ -245,6 +296,29 @@ func (s ReservedInsightActivationService) Apply(ctx context.Context, input Activ
 	result.Insight = stored
 	persistedInsight = true
 	return result, nil
+}
+
+// ApplyReasoningCandidate performs the explicit, authorized handoff for a
+// normalized reasoning candidate. The candidate is converted and validated
+// before the ordinary activation service persists anything.
+func (s ReservedInsightActivationService) ApplyReasoningCandidate(ctx context.Context, candidate reasoning.InsightCandidate, policy ReservedInsightActivationPolicy, authorizedEvidence []memory.DerivedInsightEvidenceRef, now time.Time) (ActivationResult, error) {
+	preflight := AdmitReasoningCandidate(candidate, policy, authorizedEvidence, ActivationInput{Policy: policy, Shadow: true, Now: now})
+	if preflight.Disposition != ActivationDispositionWouldActivate {
+		if preflight.Err != nil {
+			return preflight, preflight.Err
+		}
+		return preflight, nil
+	}
+	return s.Apply(ctx, ActivationInput{
+		Policy:               policy,
+		Candidate:            preflight.Insight,
+		AuthorizedEvidence:   authorizedEvidence,
+		CandidateFingerprint: candidate.ReplayID,
+		IdempotencyKey:       candidate.ReplayID,
+		SourceWatermark:      candidate.SourceWatermark,
+		PolicyVersion:        candidate.PolicyVersion,
+		Now:                  now,
+	})
 }
 
 func activationDecisionRecord(input ActivationInput, result ActivationResult) ActivationDecisionRecord {

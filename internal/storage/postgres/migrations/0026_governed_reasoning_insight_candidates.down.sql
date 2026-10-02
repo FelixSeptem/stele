@@ -1,0 +1,1 @@
+DROP TABLE IF EXISTS governed_reasoning_insight_candidates;

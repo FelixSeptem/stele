@@ -64,11 +64,11 @@ not be conflated:
 - **Archived implementation**: P0–P7, RQ1–RQ4, and P8.1–P8.8 are archived
   baselines. Changes 054, 055, 056, and the reflection/compaction durable work
   closure are archived; the active bounded post-v1 proposal is
-  `progressive-context-hierarchical-retrieval-experiments`.
+  `governed-autonomous-reasoning-insights`.
 - **Candidate expansion**: useful post-v1 ideas that must wait until the provider
   contract and quality gates are stable. This includes MCP adapters, namespace
-  subtree conventions, agent self-model conventions, and autonomous reasoning
-  insights.
+  subtree conventions, agent self-model conventions, and later autonomous
+  reasoning extensions.
 
 ### OpenSpec ↔ roadmap reconciliation snapshot
 
@@ -104,7 +104,7 @@ change an archived baseline.
 | P5 | Benchmark expansion and retrieval release evidence | Archived changes 025, 026, 035, and 039 | Implemented baseline; owned real-stack evidence remains a prerequisite for activation. |
 | P6 | Durable multi-scope maintenance and observability | Archived change 037 | Implemented baseline; retain regression, freshness, and SLO evidence. |
 | P7 | Agent runtime memory-provider contract | Archived change 038 | Implemented baseline; integration remains optional to the retrieval path. |
-| P8 | Optional adapters and governed experience insights | Governed insight baseline in changes 013/014; OpenAPI-backed MCP scope/profile adapter archived as change 044; scoped memory paths archived as change 046; agent self-model conventions archived as change 047; reasoning-provider boundary archived as change 048; OpenAI-compatible adapter archived as change 049; governed reserved-insight activation archived as change 050; redacted trajectory and memory-integrity evaluation archived as change 051; MCP real-stack conformance and self-hosting evidence archived as change 052; retrieval release evidence refresh and controlled activation archived as change 053; self-hosting first-ten-minutes smoke path archived as change 054; retrieval release evidence operational closure archived as change 055; durable scheduler run history operational closure archived as change 056; reflection/compaction durable work closure archived as change 057; progressive context and hierarchical retrieval experiments are the active bounded post-v1 proposal | Keep MCP as an optional OpenAPI adapter and reuse projections/intents rather than creating a second memory system. |
+| P8 | Optional adapters and governed experience insights | Governed insight baseline in changes 013/014; OpenAPI-backed MCP scope/profile adapter archived as change 044; scoped memory paths archived as change 046; agent self-model conventions archived as change 047; reasoning-provider boundary archived as change 048; OpenAI-compatible adapter archived as change 049; governed reserved-insight activation archived as change 050; redacted trajectory and memory-integrity evaluation archived as change 051; MCP real-stack conformance and self-hosting evidence archived as change 052; retrieval release evidence refresh and controlled activation archived as change 053; self-hosting first-ten-minutes smoke path archived as change 054; retrieval release evidence operational closure archived as change 055; durable scheduler run history operational closure archived as change 056; reflection/compaction durable work closure archived as change 057; governed autonomous reasoning insights are the active bounded post-v1 proposal | Keep MCP as an optional OpenAPI adapter and reuse projections/intents rather than creating a second memory system. |
 
 ### Critical path to provider readiness
 
@@ -1413,8 +1413,7 @@ Exit signal:
 11. RQ1–RQ4 retrieval-quality frontier (archived changes 040–043)
 12. Stage 10 optional adapters and governed experience insights (P8), with
     P8.1–P8.8 and changes 054–057 archived;
-    `progressive-context-hierarchical-retrieval-experiments` is the bounded
-    post-v1 proposal
+    `governed-autonomous-reasoning-insights` is the bounded post-v1 proposal
 
 Reasoning:
 
@@ -1767,7 +1766,7 @@ archived. Change 055, `retrieval-release-evidence-operational-closure`, and
 change 056, `durable-scheduler-run-history-operational-closure`, and change 057,
 `reflection-compaction-durable-work-closure`, are also archived. The active
 bounded post-v1 proposal is
-`progressive-context-hierarchical-retrieval-experiments`. The archived P8.8
+`governed-autonomous-reasoning-insights`. The archived P8.8
 work does not
 add a second rollout system,
 change default retrieval or OpenAPI behavior, or widen the canonical

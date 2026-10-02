@@ -6,6 +6,7 @@ import (
 	"time"
 
 	"github.com/FelixSeptem/stele/internal/memory"
+	"github.com/FelixSeptem/stele/internal/reasoning"
 )
 
 type activationStoreStub struct {
@@ -287,5 +288,68 @@ func testHypothesisCandidate(scope memory.Scope) memory.DerivedInsight {
 		}},
 		CreatedAt: now,
 		UpdatedAt: now,
+	}
+}
+
+func TestAdmitReasoningCandidateUsesExistingPolicyAndKeepsShadowNonAuthoritative(t *testing.T) {
+	scope := memory.Scope{Tenant: "tenant-a", Project: "project-a", Namespace: "namespace-a"}
+	now := time.Date(2026, 9, 29, 0, 0, 0, 0, time.UTC)
+	evidence := memory.DerivedInsightEvidenceRef{Kind: memory.DerivedInsightEvidenceKindJobExecution, ID: "job-1", Relation: memory.DerivedInsightEvidenceRelationSupports}
+	request := reasoning.InsightDerivationRequest{Scope: scope, InsightType: memory.DerivedInsightTypeHypothesis, Mode: reasoning.ModeShadow, Evidence: []memory.DerivedInsightEvidenceRef{evidence}, SourceWatermark: "wm-1", ScopeProof: "proof-1", LifecycleVisibility: "active_only", RedactionPolicy: "references_only", ProviderVersion: "provider-1", SchemaVersion: reasoning.SchemaVersionV1, PolicyVersion: ReservedInsightActivationPolicyVersion, InputDigest: "input-1", Limits: reasoning.DefaultLimits(), Now: now}
+	digest, err := reasoning.EvidenceDigest(request.Evidence)
+	if err != nil {
+		t.Fatal(err)
+	}
+	replayID, err := reasoning.InsightReplayID(request)
+	if err != nil {
+		t.Fatal(err)
+	}
+	candidate := reasoning.InsightCandidate{ID: "reasoning-candidate-1", Scope: scope, InsightType: request.InsightType, Title: "Bounded hypothesis", Summary: "Evidence-backed hypothesis", Evidence: request.Evidence, EvidenceDigest: digest, SourceWatermark: request.SourceWatermark, ScopeProof: request.ScopeProof, LifecycleVisibility: request.LifecycleVisibility, RedactionPolicy: request.RedactionPolicy, ProviderVersion: request.ProviderVersion, SchemaVersion: request.SchemaVersion, PolicyVersion: request.PolicyVersion, ReplayID: replayID, Uncertainty: 0.2, Mode: request.Mode, CreatedAt: now}
+	policy := DefaultReservedInsightActivationPolicy(scope)
+	policy.Enabled = true
+	policy.EnabledTypes[memory.DerivedInsightTypeHypothesis] = true
+	policy.ExpiresAt = now.Add(24 * time.Hour)
+	result := AdmitReasoningCandidate(candidate, policy, request.Evidence, ActivationInput{Policy: policy, Shadow: true, Now: now})
+	if result.Disposition != ActivationDispositionWouldActivate {
+		t.Fatalf("shadow reasoning disposition = %s, want would_activate (%v)", result.Disposition, result.Reason)
+	}
+	if result.Insight.State != memory.DerivedInsightStateCandidate {
+		t.Fatalf("shadow reasoning state = %s, want candidate", result.Insight.State)
+	}
+}
+
+func TestReasoningActivationStopsAfterPolicyRollback(t *testing.T) {
+	scope := memory.Scope{Tenant: "tenant-a", Project: "project-a", Namespace: "namespace-a"}
+	now := time.Date(2026, 9, 29, 0, 0, 0, 0, time.UTC)
+	policy := DefaultReservedInsightActivationPolicy(scope)
+	policy.Enabled = true
+	policy.EnabledTypes[memory.DerivedInsightTypeHypothesis] = true
+	policy.ExpiresAt = now.Add(24 * time.Hour)
+	rolledBack := policy.RolledBackCopy()
+	result := AdmitReservedInsight(ActivationInput{Policy: rolledBack, Candidate: testHypothesisCandidate(scope), Now: now})
+	if result.Disposition != ActivationDispositionStale {
+		t.Fatalf("rolled back reasoning policy disposition = %s, want stale", result.Disposition)
+	}
+}
+
+func TestApplyReasoningCandidatePersistsOnlyAfterPolicyAdmission(t *testing.T) {
+	scope := memory.Scope{Tenant: "tenant-a", Project: "project-a", Namespace: "namespace-a"}
+	now := time.Date(2026, 9, 29, 0, 0, 0, 0, time.UTC)
+	evidence := memory.DerivedInsightEvidenceRef{Kind: memory.DerivedInsightEvidenceKindJobExecution, ID: "job-1", Relation: memory.DerivedInsightEvidenceRelationSupports}
+	request := reasoning.InsightDerivationRequest{Scope: scope, InsightType: memory.DerivedInsightTypeHypothesis, Mode: reasoning.ModeOffline, Evidence: []memory.DerivedInsightEvidenceRef{evidence}, SourceWatermark: "wm-1", ScopeProof: "proof-1", LifecycleVisibility: "active_only", RedactionPolicy: "references_only", ProviderVersion: "provider-1", SchemaVersion: reasoning.SchemaVersionV1, PolicyVersion: ReservedInsightActivationPolicyVersion, InputDigest: "input-1", Limits: reasoning.DefaultLimits(), Now: now}
+	digest, _ := reasoning.EvidenceDigest(request.Evidence)
+	replayID, _ := reasoning.InsightReplayID(request)
+	candidate := reasoning.InsightCandidate{ID: "reasoning-candidate-apply", Scope: scope, InsightType: request.InsightType, Title: "Bounded hypothesis", Summary: "Evidence-backed hypothesis", Evidence: request.Evidence, EvidenceDigest: digest, SourceWatermark: request.SourceWatermark, ScopeProof: request.ScopeProof, LifecycleVisibility: request.LifecycleVisibility, RedactionPolicy: request.RedactionPolicy, ProviderVersion: request.ProviderVersion, SchemaVersion: request.SchemaVersion, PolicyVersion: request.PolicyVersion, ReplayID: replayID, Uncertainty: 0.2, Mode: request.Mode, CreatedAt: now}
+	policy := DefaultReservedInsightActivationPolicy(scope)
+	policy.Enabled = true
+	policy.EnabledTypes[memory.DerivedInsightTypeHypothesis] = true
+	policy.ExpiresAt = now.Add(24 * time.Hour)
+	store := &activationStoreStub{}
+	result, err := (ReservedInsightActivationService{Store: store}).ApplyReasoningCandidate(context.Background(), candidate, policy, request.Evidence, now)
+	if err != nil || result.Disposition != ActivationDispositionActivated {
+		t.Fatalf("apply reasoning candidate result=%+v err=%v", result, err)
+	}
+	if len(store.stored) != 1 || len(store.decisions) != 1 || store.stored[0].State != memory.DerivedInsightStateActive {
+		t.Fatalf("stored=%d decisions=%d insight=%+v", len(store.stored), len(store.decisions), store.stored)
 	}
 }

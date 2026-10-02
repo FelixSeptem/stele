@@ -54,6 +54,25 @@ func TestMetricsObserverExportsOperationsBacklogsAndAdmission(t *testing.T) {
 	}
 }
 
+func TestMetricsObserverBoundsReasoningInsightLabels(t *testing.T) {
+	observer := NewMetricsObserver()
+	observer.RecordReasoningInsight(context.Background(), ReasoningInsightEvent{
+		Operation: "derive", Mode: "shadow", InsightType: "hypothesis", Result: "would_activate",
+		Eligibility: "eligible", Freshness: "fresh", Fallback: "none", Duration: "lt_1s",
+	})
+	observer.RecordReasoningInsight(context.Background(), ReasoningInsightEvent{
+		Operation: "secret-operation", Mode: "secret-mode", InsightType: "prompt-content", Result: "secret-result",
+		Eligibility: "secret", Freshness: "secret", Fallback: "secret", Duration: "secret",
+	})
+	metrics := observer.RenderPrometheus()
+	if !strings.Contains(metrics, `stele_reasoning_insight_total{duration="lt_1s",eligibility="eligible",fallback="none",freshness="fresh",insight_type="hypothesis",mode="shadow",operation="derive",result="would_activate"} 1`) {
+		t.Fatalf("bounded reasoning metric missing:\n%s", metrics)
+	}
+	if !strings.Contains(metrics, `stele_reasoning_insight_total{duration="unknown",eligibility="unknown",fallback="unknown",freshness="unknown",insight_type="unknown",mode="unknown",operation="unknown",result="unknown"} 1`) {
+		t.Fatalf("unknown reasoning labels were not bucketed:\n%s", metrics)
+	}
+}
+
 func TestMetricsObserverExportsBoundedMaintenanceEvent(t *testing.T) {
 	observer := NewMetricsObserver()
 	observer.RecordMaintenance(context.Background(), MaintenanceEvent{JobClass: "projection_refresh", Outcome: "success", LeaseOutcome: "renewed", Freshness: "fresh", SLO: "within_budget", LatencyBucket: "lt_1s", CandidateBucket: "0_10"})

@@ -89,7 +89,11 @@ paths:
         - $ref: '#/components/parameters/NamespaceHeader'
       responses:
         '200':
-          description: Bounded reasoning capabilities and execution limits
+          description: >-
+            Bounded reasoning capabilities and execution limits. Reserved
+            reasoning insight candidates are offline/shadow-only until a
+            separate exact-scope activation policy admits them; provider output
+            cannot mutate canonical memory or ordinary context.
           content:
             application/json:
               schema:
