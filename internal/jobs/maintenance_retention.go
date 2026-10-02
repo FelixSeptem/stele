@@ -48,6 +48,52 @@ type DerivedArtifactRetentionJob struct {
 	Observer        telemetry.Observer
 }
 
+// SchedulerRunHistoryRetentionJob prunes only derived attempt details. Run
+// summaries and audit transitions remain in PostgreSQL for the configured
+// audit horizon.
+type SchedulerRunHistoryRetentionJob struct {
+	Store           SchedulerRunHistoryRetentionStore
+	Now             func() time.Time
+	RetentionWindow time.Duration
+	Limit           int
+	Observer        telemetry.Observer
+}
+
+func (j SchedulerRunHistoryRetentionJob) Name() string { return "scheduler_run_history_retention" }
+
+func (j SchedulerRunHistoryRetentionJob) Run(ctx context.Context) (int, error) {
+	if j.Store == nil {
+		return 0, fmt.Errorf("scheduler run history retention store is required")
+	}
+	now := time.Now().UTC()
+	if j.Now != nil {
+		now = j.Now().UTC()
+	}
+	window := j.RetentionWindow
+	if window <= 0 {
+		window = 30 * 24 * time.Hour
+	}
+	limit := j.Limit
+	if limit <= 0 || limit > 1000 {
+		limit = 100
+	}
+	deleted, err := j.Store.PruneSchedulerRunAttemptDetails(ctx, now.Add(-window), limit)
+	if err != nil {
+		j.recordSchedulerTelemetry(ctx, "failure", "attempt_detail")
+		return deleted, err
+	}
+	j.recordSchedulerTelemetry(ctx, "deleted", "attempt_detail")
+	return deleted, nil
+}
+
+func (j SchedulerRunHistoryRetentionJob) recordSchedulerTelemetry(ctx context.Context, result, record string) {
+	if observer, ok := j.Observer.(interface {
+		RecordSchedulerRun(context.Context, telemetry.SchedulerRunEvent)
+	}); ok {
+		observer.RecordSchedulerRun(ctx, telemetry.SchedulerRunEvent{Operation: "retention_cleanup", Result: result, Record: record, State: "completed", DurationBucket: "unknown"})
+	}
+}
+
 func (j DerivedArtifactRetentionJob) Name() string { return "derived_artifact_retention" }
 
 func (j DerivedArtifactRetentionJob) Run(ctx context.Context) (int, error) {

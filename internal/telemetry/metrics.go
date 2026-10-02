@@ -168,6 +168,24 @@ func (o *MetricsObserver) RecordMaintenance(ctx context.Context, event Maintenan
 	}, 1)
 }
 
+func (o *MetricsObserver) RecordSchedulerRun(ctx context.Context, event SchedulerRunEvent) {
+	if o == nil {
+		return
+	}
+	o.addCounter("stele_scheduler_runs_total", map[string]string{
+		"operation":       boundedSchedulerLabel(event.Operation, "dispatch", "lease", "retry", "recovery", "duplicate", "checkpoint", "terminal", "retention_cleanup", "admin_inspection"),
+		"result":          boundedSchedulerLabel(event.Result, "accepted", "acquired", "renewed", "reclaimed", "retrying", "exhausted", "completed", "cancelled", "duplicate", "skipped", "deleted", "failure", "denied"),
+		"state":           boundedSchedulerLabel(event.State, "pending", "running", "retrying", "recovered", "completed", "failed", "duplicate", "skipped", "exhausted", "cancelled"),
+		"lease":           boundedSchedulerLabel(event.Lease, "acquired", "renewed", "reclaimed", "conflict", "none"),
+		"retry":           boundedSchedulerLabel(event.Retry, "none", "eligible", "backoff", "exhausted"),
+		"recovery":        boundedSchedulerLabel(event.Recovery, "none", "reclaimed", "resumed", "manual_review", "cancelled"),
+		"record":          boundedSchedulerLabel(event.Record, "run_summary", "attempt", "attempt_detail", "admin_page"),
+		"freshness":       boundedSchedulerLabel(event.Freshness, "fresh", "stale", "divergent", "missing", "unknown"),
+		"slo":             boundedSchedulerLabel(event.SLO, "within_budget", "over_budget", "unknown"),
+		"duration_bucket": boundedSchedulerLabel(event.DurationBucket, "lt_1s", "1s_10s", "gt_10s", "unknown"),
+	}, 1)
+}
+
 func maintenanceLabel(value string, allowed []string) string {
 	for _, candidate := range allowed {
 		if value == candidate {
@@ -901,6 +919,7 @@ func (o *MetricsObserver) RenderPrometheus() string {
 	writeMetricFamilyHeader(&builder, "stele_backlog_pending", "gauge", "Stele pending backlog count.")
 	writeMetricFamilyHeader(&builder, "stele_backlog_leased", "gauge", "Stele leased backlog count.")
 	writeMetricFamilyHeader(&builder, "stele_backlog_processed", "gauge", "Stele processed backlog count.")
+	writeMetricFamilyHeader(&builder, "stele_scheduler_runs_total", "counter", "Durable scheduler run lifecycle outcomes by bounded categories.")
 	writeMetricFamilyHeader(&builder, "stele_admission_decisions_total", "counter", "Stele admission decisions.")
 	writeMetricFamilyHeader(&builder, "stele_admission_findings_total", "counter", "Stele admission findings.")
 	writeMetricFamilyHeader(&builder, "stele_embedding_cutover_plans", "gauge", "Embedding cutover plan counts by status.")

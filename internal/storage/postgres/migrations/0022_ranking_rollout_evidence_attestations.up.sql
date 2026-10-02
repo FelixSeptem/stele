@@ -1,5 +1,5 @@
 CREATE TABLE IF NOT EXISTS ranking_rollout_evidence_attestations (
-    policy_id text NOT NULL REFERENCES ranking_rollout_policies(id) ON DELETE CASCADE,
+    policy_id uuid NOT NULL REFERENCES ranking_rollout_policies(id) ON DELETE CASCADE,
     tenant text NOT NULL,
     project text NOT NULL,
     namespace text NOT NULL,

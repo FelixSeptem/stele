@@ -1190,17 +1190,169 @@ const (
 	MaintenanceDispositionLeaseConflict MaintenanceExecutionDisposition = "lease_conflict"
 	MaintenanceDispositionStale         MaintenanceExecutionDisposition = "stale"
 	MaintenanceDispositionExhausted     MaintenanceExecutionDisposition = "exhausted"
+	MaintenanceDispositionCancelled     MaintenanceExecutionDisposition = "cancelled"
+	MaintenanceDispositionSkipped       MaintenanceExecutionDisposition = "skipped"
+	MaintenanceDispositionManualReview  MaintenanceExecutionDisposition = "manual_review"
 )
 
 func (d MaintenanceExecutionDisposition) Valid() bool {
 	switch d {
 	case MaintenanceDispositionCompleted, MaintenanceDispositionFailed,
 		MaintenanceDispositionDuplicate, MaintenanceDispositionLeaseConflict,
-		MaintenanceDispositionStale, MaintenanceDispositionExhausted:
+		MaintenanceDispositionStale, MaintenanceDispositionExhausted,
+		MaintenanceDispositionCancelled, MaintenanceDispositionSkipped,
+		MaintenanceDispositionManualReview:
 		return true
 	default:
 		return false
 	}
+}
+
+// SchedulerRunState is the bounded lifecycle vocabulary for durable scheduler
+// runs. Values are intentionally stable because they are persisted and emitted
+// through operator-facing telemetry.
+type SchedulerRunState string
+
+const (
+	SchedulerRunPending   SchedulerRunState = "pending"
+	SchedulerRunRunning   SchedulerRunState = "running"
+	SchedulerRunRetrying  SchedulerRunState = "retrying"
+	SchedulerRunCompleted SchedulerRunState = "completed"
+	SchedulerRunFailed    SchedulerRunState = "failed"
+	SchedulerRunDuplicate SchedulerRunState = "duplicate"
+	SchedulerRunSkipped   SchedulerRunState = "skipped"
+	SchedulerRunExhausted SchedulerRunState = "exhausted"
+	SchedulerRunCancelled SchedulerRunState = "cancelled"
+	SchedulerRunRecovered SchedulerRunState = "recovered"
+)
+
+func (s SchedulerRunState) Valid() bool {
+	switch s {
+	case SchedulerRunPending, SchedulerRunRunning, SchedulerRunRetrying,
+		SchedulerRunCompleted, SchedulerRunFailed, SchedulerRunDuplicate,
+		SchedulerRunSkipped, SchedulerRunExhausted, SchedulerRunCancelled,
+		SchedulerRunRecovered:
+		return true
+	default:
+		return false
+	}
+}
+
+type SchedulerRunRecovery string
+
+const (
+	SchedulerRecoveryNone      SchedulerRunRecovery = "none"
+	SchedulerRecoveryReclaimed SchedulerRunRecovery = "reclaimed"
+	SchedulerRecoveryResumed   SchedulerRunRecovery = "resumed"
+	SchedulerRecoveryManual    SchedulerRunRecovery = "manual_review"
+	SchedulerRecoveryCancelled SchedulerRunRecovery = "cancelled"
+)
+
+func (r SchedulerRunRecovery) Valid() bool {
+	switch r {
+	case SchedulerRecoveryNone, SchedulerRecoveryReclaimed,
+		SchedulerRecoveryResumed, SchedulerRecoveryManual,
+		SchedulerRecoveryCancelled:
+		return true
+	default:
+		return false
+	}
+}
+
+type SchedulerRunAttempt struct {
+	RunKey          string                          `json:"run_key"`
+	JobClass        string                          `json:"job_class"`
+	Scope           memory.Scope                    `json:"scope"`
+	CadenceWindow   time.Time                       `json:"cadence_window"`
+	Attempt         int                             `json:"attempt"`
+	State           SchedulerRunState               `json:"state"`
+	Disposition     MaintenanceExecutionDisposition `json:"disposition,omitempty"`
+	WorkerID        string                          `json:"-"`
+	LeaseUntil      time.Time                       `json:"lease_until,omitempty"`
+	Checkpoint      string                          `json:"checkpoint,omitempty"`
+	SourceWatermark string                          `json:"source_watermark,omitempty"`
+	RetryAt         time.Time                       `json:"retry_at,omitempty"`
+	Recovery        SchedulerRunRecovery            `json:"recovery"`
+	ErrorCategory   string                          `json:"error_category,omitempty"`
+	ObservedAt      time.Time                       `json:"observed_at"`
+	FinishedAt      time.Time                       `json:"finished_at,omitempty"`
+	DetailExpiresAt time.Time                       `json:"detail_expires_at,omitempty"`
+}
+
+type SchedulerRunSummary struct {
+	RunKey          string                          `json:"run_key"`
+	JobClass        string                          `json:"job_class"`
+	Scope           memory.Scope                    `json:"scope"`
+	CadenceWindow   time.Time                       `json:"cadence_window"`
+	State           SchedulerRunState               `json:"state"`
+	AttemptCount    int                             `json:"attempt_count"`
+	Terminal        MaintenanceExecutionDisposition `json:"terminal_disposition,omitempty"`
+	Recovery        SchedulerRunRecovery            `json:"recovery"`
+	Checkpoint      string                          `json:"checkpoint,omitempty"`
+	SourceWatermark string                          `json:"source_watermark,omitempty"`
+	Freshness       string                          `json:"freshness"`
+	SLO             string                          `json:"slo"`
+	RetryExhausted  bool                            `json:"retry_exhausted"`
+	CleanupState    string                          `json:"cleanup_state"`
+	ObservedAt      time.Time                       `json:"observed_at"`
+	FinishedAt      time.Time                       `json:"finished_at,omitempty"`
+}
+
+// EligibleForConformance reports whether a retained summary can support a
+// readiness/conformance claim. It deliberately fails closed for stale,
+// divergent, hidden, foreign, or non-terminal evidence.
+func (s SchedulerRunSummary) EligibleForConformance(now time.Time, freshnessWindow time.Duration, expectedWatermark string) bool {
+	if s.Scope.Validate() != nil || !s.State.Valid() || s.FinishedAt.IsZero() || s.RetryExhausted {
+		return false
+	}
+	if s.State != SchedulerRunCompleted && s.State != SchedulerRunRecovered {
+		return false
+	}
+	if s.Freshness != "fresh" || s.SLO != "within_budget" || s.SourceWatermark == "" {
+		return false
+	}
+	if strings.TrimSpace(expectedWatermark) != "" && s.SourceWatermark != strings.TrimSpace(expectedWatermark) {
+		return false
+	}
+	if freshnessWindow <= 0 || now.IsZero() || s.ObservedAt.IsZero() || now.Before(s.ObservedAt) {
+		return false
+	}
+	return now.Sub(s.ObservedAt) <= freshnessWindow
+}
+
+type SchedulerRunHistoryQuery struct {
+	Scope        memory.Scope
+	Limit        int
+	Cursor       string
+	JobClass     string
+	State        SchedulerRunState
+	Recovery     SchedulerRunRecovery
+	ObservedFrom time.Time
+	ObservedTo   time.Time
+}
+
+type SchedulerRunHistoryPage struct {
+	Runs       []SchedulerRunSummary `json:"runs"`
+	NextCursor string                `json:"next_cursor,omitempty"`
+}
+
+type SchedulerRunHistoryStore interface {
+	RecordSchedulerRunAttempt(context.Context, SchedulerRunAttempt) error
+	RecordSchedulerRunSummary(context.Context, SchedulerRunSummary) error
+}
+
+type SchedulerRunHistoryReader interface {
+	ListSchedulerRunHistory(context.Context, SchedulerRunHistoryQuery) (SchedulerRunHistoryPage, error)
+	ReadSchedulerRunHistory(context.Context, memory.Scope, string) (SchedulerRunSummary, []SchedulerRunAttempt, error)
+}
+
+type SchedulerRunHistoryRetentionStore interface {
+	PruneSchedulerRunAttemptDetails(context.Context, time.Time, int) (int, error)
+}
+
+type SchedulerRunAdminActions interface {
+	CancelSchedulerRun(context.Context, memory.Scope, string, time.Time) error
+	RecoverSchedulerRun(context.Context, memory.Scope, string, time.Time) error
 }
 
 type MaintenanceExecutionState struct {

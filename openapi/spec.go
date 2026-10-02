@@ -2309,6 +2309,124 @@ paths:
                 $ref: '#/components/schemas/JobExecutionListResponse'
         '401':
           description: Missing or invalid admin API key
+  /v1/admin/jobs/run-history:
+    get:
+      operationId: listAdminSchedulerRunHistory
+      parameters:
+        - $ref: '#/components/parameters/AdminAPIKey'
+        - $ref: '#/components/parameters/TenantHeader'
+        - $ref: '#/components/parameters/ProjectHeader'
+        - $ref: '#/components/parameters/NamespaceHeader'
+        - in: query
+          name: limit
+          required: false
+          schema:
+            type: integer
+            maximum: 100
+        - in: query
+          name: cursor
+          required: false
+          schema:
+            type: string
+        - in: query
+          name: job_class
+          required: false
+          schema:
+            type: string
+        - in: query
+          name: state
+          required: false
+          schema:
+            type: string
+        - in: query
+          name: recovery
+          required: false
+          schema:
+            type: string
+        - in: query
+          name: observed_from
+          required: false
+          schema:
+            type: string
+            format: date-time
+        - in: query
+          name: observed_to
+          required: false
+          schema:
+            type: string
+            format: date-time
+      responses:
+        '200':
+          description: Exact-scope durable scheduler run history page
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/SchedulerRunHistoryPage'
+        '400':
+          description: Invalid scope, filter, or cursor
+        '401':
+          description: Missing or invalid admin API key
+  /v1/admin/jobs/run-history/{run_key}:
+    get:
+      operationId: readAdminSchedulerRunHistory
+      parameters:
+        - $ref: '#/components/parameters/AdminAPIKey'
+        - $ref: '#/components/parameters/TenantHeader'
+        - $ref: '#/components/parameters/ProjectHeader'
+        - $ref: '#/components/parameters/NamespaceHeader'
+        - in: path
+          name: run_key
+          required: true
+          schema:
+            type: string
+      responses:
+        '200':
+          description: Bounded scheduler run summary and attempts
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [run, attempts]
+                properties:
+                  run:
+                    $ref: '#/components/schemas/SchedulerRunSummary'
+                  attempts:
+                    type: array
+                    items:
+                      $ref: '#/components/schemas/SchedulerRunAttempt'
+        '401':
+          description: Missing or invalid admin API key
+        '404':
+          description: Scheduler run not found in the exact scope
+    post:
+      operationId: applyAdminSchedulerRunAction
+      parameters:
+        - $ref: '#/components/parameters/AdminAPIKey'
+        - $ref: '#/components/parameters/TenantHeader'
+        - $ref: '#/components/parameters/ProjectHeader'
+        - $ref: '#/components/parameters/NamespaceHeader'
+        - in: path
+          name: run_key
+          required: true
+          schema:
+            type: string
+        - in: query
+          name: action
+          required: true
+          schema:
+            type: string
+            enum: [cancel, recover]
+      responses:
+        '200':
+          description: Governed scheduler run action accepted
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/SchedulerRunActionResponse'
+        '401':
+          description: Missing or invalid admin API key
+        '409':
+          description: Lease or terminal-state conflict
   /v1/admin/scope-proofs:
     get:
       operationId: listAdminScopeProofs
@@ -8357,6 +8475,95 @@ components:
           type: array
           items:
             $ref: '#/components/schemas/JobExecutionRecord'
+    SchedulerRunSummary:
+      type: object
+      required: [run_key, job_class, scope, state, attempt_count, recovery, freshness, slo, cleanup_state, observed_at]
+      properties:
+        run_key:
+          type: string
+        job_class:
+          type: string
+        scope:
+          $ref: '#/components/schemas/Scope'
+        cadence_window:
+          type: string
+          format: date-time
+        state:
+          type: string
+        attempt_count:
+          type: integer
+        terminal_disposition:
+          type: string
+        recovery:
+          type: string
+        checkpoint:
+          type: string
+        source_watermark:
+          type: string
+        freshness:
+          type: string
+        slo:
+          type: string
+        retry_exhausted:
+          type: boolean
+        cleanup_state:
+          type: string
+        observed_at:
+          type: string
+          format: date-time
+        finished_at:
+          type: string
+          format: date-time
+    SchedulerRunAttempt:
+      type: object
+      required: [run_key, attempt, state, recovery, observed_at]
+      properties:
+        run_key:
+          type: string
+        attempt:
+          type: integer
+        state:
+          type: string
+        disposition:
+          type: string
+        lease_until:
+          type: string
+          format: date-time
+        checkpoint:
+          type: string
+        source_watermark:
+          type: string
+        retry_at:
+          type: string
+          format: date-time
+        recovery:
+          type: string
+        error_category:
+          type: string
+        observed_at:
+          type: string
+          format: date-time
+        finished_at:
+          type: string
+          format: date-time
+    SchedulerRunHistoryPage:
+      type: object
+      required: [runs]
+      properties:
+        runs:
+          type: array
+          items:
+            $ref: '#/components/schemas/SchedulerRunSummary'
+        next_cursor:
+          type: string
+    SchedulerRunActionResponse:
+      type: object
+      required: [run_key, status]
+      properties:
+        run_key:
+          type: string
+        status:
+          type: string
     RankingRolloutPolicyCreateRequest:
       type: object
       required:

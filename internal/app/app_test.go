@@ -768,8 +768,8 @@ func TestBuildSchedulerRuntimeAssemblesMaintenanceScheduler(t *testing.T) {
 		t.Fatalf("runtime scheduler type = %T, want jobs.MaintenanceScheduler", runtime.scheduler)
 	}
 
-	if len(scheduler.Jobs) != 11 {
-		t.Fatalf("len(scheduler.Jobs) = %d, want 11", len(scheduler.Jobs))
+	if len(scheduler.Jobs) != 12 {
+		t.Fatalf("len(scheduler.Jobs) = %d, want 12", len(scheduler.Jobs))
 	}
 }
 
@@ -924,8 +924,8 @@ func TestBuildSchedulerRuntimeAssemblesScopeDispatchJobs(t *testing.T) {
 		t.Fatalf("runtime scheduler type = %T, want jobs.MaintenanceScheduler", runtime.scheduler)
 	}
 
-	if len(scheduler.Jobs) != 11 {
-		t.Fatalf("len(scheduler.Jobs) = %d, want 11", len(scheduler.Jobs))
+	if len(scheduler.Jobs) != 12 {
+		t.Fatalf("len(scheduler.Jobs) = %d, want 12", len(scheduler.Jobs))
 	}
 
 	dispatchA, ok := scheduler.Jobs[0].(jobs.ScopeDispatchJob)
@@ -1051,10 +1051,13 @@ func TestBuildSchedulerRuntimeAssemblesScopeDispatchJobs(t *testing.T) {
 		t.Fatalf("scheduler.Jobs[8] type = %T, want jobs.JobExecutionCleanupJob", scheduler.Jobs[8])
 	}
 	if _, ok := scheduler.Jobs[9].(jobs.ScopeDispatchJob); !ok {
-		t.Fatalf("scheduler.Jobs[9] type = %T, want context projection rebuild dispatch", scheduler.Jobs[9])
+		t.Fatalf("scheduler.Jobs[9] type = %T, want derived artifact retention dispatch", scheduler.Jobs[9])
 	}
 	if _, ok := scheduler.Jobs[10].(jobs.ScopeDispatchJob); !ok {
-		t.Fatalf("scheduler.Jobs[10] type = %T, want derived artifact retention dispatch", scheduler.Jobs[10])
+		t.Fatalf("scheduler.Jobs[10] type = %T, want context projection rebuild dispatch", scheduler.Jobs[10])
+	}
+	if _, ok := scheduler.Jobs[11].(jobs.SchedulerRunHistoryRetentionJob); !ok {
+		t.Fatalf("scheduler.Jobs[11] type = %T, want scheduler run history retention", scheduler.Jobs[11])
 	}
 }
 

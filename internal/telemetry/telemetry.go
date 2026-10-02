@@ -40,6 +40,48 @@ type MaintenanceEvent struct {
 	CandidateBucket string
 }
 
+// SchedulerRunEvent carries only fixed categories or buckets. It deliberately
+// has no scope, run id, attempt id, raw error, payload, or reason fields.
+type SchedulerRunEvent struct {
+	Operation      string
+	Result         string
+	State          string
+	Lease          string
+	Retry          string
+	Recovery       string
+	Record         string
+	Freshness      string
+	SLO            string
+	DurationBucket string
+}
+
+func LogSchedulerRunLifecycle(logger *log.Logger, event SchedulerRunEvent) {
+	if logger == nil {
+		return
+	}
+	logger.Printf("component=scheduler_run operation=%s result=%s state=%s lease=%s retry=%s recovery=%s record=%s freshness=%s slo=%s duration_bucket=%s",
+		boundedSchedulerLabel(event.Operation, "dispatch", "lease", "retry", "recovery", "duplicate", "checkpoint", "terminal", "retention_cleanup", "admin_inspection"),
+		boundedSchedulerLabel(event.Result, "accepted", "acquired", "renewed", "reclaimed", "retrying", "exhausted", "completed", "cancelled", "duplicate", "skipped", "deleted", "failure", "denied"),
+		boundedSchedulerLabel(event.State, "pending", "running", "retrying", "recovered", "completed", "failed", "duplicate", "skipped", "exhausted", "cancelled"),
+		boundedSchedulerLabel(event.Lease, "acquired", "renewed", "reclaimed", "conflict", "none"),
+		boundedSchedulerLabel(event.Retry, "none", "eligible", "backoff", "exhausted"),
+		boundedSchedulerLabel(event.Recovery, "none", "reclaimed", "resumed", "manual_review", "cancelled"),
+		boundedSchedulerLabel(event.Record, "run_summary", "attempt", "attempt_detail", "admin_page"),
+		boundedSchedulerLabel(event.Freshness, "fresh", "stale", "divergent", "missing", "unknown"),
+		boundedSchedulerLabel(event.SLO, "within_budget", "over_budget", "unknown"),
+		boundedSchedulerLabel(event.DurationBucket, "lt_1s", "1s_10s", "gt_10s", "unknown"),
+	)
+}
+
+func boundedSchedulerLabel(value string, allowed ...string) string {
+	for _, candidate := range allowed {
+		if value == candidate {
+			return candidate
+		}
+	}
+	return "unknown"
+}
+
 // RetrievalEvaluationEvent is intentionally low-cardinality. It contains no scope,
 // query, memory, source, credential, DSN, or raw error payload.
 type RetrievalEvaluationEvent struct {

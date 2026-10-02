@@ -3,13 +3,262 @@ package postgres
 import (
 	"context"
 	"database/sql"
+	"encoding/base64"
+	"encoding/json"
 	"fmt"
 	"strings"
+	"time"
 
 	"github.com/FelixSeptem/stele/internal/jobs"
 	"github.com/FelixSeptem/stele/internal/memory"
 	"github.com/jackc/pgx/v5"
 )
+
+const schedulerRunDetailRetention = 30 * 24 * time.Hour
+
+type schedulerRunCursor struct {
+	ObservedAt time.Time `json:"observed_at"`
+	RunKey     string    `json:"run_key"`
+}
+
+func encodeSchedulerRunCursor(cursor schedulerRunCursor) string {
+	data, _ := json.Marshal(cursor)
+	return base64.RawURLEncoding.EncodeToString(data)
+}
+
+func decodeSchedulerRunCursor(value string) (schedulerRunCursor, error) {
+	if strings.TrimSpace(value) == "" {
+		return schedulerRunCursor{}, nil
+	}
+	data, err := base64.RawURLEncoding.DecodeString(value)
+	if err != nil {
+		return schedulerRunCursor{}, fmt.Errorf("invalid scheduler history cursor")
+	}
+	var cursor schedulerRunCursor
+	if err := json.Unmarshal(data, &cursor); err != nil || cursor.RunKey == "" || cursor.ObservedAt.IsZero() {
+		return schedulerRunCursor{}, fmt.Errorf("invalid scheduler history cursor")
+	}
+	return cursor, nil
+}
+
+func (r *Repository) RecordSchedulerRunAttempt(ctx context.Context, attempt jobs.SchedulerRunAttempt) error {
+	if err := attempt.Scope.Validate(); err != nil {
+		return err
+	}
+	if strings.TrimSpace(attempt.RunKey) == "" || strings.TrimSpace(attempt.JobClass) == "" || attempt.Attempt < 1 || attempt.ObservedAt.IsZero() {
+		return fmt.Errorf("scheduler run attempt identity and time are required")
+	}
+	if !attempt.State.Valid() || !attempt.Recovery.Valid() {
+		return fmt.Errorf("scheduler run attempt category is invalid")
+	}
+	if attempt.Disposition != "" && !attempt.Disposition.Valid() {
+		return fmt.Errorf("scheduler run disposition %q is invalid", attempt.Disposition)
+	}
+	terminal := attempt.Disposition
+	retryExhausted := attempt.State == jobs.SchedulerRunExhausted
+	const summaryQuery = `
+INSERT INTO scheduler_run_summaries (run_key, job_class, tenant, project, namespace, cadence_window, state, attempt_count, terminal_disposition, recovery, checkpoint, source_watermark, retry_exhausted, observed_at, finished_at)
+VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15)
+ON CONFLICT (run_key) DO UPDATE SET state=CASE WHEN scheduler_run_summaries.state IN ('completed','exhausted','cancelled') AND EXCLUDED.state='duplicate' THEN scheduler_run_summaries.state ELSE EXCLUDED.state END, attempt_count=GREATEST(scheduler_run_summaries.attempt_count, EXCLUDED.attempt_count), terminal_disposition=CASE WHEN scheduler_run_summaries.state IN ('completed','exhausted','cancelled') AND EXCLUDED.state='duplicate' THEN scheduler_run_summaries.terminal_disposition ELSE COALESCE(EXCLUDED.terminal_disposition, scheduler_run_summaries.terminal_disposition) END, recovery=EXCLUDED.recovery, checkpoint=COALESCE(NULLIF(EXCLUDED.checkpoint,''), scheduler_run_summaries.checkpoint), source_watermark=COALESCE(NULLIF(EXCLUDED.source_watermark,''), scheduler_run_summaries.source_watermark), retry_exhausted=scheduler_run_summaries.retry_exhausted OR EXCLUDED.retry_exhausted, observed_at=GREATEST(scheduler_run_summaries.observed_at, EXCLUDED.observed_at), finished_at=COALESCE(EXCLUDED.finished_at, scheduler_run_summaries.finished_at)`
+	if _, err := r.db.Exec(ctx, summaryQuery, attempt.RunKey, attempt.JobClass, attempt.Scope.Tenant, attempt.Scope.Project, attempt.Scope.Namespace, attempt.CadenceWindow, attempt.State, attempt.Attempt, nullableDisposition(terminal), attempt.Recovery, attempt.Checkpoint, attempt.SourceWatermark, retryExhausted, attempt.ObservedAt, nullableTime(attempt.FinishedAt)); err != nil {
+		return fmt.Errorf("record scheduler run summary: %w", err)
+	}
+	const attemptQuery = `INSERT INTO scheduler_run_attempts (run_key, attempt, state, disposition, worker_id, lease_until, checkpoint, source_watermark, retry_at, recovery, error_category, observed_at, finished_at, detail_expires_at) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14)`
+	if _, err := r.db.Exec(ctx, attemptQuery, attempt.RunKey, attempt.Attempt, attempt.State, nullableDisposition(terminal), nullableSchedulerString(attempt.WorkerID), nullableTime(attempt.LeaseUntil), attempt.Checkpoint, attempt.SourceWatermark, nullableTime(attempt.RetryAt), attempt.Recovery, nullableSchedulerString(attempt.ErrorCategory), attempt.ObservedAt, nullableTime(attempt.FinishedAt), attempt.ObservedAt.Add(schedulerRunDetailRetention)); err != nil {
+		return fmt.Errorf("record scheduler run attempt: %w", err)
+	}
+	return nil
+}
+
+func (r *Repository) RecordSchedulerRunSummary(ctx context.Context, summary jobs.SchedulerRunSummary) error {
+	if err := summary.Scope.Validate(); err != nil {
+		return err
+	}
+	if strings.TrimSpace(summary.RunKey) == "" || strings.TrimSpace(summary.JobClass) == "" || summary.ObservedAt.IsZero() || !summary.State.Valid() || !summary.Recovery.Valid() {
+		return fmt.Errorf("scheduler run summary is invalid")
+	}
+	const query = `INSERT INTO scheduler_run_summaries (run_key, job_class, tenant, project, namespace, cadence_window, state, attempt_count, terminal_disposition, recovery, checkpoint, source_watermark, freshness, slo, retry_exhausted, cleanup_state, observed_at, finished_at) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18) ON CONFLICT (run_key) DO UPDATE SET state=EXCLUDED.state, attempt_count=GREATEST(scheduler_run_summaries.attempt_count, EXCLUDED.attempt_count), terminal_disposition=COALESCE(EXCLUDED.terminal_disposition, scheduler_run_summaries.terminal_disposition), recovery=EXCLUDED.recovery, checkpoint=COALESCE(NULLIF(EXCLUDED.checkpoint,''), scheduler_run_summaries.checkpoint), source_watermark=COALESCE(NULLIF(EXCLUDED.source_watermark,''), scheduler_run_summaries.source_watermark), freshness=EXCLUDED.freshness, slo=EXCLUDED.slo, retry_exhausted=EXCLUDED.retry_exhausted, cleanup_state=EXCLUDED.cleanup_state, observed_at=GREATEST(scheduler_run_summaries.observed_at, EXCLUDED.observed_at), finished_at=COALESCE(EXCLUDED.finished_at, scheduler_run_summaries.finished_at)`
+	if _, err := r.db.Exec(ctx, query, summary.RunKey, summary.JobClass, summary.Scope.Tenant, summary.Scope.Project, summary.Scope.Namespace, summary.CadenceWindow, summary.State, summary.AttemptCount, nullableDisposition(summary.Terminal), summary.Recovery, summary.Checkpoint, summary.SourceWatermark, boundedHistoryLabel(summary.Freshness), boundedHistoryLabel(summary.SLO), summary.RetryExhausted, boundedHistoryLabel(summary.CleanupState), summary.ObservedAt, nullableTime(summary.FinishedAt)); err != nil {
+		return fmt.Errorf("record scheduler run summary: %w", err)
+	}
+	return nil
+}
+
+func (r *Repository) ListSchedulerRunHistory(ctx context.Context, input jobs.SchedulerRunHistoryQuery) (jobs.SchedulerRunHistoryPage, error) {
+	if err := input.Scope.Validate(); err != nil {
+		return jobs.SchedulerRunHistoryPage{}, err
+	}
+	limit := input.Limit
+	if limit <= 0 || limit > 100 {
+		limit = 100
+	}
+	cursor, err := decodeSchedulerRunCursor(input.Cursor)
+	if err != nil {
+		return jobs.SchedulerRunHistoryPage{}, err
+	}
+	if input.State != "" && !input.State.Valid() {
+		return jobs.SchedulerRunHistoryPage{}, fmt.Errorf("invalid scheduler run state")
+	}
+	if input.Recovery != "" && !input.Recovery.Valid() {
+		return jobs.SchedulerRunHistoryPage{}, fmt.Errorf("invalid scheduler recovery")
+	}
+	const query = `SELECT run_key, job_class, tenant, project, namespace, cadence_window, state, attempt_count, terminal_disposition, recovery, COALESCE(checkpoint,''), COALESCE(source_watermark,''), freshness, slo, retry_exhausted, cleanup_state, observed_at, finished_at FROM scheduler_run_summaries WHERE tenant=$1 AND project=$2 AND namespace=$3 AND ($4='' OR job_class=$4) AND ($5='' OR state=$5) AND ($6='' OR recovery=$6) AND ($7::timestamptz IS NULL OR observed_at >= $7) AND ($8::timestamptz IS NULL OR observed_at <= $8) AND ($9::timestamptz IS NULL OR (observed_at,run_key) < ($9,$10)) ORDER BY observed_at DESC, run_key DESC LIMIT $11`
+	rows, err := r.db.Query(ctx, query, input.Scope.Tenant, input.Scope.Project, input.Scope.Namespace, strings.TrimSpace(input.JobClass), input.State, input.Recovery, nullableTime(input.ObservedFrom), nullableTime(input.ObservedTo), nullableTime(cursor.ObservedAt), cursor.RunKey, limit)
+	if err != nil {
+		return jobs.SchedulerRunHistoryPage{}, fmt.Errorf("list scheduler run history: %w", err)
+	}
+	defer rows.Close()
+	page := jobs.SchedulerRunHistoryPage{Runs: make([]jobs.SchedulerRunSummary, 0, limit)}
+	for rows.Next() {
+		var run jobs.SchedulerRunSummary
+		var terminal sql.NullString
+		var finished sql.NullTime
+		if err := rows.Scan(&run.RunKey, &run.JobClass, &run.Scope.Tenant, &run.Scope.Project, &run.Scope.Namespace, &run.CadenceWindow, &run.State, &run.AttemptCount, &terminal, &run.Recovery, &run.Checkpoint, &run.SourceWatermark, &run.Freshness, &run.SLO, &run.RetryExhausted, &run.CleanupState, &run.ObservedAt, &finished); err != nil {
+			return jobs.SchedulerRunHistoryPage{}, fmt.Errorf("scan scheduler run history: %w", err)
+		}
+		if terminal.Valid {
+			run.Terminal = jobs.MaintenanceExecutionDisposition(terminal.String)
+		}
+		if finished.Valid {
+			run.FinishedAt = finished.Time
+		}
+		page.Runs = append(page.Runs, run)
+	}
+	if err := rows.Err(); err != nil {
+		return jobs.SchedulerRunHistoryPage{}, err
+	}
+	if len(page.Runs) == limit {
+		last := page.Runs[len(page.Runs)-1]
+		page.NextCursor = encodeSchedulerRunCursor(schedulerRunCursor{ObservedAt: last.ObservedAt, RunKey: last.RunKey})
+	}
+	return page, nil
+}
+
+func (r *Repository) ReadSchedulerRunHistory(ctx context.Context, scope memory.Scope, runKey string) (jobs.SchedulerRunSummary, []jobs.SchedulerRunAttempt, error) {
+	if err := scope.Validate(); err != nil {
+		return jobs.SchedulerRunSummary{}, nil, err
+	}
+	var summary jobs.SchedulerRunSummary
+	var terminal sql.NullString
+	var finished sql.NullTime
+	const summaryQuery = `SELECT run_key, job_class, tenant, project, namespace, cadence_window, state, attempt_count, terminal_disposition, recovery, COALESCE(checkpoint,''), COALESCE(source_watermark,''), freshness, slo, retry_exhausted, cleanup_state, observed_at, finished_at FROM scheduler_run_summaries WHERE run_key=$1 AND tenant=$2 AND project=$3 AND namespace=$4`
+	if err := r.db.QueryRow(ctx, summaryQuery, strings.TrimSpace(runKey), scope.Tenant, scope.Project, scope.Namespace).Scan(&summary.RunKey, &summary.JobClass, &summary.Scope.Tenant, &summary.Scope.Project, &summary.Scope.Namespace, &summary.CadenceWindow, &summary.State, &summary.AttemptCount, &terminal, &summary.Recovery, &summary.Checkpoint, &summary.SourceWatermark, &summary.Freshness, &summary.SLO, &summary.RetryExhausted, &summary.CleanupState, &summary.ObservedAt, &finished); err != nil {
+		return jobs.SchedulerRunSummary{}, nil, err
+	}
+	if terminal.Valid {
+		summary.Terminal = jobs.MaintenanceExecutionDisposition(terminal.String)
+	}
+	if finished.Valid {
+		summary.FinishedAt = finished.Time
+	}
+	const attemptsQuery = `SELECT run_key, attempt, state, disposition, COALESCE(worker_id,''), lease_until, COALESCE(checkpoint,''), COALESCE(source_watermark,''), retry_at, recovery, COALESCE(error_category,''), observed_at, finished_at, detail_expires_at FROM scheduler_run_attempts WHERE run_key=$1 ORDER BY attempt ASC, observed_at ASC`
+	rows, err := r.db.Query(ctx, attemptsQuery, summary.RunKey)
+	if err != nil {
+		return jobs.SchedulerRunSummary{}, nil, err
+	}
+	defer rows.Close()
+	attempts := make([]jobs.SchedulerRunAttempt, 0, summary.AttemptCount)
+	for rows.Next() {
+		var attempt jobs.SchedulerRunAttempt
+		var disposition sql.NullString
+		var lease, retry, finished, expires sql.NullTime
+		if err := rows.Scan(&attempt.RunKey, &attempt.Attempt, &attempt.State, &disposition, &attempt.WorkerID, &lease, &attempt.Checkpoint, &attempt.SourceWatermark, &retry, &attempt.Recovery, &attempt.ErrorCategory, &attempt.ObservedAt, &finished, &expires); err != nil {
+			return jobs.SchedulerRunSummary{}, nil, err
+		}
+		attempt.JobClass, attempt.Scope, attempt.CadenceWindow = summary.JobClass, summary.Scope, summary.CadenceWindow
+		if disposition.Valid {
+			attempt.Disposition = jobs.MaintenanceExecutionDisposition(disposition.String)
+		}
+		if lease.Valid {
+			attempt.LeaseUntil = lease.Time
+		}
+		if retry.Valid {
+			attempt.RetryAt = retry.Time
+		}
+		if finished.Valid {
+			attempt.FinishedAt = finished.Time
+		}
+		if expires.Valid {
+			attempt.DetailExpiresAt = expires.Time
+		}
+		attempts = append(attempts, attempt)
+	}
+	return summary, attempts, rows.Err()
+}
+
+func (r *Repository) PruneSchedulerRunAttemptDetails(ctx context.Context, before time.Time, limit int) (int, error) {
+	if before.IsZero() {
+		return 0, fmt.Errorf("scheduler retention cutoff is required")
+	}
+	if limit <= 0 || limit > 1000 {
+		limit = 100
+	}
+	const query = `DELETE FROM scheduler_run_attempts WHERE id IN (SELECT id FROM scheduler_run_attempts WHERE detail_expires_at IS NOT NULL AND detail_expires_at <= $1 ORDER BY detail_expires_at ASC LIMIT $2)`
+	tag, err := r.db.Exec(ctx, query, before, limit)
+	if err != nil {
+		return 0, fmt.Errorf("prune scheduler run attempt details: %w", err)
+	}
+	return int(tag.RowsAffected()), nil
+}
+
+func (r *Repository) CancelSchedulerRun(ctx context.Context, scope memory.Scope, runKey string, now time.Time) error {
+	if err := scope.Validate(); err != nil {
+		return err
+	}
+	if strings.TrimSpace(runKey) == "" || now.IsZero() {
+		return fmt.Errorf("scheduler cancellation identity and time are required")
+	}
+	const query = `WITH updated AS (UPDATE scheduler_run_summaries SET state='cancelled', terminal_disposition='cancelled', recovery='cancelled', attempt_count=attempt_count+1, observed_at=$5, finished_at=$5 WHERE run_key=$1 AND tenant=$2 AND project=$3 AND namespace=$4 AND state IN ('pending','retrying','failed') AND NOT EXISTS (SELECT 1 FROM scheduler_run_attempts a WHERE a.run_key=scheduler_run_summaries.run_key AND a.lease_until IS NOT NULL AND a.lease_until > $5) RETURNING run_key, attempt_count) INSERT INTO scheduler_run_attempts (run_key, attempt, state, disposition, recovery, observed_at, finished_at, detail_expires_at) SELECT run_key, attempt_count, 'cancelled', 'cancelled', 'cancelled', $5, $5, $5 + interval '30 days' FROM updated`
+	tag, err := r.db.Exec(ctx, query, strings.TrimSpace(runKey), scope.Tenant, scope.Project, scope.Namespace, now)
+	if err != nil {
+		return fmt.Errorf("cancel scheduler run: %w", err)
+	}
+	if tag.RowsAffected() == 0 {
+		return fmt.Errorf("scheduler run cancellation conflict")
+	}
+	return nil
+}
+
+func (r *Repository) RecoverSchedulerRun(ctx context.Context, scope memory.Scope, runKey string, now time.Time) error {
+	if err := scope.Validate(); err != nil {
+		return err
+	}
+	if strings.TrimSpace(runKey) == "" || now.IsZero() {
+		return fmt.Errorf("scheduler recovery identity and time are required")
+	}
+	const query = `WITH updated AS (UPDATE scheduler_run_summaries SET state='pending', terminal_disposition=NULL, recovery='manual_review', retry_exhausted=false, attempt_count=attempt_count+1, observed_at=$5, finished_at=NULL WHERE run_key=$1 AND tenant=$2 AND project=$3 AND namespace=$4 AND state IN ('failed','exhausted','cancelled') AND NOT EXISTS (SELECT 1 FROM scheduler_run_attempts a WHERE a.run_key=scheduler_run_summaries.run_key AND a.lease_until IS NOT NULL AND a.lease_until > $5) RETURNING run_key, attempt_count) INSERT INTO scheduler_run_attempts (run_key, attempt, state, recovery, observed_at, detail_expires_at) SELECT run_key, attempt_count, 'recovered', 'manual_review', $5, $5 + interval '30 days' FROM updated`
+	tag, err := r.db.Exec(ctx, query, strings.TrimSpace(runKey), scope.Tenant, scope.Project, scope.Namespace, now)
+	if err != nil {
+		return fmt.Errorf("recover scheduler run: %w", err)
+	}
+	if tag.RowsAffected() == 0 {
+		return fmt.Errorf("scheduler run recovery conflict")
+	}
+	return nil
+}
+
+func nullableDisposition(value jobs.MaintenanceExecutionDisposition) any {
+	if value == "" {
+		return nil
+	}
+	return value
+}
+
+func nullableSchedulerString(value string) any {
+	if strings.TrimSpace(value) == "" {
+		return nil
+	}
+	return value
+}
+
+func boundedHistoryLabel(value string) string {
+	switch value {
+	case "fresh", "stale", "divergent", "missing", "foreign_scope", "lifecycle_hidden", "within_budget", "over_budget", "retained", "pruned", "unknown":
+		return value
+	default:
+		return "unknown"
+	}
+}
 
 func (r *Repository) ReadOwnedMaintenanceExecution(ctx context.Context, identity jobs.MaintenanceIdentity, workerID string) (jobs.MaintenanceExecutionState, error) {
 	if err := identity.Scope.Validate(); err != nil {

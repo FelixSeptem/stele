@@ -74,6 +74,8 @@ type HTTPDependencies struct {
 	Workflow                  WorkflowService
 	MemoryHistoryRead         MemoryHistoryReader
 	JobExecutionRead          JobExecutionReader
+	SchedulerRunHistoryRead   jobs.SchedulerRunHistoryReader
+	SchedulerRunActions       jobs.SchedulerRunAdminActions
 	Metrics                   MetricsRecorder
 	Logger                    *log.Logger
 	ProviderEnabled           bool
@@ -1172,6 +1174,25 @@ func NewHTTPHandler(deps HTTPDependencies) http.Handler {
 		),
 	)
 	mux.Handle("GET /v1/admin/jobs/status", adminJobStatus)
+
+	adminSchedulerRunHistory := auth.APIKeyMiddleware(deps.AdminAPIKeys)(
+		auth.ScopeMiddleware()(
+			http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				handleSchedulerRunHistory(w, r, deps.SchedulerRunHistoryRead)
+			}),
+		),
+	)
+	mux.Handle("GET /v1/admin/jobs/run-history", adminSchedulerRunHistory)
+	mux.Handle("GET /v1/admin/jobs/run-history/{run_key}", adminSchedulerRunHistory)
+
+	adminSchedulerRunAction := auth.APIKeyMiddleware(deps.AdminAPIKeys)(
+		auth.ScopeMiddleware()(
+			http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				handleSchedulerRunAction(w, r, deps.SchedulerRunActions)
+			}),
+		),
+	)
+	mux.Handle("POST /v1/admin/jobs/run-history/{run_key}", adminSchedulerRunAction)
 
 	adminMemoryHistory := auth.APIKeyMiddleware(deps.AdminAPIKeys)(
 		auth.ScopeMiddleware()(
@@ -5440,6 +5461,96 @@ func handleRecentJobExecutions(w http.ResponseWriter, r *http.Request, reader Jo
 	}
 
 	writeJSON(w, http.StatusOK, map[string]any{"executions": records})
+}
+
+func handleSchedulerRunHistory(w http.ResponseWriter, r *http.Request, reader jobs.SchedulerRunHistoryReader) {
+	if reader == nil {
+		http.Error(w, "scheduler run history reader is not configured", http.StatusServiceUnavailable)
+		return
+	}
+	scope, ok := auth.ScopeFromContext(r.Context())
+	if !ok {
+		http.Error(w, "scope context is missing", http.StatusInternalServerError)
+		return
+	}
+	if runKey := strings.TrimSpace(r.PathValue("run_key")); runKey != "" {
+		summary, attempts, err := reader.ReadSchedulerRunHistory(r.Context(), scope, runKey)
+		if err != nil {
+			// Do not distinguish missing and foreign runs on the admin surface.
+			http.Error(w, "scheduler run history not found", http.StatusNotFound)
+			return
+		}
+		writeJSON(w, http.StatusOK, map[string]any{"run": summary, "attempts": attempts})
+		return
+	}
+	limit := 20
+	if raw := strings.TrimSpace(r.URL.Query().Get("limit")); raw != "" {
+		parsed, err := strconv.Atoi(raw)
+		if err != nil || parsed <= 0 {
+			http.Error(w, "invalid limit", http.StatusBadRequest)
+			return
+		}
+		if parsed > 100 {
+			parsed = 100
+		}
+		limit = parsed
+	}
+	query := jobs.SchedulerRunHistoryQuery{Scope: scope, Limit: limit, Cursor: strings.TrimSpace(r.URL.Query().Get("cursor")), JobClass: strings.TrimSpace(r.URL.Query().Get("job_class"))}
+	query.State = jobs.SchedulerRunState(strings.TrimSpace(r.URL.Query().Get("state")))
+	query.Recovery = jobs.SchedulerRunRecovery(strings.TrimSpace(r.URL.Query().Get("recovery")))
+	var err error
+	if raw := strings.TrimSpace(r.URL.Query().Get("observed_from")); raw != "" {
+		query.ObservedFrom, err = time.Parse(time.RFC3339, raw)
+		if err != nil {
+			http.Error(w, "invalid observed_from", http.StatusBadRequest)
+			return
+		}
+	}
+	if raw := strings.TrimSpace(r.URL.Query().Get("observed_to")); raw != "" {
+		query.ObservedTo, err = time.Parse(time.RFC3339, raw)
+		if err != nil {
+			http.Error(w, "invalid observed_to", http.StatusBadRequest)
+			return
+		}
+	}
+	page, err := reader.ListSchedulerRunHistory(r.Context(), query)
+	if err != nil {
+		http.Error(w, "failed to read scheduler run history", http.StatusBadRequest)
+		return
+	}
+	writeJSON(w, http.StatusOK, page)
+}
+
+func handleSchedulerRunAction(w http.ResponseWriter, r *http.Request, actions jobs.SchedulerRunAdminActions) {
+	if actions == nil {
+		http.Error(w, "scheduler run actions are not configured", http.StatusServiceUnavailable)
+		return
+	}
+	scope, ok := auth.ScopeFromContext(r.Context())
+	if !ok {
+		http.Error(w, "scope context is missing", http.StatusInternalServerError)
+		return
+	}
+	runKey := strings.TrimSpace(r.PathValue("run_key"))
+	if runKey == "" {
+		http.Error(w, "run key is required", http.StatusBadRequest)
+		return
+	}
+	var err error
+	switch strings.TrimSpace(r.URL.Query().Get("action")) {
+	case "cancel":
+		err = actions.CancelSchedulerRun(r.Context(), scope, runKey, time.Now().UTC())
+	case "recover":
+		err = actions.RecoverSchedulerRun(r.Context(), scope, runKey, time.Now().UTC())
+	default:
+		http.Error(w, "unsupported scheduler run action", http.StatusBadRequest)
+		return
+	}
+	if err != nil {
+		http.Error(w, "scheduler run action rejected", http.StatusConflict)
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"run_key": runKey, "status": "accepted"})
 }
 
 func handleMemoryLifecycleAction(w http.ResponseWriter, r *http.Request, service MemoryLifecycleActionService) {

@@ -737,6 +737,8 @@ func buildAPIRuntime(ctx context.Context, cfg config.Config, deps apiRuntimeDepe
 	httpDeps.JobExecutionRead = jobExecutionReaderFunc(func(ctx context.Context, scope memory.Scope, limit int) ([]jobs.JobExecutionRecord, error) {
 		return repo.ListRecentJobExecutions(ctx, scope, limit)
 	})
+	httpDeps.SchedulerRunHistoryRead = repo
+	httpDeps.SchedulerRunActions = repo
 
 	return apiRuntime{
 		bootstrapper: bootstrapperFunc(func(ctx context.Context) error {
@@ -1235,6 +1237,13 @@ func buildSchedulerRuntime(ctx context.Context, cfg config.Config, deps schedule
 				Dispatch: func(scope memory.Scope) jobs.MaintenanceJob {
 					return jobs.ContextProjectionRebuildJob{Scope: scope, Service: memory.NewContextProjectionMaintenanceService(repo), Kind: memory.ContextProjectionKindAlwaysVisible, Limit: 100, SchemaVersion: "schema-v1", Policy: memory.DefaultContextProjectionPolicy("policy-v1"), RendererVersion: "renderer-v1", Observer: deps.observer}
 				},
+			},
+			jobs.SchedulerRunHistoryRetentionJob{
+				Store:           repo,
+				Now:             now,
+				RetentionWindow: cfg.Jobs.JobExecutionRetention,
+				Limit:           100,
+				Observer:        deps.observer,
 			},
 		},
 		Interval:     schedulerInterval,

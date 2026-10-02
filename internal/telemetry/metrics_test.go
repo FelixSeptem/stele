@@ -557,3 +557,24 @@ func TestMetricsObserverExportsWorkflowLifecycleWithoutHighCardinalityLabels(t *
 		}
 	}
 }
+
+func TestMetricsObserverExportsBoundedSchedulerRunLifecycle(t *testing.T) {
+	observer := NewMetricsObserver()
+	observer.RecordSchedulerRun(context.Background(), SchedulerRunEvent{
+		Operation: "terminal", Result: "completed", State: "completed", Lease: "none",
+		Retry: "none", Recovery: "none", Record: "run_summary", Freshness: "fresh",
+		SLO: "within_budget", DurationBucket: "lt_1s",
+	})
+	metrics := observer.RenderPrometheus()
+	want := `stele_scheduler_runs_total{duration_bucket="lt_1s",freshness="fresh",lease="none",operation="terminal",record="run_summary",recovery="none",result="completed",retry="none",slo="within_budget",state="completed"} 1`
+	if !strings.Contains(metrics, want) {
+		t.Fatalf("scheduler metric missing:\n%s", metrics)
+	}
+	observer.RecordSchedulerRun(context.Background(), SchedulerRunEvent{Operation: "raw scope", Result: "raw error", Record: "run-id"})
+	metrics = observer.RenderPrometheus()
+	for _, forbidden := range []string{"raw scope", "raw error", "run-id"} {
+		if strings.Contains(metrics, forbidden) {
+			t.Fatalf("scheduler telemetry leaked %q:\n%s", forbidden, metrics)
+		}
+	}
+}
