@@ -160,14 +160,16 @@ func (o *MetricsObserver) RecordReasoningInsight(ctx context.Context, event Reas
 		return
 	}
 	o.addCounter("stele_reasoning_insight_total", map[string]string{
-		"operation":    boundedReasoningLabel(event.Operation, "derive", "replay", "shadow", "handoff", "rollback"),
-		"mode":         boundedReasoningLabel(event.Mode, "offline", "shadow", "apply"),
-		"insight_type": boundedReasoningLabel(event.InsightType, "hypothesis", "goal", "contradiction", "causal_link", "unknown"),
-		"result":       boundedReasoningLabel(event.Result, "candidate", "would_activate", "rejected", "quarantined", "stale", "fallback", "completed", "failed"),
-		"eligibility":  boundedReasoningLabel(event.Eligibility, "eligible", "ineligible", "disabled", "unknown"),
-		"freshness":    boundedReasoningLabel(event.Freshness, "fresh", "stale", "missing", "unknown"),
-		"fallback":     boundedReasoningLabel(event.Fallback, "none", "provider", "budget", "compatibility", "validation", "unknown"),
-		"duration":     boundedReasoningLabel(event.Duration, "lt_1s", "1s_10s", "gt_10s", "unknown"),
+		"operation":            boundedReasoningLabel(event.Operation, "derive", "replay", "shadow", "handoff", "rollback"),
+		"mode":                 boundedReasoningLabel(event.Mode, "offline", "shadow", "apply"),
+		"insight_type":         boundedReasoningLabel(event.InsightType, "hypothesis", "goal", "contradiction", "causal_link", "unknown"),
+		"result":               boundedReasoningLabel(event.Result, "candidate", "would_activate", "rejected", "quarantined", "stale", "fallback", "completed", "failed"),
+		"eligibility":          boundedReasoningLabel(event.Eligibility, "eligible", "ineligible", "disabled", "unknown"),
+		"freshness":            boundedReasoningLabel(event.Freshness, "fresh", "stale", "missing", "unknown"),
+		"fallback":             boundedReasoningLabel(event.Fallback, "none", "provider", "budget", "compatibility", "validation", "unknown"),
+		"duration":             boundedReasoningLabel(event.Duration, "lt_1s", "1s_10s", "gt_10s", "unknown"),
+		"temporal_disposition": boundedReasoningLabel(event.TemporalDisposition, "contradiction", "temporal_coexistence", "unresolved_temporal", "unknown"),
+		"review":               boundedReasoningLabel(event.Review, "required", "confirmed", "coexists", "incorrect", "stale", "unknown"),
 	}, 1)
 }
 

@@ -17,31 +17,34 @@ import (
 const ReservedInsightActivationPolicyVersion = "reserved-insight-activation-v1"
 
 type ReservedInsightActivationPolicy struct {
-	Scope                   memory.Scope
-	Version                 string
-	Owner                   string
-	Enabled                 bool
-	EnabledTypes            map[memory.DerivedInsightType]bool
-	ProviderContractVersion string
-	SchemaVersion           string
-	MinEvidence             int
-	MinConfidence           float64
-	MaxEvidence             int
-	MaxCandidateBytes       int
-	ExpiresAt               time.Time
-	SourceWatermark         string
-	RolledBack              bool
+	Scope                       memory.Scope
+	Version                     string
+	Owner                       string
+	Enabled                     bool
+	EnabledTypes                map[memory.DerivedInsightType]bool
+	ProviderContractVersion     string
+	SchemaVersion               string
+	MinEvidence                 int
+	MinConfidence               float64
+	MaxEvidence                 int
+	MaxCandidateBytes           int
+	ExpiresAt                   time.Time
+	SourceWatermark             string
+	RolledBack                  bool
+	ContradictionRequireReview  bool
+	ContradictionMinUncertainty float64
 }
 
 func DefaultReservedInsightActivationPolicy(scope memory.Scope) ReservedInsightActivationPolicy {
 	return ReservedInsightActivationPolicy{
-		Scope:             scope.Normalized(),
-		Version:           ReservedInsightActivationPolicyVersion,
-		Owner:             "operator",
-		EnabledTypes:      map[memory.DerivedInsightType]bool{},
-		MinEvidence:       1,
-		MaxEvidence:       32,
-		MaxCandidateBytes: 16 * 1024,
+		Scope:                       scope.Normalized(),
+		Version:                     ReservedInsightActivationPolicyVersion,
+		Owner:                       "operator",
+		EnabledTypes:                map[memory.DerivedInsightType]bool{},
+		MinEvidence:                 1,
+		MaxEvidence:                 32,
+		MaxCandidateBytes:           16 * 1024,
+		ContradictionMinUncertainty: 0,
 	}
 }
 
@@ -64,6 +67,8 @@ func (p ReservedInsightActivationPolicy) ValidateAt(now time.Time) error {
 		return fmt.Errorf("activation policy maximum candidate bytes must be greater than zero")
 	case p.MinConfidence < 0 || p.MinConfidence > 1:
 		return fmt.Errorf("activation policy minimum confidence must be between 0 and 1")
+	case p.ContradictionMinUncertainty < 0 || p.ContradictionMinUncertainty > 1:
+		return fmt.Errorf("contradiction minimum uncertainty must be between 0 and 1")
 	case p.RolledBack:
 		return fmt.Errorf("activation policy is rolled back")
 	}
@@ -81,7 +86,9 @@ func (p ReservedInsightActivationPolicy) ValidateAt(now time.Time) error {
 			return fmt.Errorf("activation policy type %q is not reserved", insightType)
 		}
 		if enabled && insightType != memory.DerivedInsightTypeHypothesis {
-			return fmt.Errorf("activation policy type %q is not enabled by the initial policy", insightType)
+			if insightType != memory.DerivedInsightTypeContradiction {
+				return fmt.Errorf("activation policy type %q is not enabled by the initial policy", insightType)
+			}
 		}
 	}
 	return nil
@@ -212,6 +219,10 @@ type ActivationDecisionStore interface {
 	CreateActivationDecision(ctx context.Context, record ActivationDecisionRecord, evidence []ActivationDecisionEvidence) error
 }
 
+type ActivationDecisionLookup interface {
+	FindActivationDecision(ctx context.Context, scope memory.Scope, candidateFingerprint string) (ActivationDecisionRecord, error)
+}
+
 // AdmitReasoningCandidate converts the non-authoritative provider envelope
 // into the ordinary candidate lifecycle. It never activates directly: the
 // existing policy, evidence subset, compatibility, confidence, idempotency,
@@ -259,6 +270,9 @@ func AdmitReasoningCandidate(candidate reasoning.InsightCandidate, policy Reserv
 		CreatedAt: candidate.CreatedAt,
 		UpdatedAt: candidate.CreatedAt,
 	}
+	for key, value := range candidate.Metadata {
+		input.Candidate.Derivation.Metadata[key] = value
+	}
 	return AdmitReservedInsight(input)
 }
 
@@ -302,6 +316,11 @@ func (s ReservedInsightActivationService) Apply(ctx context.Context, input Activ
 // normalized reasoning candidate. The candidate is converted and validated
 // before the ordinary activation service persists anything.
 func (s ReservedInsightActivationService) ApplyReasoningCandidate(ctx context.Context, candidate reasoning.InsightCandidate, policy ReservedInsightActivationPolicy, authorizedEvidence []memory.DerivedInsightEvidenceRef, now time.Time) (ActivationResult, error) {
+	if lookup, ok := s.Store.(ActivationDecisionLookup); ok {
+		if existing, lookupErr := lookup.FindActivationDecision(ctx, candidate.Scope, candidate.ReplayID); lookupErr == nil {
+			return ActivationResult{Disposition: ActivationDispositionDuplicate, CandidateFingerprint: candidate.ReplayID, Reason: "candidate fingerprint already has an activation decision", Insight: memory.DerivedInsight{ID: existing.InsightID, Scope: existing.Scope, Type: existing.InsightType}}, nil
+		}
+	}
 	preflight := AdmitReasoningCandidate(candidate, policy, authorizedEvidence, ActivationInput{Policy: policy, Shadow: true, Now: now})
 	if preflight.Disposition != ActivationDispositionWouldActivate {
 		if preflight.Err != nil {
@@ -397,6 +416,11 @@ func AdmitReservedInsight(input ActivationInput) ActivationResult {
 	if input.Candidate.Confidence.Score < input.Policy.MinConfidence {
 		return rejectActivation(result, "candidate does not meet minimum confidence")
 	}
+	if input.Candidate.Type == memory.DerivedInsightTypeContradiction {
+		if err := validateContradictionActivation(input); err != nil {
+			return rejectActivation(result, err.Error())
+		}
+	}
 	if input.Policy.SourceWatermark != "" && input.Policy.SourceWatermark != input.SourceWatermark {
 		result.Disposition = ActivationDispositionStale
 		result.Reason = "source watermark does not match activation policy"
@@ -437,6 +461,23 @@ func AdmitReservedInsight(input ActivationInput) ActivationResult {
 	result.Disposition = ActivationDispositionActivated
 	result.Reason = "candidate admitted by activation policy"
 	return result
+}
+
+func validateContradictionActivation(input ActivationInput) error {
+	metadata := input.Candidate.Derivation.Metadata
+	if metadataString(metadata, "contradiction_temporal_disposition") != "contradiction" {
+		return fmt.Errorf("contradiction candidate does not have an overlapping temporal disposition")
+	}
+	if input.Policy.ContradictionRequireReview && metadataString(metadata, "contradiction_review_state") != "confirmed" {
+		return fmt.Errorf("contradiction candidate requires operator review")
+	}
+	if input.Policy.ContradictionMinUncertainty > 0 && input.Candidate.Confidence.Score < 1-input.Policy.ContradictionMinUncertainty {
+		return fmt.Errorf("contradiction candidate uncertainty exceeds policy bound")
+	}
+	if len(input.Candidate.Evidence) < 2 {
+		return fmt.Errorf("contradiction candidate requires evidence for both fact sides")
+	}
+	return nil
 }
 
 func rejectActivation(result ActivationResult, reason string) ActivationResult {

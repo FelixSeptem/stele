@@ -128,7 +128,9 @@ func TestRoadmapTracksCurrentP8Proposal(t *testing.T) {
 		"MCP real-stack conformance and self-hosting evidence archived as change 052",
 		"retrieval release evidence refresh and controlled activation archived as change 053",
 		"self-hosting-first-ten-minutes-smoke-path",
-		"active bounded post-v1 proposal",
+		"governed-autonomous-reasoning-insights",
+		"governed-contradiction-insights",
+		"next bounded post-v1 proposal",
 		"exact-scope activation",
 	} {
 		if !strings.Contains(roadmap, want) {

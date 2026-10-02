@@ -2,6 +2,7 @@ package insights
 
 import (
 	"context"
+	"fmt"
 	"testing"
 	"time"
 
@@ -24,6 +25,15 @@ func (s *activationStoreStub) CreateActivationDecision(_ context.Context, record
 	s.decisions = append(s.decisions, record)
 	s.evidence = append(s.evidence, evidence...)
 	return nil
+}
+
+func (s *activationStoreStub) FindActivationDecision(_ context.Context, scope memory.Scope, candidateFingerprint string) (ActivationDecisionRecord, error) {
+	for _, decision := range s.decisions {
+		if decision.Scope.Normalized() == scope.Normalized() && decision.CandidateFingerprint == candidateFingerprint {
+			return decision, nil
+		}
+	}
+	return ActivationDecisionRecord{}, fmt.Errorf("activation decision not found")
 }
 
 func TestReservedInsightActivationPolicyDefaultsDisabledAndEnablesHypothesisOnly(t *testing.T) {
@@ -270,6 +280,35 @@ func TestReservedInsightActivationPolicyStopAndRollbackDisableNewAdmissions(t *t
 	}
 }
 
+func TestReservedInsightAdmissionRequiresContradictionOverlapAndReview(t *testing.T) {
+	scope := memory.Scope{Tenant: "tenant-a", Project: "project-a", Namespace: "namespace-a"}
+	policy := DefaultReservedInsightActivationPolicy(scope)
+	policy.Enabled = true
+	policy.EnabledTypes[memory.DerivedInsightTypeContradiction] = true
+	policy.ExpiresAt = time.Date(2026, 10, 1, 0, 0, 0, 0, time.UTC)
+	policy.ContradictionRequireReview = true
+	candidate := testHypothesisCandidate(scope)
+	candidate.Type = memory.DerivedInsightTypeContradiction
+	candidate.ID = "insight_contradiction_1"
+	candidate.Title = "Contradictory facts"
+	candidate.Summary = "Two facts overlap"
+	candidate.Evidence = append(candidate.Evidence, memory.DerivedInsightEvidenceRef{Kind: memory.DerivedInsightEvidenceKindCanonicalMemory, ID: "memory-2", Relation: memory.DerivedInsightEvidenceRelationSupports})
+	candidate.Derivation.Metadata = map[string]any{
+		"contradiction_temporal_disposition": "contradiction",
+		"contradiction_review_state":         "confirmed",
+	}
+	result := AdmitReservedInsight(ActivationInput{Policy: policy, Candidate: candidate, AuthorizedEvidence: candidate.Evidence, Now: time.Date(2026, 9, 29, 0, 0, 0, 0, time.UTC)})
+	if result.Disposition != ActivationDispositionActivated {
+		t.Fatalf("disposition = %s, want activated: %s", result.Disposition, result.Reason)
+	}
+
+	candidate.Derivation.Metadata["contradiction_review_state"] = "review_required"
+	result = AdmitReservedInsight(ActivationInput{Policy: policy, Candidate: candidate, AuthorizedEvidence: candidate.Evidence, Now: time.Date(2026, 9, 29, 0, 0, 0, 0, time.UTC)})
+	if result.Disposition != ActivationDispositionRejected {
+		t.Fatalf("review-required disposition = %s, want rejected", result.Disposition)
+	}
+}
+
 func testHypothesisCandidate(scope memory.Scope) memory.DerivedInsight {
 	now := time.Date(2026, 9, 29, 0, 0, 0, 0, time.UTC)
 	return memory.DerivedInsight{
@@ -351,5 +390,32 @@ func TestApplyReasoningCandidatePersistsOnlyAfterPolicyAdmission(t *testing.T) {
 	}
 	if len(store.stored) != 1 || len(store.decisions) != 1 || store.stored[0].State != memory.DerivedInsightStateActive {
 		t.Fatalf("stored=%d decisions=%d insight=%+v", len(store.stored), len(store.decisions), store.stored)
+	}
+}
+
+func TestApplyReasoningCandidateRetryIsIdempotentAtAdmissionBoundary(t *testing.T) {
+	scope := memory.Scope{Tenant: "tenant-a", Project: "project-a", Namespace: "namespace-a"}
+	now := time.Date(2026, 9, 29, 0, 0, 0, 0, time.UTC)
+	evidence := memory.DerivedInsightEvidenceRef{Kind: memory.DerivedInsightEvidenceKindJobExecution, ID: "job-1", Relation: memory.DerivedInsightEvidenceRelationSupports}
+	request := reasoning.InsightDerivationRequest{Scope: scope, InsightType: memory.DerivedInsightTypeHypothesis, Mode: reasoning.ModeOffline, Evidence: []memory.DerivedInsightEvidenceRef{evidence}, SourceWatermark: "wm-1", ScopeProof: "proof-1", LifecycleVisibility: "active_only", RedactionPolicy: "references_only", ProviderVersion: "provider-1", SchemaVersion: reasoning.SchemaVersionV1, PolicyVersion: ReservedInsightActivationPolicyVersion, InputDigest: "input-1", Limits: reasoning.DefaultLimits(), Now: now}
+	digest, _ := reasoning.EvidenceDigest(request.Evidence)
+	replayID, _ := reasoning.InsightReplayID(request)
+	candidate := reasoning.InsightCandidate{ID: "reasoning-candidate-retry", Scope: scope, InsightType: request.InsightType, Title: "Bounded hypothesis", Summary: "Evidence-backed hypothesis", Evidence: request.Evidence, EvidenceDigest: digest, SourceWatermark: request.SourceWatermark, ScopeProof: request.ScopeProof, LifecycleVisibility: request.LifecycleVisibility, RedactionPolicy: request.RedactionPolicy, ProviderVersion: request.ProviderVersion, SchemaVersion: request.SchemaVersion, PolicyVersion: request.PolicyVersion, ReplayID: replayID, Uncertainty: 0.2, Mode: request.Mode, CreatedAt: now}
+	policy := DefaultReservedInsightActivationPolicy(scope)
+	policy.Enabled = true
+	policy.EnabledTypes[memory.DerivedInsightTypeHypothesis] = true
+	policy.ExpiresAt = now.Add(24 * time.Hour)
+	store := &activationStoreStub{}
+	service := ReservedInsightActivationService{Store: store}
+	first, err := service.ApplyReasoningCandidate(context.Background(), candidate, policy, request.Evidence, now)
+	if err != nil || first.Disposition != ActivationDispositionActivated {
+		t.Fatalf("first apply result=%+v err=%v", first, err)
+	}
+	second, err := service.ApplyReasoningCandidate(context.Background(), candidate, policy, request.Evidence, now)
+	if err != nil || second.Disposition != ActivationDispositionDuplicate {
+		t.Fatalf("retry result=%+v err=%v", second, err)
+	}
+	if len(store.stored) != 1 || store.stored[0].ID != candidate.ID {
+		t.Fatalf("retry changed insight identity: %+v", store.stored)
 	}
 }

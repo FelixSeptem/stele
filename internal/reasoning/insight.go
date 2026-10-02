@@ -37,6 +37,7 @@ type InsightCandidate struct {
 	Mode                Mode                               `json:"mode"`
 	DirectActivation    bool                               `json:"direct_activation,omitempty"`
 	CanonicalMutation   bool                               `json:"canonical_mutation,omitempty"`
+	Metadata            map[string]any                     `json:"metadata,omitempty"`
 	CreatedAt           time.Time                          `json:"created_at"`
 }
 

@@ -93,6 +93,11 @@ const (
 	DerivedInsightReplayReasonActivationIncompatible DerivedInsightReplayReason = "activation_incompatible"
 	DerivedInsightReplayReasonActivationWouldApply   DerivedInsightReplayReason = "activation_would_apply"
 	DerivedInsightReplayReasonActivationQuarantined  DerivedInsightReplayReason = "activation_quarantined"
+	DerivedInsightReplayReasonContradiction          DerivedInsightReplayReason = "contradiction"
+	DerivedInsightReplayReasonTemporalCoexistence    DerivedInsightReplayReason = "temporal_coexistence"
+	DerivedInsightReplayReasonUnresolvedTemporal     DerivedInsightReplayReason = "unresolved_temporal"
+	DerivedInsightReplayReasonStaleEvidence          DerivedInsightReplayReason = "stale_evidence"
+	DerivedInsightReplayReasonReviewRequired         DerivedInsightReplayReason = "review_required"
 )
 
 func (r DerivedInsightReplayReason) Valid() bool {
@@ -108,7 +113,12 @@ func (r DerivedInsightReplayReason) Valid() bool {
 		DerivedInsightReplayReasonActivationPolicyStale,
 		DerivedInsightReplayReasonActivationIncompatible,
 		DerivedInsightReplayReasonActivationWouldApply,
-		DerivedInsightReplayReasonActivationQuarantined:
+		DerivedInsightReplayReasonActivationQuarantined,
+		DerivedInsightReplayReasonContradiction,
+		DerivedInsightReplayReasonTemporalCoexistence,
+		DerivedInsightReplayReasonUnresolvedTemporal,
+		DerivedInsightReplayReasonStaleEvidence,
+		DerivedInsightReplayReasonReviewRequired:
 		return true
 	default:
 		return false

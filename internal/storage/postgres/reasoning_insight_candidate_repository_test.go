@@ -35,6 +35,7 @@ func TestPersistReasoningInsightCandidateIsScopedAndIdempotent(t *testing.T) {
 		candidate.Title, candidate.Summary, pgxmock.AnyArg(), candidate.EvidenceDigest, candidate.SourceWatermark,
 		candidate.ScopeProof, candidate.LifecycleVisibility, candidate.RedactionPolicy, candidate.ProviderVersion, candidate.SchemaVersion, candidate.PolicyVersion,
 		candidate.ReplayID, candidate.Uncertainty, false, false, reasoning.InsightDispositionCandidate, "shadow candidate", candidate.CreatedAt,
+		pgxmock.AnyArg(), "review_required", pgxmock.AnyArg(), pgxmock.AnyArg(), "shadow candidate",
 	).WillReturnResult(pgxmock.NewResult("INSERT", 1))
 	if err := repo.PersistReasoningInsightCandidate(context.Background(), candidate, reasoning.InsightDispositionCandidate, "shadow candidate"); err != nil {
 		t.Fatalf("persist candidate: %v", err)

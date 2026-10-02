@@ -134,21 +134,23 @@ type ProgressiveExperimentEvent struct {
 // insight derivation and replay. It deliberately excludes scope, prompts,
 // candidate identifiers, source content, provider payloads, and raw errors.
 type ReasoningInsightEvent struct {
-	Operation   string
-	Mode        string
-	InsightType string
-	Result      string
-	Eligibility string
-	Freshness   string
-	Fallback    string
-	Duration    string
+	Operation           string
+	Mode                string
+	InsightType         string
+	Result              string
+	Eligibility         string
+	Freshness           string
+	Fallback            string
+	Duration            string
+	TemporalDisposition string
+	Review              string
 }
 
 func LogReasoningInsightLifecycle(logger *log.Logger, event ReasoningInsightEvent) {
 	if logger == nil {
 		return
 	}
-	logger.Printf("component=reasoning_insight operation=%s mode=%s insight_type=%s result=%s eligibility=%s freshness=%s fallback=%s duration_bucket=%s",
+	logger.Printf("component=reasoning_insight operation=%s mode=%s insight_type=%s result=%s eligibility=%s freshness=%s fallback=%s duration_bucket=%s temporal_disposition=%s review=%s",
 		boundedReasoningLabel(event.Operation, "derive", "replay", "shadow", "handoff", "rollback"),
 		boundedReasoningLabel(event.Mode, "offline", "shadow", "apply"),
 		boundedReasoningLabel(event.InsightType, "hypothesis", "goal", "contradiction", "causal_link", "unknown"),
@@ -157,6 +159,8 @@ func LogReasoningInsightLifecycle(logger *log.Logger, event ReasoningInsightEven
 		boundedReasoningLabel(event.Freshness, "fresh", "stale", "missing", "unknown"),
 		boundedReasoningLabel(event.Fallback, "none", "provider", "budget", "compatibility", "validation", "unknown"),
 		boundedReasoningLabel(event.Duration, "lt_1s", "1s_10s", "gt_10s", "unknown"),
+		boundedReasoningLabel(event.TemporalDisposition, "contradiction", "temporal_coexistence", "unresolved_temporal", "unknown"),
+		boundedReasoningLabel(event.Review, "required", "confirmed", "coexists", "incorrect", "stale", "unknown"),
 	)
 }
 
