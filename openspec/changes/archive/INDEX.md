@@ -1,6 +1,6 @@
 # Archive Index
 
-Updated: 2026-10-02 16:50:11
+Updated: 2026-10-02 19:01:33
 
 - 001 -> bootstrap-foundation-and-event-ingestion
 - 002 -> governance-pipeline-and-memory-consolidation
@@ -61,3 +61,4 @@ Updated: 2026-10-02 16:50:11
 - 057 -> reflection-compaction-durable-work-closure
 - 058 -> progressive-context-hierarchical-retrieval-experiments
 - 059 -> governed-autonomous-reasoning-insights
+- 060 -> governed-contradiction-insights
