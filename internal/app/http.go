@@ -61,6 +61,7 @@ type HTTPDependencies struct {
 	GovernanceStatusRead      GovernanceStatusReader
 	GovernanceAdmin           GovernanceAdminService
 	DerivedInsightAdmin       DerivedInsightAdminService
+	GoalVisibilityAdmin       insights.GoalReviewReader
 	DerivedInsightReplayAdmin DerivedInsightReplayAdminService
 	ActivationDecisionAdmin   ActivationDecisionAdminService
 	RetrievalIntegrityAdmin   RetrievalIntegrityAdminService
@@ -826,6 +827,7 @@ type contextAssembleRequest struct {
 	Budget                     int    `json:"budget"`
 	IncludeRelations           bool   `json:"include_relations"`
 	IncludeExperienceInsights  bool   `json:"include_experience_insights"`
+	IncludeGoalContext         bool   `json:"include_goal_context"`
 	IncludeDiagnostics         bool   `json:"include_diagnostics"`
 	IncludeFeedbackDiagnostics bool   `json:"include_feedback_diagnostics"`
 	FeedbackAwareRanking       bool   `json:"feedback_aware_ranking"`
@@ -1248,6 +1250,14 @@ func NewHTTPHandler(deps HTTPDependencies) http.Handler {
 		),
 	)
 	mux.Handle("GET /v1/admin/derived-insights", adminDerivedInsightList)
+
+	adminGoalReview := auth.APIKeyMiddleware(deps.AdminAPIKeys)(
+		auth.ScopeMiddleware()(
+			http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				handleAdminGoalReview(w, r, deps.GoalVisibilityAdmin)
+			}),
+		))
+	mux.Handle("GET /v1/admin/goals/review", adminGoalReview)
 
 	adminActivationDecisions := auth.APIKeyMiddleware(deps.AdminAPIKeys)(
 		auth.ScopeMiddleware()(
@@ -2324,6 +2334,7 @@ func handleContextAssembly(w http.ResponseWriter, r *http.Request, assembler ret
 		Budget:                     req.Budget,
 		IncludeRelations:           req.IncludeRelations,
 		IncludeExperienceInsights:  req.IncludeExperienceInsights,
+		IncludeGoalContext:         req.IncludeGoalContext,
 		IncludeDiagnostics:         req.IncludeDiagnostics,
 		IncludeFeedbackDiagnostics: req.IncludeFeedbackDiagnostics,
 		FeedbackAwareRanking:       req.FeedbackAwareRanking,
@@ -4083,6 +4094,36 @@ func handleAdminDerivedInsightList(w http.ResponseWriter, r *http.Request, servi
 		return
 	}
 
+	writeJSON(w, http.StatusOK, map[string]any{"items": items})
+}
+
+func handleAdminGoalReview(w http.ResponseWriter, r *http.Request, reader insights.GoalReviewReader) {
+	if reader == nil {
+		http.Error(w, "goal visibility admin service is not configured", http.StatusServiceUnavailable)
+		return
+	}
+	scope, ok := auth.ScopeFromContext(r.Context())
+	if !ok {
+		http.Error(w, "scope context is missing", http.StatusInternalServerError)
+		return
+	}
+	limit := 20
+	if raw := strings.TrimSpace(r.URL.Query().Get("limit")); raw != "" {
+		parsed, err := strconv.Atoi(raw)
+		if err != nil || parsed <= 0 {
+			http.Error(w, "invalid limit", http.StatusBadRequest)
+			return
+		}
+		if parsed > 100 {
+			parsed = 100
+		}
+		limit = parsed
+	}
+	items, err := reader.ListGoalReviews(r.Context(), scope, limit)
+	if err != nil {
+		http.Error(w, "failed to read goal review", http.StatusInternalServerError)
+		return
+	}
 	writeJSON(w, http.StatusOK, map[string]any{"items": items})
 }
 

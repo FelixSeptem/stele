@@ -147,6 +147,18 @@ type ReasoningInsightEvent struct {
 	GoalState           string
 }
 
+// GoalVisibilityEvent contains only fixed categories for review and the
+// independently governed experimental goal_context surface.
+type GoalVisibilityEvent struct {
+	Operation string
+	Result    string
+	Policy    string
+	Review    string
+	Freshness string
+	Inclusion string
+	Rollback  string
+}
+
 // MemoryIntentEvent is deliberately category-only. It never accepts scope,
 // payload, request identifiers, claims, credentials, or provider errors.
 type MemoryIntentEvent struct {
@@ -426,11 +438,16 @@ type Observer interface {
 	RecordBacklog(ctx context.Context, event BacklogEvent)
 }
 
+type GoalVisibilityObserver interface {
+	RecordGoalVisibility(ctx context.Context, event GoalVisibilityEvent)
+}
+
 type noopObserver struct{}
 
 func (noopObserver) RecordOperation(ctx context.Context, event OperationEvent) {}
 
-func (noopObserver) RecordBacklog(ctx context.Context, event BacklogEvent) {}
+func (noopObserver) RecordBacklog(ctx context.Context, event BacklogEvent)               {}
+func (noopObserver) RecordGoalVisibility(ctx context.Context, event GoalVisibilityEvent) {}
 
 func (noopObserver) RecordRetrievalEvaluation(ctx context.Context, event RetrievalEvaluationEvent) {}
 

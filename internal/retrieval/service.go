@@ -105,16 +105,20 @@ func (i SearchInput) Validate() error {
 }
 
 type AssembleContextInput struct {
-	Scope                                 memory.Scope
-	Query                                 string
-	Path                                  string
-	PathPrefix                            string
-	SessionID                             string
-	UserID                                string
-	Budget                                int
-	CharacterBudget                       int
-	IncludeRelations                      bool
-	IncludeExperienceInsights             bool
+	Scope                     memory.Scope
+	Query                     string
+	Path                      string
+	PathPrefix                string
+	SessionID                 string
+	UserID                    string
+	Budget                    int
+	CharacterBudget           int
+	IncludeRelations          bool
+	IncludeExperienceInsights bool
+	// IncludeGoalContext is an explicit opt-in to the independently governed
+	// experimental goal section. It is ignored unless a GoalContextReader is
+	// configured and the reader's exact-scope policy gates pass.
+	IncludeGoalContext                    bool
 	IncludeDiagnostics                    bool
 	IncludeFeedbackDiagnostics            bool
 	FeedbackAwareRanking                  bool
@@ -294,6 +298,7 @@ type AssembledContext struct {
 	Citations          []Citation                 `json:"citations"`
 	KnownFailures      []ExperienceInsightContext `json:"known_failures,omitempty"`
 	ExperienceLessons  []ExperienceInsightContext `json:"experience_lessons,omitempty"`
+	GoalContext        []GoalContextItem          `json:"goal_context,omitempty"`
 	Diagnostics        []ContextDiagnostic        `json:"diagnostics,omitempty"`
 	plannerDiagnostics []ContextDiagnostic
 }
@@ -362,6 +367,20 @@ type DerivedInsightLister interface {
 	ListDerivedInsights(ctx context.Context, input memory.ListDerivedInsightsInput) ([]memory.DerivedInsight, error)
 }
 
+// GoalContextItem is intentionally a separate section. Its provider must
+// enforce exact scope, principal grant, freshness, review, and rollback gates.
+type GoalContextItem struct {
+	Title         string `json:"title"`
+	Summary       string `json:"summary"`
+	State         string `json:"state"`
+	ReviewState   string `json:"review_state"`
+	PolicyVersion string `json:"policy_version"`
+}
+
+type GoalContextReader interface {
+	ReadGoalContext(ctx context.Context, scope memory.Scope, limit int) ([]GoalContextItem, string, error)
+}
+
 type UsefulnessSummarizer interface {
 	SummarizeUsefulnessFeedback(ctx context.Context, input memory.SummarizeUsefulnessFeedbackInput) (memory.UsefulnessFeedbackSummary, error)
 }
@@ -426,6 +445,7 @@ type ServiceDependencies struct {
 	GraphTraversal                  GraphTraversalSearcher
 	Citations                       CitationLister
 	Insights                        DerivedInsightLister
+	GoalContext                     GoalContextReader
 	UsefulnessSummarizer            UsefulnessSummarizer
 	TaskEvaluationSummarizer        TaskEvaluationSummarizer
 	RankingRolloutPolicyReader      RankingRolloutPolicyReader
@@ -478,6 +498,7 @@ type Service struct {
 	graphTraversal                  GraphTraversalSearcher
 	citations                       CitationLister
 	insights                        DerivedInsightLister
+	goalContext                     GoalContextReader
 	usefulnessSummarizer            UsefulnessSummarizer
 	taskEvaluationSummarizer        TaskEvaluationSummarizer
 	rankingRolloutPolicyReader      RankingRolloutPolicyReader
@@ -560,6 +581,7 @@ func NewService(deps ServiceDependencies, observers ...telemetry.Observer) *Serv
 		graphTraversal:                  deps.GraphTraversal,
 		citations:                       deps.Citations,
 		insights:                        deps.Insights,
+		goalContext:                     deps.GoalContext,
 		usefulnessSummarizer:            deps.UsefulnessSummarizer,
 		taskEvaluationSummarizer:        deps.TaskEvaluationSummarizer,
 		rankingRolloutPolicyReader:      deps.RankingRolloutPolicyReader,
@@ -2900,6 +2922,7 @@ func (s *Service) AssembleContext(ctx context.Context, input AssembleContextInpu
 		} else if input.IncludeDiagnostics {
 			output.Diagnostics = append(output.Diagnostics, skippedExperienceDiagnostics(input.IncludeExperienceInsights, s.insights != nil, remaining)...)
 		}
+		s.appendGoalContext(ctx, input, &output)
 		return output, nil
 	}
 
@@ -2946,8 +2969,36 @@ func (s *Service) AssembleContext(ctx context.Context, input AssembleContextInpu
 	} else if input.IncludeDiagnostics {
 		output.Diagnostics = append(output.Diagnostics, skippedExperienceDiagnostics(input.IncludeExperienceInsights, s.insights != nil, remaining)...)
 	}
+	s.appendGoalContext(ctx, input, &output)
 
 	return output, nil
+}
+
+func (s *Service) appendGoalContext(ctx context.Context, input AssembleContextInput, output *AssembledContext) {
+	if !input.IncludeGoalContext {
+		return
+	}
+	if s.goalContext == nil {
+		if input.IncludeDiagnostics {
+			output.Diagnostics = append(output.Diagnostics, ContextDiagnostic{Section: "goal_context", Status: "omitted", Reason: "experimental visibility is not configured"})
+		}
+		return
+	}
+	items, disposition, err := s.goalContext.ReadGoalContext(ctx, input.Scope, input.Budget)
+	if err != nil {
+		if input.IncludeDiagnostics {
+			output.Diagnostics = append(output.Diagnostics, ContextDiagnostic{Section: "goal_context", Status: "omitted", Reason: "experimental visibility failed closed"})
+		}
+		return
+	}
+	output.GoalContext = append(output.GoalContext, items...)
+	if input.IncludeDiagnostics {
+		status := "included"
+		if len(items) == 0 {
+			status = "omitted"
+		}
+		output.Diagnostics = append(output.Diagnostics, ContextDiagnostic{Section: "goal_context", Status: status, Reason: disposition, Available: len(items), Included: len(items)})
+	}
 }
 
 func applyContextDiversity(scope memory.Scope, policy DiversityPolicy, hits []SearchHit) ([]SearchHit, int) {

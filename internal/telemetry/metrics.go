@@ -174,6 +174,30 @@ func (o *MetricsObserver) RecordReasoningInsight(ctx context.Context, event Reas
 	}, 1)
 }
 
+func (o *MetricsObserver) RecordGoalVisibility(ctx context.Context, event GoalVisibilityEvent) {
+	if o == nil {
+		return
+	}
+	o.addCounter("stele_goal_visibility_total", map[string]string{
+		"operation": boundedGoalVisibilityLabel(event.Operation, "review", "evaluate", "include", "disable", "rollback"),
+		"result":    boundedGoalVisibilityLabel(event.Result, "eligible", "omitted", "denied", "stale", "disabled", "failed"),
+		"policy":    boundedGoalVisibilityLabel(event.Policy, "enabled", "disabled", "expired", "rolled_back", "unknown"),
+		"review":    boundedGoalVisibilityLabel(event.Review, "required", "approved", "rejected", "unknown"),
+		"freshness": boundedGoalVisibilityLabel(event.Freshness, "fresh", "stale", "unknown"),
+		"inclusion": boundedGoalVisibilityLabel(event.Inclusion, "included", "omitted", "none"),
+		"rollback":  boundedGoalVisibilityLabel(event.Rollback, "none", "disabled", "rolled_back", "unknown"),
+	}, 1)
+}
+
+func boundedGoalVisibilityLabel(value string, allowed ...string) string {
+	for _, candidate := range allowed {
+		if value == candidate {
+			return candidate
+		}
+	}
+	return "unknown"
+}
+
 func boundedProgressiveLabel(value string, allowed ...string) string {
 	for _, candidate := range allowed {
 		if value == candidate {

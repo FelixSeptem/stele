@@ -660,6 +660,7 @@ func buildAPIRuntime(ctx context.Context, cfg config.Config, deps apiRuntimeDepe
 		GraphTraversal:                  repo,
 		Citations:                       repo,
 		Insights:                        repo,
+		GoalContext:                     repo,
 		UsefulnessSummarizer:            repo,
 		TaskEvaluationSummarizer:        repo,
 		RankingRolloutPolicyReader:      repo,
@@ -765,6 +766,7 @@ func buildAPIRuntime(ctx context.Context, cfg config.Config, deps apiRuntimeDepe
 	httpDeps.GovernanceAdmin = repo
 	httpDeps.ContextProjectionAdmin = memory.NewContextProjectionMaintenanceService(repo)
 	httpDeps.DerivedInsightAdmin = repo
+	httpDeps.GoalVisibilityAdmin = repo
 	httpDeps.ActivationDecisionAdmin = repo
 	httpDeps.RetrievalIntegrityAdmin = repo
 	httpDeps.UsefulnessFeedback = repo
@@ -935,6 +937,7 @@ func buildWorkerRuntime(ctx context.Context, cfg config.Config, deps workerRunti
 		GraphTraversal:                  repo,
 		Citations:                       repo,
 		Insights:                        repo,
+		GoalContext:                     repo,
 		UsefulnessSummarizer:            repo,
 		TaskEvaluationSummarizer:        repo,
 		RankingRolloutPolicyReader:      repo,

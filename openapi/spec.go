@@ -2741,6 +2741,24 @@ paths:
           description: Invalid request
         '401':
           description: Missing or invalid admin API key
+  /v1/admin/goals/review:
+    get:
+      operationId: listGoalReviews
+      parameters:
+        - $ref: '#/components/parameters/AdminAPIKey'
+        - $ref: '#/components/parameters/TenantHeader'
+        - $ref: '#/components/parameters/ProjectHeader'
+        - $ref: '#/components/parameters/NamespaceHeader'
+        - in: query
+          name: limit
+          schema:
+            type: integer
+            maximum: 100
+      responses:
+        '200':
+          description: Bounded exact-scope goal review diagnostics without goal content
+        '401':
+          description: Missing or invalid admin API key
   /v1/admin/derived-insights/{insight_id}:
     get:
       operationId: getAdminDerivedInsight
@@ -5779,6 +5797,9 @@ components:
           type: boolean
         include_experience_insights:
           type: boolean
+        include_goal_context:
+          type: boolean
+          description: Explicit opt-in to the separately governed experimental goal_context section; disabled unless an exact-scope policy and all authorization and freshness gates pass.
         include_diagnostics:
           type: boolean
         include_feedback_diagnostics:
@@ -7569,6 +7590,27 @@ components:
           type: array
           items:
             $ref: '#/components/schemas/InsightCitation'
+    GoalContextItem:
+      type: object
+      required:
+        - title
+        - summary
+        - state
+        - review_state
+        - policy_version
+      properties:
+        title:
+          type: string
+        summary:
+          type: string
+        state:
+          type: string
+          enum: [proposed, active]
+        review_state:
+          type: string
+          enum: [review_required, review_approved, review_rejected]
+        policy_version:
+          type: string
     ContextDiagnostic:
       type: object
       required:
@@ -7633,6 +7675,11 @@ components:
           type: array
           items:
             $ref: '#/components/schemas/ExperienceInsightContext'
+        goal_context:
+          type: array
+          description: Independently governed experimental section. It is absent by default and never changes ordinary retrieval sections.
+          items:
+            $ref: '#/components/schemas/GoalContextItem'
         diagnostics:
           type: array
           items:
