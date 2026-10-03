@@ -52,6 +52,7 @@ type Config struct {
 	Reasoning                           ReasoningConfig
 	ContextCalibration                  ContextCalibrationConfig
 	MCP                                 MCPConfig
+	MemoryIntent                        MemoryIntentConfig
 	DerivedWork                         workqueue.QueueConfig
 }
 
@@ -64,6 +65,14 @@ type MCPConfig struct {
 	MaxPayloadBytes int
 	MaxResults      int
 	MaxIDs          int
+}
+
+// MemoryIntentConfig controls the single governed-intent policy boundary.
+// PostgreSQL remains authoritative for persisted intents and work; these
+// values only decide whether the current process may accept or resume work.
+type MemoryIntentConfig struct {
+	Enabled       bool
+	PolicyVersion string
 }
 
 type ContextCalibrationConfig struct {
@@ -269,6 +278,10 @@ func LoadFromEnv() (Config, error) {
 	mcpConfig, err := loadMCPConfig(mode)
 	if err != nil {
 		return Config{}, err
+	}
+	intentPolicyVersion := strings.TrimSpace(getEnvOrDefault("STELE_MEMORY_INTENT_POLICY_VERSION", "v1"))
+	if intentPolicyVersion == "" || len(intentPolicyVersion) > 64 || strings.Trim(intentPolicyVersion, "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789._-") != "" {
+		return Config{}, fmt.Errorf("STELE_MEMORY_INTENT_POLICY_VERSION is invalid")
 	}
 
 	// Accept the short policy name introduced by the migration contract while
@@ -563,6 +576,7 @@ func LoadFromEnv() (Config, error) {
 		PostgresDSN:                         postgresDSN,
 		Migrations:                          MigrationConfig{Policy: migrationPolicy},
 		ContextProjectionConsumptionEnabled: contextProjectionConsumptionEnabled,
+		MemoryIntent:                        MemoryIntentConfig{Enabled: loadBoolEnvWithDefault("STELE_MEMORY_INTENT_POLICY_ENABLED", true), PolicyVersion: intentPolicyVersion},
 		QueryAnalysis:                       queryAnalysis,
 		GraphTraversal:                      graphTraversal,
 		ContextCalibration:                  contextCalibration,

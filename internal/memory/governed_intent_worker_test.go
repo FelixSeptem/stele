@@ -51,6 +51,7 @@ func TestMemoryIntentResumePolicyOnlyAllowsExactScopePendingWork(t *testing.T) {
 	policy := MemoryIntentResumePolicy{Scope: scope, PolicyVersion: "v2", Enabled: true}
 	accepted := workerRecord(MemoryIntentRemember)
 	accepted.Status = MemoryIntentStatusAccepted
+	accepted.PolicyVersion = "v2"
 	if !policy.Allows(accepted) {
 		t.Fatal("accepted exact-scope intent should resume")
 	}
@@ -61,6 +62,7 @@ func TestMemoryIntentResumePolicyOnlyAllowsExactScopePendingWork(t *testing.T) {
 	}
 	foreign := workerRecord(MemoryIntentRemember)
 	foreign.Status = MemoryIntentStatusPending
+	foreign.PolicyVersion = "v2"
 	foreign.Scope.Tenant = "foreign"
 	if policy.Allows(foreign) {
 		t.Fatal("foreign intent must not resume")
@@ -68,8 +70,41 @@ func TestMemoryIntentResumePolicyOnlyAllowsExactScopePendingWork(t *testing.T) {
 	policy.Enabled = false
 	pending := workerRecord(MemoryIntentRemember)
 	pending.Status = MemoryIntentStatusPending
+	pending.PolicyVersion = "v2"
 	if policy.Allows(pending) {
 		t.Fatal("disabled policy must not resume")
+	}
+}
+
+func TestStaticMemoryIntentPolicyRequiresCompatibleVersionAndExactScope(t *testing.T) {
+	scope := Scope{Tenant: "t", Project: "p", Namespace: "n"}
+	policy := StaticMemoryIntentPolicy{Scope: scope, PolicyVersion: "v2", Enabled: true}
+	record := workerRecord(MemoryIntentRemember)
+	record.Status = MemoryIntentStatusPending
+	record.PolicyVersion = "v2"
+	decision, err := policy.EvaluateMemoryIntentResume(context.Background(), record)
+	if err != nil || !decision.Enabled {
+		t.Fatalf("compatible resume decision = %+v, err=%v", decision, err)
+	}
+	record.PolicyVersion = "v1"
+	decision, err = policy.EvaluateMemoryIntentResume(context.Background(), record)
+	if err != nil || decision.Enabled {
+		t.Fatalf("incompatible resume decision = %+v, err=%v", decision, err)
+	}
+	record.PolicyVersion = "v2"
+	record.Scope.Namespace = "foreign"
+	decision, err = policy.EvaluateMemoryIntentResume(context.Background(), record)
+	if err != nil || decision.Enabled || decision.Category != MemoryIntentDiagnosticScopeDenied {
+		t.Fatalf("foreign resume decision = %+v, err=%v", decision, err)
+	}
+}
+
+func TestStaticMemoryIntentPolicyDisablementDoesNotChangeSubmissionScopeContract(t *testing.T) {
+	scope := Scope{Tenant: "t", Project: "p", Namespace: "n"}
+	policy := StaticMemoryIntentPolicy{Scope: scope, PolicyVersion: "rollback-v1", Enabled: false}
+	decision, err := policy.EvaluateMemoryIntent(context.Background(), MemoryIntentInput{Scope: scope})
+	if err != nil || decision.Enabled || decision.Category != MemoryIntentDiagnosticPolicyDisabled {
+		t.Fatalf("disabled submission decision = %+v, err=%v", decision, err)
 	}
 }
 

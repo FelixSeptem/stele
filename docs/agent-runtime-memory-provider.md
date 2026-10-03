@@ -58,6 +58,19 @@ provider-readiness evidence. Conformance is diagnostic and does not invoke an
 external agent or mutate canonical memory except through ordinary governed
 fixture ingestion.
 
+The self-hosted product verifier extends this evidence to governed memory
+intents. It submits through the public OpenAPI boundary, confirms the durable
+PostgreSQL `memory_intent` work reference, replays and conflicts an idempotency
+key, checks exact-scope inspection and foreign-scope denial, and verifies worker
+and scheduler restart recovery. It also stops the worker, verifies that
+`STELE_MEMORY_INTENT_POLICY_ENABLED=false` rejects new persistence while the
+queued record remains inspectable, then re-enables the same
+`STELE_MEMORY_INTENT_POLICY_VERSION` and confirms only the exact-scope pending
+work resumes. The resulting report is redacted and uses only bounded phase,
+recovery, rollback, cleanup, freshness, and consumability categories. A
+missing rollback-policy fixture or other hard gate is recorded as degraded
+evidence and never enables a provider or changes default retrieval.
+
 To roll back, set `STELE_PROVIDER_ENABLED=false` and restart API replicas. The
 existing public APIs, PostgreSQL canonical records, append-only history, and
 provider conformance evidence remain intact. Do not down-migrate or delete

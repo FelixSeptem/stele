@@ -583,6 +583,24 @@ func TestMetricsObserverExportsAssuranceConformanceSignalsWithoutHighCardinality
 	}
 }
 
+func TestMetricsObserverExportsIntentConformanceWithoutSensitiveLabels(t *testing.T) {
+	observer := NewMetricsObserver()
+	observer.RecordIntentConformance(context.Background(), IntentConformanceEvent{
+		Operation: "phase", Phase: "queue_recovery", Result: "degraded", Prerequisite: "available",
+		Recovery: "reclaimed", Duration: "1s_10s", FailureCategory: "dependency", Rollback: "held", Consumable: "no",
+	})
+	metrics := observer.RenderPrometheus()
+	want := `stele_memory_intent_conformance_total{consumable="no",duration_bucket="1s_10s",failure_category="dependency",operation="phase",phase="queue_recovery",prerequisite="available",recovery="reclaimed",result="degraded",rollback="held"} 1`
+	if !strings.Contains(metrics, want) {
+		t.Fatalf("metrics missing %q\n%s", want, metrics)
+	}
+	for _, forbidden := range []string{"tenant-secret", "intent-id", "dsn", "raw-error"} {
+		if strings.Contains(metrics, forbidden) {
+			t.Fatalf("metrics contain sensitive value %q\n%s", forbidden, metrics)
+		}
+	}
+}
+
 func TestMetricsObserverExportsWorkflowLifecycleWithoutHighCardinalityLabels(t *testing.T) {
 	observer := NewMetricsObserver()
 	observer.RecordWorkflowLifecycle(context.Background(), WorkflowLifecycleEvent{Operation: "diagnostic", Result: "ok", TemplateStatus: "active", RunStatus: "expired", StepKind: "turn_outcome_recorded", EvidenceKind: "outcome", DiagnosticCategory: "stale", NextActionCategory: "record_outcome", CleanupCategory: "diagnostic"})

@@ -2,7 +2,9 @@
 param(
     [string]$EvidencePath,
     [string]$ApiBaseUrl,
-    [int]$TimeoutSeconds = 150
+    [int]$TimeoutSeconds = 150,
+    [switch]$ExpectEnabled,
+    [string]$McpPath = "/mcp"
 )
 
 Set-StrictMode -Version Latest
@@ -10,6 +12,9 @@ $ErrorActionPreference = "Stop"
 $repoRoot = Split-Path -Parent $PSScriptRoot
 Push-Location $repoRoot
 try {
+    if ([string]::IsNullOrWhiteSpace($McpPath) -or $McpPath -notmatch '^/[a-zA-Z0-9/_-]{1,64}$') {
+        throw "McpPath must be a bounded absolute endpoint path"
+    }
     if ([string]::IsNullOrWhiteSpace($env:STELE_TEST_POSTGRES_MCP_DSN)) {
         Write-Output "SKIP: STELE_TEST_POSTGRES_MCP_DSN is not configured; MCP real-stack conformance did not run"
         exit 2
@@ -40,14 +45,28 @@ try {
                 throw "API probe $path failed without exposing response details"
             }
         }
-        try {
-            $mcpResponse = Invoke-WebRequest -Method Get -Uri ($baseUrl + '/mcp') -ErrorAction Stop
-            throw "MCP disabled probe returned HTTP $($mcpResponse.StatusCode), expected not-found"
-        } catch {
-            $statusCode = $null
-            try { $statusCode = [int]$_.Exception.Response.StatusCode } catch { }
-            if ($statusCode -ne 404) {
-                throw "MCP disabled probe did not fail closed"
+        $mcpUri = $baseUrl + "/" + $McpPath.TrimStart('/')
+        if ($ExpectEnabled) {
+            try {
+                $mcpResponse = Invoke-WebRequest -Method Get -Uri $mcpUri -ErrorAction Stop
+                $mcpStatus = [int]$mcpResponse.StatusCode
+            } catch {
+                $mcpStatus = $null
+                try { $mcpStatus = [int]$_.Exception.Response.StatusCode } catch { }
+            }
+            if ($mcpStatus -notin @(200, 400, 401, 405)) {
+                throw "MCP enabled probe did not expose the configured endpoint"
+            }
+        } else {
+            try {
+                $mcpResponse = Invoke-WebRequest -Method Get -Uri $mcpUri -ErrorAction Stop
+                throw "MCP disabled probe returned HTTP $($mcpResponse.StatusCode), expected not-found"
+            } catch {
+                $statusCode = $null
+                try { $statusCode = [int]$_.Exception.Response.StatusCode } catch { }
+                if ($statusCode -ne 404) {
+                    throw "MCP disabled probe did not fail closed"
+                }
             }
         }
     }

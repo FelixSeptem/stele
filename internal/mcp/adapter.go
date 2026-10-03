@@ -282,7 +282,14 @@ func (a *Adapter) serverForRequest(r *http.Request) *protocolmcp.Server {
 		if err != nil {
 			return nil, MutationResponse{}, safeMutationError(err)
 		}
-		response := MutationResponse{IntentID: record.ID, Status: string(record.Status)}
+		// MCP mutation responses are replay-stable: a retry exposes the same
+		// accepted metadata as the original request. The governed intent ledger
+		// still records the internal replay disposition for audit and recovery.
+		status := record.Status
+		if status == memory.MemoryIntentStatusReplayed {
+			status = memory.MemoryIntentStatusAccepted
+		}
+		response := MutationResponse{IntentID: record.ID, Status: string(status)}
 		return nil, response, nil
 	})
 	protocolmcp.AddTool(server, &protocolmcp.Tool{

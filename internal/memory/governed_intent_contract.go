@@ -109,8 +109,62 @@ type MemoryIntentResumePolicy struct {
 }
 
 func (p MemoryIntentResumePolicy) Allows(record MemoryIntentRecord) bool {
-	return p.Enabled && p.Scope.Normalized() == record.Scope.Normalized() && strings.TrimSpace(p.PolicyVersion) != "" &&
+	return p.Enabled && p.Scope.Normalized() == record.Scope.Normalized() &&
+		strings.TrimSpace(p.PolicyVersion) != "" && strings.TrimSpace(record.PolicyVersion) != "" &&
+		strings.TrimSpace(p.PolicyVersion) == strings.TrimSpace(record.PolicyVersion) &&
 		(record.Status == MemoryIntentStatusPending || record.Status == MemoryIntentStatusAccepted)
+}
+
+// MemoryIntentResumePolicyGate is the optional runtime boundary used by a
+// worker before it routes an already persisted intent. A disabled or
+// incompatible decision must leave the durable work inspectable so an
+// operator can re-enable a compatible policy and retry it later.
+type MemoryIntentResumePolicyGate interface {
+	EvaluateMemoryIntentResume(context.Context, MemoryIntentRecord) (MemoryIntentPolicyDecision, error)
+}
+
+// StaticMemoryIntentPolicy is the default self-hosted policy implementation.
+// It is deliberately process-local and configuration-backed: PostgreSQL
+// remains the source of truth for intents, transitions, and durable work.
+// Scope is optional for API submission, but when supplied it is an exact
+// normalized scope boundary for both submission and resume.
+type StaticMemoryIntentPolicy struct {
+	Scope         Scope
+	PolicyVersion string
+	Enabled       bool
+}
+
+func (p StaticMemoryIntentPolicy) decision(recordScope Scope, status MemoryIntentStatus) MemoryIntentPolicyDecision {
+	if p.Scope.Valid() && p.Scope.Normalized() != recordScope.Normalized() {
+		return MemoryIntentPolicyDecision{Enabled: false, PolicyVersion: strings.TrimSpace(p.PolicyVersion), Disposition: status, Category: MemoryIntentDiagnosticScopeDenied}
+	}
+	if !p.Enabled {
+		return MemoryIntentPolicyDecision{Enabled: false, PolicyVersion: strings.TrimSpace(p.PolicyVersion), Disposition: status, Category: MemoryIntentDiagnosticPolicyDisabled}
+	}
+	version := strings.TrimSpace(p.PolicyVersion)
+	if version == "" {
+		return MemoryIntentPolicyDecision{Enabled: false, Disposition: status, Category: MemoryIntentDiagnosticPolicyDisabled}
+	}
+	return MemoryIntentPolicyDecision{Enabled: true, PolicyVersion: version, Disposition: status, Category: MemoryIntentDiagnosticAccepted}
+}
+
+func (p StaticMemoryIntentPolicy) EvaluateMemoryIntent(_ context.Context, input MemoryIntentInput) (MemoryIntentPolicyDecision, error) {
+	return p.decision(input.Scope, MemoryIntentStatusAccepted), nil
+}
+
+func (p StaticMemoryIntentPolicy) EvaluateMemoryIntentResume(_ context.Context, record MemoryIntentRecord) (MemoryIntentPolicyDecision, error) {
+	decision := p.decision(record.Scope, record.Status)
+	if !p.Enabled || !p.Scope.Valid() || p.Scope.Normalized() != record.Scope.Normalized() ||
+		strings.TrimSpace(p.PolicyVersion) == "" || strings.TrimSpace(record.PolicyVersion) == "" ||
+		strings.TrimSpace(p.PolicyVersion) != strings.TrimSpace(record.PolicyVersion) ||
+		(record.Status != MemoryIntentStatusPending && record.Status != MemoryIntentStatusAccepted) {
+		decision.Enabled = false
+		if decision.Category == MemoryIntentDiagnosticAccepted {
+			decision.Category = MemoryIntentDiagnosticPolicyDisabled
+		}
+		return decision, nil
+	}
+	return decision, nil
 }
 
 // MemoryIntentPolicyGate is evaluated before persistence. Implementations

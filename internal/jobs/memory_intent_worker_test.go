@@ -73,6 +73,22 @@ func TestMemoryIntentWorkExecutorRetriesFailedOutcomeWithNextTransitionSequence(
 	}
 }
 
+func TestMemoryIntentWorkExecutorHoldsPendingWorkWhenPolicyDisabled(t *testing.T) {
+	scope := memory.Scope{Tenant: "t", Project: "p", Namespace: "n"}
+	record := memory.MemoryIntentRecord{ID: "intent-held", Scope: scope, Type: memory.MemoryIntentRemember, Content: "hello", Actor: "worker", Reason: "test", RequestID: "req", OperationID: "op", IdempotencyKey: "idem", PolicyVersion: "v1", Status: memory.MemoryIntentStatusPending}
+	executor := MemoryIntentWorkExecutor{
+		Reader:   intentRecordReaderStub{record: record},
+		History:  intentHistoryReaderStub{history: memory.MemoryIntentHistory{Intent: record, Transitions: []memory.MemoryIntentTransition{{Sequence: 1, To: memory.MemoryIntentStatusAccepted}}}},
+		Worker:   memory.MemoryIntentWorker{Router: &intentRouterForJobTest{}},
+		Recorder: &intentOutcomeRecorderStub{},
+		Policy:   memory.StaticMemoryIntentPolicy{Scope: scope, PolicyVersion: "v1", Enabled: false},
+	}
+	item := workqueue.DerivedWorkItem{DerivedWorkIdentity: workqueue.DerivedWorkIdentity{Scope: scope}, Kind: workqueue.WorkKindMemoryIntent, Reference: record.ID}
+	if _, _, err := executor.ExecuteDerivedWork(context.Background(), item); err == nil {
+		t.Fatal("disabled policy execution error = nil, want held/retryable error")
+	}
+}
+
 type intentRouterForJobTest struct{ calls int }
 
 type mutableIntentHistoryReader struct{ history memory.MemoryIntentHistory }

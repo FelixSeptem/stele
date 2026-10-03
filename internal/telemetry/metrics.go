@@ -911,6 +911,23 @@ func (o *MetricsObserver) RecordConformanceRun(ctx context.Context, event Confor
 	}, 1)
 }
 
+func (o *MetricsObserver) RecordIntentConformance(ctx context.Context, event IntentConformanceEvent) {
+	if o == nil {
+		return
+	}
+	o.addCounter("stele_memory_intent_conformance_total", map[string]string{
+		"operation":        labelOrUnknown(event.Operation),
+		"phase":            labelOrUnknown(event.Phase),
+		"result":           labelOrUnknown(event.Result),
+		"prerequisite":     labelOrUnknown(event.Prerequisite),
+		"recovery":         labelOrUnknown(event.Recovery),
+		"duration_bucket":  labelOrUnknown(event.Duration),
+		"failure_category": labelOrUnknown(event.FailureCategory),
+		"rollback":         labelOrUnknown(event.Rollback),
+		"consumable":       labelOrUnknown(event.Consumable),
+	}, 1)
+}
+
 func (o *MetricsObserver) RecordMissingEvidenceDiagnostic(ctx context.Context, event MissingEvidenceDiagnosticEvent) {
 	if o == nil {
 		return
@@ -1025,6 +1042,7 @@ func (o *MetricsObserver) RenderPrometheus() string {
 	writeMetricFamilyHeader(&builder, "stele_assurance_alert_delivery_total", "counter", "Assurance alert delivery outcomes by bounded categories.")
 	writeMetricFamilyHeader(&builder, "stele_assurance_cleanup_total", "counter", "Assurance and conformance cleanup outcomes by bounded categories.")
 	writeMetricFamilyHeader(&builder, "stele_conformance_runs_total", "counter", "Conformance run outcomes by bounded categories.")
+	writeMetricFamilyHeader(&builder, "stele_memory_intent_conformance_total", "counter", "Memory intent product conformance phases by bounded categories.")
 	writeMetricFamilyHeader(&builder, "stele_conformance_missing_evidence_total", "counter", "Conformance missing evidence diagnostics by bounded categories.")
 	writeMetricFamilyHeader(&builder, "stele_operational_proofs_total", "counter", "Operational proof outcomes by bounded categories.")
 	writeMetricFamilyHeader(&builder, "stele_readiness_reports_total", "counter", "Readiness report outcomes by bounded categories.")
