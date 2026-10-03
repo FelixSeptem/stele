@@ -71,6 +71,7 @@ type HTTPDependencies struct {
 	UsefulnessFeedback        UsefulnessFeedbackService
 	TaskEvaluations           TaskEvaluationService
 	RankingRollout            RankingRolloutAdminService
+	ReleaseEvidenceReconcile  ReleaseEvidenceReconciliationAdminService
 	AssuranceAdmin            AssuranceAdminService
 	ContextProjectionAdmin    ContextProjectionAdminService
 	Workflow                  WorkflowService
@@ -305,6 +306,15 @@ type RankingRolloutAdminService interface {
 	DisableRankingRolloutPolicy(ctx context.Context, input memory.DisableRankingRolloutPolicyInput) (memory.RankingRolloutPolicy, error)
 	RollbackRankingRolloutPolicy(ctx context.Context, input memory.RollbackRankingRolloutPolicyInput) (memory.RankingRolloutPolicy, error)
 	ListRankingRolloutPolicyImpact(ctx context.Context, input memory.ListRankingRolloutPolicyImpactInput) ([]memory.RankingRolloutImpactEntry, error)
+}
+
+type RankingRolloutReconciliationEligibilityReader interface {
+	ReadReleaseEvidenceReconciliationEligibility(context.Context, memory.Scope, string) (bool, error)
+}
+
+type ReleaseEvidenceReconciliationAdminService interface {
+	ListReleaseEvidenceReconciliation(context.Context, memory.Scope, int) ([]retrieval.ReconciliationInspection, error)
+	TriggerReleaseEvidenceReconciliation(context.Context, memory.Scope, retrieval.ReconciliationTrigger) (string, error)
 }
 
 type AssuranceAdminService interface {
@@ -1388,6 +1398,16 @@ func NewHTTPHandler(deps HTTPDependencies) http.Handler {
 	mux.Handle("POST /v1/admin/ranking-rollouts/{policy_id}/activate", adminRankingRollouts)
 	mux.Handle("POST /v1/admin/ranking-rollouts/{policy_id}/disable", adminRankingRollouts)
 	mux.Handle("POST /v1/admin/ranking-rollouts/{policy_id}/rollback", adminRankingRollouts)
+
+	adminReleaseEvidenceReconciliation := auth.APIKeyMiddleware(deps.AdminAPIKeys)(
+		auth.ScopeMiddleware()(
+			http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				handleAdminReleaseEvidenceReconciliation(w, r, deps.ReleaseEvidenceReconcile)
+			}),
+		),
+	)
+	mux.Handle("GET /v1/admin/release-evidence/reconciliation", adminReleaseEvidenceReconciliation)
+	mux.Handle("POST /v1/admin/release-evidence/reconciliation", adminReleaseEvidenceReconciliation)
 
 	adminAssurance := auth.APIKeyMiddleware(deps.AdminAPIKeys)(
 		auth.ScopeMiddleware()(
@@ -3645,6 +3665,15 @@ func handleAdminRankingRolloutAction(w http.ResponseWriter, r *http.Request, ser
 	policyID := strings.TrimSpace(r.PathValue("policy_id"))
 	switch action {
 	case "activate":
+		var reconciliationEligible *bool
+		if reader, ok := service.(RankingRolloutReconciliationEligibilityReader); ok {
+			eligible, err := reader.ReadReleaseEvidenceReconciliationEligibility(r.Context(), scope, policyID)
+			if err != nil {
+				http.Error(w, "release evidence reconciliation state is unavailable", http.StatusBadRequest)
+				return
+			}
+			reconciliationEligible = &eligible
+		}
 		policy, err := service.ActivateRankingRolloutPolicy(r.Context(), memory.ActivateRankingRolloutPolicyInput{
 			Scope:       scope,
 			PolicyID:    policyID,
@@ -3656,6 +3685,7 @@ func handleAdminRankingRolloutAction(w http.ResponseWriter, r *http.Request, ser
 				EvidenceThresholdStatus: memory.RankingRolloutThresholdStatusSatisfied,
 				AttributionRecorded:     true,
 				Evidence:                req.Evidence,
+				ReconciliationEligible:  reconciliationEligible,
 			},
 		})
 		if err != nil {

@@ -358,6 +358,37 @@ type ReleaseEvidenceOperationalEvent struct {
 	DurationBucket string
 }
 
+// ReleaseEvidenceReconciliationEvent contains only bounded reconciliation
+// categories. It deliberately excludes scope, handoff, policy payloads and
+// raw errors so it is safe for metrics and operator logs.
+type ReleaseEvidenceReconciliationEvent struct {
+	Outcome   string
+	Reason    string
+	Freshness string
+	SLO       string
+}
+
+func LogReleaseEvidenceReconciliation(logger *log.Logger, event ReleaseEvidenceReconciliationEvent) {
+	if logger == nil {
+		return
+	}
+	logger.Printf("component=retrieval_release_evidence_reconciliation outcome=%s reason=%s freshness=%s slo=%s",
+		boundedReconciliationLabel(event.Outcome, "eligible", "revoked", "unchanged", "failed"),
+		boundedReconciliationLabel(event.Reason, "eligible", "scope_mismatch", "handoff_incomplete", "policy_mismatch", "fixture_mismatch", "representation_mismatch", "watermark_mismatch", "freshness_expired", "attestation_missing", "attestation_mismatch", "rollback_required"),
+		boundedReconciliationLabel(event.Freshness, "fresh", "stale", "unknown"),
+		boundedReconciliationLabel(event.SLO, "within_budget", "over_budget", "unknown"),
+	)
+}
+
+func boundedReconciliationLabel(value string, allowed ...string) string {
+	for _, candidate := range allowed {
+		if value == candidate {
+			return candidate
+		}
+	}
+	return "unknown"
+}
+
 func LogReleaseEvidenceOperationalLifecycle(logger *log.Logger, event ReleaseEvidenceOperationalEvent) {
 	if logger == nil {
 		return

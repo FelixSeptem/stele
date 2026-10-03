@@ -222,6 +222,18 @@ func (o *MetricsObserver) RecordReleaseEvidenceOperational(ctx context.Context, 
 	}, 1)
 }
 
+func (o *MetricsObserver) RecordReleaseEvidenceReconciliation(ctx context.Context, event ReleaseEvidenceReconciliationEvent) {
+	if o == nil {
+		return
+	}
+	o.addCounter("stele_retrieval_release_evidence_reconciliation_total", map[string]string{
+		"outcome":   boundedReconciliationLabel(event.Outcome, "eligible", "revoked", "unchanged", "failed"),
+		"reason":    boundedReconciliationLabel(event.Reason, "eligible", "scope_mismatch", "handoff_incomplete", "policy_mismatch", "fixture_mismatch", "representation_mismatch", "watermark_mismatch", "freshness_expired", "attestation_missing", "attestation_mismatch", "rollback_required"),
+		"freshness": boundedReconciliationLabel(event.Freshness, "fresh", "stale", "unknown"),
+		"slo":       boundedReconciliationLabel(event.SLO, "within_budget", "over_budget", "unknown"),
+	}, 1)
+}
+
 func (o *MetricsObserver) RecordMaintenance(ctx context.Context, event MaintenanceEvent) {
 	if o == nil {
 		return

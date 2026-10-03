@@ -56,6 +56,18 @@ func TestRankingRolloutActivationGateRequiresFreshExactScopeEvidence(t *testing.
 	}
 }
 
+func TestRankingRolloutActivationGateRequiresCurrentReconciliationEligibility(t *testing.T) {
+	now := time.Date(2026, 10, 1, 12, 0, 0, 0, time.UTC)
+	scope := Scope{Tenant: "tenant-a", Project: "project-a", Namespace: "namespace-a"}
+	gate := RankingRolloutActivationGate{DryRunSucceeded: true, EvidenceThresholdStatus: RankingRolloutThresholdStatusSatisfied, AttributionRecorded: true, Evidence: &RankingRolloutEvidenceAttestation{RunIdentity: "run:0123456789012345678901234567890123456789012345678901234567890123", PolicyID: "policy-1", ScopeHash: rankingRolloutScopeHash(scope), PolicyVersion: "release-v1", StrategyIdentity: "rrf-v1", SourceWatermarkHash: "watermark:0123456789012345678901234567890123456789012345678901234567890123", Verdict: "passed", Freshness: "fresh", RealStack: true, DeterministicReplay: true, RollbackTested: true, EvaluatedAt: now.Add(-time.Minute), ExpiresAt: now.Add(time.Hour)}}
+	if gate.CanActivateForReconciliation(scope, "policy-1", now, false) {
+		t.Fatal("CanActivateForReconciliation() = true, want revoked reconciliation state to fail closed")
+	}
+	if !gate.CanActivateForReconciliation(scope, "policy-1", now, true) {
+		t.Fatal("CanActivateForReconciliation() = false, want current eligible state to activate")
+	}
+}
+
 func TestRankingRolloutPolicyValidate(t *testing.T) {
 	policy := RankingRolloutPolicy{
 		ID:              "policy_1",

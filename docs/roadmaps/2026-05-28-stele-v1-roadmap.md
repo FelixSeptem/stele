@@ -62,12 +62,15 @@ not be conflated:
   specifications. Active rollout remains unauthorized without fresh owned
   PostgreSQL + pgvector release evidence.
 - **Archived implementation**: P0–P7, RQ1–RQ4, and P8.1–P8.8 are archived
-  baselines. Changes 054–063, including the reflection/compaction durable work,
-  reasoning, contradiction, intent, precedence, and real-stack conformance
-  closures, are archived. Archived names include
-  `governed-contradiction-insights`, `governed-memory-intents`, and
-  `governed-operation-policy-precedence`. The current bounded post-v1
-  candidate is `governed-goal-insights`.
+  baselines. Changes 054–065, including the reflection/compaction durable work,
+  reasoning, contradiction, intent, precedence, real-stack conformance, goal
+  insights, and goal review/experimental visibility closures, are archived.
+  Archived names include `governed-contradiction-insights`,
+  `governed-memory-intents`, `governed-operation-policy-precedence`,
+  `governed-goal-insights`, and
+  `governed-goal-review-and-experimental-visibility`. The current bounded
+  candidate is `governed-release-evidence-freshness-reconciliation`, a
+  narrowly scoped release-governance regression closure.
 - **Candidate expansion**: useful post-v1 ideas that must wait until the provider
   contract and quality gates are stable. This includes MCP adapters, namespace
   subtree conventions, agent self-model conventions, and later autonomous
@@ -107,7 +110,7 @@ change an archived baseline.
 | P5 | Benchmark expansion and retrieval release evidence | Archived changes 025, 026, 035, and 039 | Implemented baseline; owned real-stack evidence remains a prerequisite for activation. |
 | P6 | Durable multi-scope maintenance and observability | Archived change 037 | Implemented baseline; retain regression, freshness, and SLO evidence. |
 | P7 | Agent runtime memory-provider contract | Archived change 038 | Implemented baseline; integration remains optional to the retrieval path. |
-| P8 | Optional adapters and governed experience insights | Governed insight baseline in changes 013/014; changes 044–063 are archived, including governed contradiction insights, governed memory intents, operation precedence, and memory-intent real-stack conformance; `governed-goal-insights` is the current bounded candidate | Keep MCP as an optional OpenAPI adapter and reuse projections/intents rather than creating a second memory system. |
+| P8 | Optional adapters and governed experience insights | Governed insight baseline in changes 013/014; changes 044–065 are archived, including governed contradiction insights, governed memory intents, operation precedence, memory-intent real-stack conformance, goal insights, and goal review/experimental visibility; `governed-release-evidence-freshness-reconciliation` is the current bounded candidate | Keep MCP as an optional OpenAPI adapter and reuse projections/intents rather than creating a second memory system. |
 
 ### Critical path to provider readiness
 
@@ -1377,9 +1380,13 @@ attestation, exact-scope activation, rollback, and self-hosting contracts are no
 baseline.
 
 Governed autonomous reasoning insights is complete and archived as change 059.
-Changes 060–063 are complete and archived. The current bounded candidate is `governed-goal-insights`,
-which specializes the reasoning envelope to an
-evidence-backed, review-only goal type while keeping default visibility off.
+Changes 060–065 are complete and archived. Change 064,
+`governed-goal-insights`, and change 065,
+`governed-goal-review-and-experimental-visibility`, specialize the reasoning
+envelope to an evidence-backed, review-only goal type while keeping default
+visibility off. The current bounded candidate is
+`governed-release-evidence-freshness-reconciliation`, which closes the
+post-activation release-evidence freshness and eligibility regression gap.
 
 Follow-up candidates for a future P8 proposal:
 
@@ -1658,10 +1665,10 @@ scoped P8.1 MCP adapter):
    plus separate action-success and information-integrity metrics for
    consolidation, merge, reclassification, reflection, and projection changes.
 
-8. Governed contradiction insights (next proposal): specialize the archived
-   reasoning envelope for one `contradiction` type using exact-scope evidence
-   pairs, bi-temporal overlap checks, review-gated activation, deterministic
-   replay, and independently reversible policy controls.
+8. Governed release-evidence freshness reconciliation: continuously reconcile
+   archived handoffs against exact-scope freshness, source-watermark, policy,
+   representation, attestation, and rollback requirements, revoking activation
+   eligibility fail-closed while retaining evidence history.
 
 ## Execution Order
 
@@ -1685,6 +1692,7 @@ Recommended execution order for the current product baseline and next frontier:
 16. P8.6: redacted retrieval trajectory and memory-integrity evaluation (archived change 051)
 17. P8.7: MCP adapter real-stack conformance and self-hosting evidence (archived change 052)
 18. P8.8: retrieval release evidence refresh and controlled activation (archived change 053)
+19. Governed release-evidence freshness reconciliation (current proposal)
 
 The original Phase 1–5 order remains the build order for a fresh repository;
 the P0–P7 sequence is the archived baseline and RQ1–RQ4 are the next
@@ -1780,11 +1788,13 @@ complete and archived. Change 052,
 and archived. Change 054, `self-hosting-first-ten-minutes-smoke-path`, is also
 archived. Change 055, `retrieval-release-evidence-operational-closure`, and
 change 056, `durable-scheduler-run-history-operational-closure`, and change 057,
-`reflection-compaction-durable-work-closure`, and changes 060–063 are also
+`reflection-compaction-durable-work-closure`, and changes 060–065 are also
 archived. Change 059, `governed-autonomous-reasoning-insights`, is now
-archived. The current bounded post-v1 candidate is `governed-goal-insights`.
-The archived P8.8
-work does not
+archived. Changes 064 and 065, `governed-goal-insights` and
+`governed-goal-review-and-experimental-visibility`, are also archived. The
+current bounded post-v1 candidate is
+`governed-release-evidence-freshness-reconciliation`, focused on reconciling
+post-activation evidence freshness and eligibility. The archived P8.8 work does not
 add a second rollout system,
 change default retrieval or OpenAPI behavior, or widen the canonical
 authorization boundary.

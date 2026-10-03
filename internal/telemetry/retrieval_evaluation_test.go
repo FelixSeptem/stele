@@ -41,3 +41,17 @@ func TestReleaseEvidenceOperationalTelemetryUsesBoundedCategories(t *testing.T) 
 		t.Fatalf("logs=%s", logs.String())
 	}
 }
+
+func TestReleaseEvidenceReconciliationTelemetryUsesBoundedCategories(t *testing.T) {
+	observer := NewMetricsObserver()
+	observer.RecordReleaseEvidenceReconciliation(context.Background(), ReleaseEvidenceReconciliationEvent{
+		Outcome: "revoked", Reason: "watermark_mismatch", Freshness: "stale", SLO: "within_budget",
+	})
+	output := observer.RenderPrometheus()
+	if !strings.Contains(output, "stele_retrieval_release_evidence_reconciliation_total") || !strings.Contains(output, "watermark_mismatch") {
+		t.Fatalf("metrics output = %s", output)
+	}
+	if strings.Contains(strings.ToLower(output), "tenant") || strings.Contains(strings.ToLower(output), "handoff") {
+		t.Fatalf("metrics output contains sensitive labels: %s", output)
+	}
+}

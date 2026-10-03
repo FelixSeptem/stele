@@ -1,6 +1,6 @@
 # Archive Index
 
-Updated: 2026-10-03 19:52:51
+Updated: 2026-10-03 22:37:33
 
 - 001 -> bootstrap-foundation-and-event-ingestion
 - 002 -> governance-pipeline-and-memory-consolidation
@@ -46,7 +46,6 @@ Updated: 2026-10-03 19:52:51
 - 042 -> bounded-graph-distance-retrieval
 - 043 -> context-efficiency-feedback-calibration
 - 044 -> openapi-backed-mcp-scope-and-profile-context
-- 045 -> agent-runtime-memory-provider-contract
 - 046 -> scoped-memory-path-conventions
 - 047 -> scoped-agent-self-model-conventions
 - 048 -> reasoning-provider-boundary
@@ -67,3 +66,4 @@ Updated: 2026-10-03 19:52:51
 - 063 -> memory-intent-real-stack-conformance-and-product-verification
 - 064 -> governed-goal-insights
 - 065 -> governed-goal-review-and-experimental-visibility
+- 066 -> governed-release-evidence-freshness-reconciliation

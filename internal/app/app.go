@@ -673,6 +673,7 @@ func buildAPIRuntime(ctx context.Context, cfg config.Config, deps apiRuntimeDepe
 		GraphTraversalLimits: retrieval.GraphTraversalLimits{MaxHops: cfg.GraphTraversal.MaxHops, MaxSeeds: cfg.GraphTraversal.MaxSeeds, MaxEdgesPerHop: cfg.GraphTraversal.MaxEdgesPerHop, MaxPathsPerSeed: cfg.GraphTraversal.MaxPathsPerSeed, MaxPathsPerRequest: cfg.GraphTraversal.MaxPathsPerRequest, MaxCandidates: cfg.GraphTraversal.MaxCandidates, MaxElapsed: cfg.GraphTraversal.MaxElapsed},
 	}, deps.observer)
 	httpDeps := httpDependenciesFromConfigWithIngestor(cfg, ingestor)
+	httpDeps.ReleaseEvidenceReconcile = repo
 	durableAuthorizer := auth.NewPrincipalService(repo, time.Now)
 	httpDeps.PrincipalAdmin = auth.NewPrincipalAdminService(repo, time.Now, newID)
 	if cfg.Auth.BootstrapAdminKey != "" {

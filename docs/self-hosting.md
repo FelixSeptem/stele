@@ -2190,6 +2190,26 @@ returns later retrieval to the prior approved baseline without modifying canonic
 memory, derived chunks, raw events, or provenance records; the bounded rollout
 telemetry records the restoration as `rollback_restored`.
 
+### Release-evidence freshness reconciliation
+
+An activation handoff is valid only while its exact-scope evidence remains
+compatible with the current source watermark, policy version, fixture and
+representation identities, freshness deadline, attestation, and rollback
+proof. The scheduler and worker reconcile those conditions through the durable
+`release_evidence_reconciliation` job. A stale or mismatched handoff is marked
+ineligible and the current activation must fail closed; the original evidence
+and every reconciliation verdict remain append-only and inspectable.
+
+Administrators can inspect the bounded current state with
+`GET /v1/admin/release-evidence/reconciliation` and request a scope-bound
+maintenance run with `POST /v1/admin/release-evidence/reconciliation`, using
+an `actor` and `reason`. The trigger returns a durable run identity and does
+not directly activate a policy. A new compatible evidence handoff is required
+to restore eligibility. Responses and metrics contain only opaque identities,
+bounded reason categories, freshness buckets, and transition timestamps; they
+never expose raw evidence, queries, provider payloads, credentials, or foreign
+scope values.
+
 Run the evaluator only with an explicitly supplied disposable owned PostgreSQL
 DSN in `STELE_TEST_RETRIEVAL_EVALUATION_DSN`. Never use ambient
 `STELE_POSTGRES_DSN` for replay. If the evaluator DSN is absent,

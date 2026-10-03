@@ -125,8 +125,8 @@ func TestRoadmapTracksCurrentP8Proposal(t *testing.T) {
 		"P8.8",
 		"`retrieval-release-evidence-refresh-and-controlled-activation`",
 		"`governed-reserved-insight-activation`",
-		"changes 060–063",
-		"current bounded candidate is `governed-goal-insights`",
+		"changes 060–065",
+		"`governed-release-evidence-freshness-reconciliation`",
 		"self-hosting-first-ten-minutes-smoke-path",
 		"governed-autonomous-reasoning-insights",
 		"governed-contradiction-insights",
@@ -192,6 +192,19 @@ func TestSelfHostingDocsDescribeScopedAgentSelfModelConvention(t *testing.T) {
 	}
 }
 
+func TestSelfHostingDocsDescribeReleaseEvidenceReconciliation(t *testing.T) {
+	contentBytes, err := os.ReadFile("self-hosting.md")
+	if err != nil {
+		t.Fatalf("read self-hosting.md: %v", err)
+	}
+	content := string(contentBytes)
+	for _, want := range []string{"Release-evidence freshness reconciliation", "release_evidence_reconciliation", "/v1/admin/release-evidence/reconciliation", "new compatible evidence handoff", "fail closed"} {
+		if !strings.Contains(content, want) {
+			t.Fatalf("self-hosting docs missing reconciliation guidance %q", want)
+		}
+	}
+}
+
 func TestSelfModelSpecPreservesExistingClassesAndAuthority(t *testing.T) {
 	specBytes, err := os.ReadFile("../openspec/specs/scoped-agent-self-model-conventions/spec.md")
 	if err != nil {
@@ -221,7 +234,7 @@ func TestRoadmapTracksScopedMemoryAndSelfModelProposalStatus(t *testing.T) {
 	}
 	roadmap := string(roadmapBytes)
 	for _, want := range []string{
-		"Changes 060–063",
+		"Changes 060–065",
 		"Agent self-model conventions are complete and archived as change 047.",
 		"P8.2: scoped memory path conventions (archived change 046)",
 		"P8.2b: agent self-model conventions (archived change 047)",

@@ -2336,6 +2336,63 @@ paths:
                 $ref: '#/components/schemas/JobExecutionListResponse'
         '401':
           description: Missing or invalid admin API key
+  /v1/admin/release-evidence/reconciliation:
+    get:
+      operationId: listAdminReleaseEvidenceReconciliation
+      parameters:
+        - $ref: '#/components/parameters/AdminAPIKey'
+        - $ref: '#/components/parameters/TenantHeader'
+        - $ref: '#/components/parameters/ProjectHeader'
+        - $ref: '#/components/parameters/NamespaceHeader'
+        - in: query
+          name: limit
+          required: false
+          schema:
+            type: integer
+            maximum: 100
+      responses:
+        '200':
+          description: Exact-scope release evidence eligibility state
+          content:
+            application/json:
+              schema:
+                type: object
+        '401':
+          description: Missing or invalid admin API key
+        '404':
+          description: Reconciliation state unavailable for the requested scope
+    post:
+      operationId: triggerAdminReleaseEvidenceReconciliation
+      parameters:
+        - $ref: '#/components/parameters/AdminAPIKey'
+        - $ref: '#/components/parameters/TenantHeader'
+        - $ref: '#/components/parameters/ProjectHeader'
+        - $ref: '#/components/parameters/NamespaceHeader'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [actor, reason]
+              properties:
+                actor:
+                  type: string
+                reason:
+                  type: string
+      responses:
+        '202':
+          description: Reconciliation queued
+          content:
+            application/json:
+              schema:
+                type: object
+        '400':
+          description: Invalid trigger
+        '401':
+          description: Missing or invalid admin API key
+        '422':
+          description: Reconciliation could not be queued
   /v1/admin/derived-work/status:
     get:
       operationId: getAdminDerivedWorkStatus

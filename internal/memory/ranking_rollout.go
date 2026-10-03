@@ -221,6 +221,11 @@ type RankingRolloutActivationGate struct {
 	BlockersPresent         bool                               `json:"blockers_present"`
 	AttributionRecorded     bool                               `json:"attribution_recorded"`
 	Evidence                *RankingRolloutEvidenceAttestation `json:"evidence,omitempty"`
+	// ReconciliationEligible is populated by the persistence layer when the
+	// current evidence projection has been resolved. Nil preserves the legacy
+	// dry-run contract for diagnostics-only callers; a supplied false value
+	// always fails closed.
+	ReconciliationEligible *bool `json:"reconciliation_eligible,omitempty"`
 }
 
 func (g RankingRolloutActivationGate) CanActivate() bool {
@@ -281,7 +286,19 @@ func (a RankingRolloutEvidenceAttestation) Validate(scope Scope, policyID string
 }
 
 func (g RankingRolloutActivationGate) CanActivateFor(scope Scope, policyID string, now time.Time) bool {
+	if g.ReconciliationEligible != nil && !*g.ReconciliationEligible {
+		return false
+	}
 	return g.CanActivate() && g.Evidence != nil && g.Evidence.Validate(scope.Normalized(), policyID, now) == nil
+}
+
+// CanActivateForReconciliation is the fail-closed activation boundary for
+// callers that have resolved the current exact-scope reconciliation projection.
+// The projection is deliberately supplied by the persistence layer so this
+// value cannot be inferred from historical evidence alone.
+func (g RankingRolloutActivationGate) CanActivateForReconciliation(scope Scope, policyID string, now time.Time, reconciliationEligible bool) bool {
+	g.ReconciliationEligible = &reconciliationEligible
+	return g.CanActivateFor(scope, policyID, now)
 }
 
 func rankingRolloutScopeHash(scope Scope) string {
