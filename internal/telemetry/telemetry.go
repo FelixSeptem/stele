@@ -158,7 +158,9 @@ type MemoryIntentEvent struct {
 }
 
 func LogMemoryIntentLifecycle(logger *log.Logger, event MemoryIntentEvent) {
-	if logger == nil { return }
+	if logger == nil {
+		return
+	}
 	logger.Printf("component=memory_intent operation=%s type=%s status=%s outcome=%s retry=%s rollback=%s",
 		boundedIntentLabel(event.Operation, "submit", "replay", "queue", "outcome", "retry", "rollback", "inspect"),
 		boundedIntentLabel(event.Type, "remember", "update", "forget", "contradiction", "feedback"),
@@ -169,8 +171,53 @@ func LogMemoryIntentLifecycle(logger *log.Logger, event MemoryIntentEvent) {
 	)
 }
 
+// IntentConformanceEvent carries only the fixed vocabulary used by the
+// product-verification report. It deliberately excludes scopes, identifiers,
+// payloads, credentials, DSNs, and raw dependency errors.
+type IntentConformanceEvent struct {
+	Operation       string
+	Phase           string
+	Result          string
+	Prerequisite    string
+	Recovery        string
+	Duration        string
+	FailureCategory string
+	Rollback        string
+	Consumable      string
+}
+
+func LogIntentConformance(logger *log.Logger, event IntentConformanceEvent) {
+	if logger == nil {
+		return
+	}
+	logger.Printf("component=intent_conformance operation=%s phase=%s result=%s prerequisite=%s recovery=%s duration_bucket=%s failure_category=%s rollback=%s consumable=%s",
+		boundedConformanceLabel(event.Operation, "run", "phase", "replay", "inspect", "cleanup", "redaction"),
+		boundedConformanceLabel(event.Phase, "prerequisite", "submission", "replay", "scope_isolation", "inspection", "queue_recovery", "worker_restart", "scheduler_restart", "rollback", "cleanup"),
+		boundedConformanceLabel(event.Result, "pass", "skip", "degraded", "fail"),
+		boundedConformanceLabel(event.Prerequisite, "available", "missing", "incompatible", "unknown"),
+		boundedConformanceLabel(event.Recovery, "none", "reclaimed", "retried", "exhausted", "degraded", "unknown"),
+		boundedConformanceLabel(event.Duration, "lt_1s", "1s_10s", "gt_10s", "unknown"),
+		boundedConformanceLabel(event.FailureCategory, "none", "validation", "scope_denied", "conflict", "timeout", "dependency", "hidden_evidence", "unsafe_retry", "cleanup", "unknown"),
+		boundedConformanceLabel(event.Rollback, "none", "held", "resumed", "failed", "unknown"),
+		boundedConformanceLabel(event.Consumable, "yes", "no", "unknown"),
+	)
+}
+
+func boundedConformanceLabel(value string, allowed ...string) string {
+	for _, candidate := range allowed {
+		if value == candidate {
+			return candidate
+		}
+	}
+	return "unknown"
+}
+
 func boundedIntentLabel(value string, allowed ...string) string {
-	for _, candidate := range allowed { if value == candidate { return candidate } }
+	for _, candidate := range allowed {
+		if value == candidate {
+			return candidate
+		}
+	}
 	return "unknown"
 }
 

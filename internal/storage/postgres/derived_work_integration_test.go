@@ -32,7 +32,7 @@ func TestDerivedWorkPostgresRecoveryAndScopeIsolation(t *testing.T) {
 	defer pool.Exec(ctx, `DELETE FROM derived_work_items WHERE tenant = $1`, scope.Tenant)
 	repo := NewRepository(pool)
 	now := time.Now().UTC().Truncate(time.Microsecond)
-	input := workqueue.EnqueueInput{DerivedWorkInput: workqueue.DerivedWorkInput{Scope: scope, Kind: workqueue.WorkKindReflection, Watermark: "wm-1", Idempotency: "idempotent-1", Reference: "ref-1"}, MaxAttempts: 1, Now: now, DetailExpiresAt: now.Add(time.Hour)}
+	input := workqueue.EnqueueInput{DerivedWorkInput: workqueue.DerivedWorkInput{Scope: scope, Kind: workqueue.WorkKindMemoryIntent, Watermark: "wm-1", Idempotency: "idempotent-1", Reference: "memory-intent-ref-1"}, MaxAttempts: 1, Now: now, DetailExpiresAt: now.Add(time.Hour)}
 	first, err := repo.EnqueueDerivedWork(ctx, input)
 	if err != nil {
 		t.Fatal(err)

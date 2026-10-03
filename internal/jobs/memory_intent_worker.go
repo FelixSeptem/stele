@@ -17,6 +17,7 @@ type MemoryIntentWorkExecutor struct {
 	History  memoryIntentHistoryReader
 	Worker   memory.MemoryIntentWorker
 	Recorder memory.MemoryIntentOutcomeRecorder
+	Policy   memory.MemoryIntentResumePolicyGate
 }
 
 type memoryIntentRecordReader interface {
@@ -46,6 +47,19 @@ func (e MemoryIntentWorkExecutor) ExecuteDerivedWork(ctx context.Context, item w
 	record, err := e.Reader.ReadMemoryIntent(ctx, item.Scope, item.Reference)
 	if err != nil {
 		return 0, "", fmt.Errorf("read memory intent: %w", err)
+	}
+	if e.Policy != nil {
+		decision, policyErr := e.Policy.EvaluateMemoryIntentResume(ctx, record)
+		if policyErr != nil {
+			return 0, "", fmt.Errorf("evaluate memory intent resume policy: %w", policyErr)
+		}
+		if !decision.Enabled {
+			category := decision.Category
+			if !category.Valid() {
+				category = memory.MemoryIntentDiagnosticPolicyDisabled
+			}
+			return 0, "", fmt.Errorf("memory intent policy %s: processing held", category)
+		}
 	}
 	var outcome memory.MemoryIntentOutcome
 	if e.History != nil {

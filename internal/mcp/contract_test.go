@@ -370,6 +370,40 @@ func TestMCPRememberUsesGovernedIntentBoundaryAndMapsConflict(t *testing.T) {
 	}
 }
 
+func TestMCPRememberReplayKeepsOriginalMutationMetadata(t *testing.T) {
+	ctx := context.Background()
+	principal := auth.Principal{ID: "writer-replay-1", Role: auth.PrincipalRolePublic, Status: auth.PrincipalStatusActive}
+	scope := memory.Scope{Tenant: "tenant", Project: "project", Namespace: "namespace"}
+	intent := &sequencedContractIntentService{records: []memory.MemoryIntentRecord{
+		{ID: "intent-replay-1", Status: memory.MemoryIntentStatusAccepted},
+		{ID: "intent-replay-1", Status: memory.MemoryIntentStatusReplayed},
+	}}
+	adapter := NewAdapter(AdapterOptions{
+		Enabled:    true,
+		Authorizer: scopeAuthorizerStub{grants: map[string]bool{principal.ID + "/tenant/project/namespace": true}},
+		Intent:     intent,
+		Limits:     Limits{MaxQueryBytes: 128, MaxPayloadBytes: 4096, MaxResults: 10, MaxIDs: 10},
+	})
+	session := connectMCPContractSession(t, adapter, principal, "")
+	params := &protocolmcp.CallToolParams{Name: ToolRemember, Arguments: map[string]any{
+		"tenant": scope.Tenant, "project": scope.Project, "namespace": scope.Namespace,
+		"content": "durable governed fact", "reason": "agent request", "idempotency_key": "remember-replay-1",
+	}}
+	first, err := session.CallTool(ctx, params)
+	if err != nil || first.IsError {
+		t.Fatalf("first memory_remember result=%+v error=%v", first, err)
+	}
+	second, err := session.CallTool(ctx, params)
+	if err != nil || second.IsError {
+		t.Fatalf("replayed memory_remember result=%+v error=%v", second, err)
+	}
+	firstBytes, _ := json.Marshal(first.StructuredContent)
+	secondBytes, _ := json.Marshal(second.StructuredContent)
+	if string(firstBytes) != string(secondBytes) {
+		t.Fatalf("replayed memory_remember response = %s, want original %s", secondBytes, firstBytes)
+	}
+}
+
 func TestMCPRememberRejectsReadOnlyScopeGrant(t *testing.T) {
 	ctx := context.Background()
 	principal := auth.Principal{ID: "reader-1", Role: auth.PrincipalRolePublic, Status: auth.PrincipalStatusActive}
@@ -430,6 +464,11 @@ type contractIntentService struct {
 	err    error
 }
 
+type sequencedContractIntentService struct {
+	records []memory.MemoryIntentRecord
+	index   int
+}
+
 type contractForgetPreviewStore struct{ record ForgetPreviewRecord }
 
 func (s *contractForgetPreviewStore) SaveForgetPreview(_ context.Context, record ForgetPreviewRecord) error {
@@ -458,6 +497,15 @@ func (q *contractMemoryQuery) ListMemories(_ context.Context, input memory.ListM
 func (s *contractIntentService) Submit(_ context.Context, input memory.MemoryIntentInput) (memory.MemoryIntentRecord, error) {
 	s.got = input
 	return s.record, s.err
+}
+
+func (s *sequencedContractIntentService) Submit(_ context.Context, _ memory.MemoryIntentInput) (memory.MemoryIntentRecord, error) {
+	if s.index >= len(s.records) {
+		return memory.MemoryIntentRecord{}, errors.New("unexpected intent submission")
+	}
+	record := s.records[s.index]
+	s.index++
+	return record, nil
 }
 
 func (a *contractAssembler) AssembleContext(_ context.Context, input retrieval.AssembleContextInput) (retrieval.AssembledContext, error) {

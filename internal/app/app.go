@@ -696,8 +696,17 @@ func buildAPIRuntime(ctx context.Context, cfg config.Config, deps apiRuntimeDepe
 		Now:                  time.Now,
 		NewID:                newQualityID,
 	})
-	intentService := memory.MemoryIntentService{Processor: repo, Now: time.Now}
+	intentPolicy := memory.StaticMemoryIntentPolicy{
+		Scope:         memory.Scope{Tenant: cfg.Auth.DefaultTenant, Project: cfg.Auth.DefaultProject, Namespace: cfg.Auth.DefaultNamespace},
+		PolicyVersion: cfg.MemoryIntent.PolicyVersion,
+		Enabled:       cfg.MemoryIntent.Enabled,
+	}
+	intentService := memory.MemoryIntentService{Processor: repo, Policy: intentPolicy, Now: time.Now}
 	httpDeps.MemoryIntent = intentService
+	// Keep the public submission service separate from the exact-scope read
+	// boundary. The repository implements both read interfaces and enforces the
+	// tenant/project/namespace predicates for detail and history inspection.
+	httpDeps.MemoryIntentRead = repo
 	if (cfg.Provider.Enabled || cfg.MCP.Enabled) && httpDeps.PrincipalAuthorizer != nil {
 		if cfg.Provider.Enabled {
 			httpDeps.ProviderCapabilities = provider.Discover(provider.CapabilityInput{ProviderVersion: "provider-v1", SchemaVersion: cfg.Provider.SchemaVersions[0], ServiceVersion: BuildVersion, BuildID: BuildID})
@@ -1048,6 +1057,7 @@ func buildWorkerRuntime(ctx context.Context, cfg config.Config, deps workerRunti
 			History:  repo,
 			Worker:   memory.MemoryIntentWorker{Router: memoryIntentGovernanceRouter{repo: repo, now: now}, Validator: repo},
 			Recorder: repo,
+			Policy:   memory.StaticMemoryIntentPolicy{Scope: scope, PolicyVersion: cfg.MemoryIntent.PolicyVersion, Enabled: cfg.MemoryIntent.Enabled},
 		},
 		Scope: scope, WorkerID: "stele-memory-intent-worker", BatchSize: 16,
 		LeaseDuration: governanceWorkerLeaseDuration, RetryBackoff: cfg.Jobs.GovernanceRetryBackoff,
@@ -1057,7 +1067,9 @@ func buildWorkerRuntime(ctx context.Context, cfg config.Config, deps workerRunti
 	if err := scope.Validate(); err == nil {
 		workers = append(workers, repairWorker)
 		workers = append(workers, proofWorker, sessionVerificationWorker, alertDeliveryWorker)
-		workers = append(workers, intentWorker)
+		if cfg.MemoryIntent.Enabled {
+			workers = append(workers, intentWorker)
+		}
 	}
 
 	return workerRuntime{

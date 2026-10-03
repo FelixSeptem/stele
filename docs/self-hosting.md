@@ -2467,12 +2467,59 @@ prompts, claims, or foreign-scope data. Disabling a policy holds or rejects
 new work while preserving submitted requests and their audit history; a later
 compatible policy may resume only eligible pending work.
 
+The self-hosted runtime uses one configuration-backed intent policy boundary:
+`STELE_MEMORY_INTENT_POLICY_ENABLED` defaults to `true`, and
+`STELE_MEMORY_INTENT_POLICY_VERSION` defaults to `v1`. Changing either value
+requires restarting the API and worker processes. A disabled API rejects new
+intent persistence; a worker with the same policy disabled leaves already
+queued work inspectable for retry. Re-enable with the same exact scope and
+compatible version to resume `accepted` or `pending` work. Policy changes do
+not delete intent rows, transitions, queue history, or canonical versions.
+
 The SDK contract tests run without external agents. The durable review-manifest
 test and the complete real-stack conformance matrix can additionally run only
 against a dedicated, disposable PostgreSQL + pgvector database; they apply
 repository migrations and use unique fixture scopes without creating or
 dropping the database. The caller owns database creation and removal, and the
 command must never point at an operator, shared, or production database.
+
+### Real-stack memory-intent product verification
+
+The full disposable-stack verifier also exercises the governed intent path
+through OpenAPI, PostgreSQL, and the worker and scheduler services:
+
+```powershell
+pwsh -NoProfile -File scripts/stele-product-verify.ps1 `
+  -ReportPath .tmp/memory-intent-conformance.json
+```
+
+The command owns a unique Compose project, generated credentials, and exact
+tenant/project/namespace fixture scope. It checks accepted remember submission,
+identical replay, conflicting idempotency reuse, foreign-scope non-disclosure,
+scoped status/history, one durable `memory_intent` queue reference, and worker
+and scheduler restart recovery. It also runs the owned durable-work lease,
+checkpoint, retry, and retry-exhaustion matrix, and compares default retrieval
+and context hashes before and after contradiction/feedback review fixtures.
+The report is redacted and contains only run
+and scope hashes, bounded phase categories, compatibility labels, timestamps,
+an aggregate summary of phase/result/category counts, recovery/rollback/cleanup
+gate observations, and a consumability verdict. It never writes credentials, DSNs, scopes,
+intent/memory/evidence identifiers, payloads, or raw dependency errors.
+
+Set `STELE_PRODUCT_VERIFY_MCP=1` to include the optional MCP prerequisite
+check and, when the configured endpoint is enabled, run the same PostgreSQL
+MCP matrix used by the focused conformance command. The matrix covers
+`memory_remember` replay, read-only mutation denial, `memory_forget_preview`,
+`memory_forget_apply`, apply replay, exact-scope isolation, and response
+redaction through the shared intent and lifecycle services. A disabled MCP
+adapter is recorded as `skip` and does not become a readiness claim.
+
+Missing Docker, PostgreSQL/pgvector, migration compatibility, or service
+readiness is an explicit skip or failure. If the rollback-policy fixture or
+another hard gate cannot run, the report records degraded evidence and cannot be
+used as a readiness or enablement claim. Cleanup is limited to the generated
+Compose project and fixture resources; the command must not target an operator
+or production database.
 
 The focused matrix exercises the actual Streamable HTTP transport and reports
 bounded categories for capability discovery, identity, exact-scope isolation,
@@ -2489,8 +2536,9 @@ fixture content are never written.
 For an explicit opt-in run, use the wrapper below. It returns a skip (exit code
 2) when no DSN is configured, and a failure (non-zero exit code) when a
 configured category fails. `-ApiBaseUrl` is optional; when supplied, the
-wrapper verifies `/health` and `/openapi.yaml` remain available while `/mcp`
-fails closed for a disabled adapter:
+wrapper verifies `/health` and `/openapi.yaml` remain available. It expects
+`/mcp` to fail closed by default; pass `-ExpectEnabled` (and `-McpPath` when
+configured) for an enabled adapter:
 
 ```powershell
 $env:STELE_TEST_POSTGRES_MCP_DSN = 'postgres://stele:...@localhost:5432/stele_mcp_test?sslmode=disable'
@@ -2499,6 +2547,11 @@ pwsh -NoProfile -File scripts/stele-mcp-conformance.ps1 `
   -ApiBaseUrl http://localhost:8080
 Remove-Item Env:STELE_TEST_POSTGRES_MCP_DSN
 ```
+
+The product verifier owns the PostgreSQL DSN for the enabled path and removes
+the temporary MCP evidence artifact during cleanup. A failed enabled matrix is
+reported as a bounded conformance failure; it never turns the product report
+into an enablement or readiness claim.
 
 The underlying focused tests remain available directly:
 

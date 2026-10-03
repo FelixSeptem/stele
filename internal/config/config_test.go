@@ -51,6 +51,9 @@ func TestLoadFromEnvReturnsConfigForValidMode(t *testing.T) {
 	if cfg.Auth.DefaultTenant != "tenant-a" || cfg.Auth.DefaultProject != "project-a" || cfg.Auth.DefaultNamespace != "namespace-a" {
 		t.Fatalf("Auth defaults = %+v, want tenant/project/namespace defaults", cfg.Auth)
 	}
+	if !cfg.MemoryIntent.Enabled || cfg.MemoryIntent.PolicyVersion != "v1" {
+		t.Fatalf("MemoryIntent config = %+v, want enabled v1 default", cfg.MemoryIntent)
+	}
 
 	if cfg.Jobs.MaintenanceInterval.Minutes() != 30 {
 		t.Fatalf("Jobs.MaintenanceInterval = %v, want 30m", cfg.Jobs.MaintenanceInterval)
@@ -107,6 +110,15 @@ func TestLoadFromEnvRejectsLegacyAPIKeyLists(t *testing.T) {
 
 	if _, err := LoadFromEnv(); err == nil {
 		t.Fatal("LoadFromEnv() error = nil for deprecated legacy key list")
+	}
+}
+
+func TestLoadFromEnvRejectsUnboundedMemoryIntentPolicyVersion(t *testing.T) {
+	t.Setenv("STELE_MODE", "api")
+	t.Setenv("STELE_POSTGRES_DSN", "postgres://stele:stele@localhost:5432/stele?sslmode=disable")
+	t.Setenv("STELE_MEMORY_INTENT_POLICY_VERSION", "rollback/v1")
+	if _, err := LoadFromEnv(); err == nil {
+		t.Fatal("LoadFromEnv() error = nil for invalid memory intent policy version")
 	}
 }
 
