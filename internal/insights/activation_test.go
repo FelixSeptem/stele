@@ -280,6 +280,40 @@ func TestReservedInsightActivationPolicyStopAndRollbackDisableNewAdmissions(t *t
 	}
 }
 
+func TestGoalActivationPolicyRequiresReviewConfiguration(t *testing.T) {
+	scope := memory.Scope{Tenant: "tenant-a", Project: "project-a", Namespace: "namespace-a"}
+	now := time.Date(2026, 9, 29, 0, 0, 0, 0, time.UTC)
+	policy := DefaultReservedInsightActivationPolicy(scope)
+	policy.Enabled = true
+	policy.EnabledTypes[memory.DerivedInsightTypeGoal] = true
+	policy.ExpiresAt = now.Add(24 * time.Hour)
+	if err := policy.ValidateAt(now); err == nil {
+		t.Fatal("goal policy without review configuration accepted")
+	}
+}
+
+func TestGoalActivationRemainsReviewOnlyByDefault(t *testing.T) {
+	scope := memory.Scope{Tenant: "tenant-a", Project: "project-a", Namespace: "namespace-a"}
+	now := time.Date(2026, 9, 29, 0, 0, 0, 0, time.UTC)
+	policy := DefaultReservedInsightActivationPolicy(scope)
+	policy.Enabled = true
+	policy.EnabledTypes[memory.DerivedInsightTypeGoal] = true
+	policy.GoalRequireReview = true
+	policy.GoalAllowedStates[reasoning.GoalStateProposed] = true
+	policy.ExpiresAt = now.Add(24 * time.Hour)
+	candidate := testHypothesisCandidate(scope)
+	candidate.ID = "goal-1"
+	candidate.Type = memory.DerivedInsightTypeGoal
+	candidate.Title = "Bounded goal"
+	candidate.Summary = "Goal remains review-only"
+	candidate.Derivation.Metadata["goal_state"] = string(reasoning.GoalStateProposed)
+	candidate.Derivation.Metadata["goal_review_state"] = string(reasoning.GoalReviewRequired)
+	result := AdmitReservedInsight(ActivationInput{Policy: policy, Candidate: candidate, AuthorizedEvidence: candidate.Evidence, Now: now})
+	if result.Disposition != ActivationDispositionReviewRequired {
+		t.Fatalf("goal disposition = %s, want review_required (%s)", result.Disposition, result.Reason)
+	}
+}
+
 func TestReservedInsightAdmissionRequiresContradictionOverlapAndReview(t *testing.T) {
 	scope := memory.Scope{Tenant: "tenant-a", Project: "project-a", Namespace: "namespace-a"}
 	policy := DefaultReservedInsightActivationPolicy(scope)

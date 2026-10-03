@@ -38,6 +38,7 @@ type InsightCandidate struct {
 	DirectActivation    bool                               `json:"direct_activation,omitempty"`
 	CanonicalMutation   bool                               `json:"canonical_mutation,omitempty"`
 	Metadata            map[string]any                     `json:"metadata,omitempty"`
+	Goal                *GoalMetadata                      `json:"goal,omitempty"`
 	CreatedAt           time.Time                          `json:"created_at"`
 }
 
@@ -67,6 +68,7 @@ type InsightDerivationRequest struct {
 	InputDigest         string
 	Limits              Limits
 	Now                 time.Time
+	Goal                *GoalMetadata
 }
 
 type InsightDerivationResult struct {
@@ -111,6 +113,16 @@ func (c InsightCandidate) Validate(limits Limits) error {
 	if c.DirectActivation || c.CanonicalMutation {
 		return fmt.Errorf("reasoning candidate requests an unsafe mutation")
 	}
+	if c.InsightType == memory.DerivedInsightTypeGoal {
+		if c.Goal == nil {
+			return fmt.Errorf("goal metadata is required")
+		}
+		if err := c.Goal.Validate(); err != nil {
+			return err
+		}
+	} else if c.Goal != nil {
+		return fmt.Errorf("goal metadata is only valid for goal candidates")
+	}
 	if c.LifecycleVisibility != "active_only" || c.RedactionPolicy != "references_only" {
 		return fmt.Errorf("reasoning candidate evidence policy is invalid")
 	}
@@ -127,8 +139,8 @@ func (c InsightCandidate) Validate(limits Limits) error {
 		if err := evidence.Validate(); err != nil {
 			return fmt.Errorf("reasoning candidate evidence: %w", err)
 		}
-		if foreign, ok := evidence.Metadata["tenant"].(string); ok && strings.TrimSpace(foreign) != "" && foreign != c.Scope.Tenant {
-			return fmt.Errorf("reasoning candidate evidence is outside scope")
+		if err := validateEvidenceScope(c.Scope, evidence); err != nil {
+			return err
 		}
 	}
 	digest, err := EvidenceDigest(c.Evidence)
@@ -154,6 +166,16 @@ func (r InsightDerivationRequest) Validate(now time.Time) error {
 	if r.Mode != ModeOffline && r.Mode != ModeShadow {
 		return fmt.Errorf("reasoning insight mode must be offline or shadow")
 	}
+	if r.InsightType == memory.DerivedInsightTypeGoal {
+		if r.Goal == nil {
+			return fmt.Errorf("goal metadata is required")
+		}
+		if err := r.Goal.Validate(); err != nil {
+			return err
+		}
+	} else if r.Goal != nil {
+		return fmt.Errorf("goal metadata is only valid for goal requests")
+	}
 	if !bounded(r.SourceWatermark, 256) || !bounded(r.ScopeProof, 256) || !bounded(r.LifecycleVisibility, 64) || !bounded(r.RedactionPolicy, 64) || !bounded(r.ProviderVersion, 256) || !bounded(r.SchemaVersion, 128) || !bounded(r.PolicyVersion, 256) || !bounded(r.InputDigest, 128) {
 		return fmt.Errorf("reasoning derivation metadata is invalid")
 	}
@@ -165,6 +187,9 @@ func (r InsightDerivationRequest) Validate(now time.Time) error {
 	}
 	for _, evidence := range r.Evidence {
 		if err := evidence.Validate(); err != nil {
+			return err
+		}
+		if err := validateEvidenceScope(r.Scope, evidence); err != nil {
 			return err
 		}
 	}
@@ -210,7 +235,8 @@ func InsightReplayID(request InsightDerivationRequest) (string, error) {
 		SchemaVersion       string                    `json:"schema_version"`
 		PolicyVersion       string                    `json:"policy_version"`
 		InputDigest         string                    `json:"input_digest"`
-	}{request.Scope.Normalized(), request.InsightType, request.Mode, evidenceDigest, request.SourceWatermark, request.ScopeProof, request.LifecycleVisibility, request.RedactionPolicy, request.ProviderVersion, request.SchemaVersion, request.PolicyVersion, request.InputDigest}
+		Goal                *GoalMetadata             `json:"goal,omitempty"`
+	}{request.Scope.Normalized(), request.InsightType, request.Mode, evidenceDigest, request.SourceWatermark, request.ScopeProof, request.LifecycleVisibility, request.RedactionPolicy, request.ProviderVersion, request.SchemaVersion, request.PolicyVersion, request.InputDigest, request.Goal}
 	b, err := json.Marshal(seed)
 	if err != nil {
 		return "", err
@@ -232,6 +258,11 @@ func ValidateInsightCandidate(request InsightDerivationRequest, candidate Insigh
 	if candidate.InsightType != request.InsightType || candidate.Mode != request.Mode {
 		return fmt.Errorf("reasoning candidate type or mode does not match request")
 	}
+	if request.Goal != nil {
+		if candidate.Goal == nil || !goalMetadataEqual(*request.Goal, *candidate.Goal) {
+			return fmt.Errorf("reasoning candidate goal metadata does not match request")
+		}
+	}
 	if candidate.SourceWatermark != request.SourceWatermark || candidate.ScopeProof != request.ScopeProof || candidate.LifecycleVisibility != request.LifecycleVisibility || candidate.RedactionPolicy != request.RedactionPolicy || candidate.ProviderVersion != request.ProviderVersion || candidate.SchemaVersion != request.SchemaVersion || candidate.PolicyVersion != request.PolicyVersion {
 		return fmt.Errorf("reasoning candidate compatibility metadata does not match request")
 	}
@@ -252,6 +283,12 @@ func ValidateInsightCandidate(request InsightDerivationRequest, candidate Insigh
 		return fmt.Errorf("reasoning candidate replay identity does not match request")
 	}
 	return nil
+}
+
+func goalMetadataEqual(left, right GoalMetadata) bool {
+	leftJSON, leftErr := json.Marshal(left)
+	rightJSON, rightErr := json.Marshal(right)
+	return leftErr == nil && rightErr == nil && string(leftJSON) == string(rightJSON)
 }
 
 func EvaluateInsightCandidate(ctx context.Context, provider InsightProvider, request InsightDerivationRequest) InsightDerivationResult {
@@ -291,6 +328,18 @@ func EvaluateInsightCandidate(ctx context.Context, provider InsightProvider, req
 
 func evidenceKey(e memory.DerivedInsightEvidenceRef) string {
 	return string(e.Kind) + "\x00" + e.ID + "\x00" + string(e.Relation)
+}
+
+func validateEvidenceScope(scope memory.Scope, evidence memory.DerivedInsightEvidenceRef) error {
+	if evidence.Metadata == nil {
+		return nil
+	}
+	for key, expected := range map[string]string{"tenant": scope.Tenant, "project": scope.Project, "namespace": scope.Namespace} {
+		if value, ok := evidence.Metadata[key].(string); ok && strings.TrimSpace(value) != "" && value != expected {
+			return fmt.Errorf("reasoning candidate evidence is outside scope")
+		}
+	}
+	return nil
 }
 
 func isReservedInsightType(t memory.DerivedInsightType) bool {

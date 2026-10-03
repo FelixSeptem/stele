@@ -144,6 +144,7 @@ type ReasoningInsightEvent struct {
 	Duration            string
 	TemporalDisposition string
 	Review              string
+	GoalState           string
 }
 
 // MemoryIntentEvent is deliberately category-only. It never accepts scope,
@@ -257,7 +258,7 @@ func LogReasoningInsightLifecycle(logger *log.Logger, event ReasoningInsightEven
 	if logger == nil {
 		return
 	}
-	logger.Printf("component=reasoning_insight operation=%s mode=%s insight_type=%s result=%s eligibility=%s freshness=%s fallback=%s duration_bucket=%s temporal_disposition=%s review=%s",
+	logger.Printf("component=reasoning_insight operation=%s mode=%s insight_type=%s result=%s eligibility=%s freshness=%s fallback=%s duration_bucket=%s temporal_disposition=%s review=%s goal_state=%s",
 		boundedReasoningLabel(event.Operation, "derive", "replay", "shadow", "handoff", "rollback"),
 		boundedReasoningLabel(event.Mode, "offline", "shadow", "apply"),
 		boundedReasoningLabel(event.InsightType, "hypothesis", "goal", "contradiction", "causal_link", "unknown"),
@@ -268,6 +269,7 @@ func LogReasoningInsightLifecycle(logger *log.Logger, event ReasoningInsightEven
 		boundedReasoningLabel(event.Duration, "lt_1s", "1s_10s", "gt_10s", "unknown"),
 		boundedReasoningLabel(event.TemporalDisposition, "contradiction", "temporal_coexistence", "unresolved_temporal", "unknown"),
 		boundedReasoningLabel(event.Review, "required", "confirmed", "coexists", "incorrect", "stale", "unknown"),
+		boundedReasoningLabel(event.GoalState, "proposed", "active", "completed", "abandoned", "stale", "unknown"),
 	)
 }
 

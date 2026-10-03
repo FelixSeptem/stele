@@ -58,17 +58,17 @@ func TestMetricsObserverBoundsReasoningInsightLabels(t *testing.T) {
 	observer := NewMetricsObserver()
 	observer.RecordReasoningInsight(context.Background(), ReasoningInsightEvent{
 		Operation: "derive", Mode: "shadow", InsightType: "hypothesis", Result: "would_activate",
-		Eligibility: "eligible", Freshness: "fresh", Fallback: "none", Duration: "lt_1s", TemporalDisposition: "contradiction", Review: "required",
+		Eligibility: "eligible", Freshness: "fresh", Fallback: "none", Duration: "lt_1s", TemporalDisposition: "contradiction", Review: "required", GoalState: "completed",
 	})
 	observer.RecordReasoningInsight(context.Background(), ReasoningInsightEvent{
 		Operation: "secret-operation", Mode: "secret-mode", InsightType: "prompt-content", Result: "secret-result",
 		Eligibility: "secret", Freshness: "secret", Fallback: "secret", Duration: "secret",
 	})
 	metrics := observer.RenderPrometheus()
-	if !strings.Contains(metrics, `stele_reasoning_insight_total{duration="lt_1s",eligibility="eligible",fallback="none",freshness="fresh",insight_type="hypothesis",mode="shadow",operation="derive",result="would_activate",review="required",temporal_disposition="contradiction"} 1`) {
+	if !strings.Contains(metrics, `stele_reasoning_insight_total{duration="lt_1s",eligibility="eligible",fallback="none",freshness="fresh",goal_state="completed",insight_type="hypothesis",mode="shadow",operation="derive",result="would_activate",review="required",temporal_disposition="contradiction"} 1`) {
 		t.Fatalf("bounded reasoning metric missing:\n%s", metrics)
 	}
-	if !strings.Contains(metrics, `stele_reasoning_insight_total{duration="unknown",eligibility="unknown",fallback="unknown",freshness="unknown",insight_type="unknown",mode="unknown",operation="unknown",result="unknown",review="unknown",temporal_disposition="unknown"} 1`) {
+	if !strings.Contains(metrics, `stele_reasoning_insight_total{duration="unknown",eligibility="unknown",fallback="unknown",freshness="unknown",goal_state="unknown",insight_type="unknown",mode="unknown",operation="unknown",result="unknown",review="unknown",temporal_disposition="unknown"} 1`) {
 		t.Fatalf("unknown reasoning labels were not bucketed:\n%s", metrics)
 	}
 }

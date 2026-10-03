@@ -24,15 +24,24 @@ func (r *Repository) PersistReasoningInsightCandidate(ctx context.Context, candi
 	if err != nil {
 		return fmt.Errorf("marshal reasoning candidate evidence: %w", err)
 	}
+	var goalMetadata any
+	if candidate.Goal != nil {
+		goalMetadataJSON, err := json.Marshal(candidate.Goal)
+		if err != nil {
+			return fmt.Errorf("marshal reasoning candidate goal metadata: %w", err)
+		}
+		goalMetadata = goalMetadataJSON
+	}
 	const query = `
 INSERT INTO governed_reasoning_insight_candidates (
     id, tenant, project, namespace, insight_type, mode, title, summary,
     evidence, evidence_digest, source_watermark, scope_proof, lifecycle_visibility,
     redaction_policy, provider_version, schema_version, policy_version, replay_id,
 	uncertainty, direct_activation, canonical_mutation, disposition, reason, created_at,
-	contradiction_temporal_disposition, contradiction_review_state, contradiction_overlap_from, contradiction_overlap_to, review_reason
+	contradiction_temporal_disposition, contradiction_review_state, contradiction_overlap_from, contradiction_overlap_to, review_reason,
+	goal_metadata
 ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19, $20, $21, $22, $23, $24,
-	$25, $26, $27, $28, $29)
+	$25, $26, $27, $28, $29, $30)
 ON CONFLICT (tenant, project, namespace, replay_id) DO NOTHING`
 	_, err = r.db.Exec(ctx, query,
 		candidate.ID, candidate.Scope.Tenant, candidate.Scope.Project, candidate.Scope.Namespace,
@@ -42,7 +51,7 @@ ON CONFLICT (tenant, project, namespace, replay_id) DO NOTHING`
 		candidate.ReplayID, candidate.Uncertainty, candidate.DirectActivation,
 		candidate.CanonicalMutation, disposition, strings.TrimSpace(reason), candidate.CreatedAt,
 		metadataStringOrNil(candidate.Metadata, "contradiction_temporal_disposition"), metadataStringOrDefault(candidate.Metadata, "contradiction_review_state", "review_required"),
-		metadataTime(candidate.Metadata, "contradiction_overlap_from"), metadataTime(candidate.Metadata, "contradiction_overlap_to"), strings.TrimSpace(reason),
+		metadataTime(candidate.Metadata, "contradiction_overlap_from"), metadataTime(candidate.Metadata, "contradiction_overlap_to"), strings.TrimSpace(reason), goalMetadata,
 	)
 	if err != nil {
 		return fmt.Errorf("persist reasoning insight candidate: %w", err)

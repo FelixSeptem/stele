@@ -9,6 +9,8 @@ type InsightDiagnostics struct {
 	AuthorizedScope bool   `json:"authorized_scope"`
 	Mode            string `json:"mode"`
 	InsightType     string `json:"insight_type"`
+	GoalState       string `json:"goal_state,omitempty"`
+	Review          string `json:"review,omitempty"`
 	Result          string `json:"result"`
 	Eligibility     string `json:"eligibility"`
 	Freshness       string `json:"freshness"`
@@ -25,6 +27,12 @@ func (d InsightDiagnostics) Validate() error {
 	}
 	if boundedReasoningCategory(d.Mode, "offline", "shadow", "apply") == "unknown" || boundedReasoningCategory(d.InsightType, "hypothesis", "goal", "contradiction", "causal_link", "unknown") == "unknown" && d.InsightType != "unknown" {
 		return fmt.Errorf("reasoning diagnostics category is invalid")
+	}
+	if d.GoalState != "" && boundedReasoningCategory(d.GoalState, "proposed", "active", "completed", "abandoned", "stale", "unknown") == "unknown" {
+		return fmt.Errorf("goal state category is invalid")
+	}
+	if d.Review != "" && boundedReasoningCategory(d.Review, "required", "confirmed", "coexists", "incorrect", "stale", "unknown") == "unknown" {
+		return fmt.Errorf("review category is invalid")
 	}
 	if d.Candidates < 0 || d.WouldActivate < 0 || d.Quarantined < 0 || d.Rejected < 0 {
 		return fmt.Errorf("reasoning diagnostic counters cannot be negative")

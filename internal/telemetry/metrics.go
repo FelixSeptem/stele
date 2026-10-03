@@ -166,6 +166,7 @@ func (o *MetricsObserver) RecordReasoningInsight(ctx context.Context, event Reas
 		"result":               boundedReasoningLabel(event.Result, "candidate", "would_activate", "rejected", "quarantined", "stale", "fallback", "completed", "failed"),
 		"eligibility":          boundedReasoningLabel(event.Eligibility, "eligible", "ineligible", "disabled", "unknown"),
 		"freshness":            boundedReasoningLabel(event.Freshness, "fresh", "stale", "missing", "unknown"),
+		"goal_state":           boundedReasoningLabel(event.GoalState, "proposed", "active", "completed", "abandoned", "stale", "unknown"),
 		"fallback":             boundedReasoningLabel(event.Fallback, "none", "provider", "budget", "compatibility", "validation", "unknown"),
 		"duration":             boundedReasoningLabel(event.Duration, "lt_1s", "1s_10s", "gt_10s", "unknown"),
 		"temporal_disposition": boundedReasoningLabel(event.TemporalDisposition, "contradiction", "temporal_coexistence", "unresolved_temporal", "unknown"),

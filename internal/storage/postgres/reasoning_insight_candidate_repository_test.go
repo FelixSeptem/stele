@@ -36,9 +36,47 @@ func TestPersistReasoningInsightCandidateIsScopedAndIdempotent(t *testing.T) {
 		candidate.ScopeProof, candidate.LifecycleVisibility, candidate.RedactionPolicy, candidate.ProviderVersion, candidate.SchemaVersion, candidate.PolicyVersion,
 		candidate.ReplayID, candidate.Uncertainty, false, false, reasoning.InsightDispositionCandidate, "shadow candidate", candidate.CreatedAt,
 		pgxmock.AnyArg(), "review_required", pgxmock.AnyArg(), pgxmock.AnyArg(), "shadow candidate",
+		pgxmock.AnyArg(),
 	).WillReturnResult(pgxmock.NewResult("INSERT", 1))
 	if err := repo.PersistReasoningInsightCandidate(context.Background(), candidate, reasoning.InsightDispositionCandidate, "shadow candidate"); err != nil {
 		t.Fatalf("persist candidate: %v", err)
+	}
+	if err := db.ExpectationsWereMet(); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestPersistReasoningGoalCandidateStoresBoundedGoalMetadata(t *testing.T) {
+	db, err := pgxmock.NewPool()
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+	repo := NewRepository(db)
+	scope := memory.Scope{Tenant: "tenant-goal", Project: "project-goal", Namespace: "namespace-goal"}
+	now := time.Date(2026, 10, 3, 12, 0, 0, 0, time.UTC)
+	validTo := now.Add(24 * time.Hour)
+	evidence := memory.DerivedInsightEvidenceRef{Kind: memory.DerivedInsightEvidenceKindCanonicalMemory, ID: "memory-goal-1", Relation: memory.DerivedInsightEvidenceRelationSupports}
+	goal := &reasoning.GoalMetadata{State: reasoning.GoalStateProposed, ReviewState: reasoning.GoalReviewRequired, ValidFrom: &now, ValidTo: &validTo}
+	req := reasoning.InsightDerivationRequest{Scope: scope, InsightType: memory.DerivedInsightTypeGoal, Mode: reasoning.ModeShadow, Evidence: []memory.DerivedInsightEvidenceRef{evidence}, SourceWatermark: "wm-goal-1", ScopeProof: "proof-goal-1", LifecycleVisibility: "active_only", RedactionPolicy: "references_only", ProviderVersion: "provider-goal-1", SchemaVersion: reasoning.SchemaVersionV1, PolicyVersion: "goal-policy-v1", InputDigest: "goal-input-1", Limits: reasoning.DefaultLimits(), Now: now, Goal: goal}
+	digest, err := reasoning.EvidenceDigest(req.Evidence)
+	if err != nil {
+		t.Fatal(err)
+	}
+	replayID, err := reasoning.InsightReplayID(req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	candidate := reasoning.InsightCandidate{ID: "goal-candidate-1", Scope: scope, InsightType: req.InsightType, Title: "Ship the governed goal path", Summary: "A bounded reviewable goal", Evidence: req.Evidence, EvidenceDigest: digest, SourceWatermark: req.SourceWatermark, ScopeProof: req.ScopeProof, LifecycleVisibility: req.LifecycleVisibility, RedactionPolicy: req.RedactionPolicy, ProviderVersion: req.ProviderVersion, SchemaVersion: req.SchemaVersion, PolicyVersion: req.PolicyVersion, ReplayID: replayID, Uncertainty: 0.2, Mode: req.Mode, CreatedAt: now, Goal: goal}
+	db.ExpectExec(regexp.QuoteMeta("INSERT INTO governed_reasoning_insight_candidates")).WithArgs(
+		candidate.ID, scope.Tenant, scope.Project, scope.Namespace, candidate.InsightType, candidate.Mode,
+		candidate.Title, candidate.Summary, pgxmock.AnyArg(), candidate.EvidenceDigest, candidate.SourceWatermark,
+		candidate.ScopeProof, candidate.LifecycleVisibility, candidate.RedactionPolicy, candidate.ProviderVersion, candidate.SchemaVersion, candidate.PolicyVersion,
+		candidate.ReplayID, candidate.Uncertainty, false, false, reasoning.InsightDispositionWouldActivate, "shadow goal", candidate.CreatedAt,
+		pgxmock.AnyArg(), "review_required", pgxmock.AnyArg(), pgxmock.AnyArg(), "shadow goal", pgxmock.AnyArg(),
+	).WillReturnResult(pgxmock.NewResult("INSERT", 1))
+	if err := repo.PersistReasoningInsightCandidate(context.Background(), candidate, reasoning.InsightDispositionWouldActivate, "shadow goal"); err != nil {
+		t.Fatalf("persist goal candidate: %v", err)
 	}
 	if err := db.ExpectationsWereMet(); err != nil {
 		t.Fatal(err)

@@ -1,11 +1,4 @@
-# governed-reserved-insight-activation Specification
-
-## Purpose
-Define a separately governed, scope-bound path for admitting validated
-reasoning candidates as derived insights while preserving append-only history,
-evidence provenance, lifecycle controls, deterministic replay, and rollback.
-
-## Requirements
+## MODIFIED Requirements
 
 ### Requirement: Reserved insight activation requires an explicit versioned policy
 
@@ -69,29 +62,6 @@ review requirements, and the final derived-insight governance handoff.
 - **WHEN** a candidate proposes `goal`, `hypothesis`, `contradiction`, or `causal_link` while that type has no independently enabled compatible policy
 - **THEN** the service records a type-disabled disposition and does not create an active insight or invoke the activation handoff
 
-### Requirement: Activation preserves append-only lifecycle and canonical-memory boundaries
-
-An accepted reserved insight SHALL be stored as a derived, versioned, scoped
-record with evidence, provenance, policy/provider metadata, and lifecycle
-history. Activation MUST NOT overwrite canonical memory, erase prior insight
-versions, delete source evidence, or let provider output set an active
-lifecycle state without the admission decision.
-
-#### Scenario: Candidate is activated
-
-- **WHEN** admission accepts a candidate under a compatible policy
-- **THEN** the service creates an append-only derived insight version, records an activation audit event, and links the exact evidence and policy versions
-
-#### Scenario: Duplicate activation is retried
-
-- **WHEN** the same candidate and policy decision are retried with the same idempotency identity
-- **THEN** the service returns or links the original disposition without creating duplicate insight versions or audit transitions
-
-#### Scenario: Provider requests direct activation or canonical mutation
-
-- **WHEN** provider output asks to activate an insight, rewrite canonical memory, delete evidence, or bypass admission
-- **THEN** the service rejects the request and leaves canonical and derived records unchanged
-
 ### Requirement: Activation replay and shadow are deterministic and non-authoritative
 
 The service SHALL support bounded offline replay and shadow evaluation of
@@ -125,72 +95,3 @@ emit a readiness claim when dependencies are stale or incompatible.
 
 - **WHEN** policy, source evidence, provider compatibility, or watermark metadata is missing or expired
 - **THEN** the run is marked stale or incomplete at the applicable gate and no activation or readiness claim is emitted
-
-### Requirement: Activation supports bounded rollback and safe diagnostics
-
-The service SHALL provide an authorized, scope-bound stop and rollback control
-for each activation policy. Rollback MUST stop new admissions, preserve prior
-audit and evidence history, and use normal derived-insight lifecycle transitions
-for any previously activated records. Diagnostics MUST expose only bounded
-counts, dispositions, versions, and redacted references.
-
-#### Scenario: Operator rolls back a policy
-
-- **WHEN** an authorized operator rolls back a policy for one exact scope
-- **THEN** new admissions under that policy stop, the rollback is audited, and prior records remain inspectable with their original provenance
-
-#### Scenario: Operator inspects activation evidence
-
-- **WHEN** an authorized operator requests an activation report
-- **THEN** the response includes bounded policy/candidate counters and reason categories without prompts, chain-of-thought, credentials, raw provider payloads, hidden IDs, or foreign scope values
-
-### Requirement: Reasoning candidate handoff is an explicit admission boundary
-
-The service SHALL accept reasoning-derived candidates only through an explicit
-handoff that carries exact scope proof, evidence digest, replay identity,
-provider/schema compatibility, uncertainty bounds, and the target policy
-version. Provider output alone MUST NOT constitute an admission decision.
-
-#### Scenario: Eligible reasoning candidate is handed off
-
-- **WHEN** a candidate satisfies the target policy's scope, evidence, freshness, provenance, uncertainty, and idempotency gates
-- **THEN** the activation path evaluates it under the existing type-specific policy and records the admission disposition
-
-#### Scenario: Candidate omits handoff proof
-
-- **WHEN** a candidate lacks exact scope proof, evidence digest, replay identity, or compatible policy version
-- **THEN** the service rejects or quarantines it without creating an active insight
-
-### Requirement: Reasoning activation remains independently rollbackable
-
-The service SHALL record reasoning-derived admissions with provider and policy
-versions so an operator can disable or roll back that policy without changing
-other insight types or rewriting prior evidence history.
-
-#### Scenario: Reasoning policy is rolled back
-
-- **WHEN** an operator rolls back the policy used by reasoning-derived admissions
-- **THEN** new admissions stop for that policy and prior records remain auditable under their original provenance
-
-### Requirement: Contradiction activation requires type-specific temporal gates
-
-An enabled contradiction policy SHALL require two exact-scope evidence sides,
-a mutually exclusive contradiction key, a valid-time overlap or explicit
-review override, bounded uncertainty, compatible provenance, and an
-idempotency identity. The policy MUST define whether operator review is
-required before activation.
-
-#### Scenario: Overlapping contradiction is eligible
-
-- **WHEN** both fact versions are visible, mutually exclusive, temporally overlapping, policy-compatible, and reviewed as required
-- **THEN** activation admits one append-only contradiction insight through the ordinary reserved-insight lifecycle
-
-#### Scenario: Temporal coexistence is submitted for activation
-
-- **WHEN** a candidate has disjoint valid-time intervals and no explicit review override
-- **THEN** activation records temporal-coexistence and does not create an active contradiction insight
-
-#### Scenario: Contradiction policy requires review
-
-- **WHEN** an otherwise eligible candidate has not reached the policy's required review state
-- **THEN** activation records a review-required disposition and creates no active insight

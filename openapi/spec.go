@@ -92,8 +92,10 @@ paths:
           description: >-
             Bounded reasoning capabilities and execution limits. Reserved
             reasoning insight candidates are offline/shadow-only until a
-            separate exact-scope activation policy admits them; provider output
-            cannot mutate canonical memory or ordinary context.
+            separate exact-scope activation policy admits them. Goal candidates
+            remain review-only and absent from ordinary retrieval/context by
+            default; provider output cannot mutate canonical memory or ordinary
+            context.
           content:
             application/json:
               schema:

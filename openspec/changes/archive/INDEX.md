@@ -1,6 +1,6 @@
 # Archive Index
 
-Updated: 2026-10-03 16:42:21
+Updated: 2026-10-03 18:55:01
 
 - 001 -> bootstrap-foundation-and-event-ingestion
 - 002 -> governance-pipeline-and-memory-consolidation
@@ -65,3 +65,4 @@ Updated: 2026-10-03 16:42:21
 - 061 -> governed-memory-intents
 - 062 -> governed-operation-policy-precedence
 - 063 -> memory-intent-real-stack-conformance-and-product-verification
+- 064 -> governed-goal-insights

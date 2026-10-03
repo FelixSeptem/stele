@@ -1,10 +1,4 @@
-# governed-autonomous-reasoning-insights Specification
-
-## Purpose
-Provide a bounded, evidence-backed contract for generating and evaluating
-reasoning-derived insight candidates before any separately governed activation.
-
-## Requirements
+## MODIFIED Requirements
 
 ### Requirement: Reasoning candidates are bounded and exact-scope
 
@@ -60,20 +54,3 @@ retrieval, or ordinary context assembly.
 
 - **WHEN** shadow evaluation finds a candidate, including a `goal`, that satisfies the current activation gates
 - **THEN** the service records a non-authoritative would-activate or review-required result while active records and ordinary behavior remain unchanged
-
-### Requirement: Provider output and dependencies fail closed
-
-The service MUST quarantine or skip reasoning output when provider capability,
-schema, freshness, timeout, budget, redaction, or evidence dependencies are
-missing or incompatible. Provider output MUST NOT request direct activation,
-canonical mutation, evidence deletion, or policy bypass.
-
-#### Scenario: Provider dependency is stale
-
-- **WHEN** the provider contract or source watermark is stale, missing, or incompatible
-- **THEN** the run is marked incomplete or stale and no candidate is eligible for activation
-
-#### Scenario: Provider requests an unsafe operation
-
-- **WHEN** provider output requests canonical mutation, direct activation, or deletion of evidence
-- **THEN** the service rejects or quarantines the output and leaves canonical and derived records unchanged

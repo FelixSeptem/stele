@@ -3,7 +3,7 @@ package reasoning
 import "testing"
 
 func TestInsightDiagnosticsRequireAuthorizedScopeAndBoundCounters(t *testing.T) {
-	diagnostics := InsightDiagnostics{AuthorizedScope: true, Mode: "shadow", InsightType: "hypothesis", Result: "would_activate", Candidates: 2, WouldActivate: 1}
+	diagnostics := InsightDiagnostics{AuthorizedScope: true, Mode: "shadow", InsightType: "goal", Result: "would_activate", GoalState: "completed", Review: "required", Candidates: 2, WouldActivate: 1}
 	if err := diagnostics.Validate(); err != nil {
 		t.Fatalf("valid diagnostics rejected: %v", err)
 	}

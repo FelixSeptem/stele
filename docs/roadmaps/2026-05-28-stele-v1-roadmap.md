@@ -62,10 +62,12 @@ not be conflated:
   specifications. Active rollout remains unauthorized without fresh owned
   PostgreSQL + pgvector release evidence.
 - **Archived implementation**: P0–P7, RQ1–RQ4, and P8.1–P8.8 are archived
-  baselines. Changes 054, 055, 056, and the reflection/compaction durable work
-  closure are archived; change 059, `governed-autonomous-reasoning-insights`,
-  is now archived. The next bounded post-v1 proposal is
-  `governed-memory-intents`.
+  baselines. Changes 054–063, including the reflection/compaction durable work,
+  reasoning, contradiction, intent, precedence, and real-stack conformance
+  closures, are archived. Archived names include
+  `governed-contradiction-insights`, `governed-memory-intents`, and
+  `governed-operation-policy-precedence`. The current bounded post-v1
+  candidate is `governed-goal-insights`.
 - **Candidate expansion**: useful post-v1 ideas that must wait until the provider
   contract and quality gates are stable. This includes MCP adapters, namespace
   subtree conventions, agent self-model conventions, and later autonomous
@@ -105,7 +107,7 @@ change an archived baseline.
 | P5 | Benchmark expansion and retrieval release evidence | Archived changes 025, 026, 035, and 039 | Implemented baseline; owned real-stack evidence remains a prerequisite for activation. |
 | P6 | Durable multi-scope maintenance and observability | Archived change 037 | Implemented baseline; retain regression, freshness, and SLO evidence. |
 | P7 | Agent runtime memory-provider contract | Archived change 038 | Implemented baseline; integration remains optional to the retrieval path. |
-| P8 | Optional adapters and governed experience insights | Governed insight baseline in changes 013/014; OpenAPI-backed MCP scope/profile adapter archived as change 044; scoped memory paths archived as change 046; agent self-model conventions archived as change 047; reasoning-provider boundary archived as change 048; OpenAI-compatible adapter archived as change 049; governed reserved-insight activation archived as change 050; redacted trajectory and memory-integrity evaluation archived as change 051; MCP real-stack conformance and self-hosting evidence archived as change 052; retrieval release evidence refresh and controlled activation archived as change 053; self-hosting first-ten-minutes smoke path archived as change 054; retrieval release evidence operational closure archived as change 055; durable scheduler run history operational closure archived as change 056; reflection/compaction durable work closure archived as change 057; governed autonomous reasoning insights archived as change 059; governed contradiction insights is the next bounded proposal | Keep MCP as an optional OpenAPI adapter and reuse projections/intents rather than creating a second memory system. |
+| P8 | Optional adapters and governed experience insights | Governed insight baseline in changes 013/014; changes 044–063 are archived, including governed contradiction insights, governed memory intents, operation precedence, and memory-intent real-stack conformance; `governed-goal-insights` is the current bounded candidate | Keep MCP as an optional OpenAPI adapter and reuse projections/intents rather than creating a second memory system. |
 
 ### Critical path to provider readiness
 
@@ -1375,8 +1377,9 @@ attestation, exact-scope activation, rollback, and self-hosting contracts are no
 baseline.
 
 Governed autonomous reasoning insights is complete and archived as change 059.
-The next bounded candidate is `governed-contradiction-insights`, which
-specializes the reasoning envelope to one evidence-backed reserved type.
+Changes 060–063 are complete and archived. The current bounded candidate is `governed-goal-insights`,
+which specializes the reasoning envelope to an
+evidence-backed, review-only goal type while keeping default visibility off.
 
 Follow-up candidates for a future P8 proposal:
 
@@ -1393,11 +1396,11 @@ Later P8 candidates:
 - extend the archived governed-insight baseline only where a new insight type
   has its own provenance, lifecycle, replay, feedback, and context-evidence
   contract;
-- define a provider-independent reasoning boundary before considering hypothesis,
-  causal-link, contradiction, or goal inference.
-- specialize the archived reasoning envelope for `contradiction` only after
-  temporal-overlap, evidence, review, replay, and rollback requirements are
-  specified in its own change.
+- define a provider-independent reasoning boundary before considering a new
+  insight type.
+- specialize the archived reasoning envelope for `goal` only with bounded
+  evidence, review, replay, redaction, rollback, and default-visibility
+  requirements in its own change.
 
 Exit signal:
 
@@ -1420,8 +1423,8 @@ Exit signal:
 10. Stage 9 agent runtime memory-provider contract and adapter (P7, archived)
 11. RQ1–RQ4 retrieval-quality frontier (archived changes 040–043)
 12. Stage 10 optional adapters and governed experience insights (P8), with
-    P8.1–P8.8 and changes 054–059 archived;
-    `governed-memory-intents` is the next bounded post-v1 proposal
+    P8.1–P8.8 and changes 054–063 archived;
+    `governed-goal-insights` is the current bounded post-v1 candidate
 
 Reasoning:
 
@@ -1485,7 +1488,7 @@ Patterns from the active codebase that are useful to Stele:
 
 Stele adaptations and proposal seeds:
 
-1. `governed-memory-intents`: define `remember`, `update`, `forget`,
+1. Archived `governed-memory-intents`: define `remember`, `update`, `forget`,
    `contradiction`, and feedback requests as durable, scoped, idempotent intents;
    process them through governance rather than allowing direct canonical writes.
 2. `reflection-runs-and-transcript-watermarks`: add durable reflection runs,
@@ -1777,9 +1780,10 @@ complete and archived. Change 052,
 and archived. Change 054, `self-hosting-first-ten-minutes-smoke-path`, is also
 archived. Change 055, `retrieval-release-evidence-operational-closure`, and
 change 056, `durable-scheduler-run-history-operational-closure`, and change 057,
-`reflection-compaction-durable-work-closure`, are also archived. Change 059,
-`governed-autonomous-reasoning-insights`, is now archived. The next bounded
-post-v1 proposal is `governed-memory-intents`. The archived P8.8
+`reflection-compaction-durable-work-closure`, and changes 060–063 are also
+archived. Change 059, `governed-autonomous-reasoning-insights`, is now
+archived. The current bounded post-v1 candidate is `governed-goal-insights`.
+The archived P8.8
 work does not
 add a second rollout system,
 change default retrieval or OpenAPI behavior, or widen the canonical

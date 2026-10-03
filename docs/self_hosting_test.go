@@ -125,13 +125,13 @@ func TestRoadmapTracksCurrentP8Proposal(t *testing.T) {
 		"P8.8",
 		"`retrieval-release-evidence-refresh-and-controlled-activation`",
 		"`governed-reserved-insight-activation`",
-		"MCP real-stack conformance and self-hosting evidence archived as change 052",
-		"retrieval release evidence refresh and controlled activation archived as change 053",
+		"changes 060–063",
+		"current bounded candidate is `governed-goal-insights`",
 		"self-hosting-first-ten-minutes-smoke-path",
 		"governed-autonomous-reasoning-insights",
 		"governed-contradiction-insights",
 		"governed-memory-intents",
-		"next bounded post-v1 proposal",
+		"current bounded post-v1 candidate",
 		"exact-scope activation",
 	} {
 		if !strings.Contains(roadmap, want) {
@@ -221,7 +221,7 @@ func TestRoadmapTracksScopedMemoryAndSelfModelProposalStatus(t *testing.T) {
 	}
 	roadmap := string(roadmapBytes)
 	for _, want := range []string{
-		"scoped memory paths archived as change 046",
+		"Changes 060–063",
 		"Agent self-model conventions are complete and archived as change 047.",
 		"P8.2: scoped memory path conventions (archived change 046)",
 		"P8.2b: agent self-model conventions (archived change 047)",

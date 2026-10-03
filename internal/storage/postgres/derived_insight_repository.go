@@ -162,6 +162,9 @@ func (r *Repository) ListDerivedInsights(ctx context.Context, input memory.ListD
 		args = append(args, input.Type)
 		nextArg++
 	}
+	if !input.IncludeGoals {
+		conditions = append(conditions, "di.type <> 'goal'")
+	}
 	if input.State != "" {
 		conditions = append(conditions, fmt.Sprintf("di.lifecycle_state = $%d", nextArg))
 		args = append(args, input.State)
@@ -287,9 +290,10 @@ WHERE id = $1
 	AND project = $3
 	AND namespace = $4
 	AND ($5 OR lifecycle_state NOT IN ('suppressed', 'forgotten', 'deleted'))
+	AND ($6 OR type <> 'goal')
 `
 
-	insight, err := scanDerivedInsight(r.db.QueryRow(ctx, query, input.ID, input.Scope.Tenant, input.Scope.Project, input.Scope.Namespace, input.IncludeHidden))
+	insight, err := scanDerivedInsight(r.db.QueryRow(ctx, query, input.ID, input.Scope.Tenant, input.Scope.Project, input.Scope.Namespace, input.IncludeHidden, input.IncludeGoals))
 	if err != nil {
 		return memory.DerivedInsightDetail{}, fmt.Errorf("read derived insight: %w", err)
 	}

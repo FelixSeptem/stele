@@ -16,6 +16,7 @@ func TestAuthorizedContradictionContextExcludesShadowUnresolvedAndForeignRecords
 		{ID: "shadow", Scope: scope, Type: memory.DerivedInsightTypeContradiction, State: memory.DerivedInsightStateCandidate, UpdatedAt: now, Derivation: base.Derivation},
 		{ID: "unresolved", Scope: scope, Type: memory.DerivedInsightTypeContradiction, State: memory.DerivedInsightStateActive, UpdatedAt: now, Derivation: memory.DerivedInsightDerivation{Metadata: map[string]any{"contradiction_review_state": "confirmed", "contradiction_temporal_disposition": "unresolved_temporal", "source_watermark": "w1"}}},
 		{ID: "foreign", Scope: memory.Scope{Tenant: "other", Project: "p", Namespace: "n"}, Type: memory.DerivedInsightTypeContradiction, State: memory.DerivedInsightStateActive, UpdatedAt: now, Derivation: base.Derivation},
+		{ID: "goal", Scope: scope, Type: memory.DerivedInsightTypeGoal, State: memory.DerivedInsightStateActive, UpdatedAt: now, Derivation: base.Derivation},
 	}
 	got := AuthorizedContradictionContext(ContradictionContextRequest{Scope: scope, Authorized: true, Now: now, SourceWatermark: "w1", MaxItems: 4}, candidates)
 	if len(got) != 1 || got[0].ID != "base" {

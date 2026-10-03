@@ -33,6 +33,9 @@ type ReservedInsightActivationPolicy struct {
 	RolledBack                  bool
 	ContradictionRequireReview  bool
 	ContradictionMinUncertainty float64
+	GoalRequireReview           bool
+	GoalAllowActivation         bool
+	GoalAllowedStates           map[reasoning.GoalState]bool
 }
 
 func DefaultReservedInsightActivationPolicy(scope memory.Scope) ReservedInsightActivationPolicy {
@@ -41,6 +44,7 @@ func DefaultReservedInsightActivationPolicy(scope memory.Scope) ReservedInsightA
 		Version:                     ReservedInsightActivationPolicyVersion,
 		Owner:                       "operator",
 		EnabledTypes:                map[memory.DerivedInsightType]bool{},
+		GoalAllowedStates:           map[reasoning.GoalState]bool{reasoning.GoalStateProposed: true},
 		MinEvidence:                 1,
 		MaxEvidence:                 32,
 		MaxCandidateBytes:           16 * 1024,
@@ -86,6 +90,20 @@ func (p ReservedInsightActivationPolicy) ValidateAt(now time.Time) error {
 			return fmt.Errorf("activation policy type %q is not reserved", insightType)
 		}
 		if enabled && insightType != memory.DerivedInsightTypeHypothesis {
+			if insightType == memory.DerivedInsightTypeGoal {
+				if !p.GoalRequireReview {
+					return fmt.Errorf("goal activation policy must require review")
+				}
+				if len(p.GoalAllowedStates) == 0 {
+					return fmt.Errorf("goal activation policy allowed states are required")
+				}
+				for state, allowedState := range p.GoalAllowedStates {
+					if allowedState && !state.Valid() {
+						return fmt.Errorf("goal activation policy state %q is invalid", state)
+					}
+				}
+				continue
+			}
 			if insightType != memory.DerivedInsightTypeContradiction {
 				return fmt.Errorf("activation policy type %q is not enabled by the initial policy", insightType)
 			}
@@ -123,6 +141,7 @@ const (
 	ActivationDispositionTypeDisabled  ActivationDisposition = "type_disabled"
 	ActivationDispositionStale         ActivationDisposition = "stale"
 	ActivationDispositionDuplicate     ActivationDisposition = "duplicate"
+	ActivationDispositionReviewRequired ActivationDisposition = "review_required"
 )
 
 type ActivationInput struct {
@@ -270,6 +289,16 @@ func AdmitReasoningCandidate(candidate reasoning.InsightCandidate, policy Reserv
 		Evidence:  candidate.Evidence,
 		CreatedAt: candidate.CreatedAt,
 		UpdatedAt: candidate.CreatedAt,
+	}
+	if candidate.Goal != nil {
+		input.Candidate.Derivation.Metadata["goal_state"] = string(candidate.Goal.State)
+		input.Candidate.Derivation.Metadata["goal_review_state"] = string(candidate.Goal.ReviewState)
+		if candidate.Goal.ValidFrom != nil {
+			input.Candidate.Derivation.Metadata["goal_valid_from"] = candidate.Goal.ValidFrom.UTC().Format(time.RFC3339Nano)
+		}
+		if candidate.Goal.ValidTo != nil {
+			input.Candidate.Derivation.Metadata["goal_valid_to"] = candidate.Goal.ValidTo.UTC().Format(time.RFC3339Nano)
+		}
 	}
 	for key, value := range candidate.Metadata {
 		input.Candidate.Derivation.Metadata[key] = value
@@ -447,6 +476,18 @@ func AdmitReservedInsight(input ActivationInput) ActivationResult {
 			return rejectActivation(result, err.Error())
 		}
 	}
+	if input.Candidate.Type == memory.DerivedInsightTypeGoal {
+		if err := validateGoalActivation(input); err != nil {
+			if strings.Contains(err.Error(), "requires operator review") || strings.Contains(err.Error(), "review-only") {
+				result.Precedence.Stage = memory.OperationStageApproval
+				result.Precedence.Outcome = memory.OperationOutcomePolicyDisabled
+				result.Disposition = ActivationDispositionReviewRequired
+				result.Reason = err.Error()
+				return result
+			}
+			return rejectActivation(result, err.Error())
+		}
+	}
 	if input.Policy.SourceWatermark != "" && input.Policy.SourceWatermark != input.SourceWatermark {
 		result.Disposition = ActivationDispositionStale
 		result.Reason = "source watermark does not match activation policy"
@@ -502,6 +543,24 @@ func validateContradictionActivation(input ActivationInput) error {
 	}
 	if len(input.Candidate.Evidence) < 2 {
 		return fmt.Errorf("contradiction candidate requires evidence for both fact sides")
+	}
+	return nil
+}
+
+func validateGoalActivation(input ActivationInput) error {
+	metadata := input.Candidate.Derivation.Metadata
+	state := reasoning.GoalState(metadataString(metadata, "goal_state"))
+	if !state.Valid() {
+		return fmt.Errorf("goal state is missing or invalid")
+	}
+	if !input.Policy.GoalAllowedStates[state] {
+		return fmt.Errorf("goal state is not allowed by policy")
+	}
+	if input.Policy.GoalRequireReview && metadataString(metadata, "goal_review_state") != string(reasoning.GoalReviewApproved) {
+		return fmt.Errorf("goal candidate requires operator review")
+	}
+	if !input.Policy.GoalAllowActivation {
+		return fmt.Errorf("goal activation is review-only")
 	}
 	return nil
 }
@@ -570,7 +629,7 @@ func isReservedInsightType(insightType memory.DerivedInsightType) bool {
 
 func validActivationDisposition(disposition ActivationDisposition) bool {
 	switch disposition {
-	case ActivationDispositionActivated, ActivationDispositionWouldActivate, ActivationDispositionRejected, ActivationDispositionQuarantined, ActivationDispositionTypeDisabled, ActivationDispositionStale, ActivationDispositionDuplicate:
+	case ActivationDispositionActivated, ActivationDispositionWouldActivate, ActivationDispositionRejected, ActivationDispositionQuarantined, ActivationDispositionTypeDisabled, ActivationDispositionStale, ActivationDispositionDuplicate, ActivationDispositionReviewRequired:
 		return true
 	default:
 		return false

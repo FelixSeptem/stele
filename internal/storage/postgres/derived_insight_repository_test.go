@@ -156,6 +156,29 @@ func TestRepositoryListDerivedInsightsScopesAndFiltersVisibleRecords(t *testing.
 	}
 }
 
+func TestRepositoryListDerivedInsightsExcludesGoalsByDefault(t *testing.T) {
+	mock, err := pgxmock.NewPool()
+	if err != nil {
+		t.Fatalf("pgxmock.NewPool() error = %v", err)
+	}
+	defer mock.Close()
+	scope := memory.Scope{Tenant: "tenant-a", Project: "project-a", Namespace: "namespace-a"}
+	mock.ExpectQuery("SELECT[\\s\\S]*FROM derived_insights[\\s\\S]*di.type <> 'goal'").
+		WithArgs(scope.Tenant, scope.Project, scope.Namespace, 10).
+		WillReturnRows(derivedInsightRowsWithEvidenceCount())
+	repo := NewRepository(mock)
+	items, err := repo.ListDerivedInsights(context.Background(), memory.ListDerivedInsightsInput{Scope: scope, Limit: 10})
+	if err != nil {
+		t.Fatalf("ListDerivedInsights() error = %v", err)
+	}
+	if len(items) != 0 {
+		t.Fatalf("ListDerivedInsights() = %+v, want goals excluded by default", items)
+	}
+	if err := mock.ExpectationsWereMet(); err != nil {
+		t.Fatalf("ExpectationsWereMet() error = %v", err)
+	}
+}
+
 func TestRepositoryReadDerivedInsightReturnsEvidenceAndLifecycleForScope(t *testing.T) {
 	mock, err := pgxmock.NewPool()
 	if err != nil {
@@ -165,7 +188,7 @@ func TestRepositoryReadDerivedInsightReturnsEvidenceAndLifecycleForScope(t *test
 
 	insight := testDerivedInsight()
 	mock.ExpectQuery("SELECT[\\s\\S]*FROM derived_insights").
-		WithArgs(insight.ID, insight.Scope.Tenant, insight.Scope.Project, insight.Scope.Namespace, false).
+		WithArgs(insight.ID, insight.Scope.Tenant, insight.Scope.Project, insight.Scope.Namespace, false, false).
 		WillReturnRows(derivedInsightRows().AddRow(
 			insight.ID,
 			insight.Scope.Tenant,

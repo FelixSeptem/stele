@@ -262,7 +262,11 @@ type ListDerivedInsightsInput struct {
 	MinConfidence    *float64
 	MinEvidenceCount int
 	IncludeHidden    bool
-	Limit            int
+	// IncludeGoals is an explicit experimental/admin opt-in. Goal insights are
+	// excluded from ordinary retrieval and context assembly even when a type
+	// filter is supplied.
+	IncludeGoals bool
+	Limit        int
 }
 
 func (i ListDerivedInsightsInput) Validate() error {
@@ -291,6 +295,8 @@ type ReadDerivedInsightInput struct {
 	Scope         Scope
 	ID            string
 	IncludeHidden bool
+	// IncludeGoals is an explicit experimental/admin opt-in for goal records.
+	IncludeGoals bool
 }
 
 func (i ReadDerivedInsightInput) Validate() error {
