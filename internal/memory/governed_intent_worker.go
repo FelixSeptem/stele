@@ -104,6 +104,22 @@ func (w MemoryIntentWorker) Process(ctx context.Context, record MemoryIntentReco
 			return MemoryIntentOutcome{Status: MemoryIntentStatusRejected, DiagnosticCategory: MemoryIntentDiagnosticTargetStale, OutcomeReference: record.ID}, nil
 		}
 	}
+	if strings.TrimSpace(record.PrecedenceVersion) != "" {
+		decision, precedenceErr := EvaluateOperationPrecedence(OperationPrecedenceInput{
+			Version: record.PrecedenceVersion, Operation: "memory.intent.process", Scope: record.Scope, GrantedScope: record.Scope,
+			PrincipalID: record.Actor, GrantID: record.Actor, LifecycleChecked: true, LifecycleVisible: true, PrincipalGranted: true,
+			ApprovalRequired: strings.TrimSpace(record.PolicyVersion) != "", ApprovalEnabled: true,
+			PolicyVersion: record.PolicyVersion, ExpectedPolicyVersion: record.PolicyVersion,
+			RequireIdempotency: true, IdempotencyKey: record.IdempotencyKey, RequestFingerprint: record.RequestFingerprint,
+			HandoffAllowed: w.Router != nil, MutationAllowed: true,
+		})
+		if precedenceErr != nil {
+			return MemoryIntentOutcome{Status: MemoryIntentStatusFailed, DiagnosticCategory: MemoryIntentDiagnosticFailed, OutcomeReference: record.ID}, precedenceErr
+		}
+		if decision.Outcome != OperationOutcomeAccepted {
+			return MemoryIntentOutcome{Status: MemoryIntentStatusSuppressed, DiagnosticCategory: MemoryIntentDiagnosticPolicyDisabled, OutcomeReference: record.ID}, fmt.Errorf("memory intent precedence %s at %s", decision.Outcome, decision.Stage)
+		}
+	}
 	var (
 		out MemoryIntentOutcome
 		err error

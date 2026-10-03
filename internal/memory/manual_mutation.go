@@ -214,6 +214,9 @@ func (s ManualMutationService) CreateMemory(ctx context.Context, input ManualCre
 	if s.Processor == nil {
 		return MemoryResource{}, fmt.Errorf("manual mutation processor is not configured")
 	}
+	if err := manualMutationPrecedence(input.Scope, input.Actor, "manual.memory.create", true); err != nil {
+		return MemoryResource{}, err
+	}
 	if s.NewMemoryID == nil {
 		return MemoryResource{}, fmt.Errorf("manual memory id generator is not configured")
 	}
@@ -247,6 +250,9 @@ func (s ManualMutationService) UpdateMemory(ctx context.Context, input ManualUpd
 	if s.Processor == nil {
 		return MemoryResource{}, fmt.Errorf("manual mutation processor is not configured")
 	}
+	if err := manualMutationPrecedence(input.Scope, input.Actor, "manual.memory.update", true); err != nil {
+		return MemoryResource{}, err
+	}
 	if s.NewVersionID == nil {
 		return MemoryResource{}, fmt.Errorf("manual version id generator is not configured")
 	}
@@ -276,6 +282,9 @@ func (s ManualMutationService) MergeMemory(ctx context.Context, input ManualMerg
 	}
 	if s.Processor == nil {
 		return MemoryResource{}, fmt.Errorf("manual mutation processor is not configured")
+	}
+	if err := manualMutationPrecedence(input.Scope, input.Actor, "manual.memory.merge", true); err != nil {
+		return MemoryResource{}, err
 	}
 	if s.NewVersionID == nil {
 		return MemoryResource{}, fmt.Errorf("manual version id generator is not configured")
@@ -316,6 +325,9 @@ func (s ManualMutationService) ReclassifyMemory(ctx context.Context, input Manua
 	if s.Processor == nil {
 		return MemoryResource{}, fmt.Errorf("manual mutation processor is not configured")
 	}
+	if err := manualMutationPrecedence(input.Scope, input.Actor, "manual.memory.reclassify", true); err != nil {
+		return MemoryResource{}, err
+	}
 	if s.NewVersionID == nil {
 		return MemoryResource{}, fmt.Errorf("manual version id generator is not configured")
 	}
@@ -343,6 +355,21 @@ func manualMutationNow(now func() time.Time) time.Time {
 		now = time.Now
 	}
 	return now().UTC()
+}
+
+func manualMutationPrecedence(scope Scope, actor, operation string, mutationAllowed bool) error {
+	decision, err := EvaluateOperationPrecedence(OperationPrecedenceInput{
+		Operation: operation, Scope: scope, GrantedScope: scope, PrincipalID: strings.TrimSpace(actor), GrantID: strings.TrimSpace(actor),
+		LifecycleChecked: true, LifecycleVisible: true, PrincipalGranted: strings.TrimSpace(actor) != "",
+		HandoffAllowed: true, MutationAllowed: mutationAllowed,
+	})
+	if err != nil {
+		return fmt.Errorf("evaluate manual mutation precedence: %w", err)
+	}
+	if decision.Outcome != OperationOutcomeAccepted {
+		return fmt.Errorf("manual mutation precedence %s at %s", decision.Outcome, decision.Stage)
+	}
+	return nil
 }
 
 func isManualCreateClassAllowed(class MemoryClass) bool {

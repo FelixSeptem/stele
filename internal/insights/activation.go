@@ -144,6 +144,7 @@ type ActivationResult struct {
 	CandidateFingerprint string
 	Reason               string
 	Err                  error
+	Precedence           memory.OperationPrecedenceDecision
 }
 
 type ActivationDecisionRecord struct {
@@ -370,6 +371,27 @@ func activationDecisionEvidence(input ActivationInput, decisionID string) []Acti
 
 func AdmitReservedInsight(input ActivationInput) ActivationResult {
 	result := ActivationResult{CandidateFingerprint: input.CandidateFingerprint}
+	if result.CandidateFingerprint == "" {
+		result.CandidateFingerprint = candidateFingerprint(input.Candidate, input.Policy)
+	}
+	precedence, precedenceErr := memory.EvaluateOperationPrecedence(memory.OperationPrecedenceInput{
+		Operation: "insight.activation", Scope: input.Candidate.Scope, GrantedScope: input.Policy.Scope,
+		PrincipalID: input.Policy.Owner, GrantID: input.Policy.Owner,
+		LifecycleChecked: true, LifecycleVisible: input.Candidate.State == memory.DerivedInsightStateCandidate,
+		PrincipalGranted: strings.TrimSpace(input.Policy.Owner) != "", HandoffAllowed: true, MutationAllowed: true,
+	})
+	if precedenceErr != nil {
+		result.Disposition = ActivationDispositionRejected
+		result.Reason = "activation precedence could not be evaluated"
+		result.Err = precedenceErr
+		return result
+	}
+	result.Precedence = precedence
+	if precedence.Outcome != memory.OperationOutcomeAccepted {
+		result.Disposition = ActivationDispositionRejected
+		result.Reason = "activation precedence denied"
+		return result
+	}
 	now := input.Now.UTC()
 	if now.IsZero() {
 		now = time.Now().UTC()
@@ -384,12 +406,16 @@ func AdmitReservedInsight(input ActivationInput) ActivationResult {
 		return rejectActivation(result, "candidate scope does not match activation policy")
 	}
 	if input.PolicyVersion != "" && input.PolicyVersion != input.Policy.Version {
+		result.Precedence.Stage = memory.OperationStageApproval
+		result.Precedence.Outcome = memory.OperationOutcomeIncompatible
 		return rejectActivation(result, "activation policy version does not match request")
 	}
 	if !isReservedInsightType(input.Candidate.Type) {
 		return rejectActivation(result, "candidate type is not reserved")
 	}
 	if !input.Policy.Allows(input.Candidate.Type) {
+		result.Precedence.Stage = memory.OperationStageApproval
+		result.Precedence.Outcome = memory.OperationOutcomePolicyDisabled
 		result.Disposition = ActivationDispositionTypeDisabled
 		result.Reason = "reserved insight type is disabled by policy"
 		return result

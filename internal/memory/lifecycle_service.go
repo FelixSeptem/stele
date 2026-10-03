@@ -70,6 +70,18 @@ func (s LifecycleService) Apply(ctx context.Context, input LifecycleActionInput)
 	if s.Processor == nil {
 		return fmt.Errorf("lifecycle processor is not configured")
 	}
+	precedence, err := EvaluateOperationPrecedence(OperationPrecedenceInput{
+		Operation: "manual.lifecycle", Scope: input.Scope, GrantedScope: input.Scope,
+		PrincipalID: strings.TrimSpace(input.Actor), GrantID: strings.TrimSpace(input.Actor),
+		LifecycleChecked: true, LifecycleVisible: true, PrincipalGranted: strings.TrimSpace(input.Actor) != "",
+		HandoffAllowed: true, MutationAllowed: true,
+	})
+	if err != nil {
+		return fmt.Errorf("evaluate lifecycle precedence: %w", err)
+	}
+	if precedence.Outcome != OperationOutcomeAccepted {
+		return fmt.Errorf("lifecycle precedence %s at %s", precedence.Outcome, precedence.Stage)
+	}
 
 	now := time.Now
 	if s.Now != nil {

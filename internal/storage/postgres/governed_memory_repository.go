@@ -36,14 +36,14 @@ func (r *Repository) AppendMemoryIntent(ctx context.Context, record memory.Memor
 	if pathErr != nil {
 		return memory.MemoryIntentRecord{}, pathErr
 	}
-	payload, _ := json.Marshal(map[string]any{"content": record.Content, "target_memory_id": record.TargetMemoryID, "target_version": record.TargetVersion, "memory_path": record.MemoryPath, "target_insight_id": record.TargetInsightID, "evidence": record.Evidence, "policy_version": record.PolicyVersion})
+	payload, _ := json.Marshal(map[string]any{"content": record.Content, "target_memory_id": record.TargetMemoryID, "target_version": record.TargetVersion, "memory_path": record.MemoryPath, "target_insight_id": record.TargetInsightID, "evidence": record.Evidence, "policy_version": record.PolicyVersion, "precedence_version": record.PrecedenceVersion, "precedence_stage": record.PrecedenceStage, "precedence_outcome": record.PrecedenceOutcome})
 	prov, _ := json.Marshal(record.Provenance)
 	fp := record.RequestFingerprint
 	if strings.TrimSpace(fp) == "" {
 		fingerprint := sha256.Sum256(payload)
 		fp = hex.EncodeToString(fingerprint[:])
 	}
-	if record.MemoryPath == memory.MemoryPathRoot && record.TargetInsightID == "" && len(record.Evidence) == 0 && record.PolicyVersion == "" && record.OutcomeReference == "" {
+	if record.MemoryPath == memory.MemoryPathRoot && record.TargetInsightID == "" && len(record.Evidence) == 0 && record.PolicyVersion == "" && record.OutcomeReference == "" && record.PrecedenceVersion == "" && record.PrecedenceStage == "" && record.PrecedenceOutcome == "" {
 		const legacy = `INSERT INTO memory_intents (id,tenant,project,namespace,intent_type,actor,reason,provenance,request_id,operation_id,idempotency_key,request_fingerprint,target_memory_id,target_version,payload,status,created_at) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,NULLIF($13,''),NULLIF($14,0),$15,$16,$17) RETURNING id,tenant,project,namespace,intent_type,actor,reason,provenance,request_id,operation_id,idempotency_key,target_memory_id,target_version,payload,status,created_at`
 		row := r.db.QueryRow(ctx, legacy, record.ID, record.Scope.Tenant, record.Scope.Project, record.Scope.Namespace, record.Type, record.Actor, record.Reason, prov, record.RequestID, record.OperationID, record.IdempotencyKey, fp, record.TargetMemoryID, record.TargetVersion, payload, record.Status, record.CreatedAt)
 		created, err := scanMemoryIntentLegacy(row)
@@ -66,17 +66,17 @@ func (r *Repository) AppendMemoryIntent(ctx context.Context, record memory.Memor
 		return existingRecord, nil
 	}
 	evidenceRefs, _ := json.Marshal(record.Evidence)
-	const q = `INSERT INTO memory_intents (id,tenant,project,namespace,memory_path,intent_type,actor,reason,provenance,request_id,operation_id,idempotency_key,request_fingerprint,target_memory_id,target_version,target_insight_id,evidence_refs,outcome_reference,policy_version,payload,status,created_at)
-VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,NULLIF($14,''),NULLIF($15,0),NULLIF($16,''),$17,NULLIF($18,''),NULLIF($19,''),$20,$21,$22)
+	const q = `INSERT INTO memory_intents (id,tenant,project,namespace,memory_path,intent_type,actor,reason,provenance,request_id,operation_id,idempotency_key,request_fingerprint,target_memory_id,target_version,target_insight_id,evidence_refs,outcome_reference,policy_version,precedence_version,precedence_stage,precedence_outcome,payload,status,created_at)
+VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,NULLIF($14,''),NULLIF($15,0),NULLIF($16,''),$17,NULLIF($18,''),NULLIF($19,''),$20,$21,$22,$23,$24,$25)
 ON CONFLICT DO NOTHING
-	RETURNING id,tenant,project,namespace,memory_path,intent_type,actor,reason,provenance,request_id,operation_id,idempotency_key,target_memory_id,target_version,target_insight_id,evidence_refs,outcome_reference,policy_version,payload,status,created_at`
-	row := r.db.QueryRow(ctx, q, record.ID, record.Scope.Tenant, record.Scope.Project, record.Scope.Namespace, record.MemoryPath, record.Type, record.Actor, record.Reason, prov, record.RequestID, record.OperationID, record.IdempotencyKey, fp, record.TargetMemoryID, record.TargetVersion, record.TargetInsightID, evidenceRefs, record.OutcomeReference, record.PolicyVersion, payload, record.Status, record.CreatedAt)
+RETURNING id,tenant,project,namespace,memory_path,intent_type,actor,reason,provenance,request_id,operation_id,idempotency_key,target_memory_id,target_version,target_insight_id,evidence_refs,outcome_reference,policy_version,precedence_version,precedence_stage,precedence_outcome,payload,status,created_at`
+	row := r.db.QueryRow(ctx, q, record.ID, record.Scope.Tenant, record.Scope.Project, record.Scope.Namespace, record.MemoryPath, record.Type, record.Actor, record.Reason, prov, record.RequestID, record.OperationID, record.IdempotencyKey, fp, record.TargetMemoryID, record.TargetVersion, record.TargetInsightID, evidenceRefs, record.OutcomeReference, record.PolicyVersion, record.PrecedenceVersion, record.PrecedenceStage, record.PrecedenceOutcome, payload, record.Status, record.CreatedAt)
 	created, err := scanMemoryIntent(row)
 	if err == nil {
 		created.RequestFingerprint = fp
 		return created, nil
 	}
-	const existing = `SELECT request_fingerprint,id,tenant,project,namespace,memory_path,intent_type,actor,reason,provenance,request_id,operation_id,idempotency_key,target_memory_id,target_version,target_insight_id,evidence_refs,outcome_reference,policy_version,payload,status,created_at FROM memory_intents WHERE tenant=$1 AND project=$2 AND namespace=$3 AND (idempotency_key=$4 OR operation_id=$5) ORDER BY created_at LIMIT 1`
+	const existing = `SELECT request_fingerprint,id,tenant,project,namespace,memory_path,intent_type,actor,reason,provenance,request_id,operation_id,idempotency_key,target_memory_id,target_version,target_insight_id,evidence_refs,outcome_reference,policy_version,precedence_version,precedence_stage,precedence_outcome,payload,status,created_at FROM memory_intents WHERE tenant=$1 AND project=$2 AND namespace=$3 AND (idempotency_key=$4 OR operation_id=$5) ORDER BY created_at LIMIT 1`
 	existingRecord, existingFingerprint, lookupErr := scanMemoryIntentWithFingerprint(r.db.QueryRow(ctx, existing, record.Scope.Tenant, record.Scope.Project, record.Scope.Namespace, record.IdempotencyKey, record.OperationID))
 	if lookupErr != nil {
 		return memory.MemoryIntentRecord{}, fmt.Errorf("append memory intent: %w", err)
@@ -149,7 +149,7 @@ func (r *Repository) ListMemoryIntents(ctx context.Context, input memory.MemoryI
 	if err := input.Validate(); err != nil {
 		return nil, err
 	}
-	const query = `SELECT id,tenant,project,namespace,memory_path,intent_type,actor,reason,provenance,request_id,operation_id,idempotency_key,target_memory_id,target_version,target_insight_id,evidence_refs,outcome_reference,policy_version,payload,status,created_at FROM memory_intents WHERE tenant=$1 AND project=$2 AND namespace=$3 AND ($4::timestamptz IS NULL OR created_at < $4) ORDER BY created_at DESC,id DESC LIMIT $5`
+	const query = `SELECT id,tenant,project,namespace,memory_path,intent_type,actor,reason,provenance,request_id,operation_id,idempotency_key,target_memory_id,target_version,target_insight_id,evidence_refs,outcome_reference,policy_version,precedence_version,precedence_stage,precedence_outcome,payload,status,created_at FROM memory_intents WHERE tenant=$1 AND project=$2 AND namespace=$3 AND ($4::timestamptz IS NULL OR created_at < $4) ORDER BY created_at DESC,id DESC LIMIT $5`
 	var cursor any
 	if !input.Cursor.IsZero() {
 		cursor = input.Cursor.UTC()
@@ -245,7 +245,7 @@ func (r *Repository) ReadMemoryIntent(ctx context.Context, scope memory.Scope, i
 SELECT id, tenant, project, namespace, memory_path, intent_type, actor, reason, provenance,
        request_id, operation_id, idempotency_key, target_memory_id,
        target_version, target_insight_id, evidence_refs, outcome_reference,
-       policy_version, payload, status, created_at
+       policy_version, precedence_version, precedence_stage, precedence_outcome, payload, status, created_at
 FROM memory_intents
 WHERE id::text = $1 AND tenant = $2 AND project = $3 AND namespace = $4`
 	return scanMemoryIntent(r.db.QueryRow(ctx, query, intentID, scope.Tenant, scope.Project, scope.Namespace))
@@ -300,9 +300,9 @@ func scanMemoryIntent(s interface{ Scan(...any) error }) (memory.MemoryIntentRec
 	var prov, payload []byte
 	var targetID *string
 	var targetVersion *int64
-	var targetInsight, outcome, policyVersion *string
+	var targetInsight, outcome, policyVersion, precedenceVersion, precedenceStage, precedenceOutcome *string
 	var evidenceRefs []byte
-	if err := s.Scan(&out.ID, &out.Scope.Tenant, &out.Scope.Project, &out.Scope.Namespace, &out.MemoryPath, &out.Type, &out.Actor, &out.Reason, &prov, &out.RequestID, &out.OperationID, &out.IdempotencyKey, &targetID, &targetVersion, &targetInsight, &evidenceRefs, &outcome, &policyVersion, &payload, &out.Status, &out.CreatedAt); err != nil {
+	if err := s.Scan(&out.ID, &out.Scope.Tenant, &out.Scope.Project, &out.Scope.Namespace, &out.MemoryPath, &out.Type, &out.Actor, &out.Reason, &prov, &out.RequestID, &out.OperationID, &out.IdempotencyKey, &targetID, &targetVersion, &targetInsight, &evidenceRefs, &outcome, &policyVersion, &precedenceVersion, &precedenceStage, &precedenceOutcome, &payload, &out.Status, &out.CreatedAt); err != nil {
 		return out, err
 	}
 	if targetID != nil {
@@ -319,6 +319,15 @@ func scanMemoryIntent(s interface{ Scan(...any) error }) (memory.MemoryIntentRec
 	}
 	if policyVersion != nil {
 		out.PolicyVersion = *policyVersion
+	}
+	if precedenceVersion != nil {
+		out.PrecedenceVersion = *precedenceVersion
+	}
+	if precedenceStage != nil {
+		out.PrecedenceStage = memory.OperationPrecedenceStage(*precedenceStage)
+	}
+	if precedenceOutcome != nil {
+		out.PrecedenceOutcome = memory.OperationPrecedenceOutcome(*precedenceOutcome)
 	}
 	if len(evidenceRefs) > 0 {
 		_ = json.Unmarshal(evidenceRefs, &out.Evidence)
@@ -377,9 +386,9 @@ func scanMemoryIntentWithFingerprint(s interface{ Scan(...any) error }) (memory.
 	var prov, payload []byte
 	var targetID *string
 	var targetVersion *int64
-	var targetInsight, outcome, policyVersion *string
+	var targetInsight, outcome, policyVersion, precedenceVersion, precedenceStage, precedenceOutcome *string
 	var evidenceRefs []byte
-	if err := s.Scan(&fingerprint, &out.ID, &out.Scope.Tenant, &out.Scope.Project, &out.Scope.Namespace, &out.MemoryPath, &out.Type, &out.Actor, &out.Reason, &prov, &out.RequestID, &out.OperationID, &out.IdempotencyKey, &targetID, &targetVersion, &targetInsight, &evidenceRefs, &outcome, &policyVersion, &payload, &out.Status, &out.CreatedAt); err != nil {
+	if err := s.Scan(&fingerprint, &out.ID, &out.Scope.Tenant, &out.Scope.Project, &out.Scope.Namespace, &out.MemoryPath, &out.Type, &out.Actor, &out.Reason, &prov, &out.RequestID, &out.OperationID, &out.IdempotencyKey, &targetID, &targetVersion, &targetInsight, &evidenceRefs, &outcome, &policyVersion, &precedenceVersion, &precedenceStage, &precedenceOutcome, &payload, &out.Status, &out.CreatedAt); err != nil {
 		return out, "", err
 	}
 	if targetID != nil {
@@ -396,6 +405,15 @@ func scanMemoryIntentWithFingerprint(s interface{ Scan(...any) error }) (memory.
 	}
 	if policyVersion != nil {
 		out.PolicyVersion = *policyVersion
+	}
+	if precedenceVersion != nil {
+		out.PrecedenceVersion = *precedenceVersion
+	}
+	if precedenceStage != nil {
+		out.PrecedenceStage = memory.OperationPrecedenceStage(*precedenceStage)
+	}
+	if precedenceOutcome != nil {
+		out.PrecedenceOutcome = memory.OperationPrecedenceOutcome(*precedenceOutcome)
 	}
 	if len(evidenceRefs) > 0 {
 		_ = json.Unmarshal(evidenceRefs, &out.Evidence)

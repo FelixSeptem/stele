@@ -19,12 +19,15 @@ const (
 )
 
 type OperationMetadata struct {
-	RequestID      string `json:"request_id"`
-	OperationID    string `json:"operation_id"`
-	IdempotencyKey string `json:"idempotency_key,omitempty"`
-	EventSeq       int64  `json:"event_seq,omitempty"`
-	SchemaVersion  string `json:"schema_version"`
-	MemoryPath     string `json:"memory_path,omitempty"`
+	RequestID         string `json:"request_id"`
+	OperationID       string `json:"operation_id"`
+	IdempotencyKey    string `json:"idempotency_key,omitempty"`
+	EventSeq          int64  `json:"event_seq,omitempty"`
+	SchemaVersion     string `json:"schema_version"`
+	MemoryPath        string `json:"memory_path,omitempty"`
+	PrecedenceVersion string `json:"precedence_version,omitempty"`
+	PrecedenceStage   string `json:"precedence_stage,omitempty"`
+	PrecedenceOutcome string `json:"precedence_outcome,omitempty"`
 }
 
 // Validate checks metadata without mutating the caller's envelope.
@@ -186,6 +189,9 @@ func (a *Adapter) Ingest(ctx context.Context, binding RuntimeBinding, meta Opera
 	if err := a.validate(binding, &meta); err != nil {
 		return IngestResult{}, err
 	}
+	if err := a.applyPrecedence(&meta, binding, "provider.ingest", false, true); err != nil {
+		return IngestResult{Metadata: meta}, err
+	}
 	input.Scope = binding.Scope
 	fingerprintBytes, _ := json.Marshal(input)
 	metadataBytes, _ := json.Marshal(input.Metadata)
@@ -254,6 +260,9 @@ func (a *Adapter) SubmitIntent(ctx context.Context, binding RuntimeBinding, meta
 	input.RequestID = meta.RequestID
 	input.OperationID = meta.OperationID
 	input.IdempotencyKey = meta.IdempotencyKey
+	if err := a.applyPrecedence(&meta, binding, "provider.intent", false, true); err != nil {
+		return memory.MemoryIntentRecord{}, err
+	}
 	if payload, _ := json.Marshal(input); len(payload) > a.limits.MaxIntentBytes {
 		return memory.MemoryIntentRecord{}, fmt.Errorf("intent exceeds provider limit")
 	}
@@ -268,6 +277,9 @@ func (a *Adapter) SubmitIntent(ctx context.Context, binding RuntimeBinding, meta
 
 func (a *Adapter) CreateTurn(ctx context.Context, binding RuntimeBinding, meta OperationMetadata, input memory.CreateMemorySessionTurnInput) (memory.MemorySessionTurn, error) {
 	if err := a.validate(binding, &meta); err != nil {
+		return memory.MemorySessionTurn{}, err
+	}
+	if err := a.applyPrecedence(&meta, binding, "provider.session.create", false, true); err != nil {
 		return memory.MemorySessionTurn{}, err
 	}
 	if a.deps.Session == nil {
@@ -287,6 +299,9 @@ func (a *Adapter) CreateTurn(ctx context.Context, binding RuntimeBinding, meta O
 
 func (a *Adapter) RecordTurnOutcome(ctx context.Context, binding RuntimeBinding, meta OperationMetadata, input memory.RecordMemorySessionTurnOutcomeInput) (memory.MemorySessionTurn, error) {
 	if err := a.validate(binding, &meta); err != nil {
+		return memory.MemorySessionTurn{}, err
+	}
+	if err := a.applyPrecedence(&meta, binding, "provider.session.outcome", false, true); err != nil {
 		return memory.MemorySessionTurn{}, err
 	}
 	if a.deps.Session == nil {
@@ -311,6 +326,9 @@ func (a *Adapter) Search(ctx context.Context, binding RuntimeBinding, meta Opera
 	if err := a.validate(binding, &meta); err != nil {
 		return retrieval.SearchResult{}, meta, err
 	}
+	if err := a.applyPrecedence(&meta, binding, "provider.search", false, true); err != nil {
+		return retrieval.SearchResult{}, meta, err
+	}
 	input.Scope = binding.Scope
 	input.SessionID = binding.SessionID
 	if input.TopK > a.limits.MaxRetrievalResults {
@@ -324,6 +342,9 @@ func (a *Adapter) Search(ctx context.Context, binding RuntimeBinding, meta Opera
 }
 func (a *Adapter) AssembleContext(ctx context.Context, binding RuntimeBinding, meta OperationMetadata, input retrieval.AssembleContextInput) (retrieval.AssembledContext, OperationMetadata, error) {
 	if err := a.validate(binding, &meta); err != nil {
+		return retrieval.AssembledContext{}, meta, err
+	}
+	if err := a.applyPrecedence(&meta, binding, "provider.context", false, true); err != nil {
 		return retrieval.AssembledContext{}, meta, err
 	}
 	input.Scope = binding.Scope
@@ -347,11 +368,9 @@ func (a *Adapter) ApplyLifecycle(ctx context.Context, binding RuntimeBinding, me
 	if a.deps.Lifecycle == nil {
 		return OperationOutcome{Metadata: meta}, fmt.Errorf("provider lifecycle service is not configured")
 	}
-	if a.deps.AllowLifecycle == nil || !a.deps.AllowLifecycle(ctx, binding) {
-		return OperationOutcome{Metadata: meta}, fmt.Errorf("provider lifecycle operation requires privileged authorization")
-	}
-	if strings.TrimSpace(meta.IdempotencyKey) == "" {
-		return OperationOutcome{Metadata: meta}, fmt.Errorf("lifecycle idempotency key is required")
+	privileged := a.deps.AllowLifecycle != nil && a.deps.AllowLifecycle(ctx, binding)
+	if err := a.applyPrecedence(&meta, binding, "provider.lifecycle", true, privileged); err != nil {
+		return OperationOutcome{Metadata: meta}, err
 	}
 	payload, _ := json.Marshal(struct {
 		Scope                                   memory.Scope
@@ -398,6 +417,29 @@ func (a *Adapter) validate(binding RuntimeBinding, meta *OperationMetadata) erro
 		return fmt.Errorf("runtime binding is invalid")
 	}
 	return meta.NormalizeValidate()
+}
+
+func (a *Adapter) applyPrecedence(meta *OperationMetadata, binding RuntimeBinding, operation string, requireIdempotency, principalGranted bool) error {
+	if meta == nil {
+		return fmt.Errorf("operation metadata is required")
+	}
+	decision, err := memory.EvaluateOperationPrecedence(memory.OperationPrecedenceInput{
+		Operation: operation, Scope: binding.Scope, GrantedScope: binding.Scope,
+		PrincipalID: binding.PrincipalID, GrantID: binding.BindingID,
+		LifecycleChecked: true, LifecycleVisible: true, PrincipalGranted: principalGranted,
+		ApprovalRequired: false, RequireIdempotency: requireIdempotency, IdempotencyKey: meta.IdempotencyKey,
+		HandoffAllowed: true, MutationAllowed: true,
+	})
+	if err != nil {
+		return fmt.Errorf("evaluate provider precedence: %w", err)
+	}
+	meta.PrecedenceVersion = decision.Version
+	meta.PrecedenceStage = string(decision.Stage)
+	meta.PrecedenceOutcome = string(decision.Outcome)
+	if decision.Outcome != memory.OperationOutcomeAccepted {
+		return fmt.Errorf("provider precedence %s at %s", decision.Outcome, decision.Stage)
+	}
+	return nil
 }
 
 func ShapeSearchCitations(result retrieval.SearchResult) []Citation {

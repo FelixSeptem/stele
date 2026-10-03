@@ -440,6 +440,19 @@ func (o *MetricsObserver) RecordOperation(ctx context.Context, event OperationEv
 	o.addCounter("stele_operation_processed_total", labels, float64(event.Count))
 }
 
+func (o *MetricsObserver) RecordOperationPrecedence(ctx context.Context, event OperationPrecedenceEvent) {
+	if o == nil {
+		return
+	}
+	o.addCounter("stele_operation_precedence_total", map[string]string{
+		"operation": boundedPrecedenceLabel(event.Operation, "intent", "insight", "provider", "lifecycle", "manual", "conformance"),
+		"stage":     boundedPrecedenceLabel(event.Stage, "scope", "lifecycle", "grant", "approval", "replay", "handoff", "mutation"),
+		"outcome":   boundedPrecedenceLabel(event.Outcome, "accepted", "denied", "replayed", "conflict", "incompatible", "policy_disabled", "lifecycle_denied", "grant_denied", "scope_denied", "handoff_denied", "mutation_denied", "retryable"),
+		"replay":    boundedPrecedenceLabel(event.Replay, "none", "replayed", "conflict"),
+		"rollback":  boundedPrecedenceLabel(event.Rollback, "none", "disabled", "held", "resumed"),
+	}, 1)
+}
+
 func (o *MetricsObserver) RecordBacklog(ctx context.Context, event BacklogEvent) {
 	if o == nil {
 		return
@@ -1001,6 +1014,7 @@ func (o *MetricsObserver) RenderPrometheus() string {
 
 	var builder strings.Builder
 	writeMetricFamilyHeader(&builder, "stele_operations_total", "counter", "Stele operation executions.")
+	writeMetricFamilyHeader(&builder, "stele_operation_precedence_total", "counter", "Governed operation precedence decisions by bounded categories.")
 	writeMetricFamilyHeader(&builder, "stele_operation_processed_total", "counter", "Stele processed item totals.")
 	writeMetricFamilyHeader(&builder, "stele_backlog_pending", "gauge", "Stele pending backlog count.")
 	writeMetricFamilyHeader(&builder, "stele_backlog_leased", "gauge", "Stele leased backlog count.")

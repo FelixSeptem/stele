@@ -131,6 +131,9 @@ type MemoryIntentRecord struct {
 	OutcomeReference   string
 	RequestFingerprint string
 	PolicyVersion      string
+	PrecedenceVersion  string
+	PrecedenceStage    OperationPrecedenceStage
+	PrecedenceOutcome  OperationPrecedenceOutcome
 	Status             MemoryIntentStatus
 	CreatedAt          time.Time
 }
@@ -175,28 +178,38 @@ func (s MemoryIntentService) Submit(ctx context.Context, input MemoryIntentInput
 	if s.Processor == nil {
 		return MemoryIntentRecord{}, fmt.Errorf("memory intent processor is not configured")
 	}
+	if validator, ok := s.Processor.(MemoryIntentTargetValidator); ok {
+		if err := validator.ValidateMemoryIntentTarget(ctx, input); err != nil {
+			return MemoryIntentRecord{}, fmt.Errorf("validate memory intent target: %w", err)
+		}
+	}
 	policyVersion := ""
+	policyEnabled := true
 	if s.Policy != nil {
 		decision, err := s.Policy.EvaluateMemoryIntent(ctx, input)
 		if err != nil {
 			return MemoryIntentRecord{}, fmt.Errorf("evaluate memory intent policy: %w", err)
 		}
-		if !decision.Enabled {
-			category := decision.Category
-			if !category.Valid() {
-				category = MemoryIntentDiagnosticPolicyDisabled
-			}
+		policyEnabled = decision.Enabled
+		policyVersion = strings.TrimSpace(decision.PolicyVersion)
+	}
+	precedence, err := EvaluateOperationPrecedence(OperationPrecedenceInput{
+		Operation: "memory.intent.submit", Scope: input.Scope, GrantedScope: input.Scope,
+		PrincipalID: strings.TrimSpace(input.Actor), GrantID: strings.TrimSpace(input.Actor),
+		LifecycleChecked: true, LifecycleVisible: true, PrincipalGranted: strings.TrimSpace(input.Actor) != "",
+		ApprovalRequired: s.Policy != nil, ApprovalEnabled: policyEnabled, PolicyVersion: policyVersion,
+		RequireIdempotency: true, IdempotencyKey: input.IdempotencyKey, RequestFingerprint: fingerprint,
+		HandoffAllowed: s.Processor != nil, MutationAllowed: true,
+	})
+	if err != nil {
+		return MemoryIntentRecord{}, fmt.Errorf("evaluate memory intent precedence: %w", err)
+	}
+	if precedence.Outcome != OperationOutcomeAccepted {
+		if precedence.Outcome == OperationOutcomePolicyDisabled {
+			category := MemoryIntentDiagnosticPolicyDisabled
 			return MemoryIntentRecord{}, fmt.Errorf("memory intent policy %s: processing disabled", category)
 		}
-		policyVersion = strings.TrimSpace(decision.PolicyVersion)
-		if policyVersion == "" {
-			return MemoryIntentRecord{}, fmt.Errorf("memory intent policy version is required")
-		}
-	}
-	if validator, ok := s.Processor.(MemoryIntentTargetValidator); ok {
-		if err := validator.ValidateMemoryIntentTarget(ctx, input); err != nil {
-			return MemoryIntentRecord{}, fmt.Errorf("validate memory intent target: %w", err)
-		}
+		return MemoryIntentRecord{}, fmt.Errorf("memory intent precedence %s at %s", precedence.Outcome, precedence.Stage)
 	}
 	now := time.Now().UTC()
 	if s.Now != nil {
@@ -212,6 +225,7 @@ func (s MemoryIntentService) Submit(ctx context.Context, input MemoryIntentInput
 		Reason: input.Reason, Provenance: input.Provenance, RequestID: strings.TrimSpace(input.RequestID),
 		OperationID: strings.TrimSpace(input.OperationID), IdempotencyKey: strings.TrimSpace(input.IdempotencyKey),
 		TargetInsightID: strings.TrimSpace(input.TargetInsightID), Evidence: input.Evidence, RequestFingerprint: fingerprint, PolicyVersion: policyVersion,
+		PrecedenceVersion: precedence.Version, PrecedenceStage: precedence.Stage, PrecedenceOutcome: precedence.Outcome,
 		Status: MemoryIntentStatusAccepted, CreatedAt: now,
 	}
 	created, err := s.Processor.AppendMemoryIntent(ctx, record)

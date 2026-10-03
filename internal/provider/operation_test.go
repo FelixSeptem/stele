@@ -94,6 +94,24 @@ func TestProviderAdapterEnforcesConfiguredLimits(t *testing.T) {
 	}
 }
 
+func TestProviderAdapterCarriesPrecedenceMetadataAndDeniesLifecycleWithoutGrant(t *testing.T) {
+	searcher := &adapterSearcher{}
+	a := NewAdapter(AdapterDependencies{Searcher: searcher})
+	binding := RuntimeBinding{BindingID: "binding", PrincipalID: "principal", Scope: memory.Scope{Tenant: "tenant", Project: "project", Namespace: "namespace"}, AgentID: "agent", SessionID: "session", ProviderInstanceID: "provider"}
+	meta := OperationMetadata{RequestID: "request", OperationID: "operation", SchemaVersion: "schema-v1"}
+	_, returned, err := a.Search(context.Background(), binding, meta, retrieval.SearchInput{Query: "bounded"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if returned.PrecedenceVersion != memory.OperationPrecedenceVersion || returned.PrecedenceStage != string(memory.OperationStageMutation) || returned.PrecedenceOutcome != string(memory.OperationOutcomeAccepted) {
+		t.Fatalf("precedence metadata = %+v", returned)
+	}
+	lifecycle := NewAdapter(AdapterDependencies{Lifecycle: &adapterLifecycleStub{}, AllowLifecycle: func(context.Context, RuntimeBinding) bool { return false }})
+	if _, err := lifecycle.ApplyLifecycle(context.Background(), binding, meta, "memory-1", policy.ForgettingActionSuppress, "reason", "actor"); err == nil || !strings.Contains(err.Error(), "grant") {
+		t.Fatalf("lifecycle error = %v, want bounded grant denial", err)
+	}
+}
+
 func TestProviderAdapterPropagatesRuntimeSessionToRetrieval(t *testing.T) {
 	searcher := &adapterSearcher{}
 	assembler := &adapterAssembler{}

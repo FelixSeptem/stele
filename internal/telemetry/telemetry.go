@@ -157,6 +157,38 @@ type MemoryIntentEvent struct {
 	Rollback  string
 }
 
+// OperationPrecedenceEvent carries only fixed stage and outcome categories.
+// It deliberately excludes scope values, payloads, identifiers and raw errors.
+type OperationPrecedenceEvent struct {
+	Operation string
+	Stage     string
+	Outcome   string
+	Replay    string
+	Rollback  string
+}
+
+func LogOperationPrecedence(logger *log.Logger, event OperationPrecedenceEvent) {
+	if logger == nil {
+		return
+	}
+	logger.Printf("component=operation_precedence operation=%s stage=%s outcome=%s replay=%s rollback=%s",
+		boundedPrecedenceLabel(event.Operation, "intent", "insight", "provider", "lifecycle", "manual", "conformance"),
+		boundedPrecedenceLabel(event.Stage, "scope", "lifecycle", "grant", "approval", "replay", "handoff", "mutation"),
+		boundedPrecedenceLabel(event.Outcome, "accepted", "denied", "replayed", "conflict", "incompatible", "policy_disabled", "lifecycle_denied", "grant_denied", "scope_denied", "handoff_denied", "mutation_denied", "retryable"),
+		boundedPrecedenceLabel(event.Replay, "none", "replayed", "conflict"),
+		boundedPrecedenceLabel(event.Rollback, "none", "disabled", "held", "resumed"),
+	)
+}
+
+func boundedPrecedenceLabel(value string, allowed ...string) string {
+	for _, candidate := range allowed {
+		if value == candidate {
+			return candidate
+		}
+	}
+	return "unknown"
+}
+
 func LogMemoryIntentLifecycle(logger *log.Logger, event MemoryIntentEvent) {
 	if logger == nil {
 		return
