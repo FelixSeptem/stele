@@ -14,8 +14,8 @@ func TestMigrationManifestIsDeterministicAndChecksummed(t *testing.T) {
 	if err != nil {
 		t.Fatalf("MigrationManifest() second call error = %v", err)
 	}
-	if len(first) != 33 {
-		t.Fatalf("manifest length = %d, want 33: %+v", len(first), first)
+	if len(first) != 34 {
+		t.Fatalf("manifest length = %d, want 34: %+v", len(first), first)
 	}
 	if first[0] != second[0] {
 		t.Fatalf("manifest is not deterministic: first=%+v second=%+v", first[0], second[0])
@@ -112,6 +112,15 @@ func TestMigrationManifestIsDeterministicAndChecksummed(t *testing.T) {
 	}
 	if first[30].Version != 31 || first[30].Name != "0031_governed_goal_metadata.up.sql" {
 		t.Fatalf("manifest entry = %+v, want version 31 governed goal metadata", first[30])
+	}
+	if first[31].Version != 32 || first[31].Name != "0032_goal_visibility.up.sql" {
+		t.Fatalf("manifest entry = %+v, want version 32 goal visibility", first[31])
+	}
+	if first[32].Version != 33 || first[32].Name != "0033_release_evidence_reconciliation.up.sql" {
+		t.Fatalf("manifest entry = %+v, want version 33 release evidence reconciliation", first[32])
+	}
+	if first[33].Version != 34 || first[33].Name != "0034_runtime_capability_event_sync.up.sql" {
+		t.Fatalf("manifest entry = %+v, want version 34 runtime capability event sync", first[33])
 	}
 	if len(first[0].ChecksumSHA256) != 64 {
 		t.Fatalf("checksum length = %d, want 64", len(first[0].ChecksumSHA256))

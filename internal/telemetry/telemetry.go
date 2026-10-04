@@ -17,6 +17,25 @@ type OperationEvent struct {
 	ObservedAt time.Time
 }
 
+// SynchronizationEvent contains only fixed protocol categories. It deliberately
+// excludes scope values, cursors, replay identities, payloads, and raw errors.
+type SynchronizationEvent struct {
+	Operation       string
+	Result          string
+	Recovery        string
+	Transport       string
+	FailureCategory string
+}
+
+// SynchronizationHealthEvent is a bounded maintenance/readiness signal. It
+// contains no scope, cursor, identity, query, or payload values.
+type SynchronizationHealthEvent struct {
+	Retention string
+	Cursor    string
+	Backlog   string
+	Pending   int64
+}
+
 type BacklogEvent struct {
 	Mode       string
 	Component  string

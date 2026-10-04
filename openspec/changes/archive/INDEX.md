@@ -1,6 +1,6 @@
 # Archive Index
 
-Updated: 2026-10-03 22:37:33
+Updated: 2026-10-04 09:55:57
 
 - 001 -> bootstrap-foundation-and-event-ingestion
 - 002 -> governance-pipeline-and-memory-consolidation
@@ -67,3 +67,4 @@ Updated: 2026-10-03 22:37:33
 - 064 -> governed-goal-insights
 - 065 -> governed-goal-review-and-experimental-visibility
 - 066 -> governed-release-evidence-freshness-reconciliation
+- 067 -> runtime-capability-and-event-sync-contract

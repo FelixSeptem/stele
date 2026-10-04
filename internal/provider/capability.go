@@ -18,6 +18,9 @@ const (
 	MaxSchemaDigestBytes    = 128
 	MaxErrorMessageBytes    = 256
 	MaxErrorCodeBytes       = 64
+	MaxSyncEventKinds       = 64
+	MaxSyncTransports       = 8
+	MaxSyncCursorBytes      = 512
 )
 
 type CanonicalScopeDescriptor struct {
@@ -107,6 +110,7 @@ const (
 	ErrorCategoryStale          ErrorCategory = "stale"
 	ErrorCategoryDependency     ErrorCategory = "dependency"
 	ErrorCategoryRetryable      ErrorCategory = "retryable"
+	ErrorCategoryResyncRequired ErrorCategory = "resync_required"
 )
 
 type ProviderError struct {
@@ -135,7 +139,7 @@ func (e ProviderError) Validate() error {
 func validErrorCategory(c ErrorCategory) bool {
 	switch c {
 	case ErrorCategoryAuthentication, ErrorCategoryScope, ErrorCategoryCompatibility, ErrorCategoryValidation,
-		ErrorCategoryConflict, ErrorCategoryLifecycle, ErrorCategoryStale, ErrorCategoryDependency, ErrorCategoryRetryable:
+		ErrorCategoryConflict, ErrorCategoryLifecycle, ErrorCategoryStale, ErrorCategoryDependency, ErrorCategoryRetryable, ErrorCategoryResyncRequired:
 		return true
 	default:
 		return false
@@ -151,6 +155,43 @@ type ProviderLimits struct {
 	MaxMetadataBytes    int `json:"max_metadata_bytes"`
 }
 
+// SynchronizationCapabilities describes the transport-neutral replay
+// contract. Transport names are advertisements only; all transports use the
+// same cursor, event ordering, completion, and recovery semantics.
+type SynchronizationCapabilities struct {
+	Enabled              bool     `json:"enabled"`
+	ContractVersion      string   `json:"contract_version"`
+	Transports           []string `json:"transports"`
+	EventKinds           []string `json:"event_kinds"`
+	MaxBatchEvents       int      `json:"max_batch_events"`
+	MaxSnapshotBytes     int      `json:"max_snapshot_bytes"`
+	MaxCursorBytes       int      `json:"max_cursor_bytes"`
+	RetentionWindowHours int      `json:"retention_window_hours"`
+}
+
+func (s SynchronizationCapabilities) Validate() error {
+	if !s.Enabled {
+		return nil
+	}
+	if !boundedToken(s.ContractVersion, MaxSchemaVersionBytes) || len(s.Transports) == 0 || len(s.Transports) > MaxSyncTransports || len(s.EventKinds) == 0 || len(s.EventKinds) > MaxSyncEventKinds {
+		return fmt.Errorf("synchronization capability identity is invalid")
+	}
+	for _, transport := range s.Transports {
+		if !boundedToken(transport, MaxOperationNameBytes) {
+			return fmt.Errorf("synchronization transport is invalid")
+		}
+	}
+	for _, kind := range s.EventKinds {
+		if !boundedToken(kind, MaxOperationNameBytes) {
+			return fmt.Errorf("synchronization event kind is invalid")
+		}
+	}
+	if s.MaxBatchEvents <= 0 || s.MaxBatchEvents > 1000 || s.MaxSnapshotBytes <= 0 || s.MaxSnapshotBytes > 4<<20 || s.MaxCursorBytes <= 0 || s.MaxCursorBytes > MaxSyncCursorBytes || s.RetentionWindowHours <= 0 || s.RetentionWindowHours > 24*365 {
+		return fmt.Errorf("synchronization limits are invalid")
+	}
+	return nil
+}
+
 func (l ProviderLimits) Validate() error {
 	if l.MaxEventBytes <= 0 || l.MaxEventBytes > 1<<20 || l.MaxIntentBytes <= 0 || l.MaxIntentBytes > 1<<20 || l.MaxRetrievalResults <= 0 || l.MaxRetrievalResults > 1000 || l.MaxContextBytes <= 0 || l.MaxContextBytes > 4<<20 || l.MaxCitations <= 0 || l.MaxCitations > 1000 || l.MaxMetadataBytes <= 0 || l.MaxMetadataBytes > 1<<20 {
 		return fmt.Errorf("provider limits are invalid")
@@ -159,14 +200,15 @@ func (l ProviderLimits) Validate() error {
 }
 
 type CapabilityDocument struct {
-	ProviderVersion string         `json:"provider_version"`
-	SchemaVersion   string         `json:"schema_version"`
-	ServiceVersion  string         `json:"service_version,omitempty"`
-	BuildID         string         `json:"build_id,omitempty"`
-	Operations      []string       `json:"operations"`
-	ScopeDimensions []string       `json:"scope_dimensions"`
-	Limits          ProviderLimits `json:"limits"`
-	SchemaDigest    string         `json:"schema_digest"`
+	ProviderVersion string                      `json:"provider_version"`
+	SchemaVersion   string                      `json:"schema_version"`
+	ServiceVersion  string                      `json:"service_version,omitempty"`
+	BuildID         string                      `json:"build_id,omitempty"`
+	Operations      []string                    `json:"operations"`
+	ScopeDimensions []string                    `json:"scope_dimensions"`
+	Limits          ProviderLimits              `json:"limits"`
+	Synchronization SynchronizationCapabilities `json:"synchronization"`
+	SchemaDigest    string                      `json:"schema_digest"`
 }
 
 func (d CapabilityDocument) Validate() error {
@@ -189,15 +231,19 @@ func (d CapabilityDocument) Validate() error {
 			return fmt.Errorf("provider scope dimension is invalid")
 		}
 	}
-	return d.Limits.Validate()
+	if err := d.Limits.Validate(); err != nil {
+		return err
+	}
+	return d.Synchronization.Validate()
 }
 
 type CapabilityInput struct{ ProviderVersion, SchemaVersion, ServiceVersion, BuildID, SchemaDigest string }
 
 func Discover(in CapabilityInput) CapabilityDocument {
 	d := CapabilityDocument{ProviderVersion: in.ProviderVersion, SchemaVersion: in.SchemaVersion, ServiceVersion: in.ServiceVersion, BuildID: in.BuildID, SchemaDigest: in.SchemaDigest,
-		Operations: []string{"ingest", "intent", "retrieve", "context", "forget", "status"}, ScopeDimensions: []string{"tenant", "project", "namespace", "agent", "session", "conversation", "provider_instance"},
-		Limits: ProviderLimits{MaxEventBytes: 1 << 20, MaxIntentBytes: 1 << 20, MaxRetrievalResults: 100, MaxContextBytes: 1 << 20, MaxCitations: 100, MaxMetadataBytes: 64 << 10}}
+		Operations: []string{"ingest", "intent", "retrieve", "context", "forget", "status", "sync"}, ScopeDimensions: []string{"tenant", "project", "namespace", "agent", "session", "conversation", "provider_instance"},
+		Synchronization: SynchronizationCapabilities{Enabled: true, ContractVersion: "sync-v1", Transports: []string{"openapi_pull"}, EventKinds: []string{"raw_event", "canonical_memory", "lifecycle", "sync_complete"}, MaxBatchEvents: 100, MaxSnapshotBytes: 1 << 20, MaxCursorBytes: MaxSyncCursorBytes, RetentionWindowHours: 24 * 30},
+		Limits:          ProviderLimits{MaxEventBytes: 1 << 20, MaxIntentBytes: 1 << 20, MaxRetrievalResults: 100, MaxContextBytes: 1 << 20, MaxCitations: 100, MaxMetadataBytes: 64 << 10}}
 	if strings.TrimSpace(d.ProviderVersion) == "" {
 		d.ProviderVersion = "unknown"
 	}

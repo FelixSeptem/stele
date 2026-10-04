@@ -27,6 +27,8 @@ func TestProviderErrorCategoryMapsBoundedContractErrors(t *testing.T) {
 		{name: "dependency", err: errors.New("provider search service is not configured"), want: provider.ErrorCategoryDependency},
 		{name: "stale", err: errors.New("stale event sequence"), want: provider.ErrorCategoryStale},
 		{name: "lifecycle", err: errors.New("provider lifecycle operation requires privileged authorization"), want: provider.ErrorCategoryLifecycle},
+		{name: "resync", err: errors.New("resync required: cursor expired"), want: provider.ErrorCategoryResyncRequired},
+		{name: "scope", err: errors.New("synchronization scope mismatch"), want: provider.ErrorCategoryScope},
 	}
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
@@ -34,6 +36,108 @@ func TestProviderErrorCategoryMapsBoundedContractErrors(t *testing.T) {
 				t.Fatalf("providerErrorCategory(%q)=%q, want %q", tc.err, got, tc.want)
 			}
 		})
+	}
+}
+
+func TestProviderSynchronizationRouteSupportsInitialAndResume(t *testing.T) {
+	now := time.Now().UTC()
+	scope := memory.Scope{Tenant: "tenant-a", Project: "project-a", Namespace: "namespace-a"}
+	principal := auth.Principal{ID: "public-1", Role: auth.PrincipalRolePublic, Status: auth.PrincipalStatusActive, Label: "public", CreatedAt: now}
+	authorizer := providerLifecycleAuthorizer{principals: map[string]auth.Principal{"public-key": principal}}
+	bindings := provider.NewMemoryBindingStore()
+	binding := provider.RuntimeBinding{BindingID: "rb_sync", PrincipalID: principal.ID, Scope: scope, AgentID: "agent-a", SessionID: "session-a", ProviderInstanceID: "pi-sync", CreatedAt: now.Add(-time.Minute), ExpiresAt: now.Add(time.Hour)}
+	if err := bindings.Create(context.Background(), binding); err != nil {
+		t.Fatal(err)
+	}
+	caps := provider.Discover(provider.CapabilityInput{ProviderVersion: "provider-v1", SchemaVersion: "schema-v1"})
+	syncer := &provider.Synchronizer{Capabilities: caps.Synchronization, Source: &provider.MemorySyncSource{Snapshots: map[string]provider.SyncSnapshot{binding.BindingID: {SnapshotID: "snap-1", Watermark: "w1"}}, EventsByBinding: map[string][]provider.SyncEvent{binding.BindingID: {{Sequence: 1, ReplayID: "evt-1", Kind: provider.SyncEventRawEvent, SchemaVersion: provider.SyncContractVersion, SourceWatermark: "w2", Payload: json.RawMessage(`{"event_type":"message"}`), Available: true}}}}}
+	h := NewHTTPHandler(HTTPDependencies{ProviderEnabled: true, ProviderCapabilities: caps, ProviderSchemaVersions: []string{"schema-v1"}, ProviderSynchronizer: syncer, ProviderBindings: bindings, PrincipalAuthorizer: authorizer})
+	request := func(body string) *httptest.ResponseRecorder {
+		req := httptest.NewRequest(http.MethodPost, "/v1/provider/sync", strings.NewReader(body))
+		req.Header.Set("X-API-Key", "public-key")
+		req.Header.Set(provider.HeaderRuntimeBinding, binding.BindingID)
+		req.Header.Set(provider.HeaderRuntimeSession, binding.SessionID)
+		req.Header.Set(auth.HeaderTenant, scope.Tenant)
+		req.Header.Set(auth.HeaderProject, scope.Project)
+		req.Header.Set(auth.HeaderNamespace, scope.Namespace)
+		resp := httptest.NewRecorder()
+		h.ServeHTTP(resp, req)
+		return resp
+	}
+	initial := request(`{"schema_version":"sync-v1"}`)
+	if initial.Code != http.StatusOK {
+		t.Fatalf("initial status=%d body=%s", initial.Code, initial.Body.String())
+	}
+	var first provider.SyncResponse
+	if err := json.Unmarshal(initial.Body.Bytes(), &first); err != nil {
+		t.Fatal(err)
+	}
+	if first.Snapshot == nil || first.NextCursor == "" {
+		t.Fatalf("initial response=%+v", first)
+	}
+	resumed := request(`{"schema_version":"sync-v1","cursor":"` + first.NextCursor + `"}`)
+	if resumed.Code != http.StatusOK {
+		t.Fatalf("resume status=%d body=%s", resumed.Code, resumed.Body.String())
+	}
+	var second provider.SyncResponse
+	if err := json.Unmarshal(resumed.Body.Bytes(), &second); err != nil {
+		t.Fatal(err)
+	}
+	if len(second.Events) != 1 || second.Events[0].ReplayID != "evt-1" {
+		t.Fatalf("resume response=%+v", second)
+	}
+}
+
+func TestProviderSynchronizationRouteReturnsBoundedResyncAndRejectsMutation(t *testing.T) {
+	now := time.Now().UTC()
+	scope := memory.Scope{Tenant: "tenant-r", Project: "project-r", Namespace: "namespace-r"}
+	principal := auth.Principal{ID: "public-r", Role: auth.PrincipalRolePublic, Status: auth.PrincipalStatusActive, Label: "public", CreatedAt: now}
+	authorizer := providerLifecycleAuthorizer{principals: map[string]auth.Principal{"public-key-r": principal}}
+	bindings := provider.NewMemoryBindingStore()
+	binding := provider.RuntimeBinding{BindingID: "rb-resync", PrincipalID: principal.ID, Scope: scope, AgentID: "agent-r", SessionID: "session-r", ProviderInstanceID: "pi-r", CreatedAt: now.Add(-time.Minute), ExpiresAt: now.Add(time.Hour)}
+	if err := bindings.Create(context.Background(), binding); err != nil {
+		t.Fatal(err)
+	}
+	caps := provider.Discover(provider.CapabilityInput{ProviderVersion: "provider-v1", SchemaVersion: "schema-v1"})
+	source := &provider.MemorySyncSource{Snapshots: map[string]provider.SyncSnapshot{binding.BindingID: {SnapshotID: "snap-r", Watermark: "w"}}, RetentionFloors: map[string]int64{binding.BindingID: 2}}
+	syncer := &provider.Synchronizer{Capabilities: caps.Synchronization, Source: source}
+	h := NewHTTPHandler(HTTPDependencies{ProviderEnabled: true, ProviderCapabilities: caps, ProviderSynchronizer: syncer, ProviderBindings: bindings, PrincipalAuthorizer: authorizer})
+	request := func(body string) *httptest.ResponseRecorder {
+		req := httptest.NewRequest(http.MethodPost, "/v1/provider/sync", strings.NewReader(body))
+		req.Header.Set("X-API-Key", "public-key-r")
+		req.Header.Set(provider.HeaderRuntimeBinding, binding.BindingID)
+		req.Header.Set(provider.HeaderRuntimeSession, binding.SessionID)
+		req.Header.Set(auth.HeaderTenant, scope.Tenant)
+		req.Header.Set(auth.HeaderProject, scope.Project)
+		req.Header.Set(auth.HeaderNamespace, scope.Namespace)
+		resp := httptest.NewRecorder()
+		h.ServeHTTP(resp, req)
+		return resp
+	}
+	initial := request(`{"schema_version":"sync-v1"}`)
+	if initial.Code != http.StatusOK {
+		t.Fatalf("initial status=%d body=%s", initial.Code, initial.Body.String())
+	}
+	var first provider.SyncResponse
+	if err := json.Unmarshal(initial.Body.Bytes(), &first); err != nil {
+		t.Fatal(err)
+	}
+	cursor, err := provider.DecodeSyncCursor(first.NextCursor)
+	if err != nil {
+		t.Fatal(err)
+	}
+	cursor.Sequence = 0
+	stale, err := provider.EncodeSyncCursor(cursor)
+	if err != nil {
+		t.Fatal(err)
+	}
+	resync := request(`{"schema_version":"sync-v1","cursor":"` + stale + `"}`)
+	if resync.Code != http.StatusConflict || !strings.Contains(resync.Body.String(), `"category":"resync_required"`) || strings.Contains(resync.Body.String(), scope.Tenant) {
+		t.Fatalf("resync response status=%d body=%s", resync.Code, resync.Body.String())
+	}
+	mutation := request(`{"schema_version":"sync-v1","memory_id":"secret","action":"delete"}`)
+	if mutation.Code != http.StatusBadRequest || strings.Contains(mutation.Body.String(), "secret") {
+		t.Fatalf("mutation response status=%d body=%s", mutation.Code, mutation.Body.String())
 	}
 }
 
@@ -283,7 +387,7 @@ func TestOpenAPIDocumentsProviderLifecycleAndStatusRoutes(t *testing.T) {
 	if resp.Code != http.StatusOK {
 		t.Fatalf("status=%d, want 200", resp.Code)
 	}
-	for _, route := range []string{"/v1/provider/lifecycle:", "/v1/provider/status:", "/v1/provider/turns:", "/v1/provider/turn-outcomes:"} {
+	for _, route := range []string{"/v1/provider/lifecycle:", "/v1/provider/status:", "/v1/provider/turns:", "/v1/provider/turn-outcomes:", "/v1/provider/sync:"} {
 		if !strings.Contains(resp.Body.String(), route) {
 			t.Fatalf("OpenAPI missing %s", route)
 		}
