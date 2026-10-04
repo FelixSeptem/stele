@@ -35,6 +35,31 @@ type ProviderProbeEvent struct {
 	Result   string
 }
 
+func (o *MetricsObserver) RecordSynchronization(ctx context.Context, event SynchronizationEvent) {
+	if o == nil {
+		return
+	}
+	o.addCounter("stele_provider_sync_total", map[string]string{
+		"operation":        boundedSyncLabel(event.Operation, "initial", "resume"),
+		"result":           boundedSyncLabel(event.Result, "started", "batch", "completed", "failed"),
+		"recovery":         boundedSyncLabel(event.Recovery, "none", "retry", "resync_required"),
+		"transport":        boundedSyncLabel(event.Transport, "openapi_pull", "websocket", "sse"),
+		"failure_category": boundedSyncLabel(event.FailureCategory, "none", "validation", "compatibility", "scope", "retention", "dependency", "retryable"),
+	}, 1)
+}
+
+func (o *MetricsObserver) RecordSynchronizationHealth(ctx context.Context, event SynchronizationHealthEvent) {
+	if o == nil {
+		return
+	}
+	labels := map[string]string{
+		"retention": boundedSyncHealthLabel(event.Retention, "healthy", "degraded", "unknown"),
+		"cursor":    boundedSyncHealthLabel(event.Cursor, "healthy", "expiring", "expired", "unknown"),
+		"backlog":   boundedSyncHealthLabel(event.Backlog, "empty", "active", "degraded", "unknown"),
+	}
+	o.setGauge("stele_provider_sync_backlog_pending", labels, float64(maxInt64(event.Pending, 0)))
+}
+
 type CutoverWaveDispatchEvent struct {
 	Result     string
 	Dispatched int
@@ -1062,6 +1087,8 @@ func (o *MetricsObserver) RenderPrometheus() string {
 	writeMetricFamilyHeader(&builder, "stele_embedding_cutover_plans", "gauge", "Embedding cutover plan counts by status.")
 	writeMetricFamilyHeader(&builder, "stele_embedding_cutover_items", "gauge", "Embedding cutover item counts by status.")
 	writeMetricFamilyHeader(&builder, "stele_embedding_provider_probe_total", "counter", "Embedding provider readiness probe results.")
+	writeMetricFamilyHeader(&builder, "stele_provider_sync_total", "counter", "Provider synchronization outcomes by bounded protocol categories.")
+	writeMetricFamilyHeader(&builder, "stele_provider_sync_backlog_pending", "gauge", "Provider synchronization backlog health by bounded categories.")
 	writeMetricFamilyHeader(&builder, "stele_embedding_cutover_wave_dispatch_total", "counter", "Embedding cutover wave dispatch attempts.")
 	writeMetricFamilyHeader(&builder, "stele_embedding_cutover_wave_dispatched_total", "counter", "Embedding cutover items dispatched by scheduler waves.")
 	writeMetricFamilyHeader(&builder, "stele_insight_feedback_total", "counter", "Derived insight feedback operations and policy decisions.")
@@ -1103,6 +1130,31 @@ func (o *MetricsObserver) RenderPrometheus() string {
 	writeMetricMap(&builder, o.counters)
 	writeMetricMap(&builder, o.gauges)
 	return builder.String()
+}
+
+func boundedSyncLabel(value string, allowed ...string) string {
+	for _, candidate := range allowed {
+		if value == candidate {
+			return candidate
+		}
+	}
+	return "unknown"
+}
+
+func boundedSyncHealthLabel(value string, allowed ...string) string {
+	for _, candidate := range allowed {
+		if value == candidate {
+			return candidate
+		}
+	}
+	return "unknown"
+}
+
+func maxInt64(value, floor int64) int64 {
+	if value < floor {
+		return floor
+	}
+	return value
 }
 
 func labelOrUnknown(value string) string {

@@ -729,6 +729,12 @@ func buildAPIRuntime(ctx context.Context, cfg config.Config, deps apiRuntimeDepe
 			},
 			LifecycleStore: repo,
 		})
+		httpDeps.ProviderSynchronizer = &provider.Synchronizer{
+			Source:       postgres.ProviderSyncSource{Repository: repo},
+			CursorStore:  repo,
+			Capabilities: httpDeps.ProviderCapabilities.Synchronization,
+			Now:          time.Now,
+		}
 	}
 	readiness := &readinessGate{checker: runtimeReadinessChecker(config.ModeAPI, pool, embeddingRuntime, false, deps.observer)}
 	httpDeps.Readiness = readiness
@@ -788,7 +794,7 @@ func buildAPIRuntime(ctx context.Context, cfg config.Config, deps apiRuntimeDepe
 	httpDeps.DerivedInsightReplayAdmin = replayService
 	var providerConformance assurance.ProviderFixtureExecutor
 	if httpDeps.ProviderAdapter != nil {
-		providerConformance = assurance.ProviderHandlerExecutor{Adapter: httpDeps.ProviderAdapter, Capabilities: httpDeps.ProviderCapabilities}
+		providerConformance = assurance.ProviderHandlerExecutor{Adapter: httpDeps.ProviderAdapter, Capabilities: httpDeps.ProviderCapabilities, Synchronizer: httpDeps.ProviderSynchronizer}
 	}
 	httpDeps.AssuranceAdmin = assurance.NewService(assurance.ServiceOptions{
 		Store:               repo,

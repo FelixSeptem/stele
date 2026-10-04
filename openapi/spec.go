@@ -128,6 +128,31 @@ paths:
           description: Authentication failed
         '403':
           description: Exact scope grant denied
+  /v1/provider/sync:
+    post:
+      operationId: synchronizeProviderRuntime
+      summary: Read a bounded provider snapshot or resume ordered event replay
+      security:
+        - PublicAPIKey: []
+      parameters:
+        - $ref: '#/components/parameters/RuntimeBindingHeader'
+        - $ref: '#/components/parameters/RuntimeSessionHeader'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/ProviderSyncRequest'
+      responses:
+        '200':
+          description: Bounded initial snapshot, ordered event batch, or sync completion response
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ProviderSyncResponse'
+        '400': {description: Invalid request or unsupported synchronization schema}
+        '403': {description: Runtime binding or exact scope denied}
+        '409': {description: Cursor retention gap requires a full resynchronization}
   /v1/provider/events:
     post:
       operationId: providerIngestEvent
@@ -4427,7 +4452,7 @@ components:
     ProviderCapabilityDocument:
       type: object
       additionalProperties: false
-      required: [provider_version, schema_version, operations, scope_dimensions, limits, schema_digest]
+      required: [provider_version, schema_version, operations, scope_dimensions, limits, synchronization, schema_digest]
       properties:
         provider_version: {type: string}
         schema_version: {type: string}
@@ -4436,6 +4461,19 @@ components:
         operations: {type: array, maxItems: 32, items: {type: string}}
         scope_dimensions: {type: array, maxItems: 16, items: {type: string}}
         limits: {type: object, additionalProperties: {type: integer}}
+        synchronization:
+          type: object
+          additionalProperties: false
+          required: [enabled, contract_version, transports, event_kinds, max_batch_events, max_snapshot_bytes, max_cursor_bytes, retention_window_hours]
+          properties:
+            enabled: {type: boolean}
+            contract_version: {type: string, maxLength: 64}
+            transports: {type: array, maxItems: 8, items: {type: string, maxLength: 64}}
+            event_kinds: {type: array, maxItems: 64, items: {type: string, maxLength: 64}}
+            max_batch_events: {type: integer, minimum: 1, maximum: 1000}
+            max_snapshot_bytes: {type: integer, minimum: 1, maximum: 4194304}
+            max_cursor_bytes: {type: integer, minimum: 1, maximum: 512}
+            retention_window_hours: {type: integer, minimum: 1}
         schema_digest: {type: string}
     ReasoningCapability:
       type: object
@@ -4494,6 +4532,39 @@ components:
         content: {type: string}
         memory_path: {type: string, maxLength: 512}
         metadata_map: {type: object}
+    ProviderSyncRequest:
+      type: object
+      additionalProperties: false
+      required: [schema_version]
+      properties:
+        schema_version: {type: string, maxLength: 64}
+        cursor: {type: string, maxLength: 512}
+        max_events: {type: integer, minimum: 1, maximum: 1000}
+        max_snapshot_bytes: {type: integer, minimum: 1, maximum: 4194304}
+    ProviderSyncEvent:
+      type: object
+      required: [sequence, replay_id, kind, schema_version, source_watermark, available]
+      properties:
+        sequence: {type: integer, minimum: 1}
+        replay_id: {type: string, maxLength: 128}
+        kind: {type: string, maxLength: 64}
+        schema_version: {type: string, maxLength: 64}
+        source_watermark: {type: string, maxLength: 128}
+        payload: {type: object}
+        available: {type: boolean}
+    ProviderSyncResponse:
+      type: object
+      required: [schema_version, status, sync_id, sync_complete]
+      properties:
+        schema_version: {type: string, maxLength: 64}
+        status: {type: string, enum: [snapshot, delta, complete, resync_required]}
+        sync_id: {type: string, maxLength: 128}
+        snapshot: {type: object}
+        events: {type: array, maxItems: 1000, items: {$ref: '#/components/schemas/ProviderSyncEvent'}}
+        cursor: {type: string, maxLength: 512}
+        next_cursor: {type: string, maxLength: 512}
+        sync_complete: {type: boolean}
+        reason: {type: string, maxLength: 64}
     ProviderEventResponse:
       type: object
       required: [event_id, replayed, metadata]
@@ -4563,7 +4634,7 @@ components:
       type: object
       required: [category, code, message, retryable]
       properties:
-        category: {type: string, enum: [authentication, scope, compatibility, validation, conflict, lifecycle, stale, dependency, retryable]}
+        category: {type: string, enum: [authentication, scope, compatibility, validation, conflict, lifecycle, stale, dependency, retryable, resync_required]}
         code: {type: string, maxLength: 64}
         message: {type: string, maxLength: 256}
         retryable: {type: boolean}

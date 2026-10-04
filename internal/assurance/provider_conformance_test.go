@@ -34,6 +34,7 @@ func providerProfile(scope memory.Scope) ProviderConformanceProfile {
 			{ID: "citation", Kind: ProviderFixtureCitation, Operation: "context", Scope: scope, RequiredEvidence: []ProviderEvidenceKind{ProviderEvidenceCitation}},
 			{ID: "restart", Kind: ProviderFixtureRestartFallback, Operation: "ingest", Scope: scope, RequiredEvidence: []ProviderEvidenceKind{ProviderEvidenceRestart}},
 			{ID: "freshness", Kind: ProviderFixtureFreshness, Operation: "context", Scope: scope, RequiredEvidence: []ProviderEvidenceKind{ProviderEvidenceFreshness}},
+			{ID: "synchronization", Kind: ProviderFixtureSynchronization, Operation: "sync", Scope: scope, RequiredEvidence: []ProviderEvidenceKind{ProviderEvidenceSynchronization}},
 		},
 	}
 }

@@ -1,6 +1,7 @@
 package app
 
 import (
+	"context"
 	"encoding/json"
 	"errors"
 	"github.com/FelixSeptem/stele/internal/auth"
@@ -8,6 +9,7 @@ import (
 	"github.com/FelixSeptem/stele/internal/policy"
 	"github.com/FelixSeptem/stele/internal/provider"
 	"github.com/FelixSeptem/stele/internal/retrieval"
+	"github.com/FelixSeptem/stele/internal/telemetry"
 	"io"
 	"net/http"
 	"strings"
@@ -44,8 +46,111 @@ func registerProviderRoutes(mux *http.ServeMux, deps HTTPDependencies) {
 		writeJSON(w, http.StatusCreated, b)
 	}))
 	mux.Handle("POST /v1/provider/runtime", runtimeInit)
+	if deps.ProviderSynchronizer != nil {
+		registerProviderSyncRoute(mux, deps)
+	}
 	if deps.ProviderAdapter != nil {
 		registerProviderOperationRoutes(mux, deps)
+	}
+}
+
+func registerProviderSyncRoute(mux *http.ServeMux, deps HTTPDependencies) {
+	wrap := func(next http.Handler) http.Handler {
+		return provider.RuntimeBindingMiddleware(deps.ProviderBindings, deps.PrincipalAuthorizer)(next)
+	}
+	mux.Handle("POST /v1/provider/sync", wrap(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		syncOperation := "initial"
+		var requestCursor string
+		// Decode once below; this lightweight operation marker is populated after
+		// validation so malformed requests remain validation failures.
+		binding, ok := provider.RuntimeBindingFromContext(r.Context())
+		if !ok {
+			writeProviderError(w, http.StatusForbidden, provider.ErrorCategoryScope, "forbidden", "runtime binding denied", false)
+			return
+		}
+		var req provider.SyncRequest
+		if err := provider.DecodeStrict(readBody(r), &req); err != nil {
+			recordProviderSyncMetric(r, deps, syncOperation, "failed", "none", "validation")
+			writeProviderError(w, http.StatusBadRequest, provider.ErrorCategoryValidation, "invalid_request", "invalid synchronization request", false)
+			return
+		}
+		requestCursor = req.Cursor
+		if strings.TrimSpace(requestCursor) != "" {
+			syncOperation = "resume"
+		}
+		out, err := deps.ProviderSynchronizer.Synchronize(r.Context(), binding, req)
+		if err != nil {
+			category := providerErrorCategory(err)
+			recovery := "none"
+			if category == provider.ErrorCategoryResyncRequired {
+				recovery = "resync_required"
+			}
+			recordProviderSyncMetric(r, deps, syncOperation, "failed", recovery, string(category))
+			status := http.StatusBadRequest
+			code := "synchronization_failed"
+			if category == provider.ErrorCategoryScope {
+				status = http.StatusForbidden
+			}
+			if category == provider.ErrorCategoryResyncRequired {
+				status, code = http.StatusConflict, "resync_required"
+			}
+			if category == provider.ErrorCategoryDependency {
+				status, code = http.StatusServiceUnavailable, "provider_unavailable"
+			}
+			writeProviderError(w, status, category, code, boundedSynchronizationMessage(category), category == provider.ErrorCategoryRetryable)
+			return
+		}
+		result := "batch"
+		if out.SyncComplete {
+			result = "completed"
+		}
+		recordProviderSyncMetric(r, deps, syncOperation, result, "none", "none")
+		writeJSON(w, http.StatusOK, out)
+	})))
+}
+
+func boundedSynchronizationMessage(category provider.ErrorCategory) string {
+	switch category {
+	case provider.ErrorCategoryResyncRequired:
+		return "full synchronization required"
+	case provider.ErrorCategoryScope:
+		return "runtime synchronization scope denied"
+	case provider.ErrorCategoryCompatibility:
+		return "unsupported synchronization contract"
+	case provider.ErrorCategoryDependency:
+		return "provider synchronization unavailable"
+	case provider.ErrorCategoryRetryable:
+		return "synchronization retryable failure"
+	case provider.ErrorCategoryValidation:
+		return "invalid synchronization request"
+	default:
+		return "synchronization failed"
+	}
+}
+
+func recordProviderSyncMetric(r *http.Request, deps HTTPDependencies, operation, result, recovery, failureCategory string) {
+	if deps.Metrics == nil {
+		return
+	}
+	observer, ok := deps.Metrics.(interface {
+		RecordSynchronization(context.Context, telemetry.SynchronizationEvent)
+	})
+	if !ok {
+		return
+	}
+	observer.RecordSynchronization(r.Context(), telemetry.SynchronizationEvent{
+		Operation: operation, Result: result, Recovery: recovery,
+		Transport: provider.SyncTransportOpenAPI, FailureCategory: failureCategory,
+	})
+	if healthObserver, ok := deps.Metrics.(interface {
+		RecordSynchronizationHealth(context.Context, telemetry.SynchronizationHealthEvent)
+	}); ok {
+		health := telemetry.SynchronizationHealthEvent{Retention: "healthy", Cursor: "healthy", Backlog: "empty", Pending: 0}
+		if recovery == "resync_required" || failureCategory == string(provider.ErrorCategoryResyncRequired) {
+			health.Retention = "degraded"
+			health.Cursor = "expired"
+		}
+		healthObserver.RecordSynchronizationHealth(r.Context(), health)
 	}
 }
 
@@ -281,6 +386,10 @@ func providerErrorCategory(err error) provider.ErrorCategory {
 	}
 	s := strings.ToLower(err.Error())
 	switch {
+	case strings.Contains(s, "resync required"):
+		return provider.ErrorCategoryResyncRequired
+	case strings.Contains(s, "scope mismatch") || strings.Contains(s, "forbidden"):
+		return provider.ErrorCategoryScope
 	case strings.Contains(s, "stale") || strings.Contains(s, "sequence"):
 		return provider.ErrorCategoryStale
 	case strings.Contains(s, "idempotency conflict") || errors.Is(err, memory.ErrIdempotencyConflict):

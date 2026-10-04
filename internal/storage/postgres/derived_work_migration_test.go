@@ -10,7 +10,7 @@ func TestMigrationManifestIncludesDerivedWorkQueue(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(manifest) != 33 || manifest[23].Version != 24 || manifest[23].Name != "0024_derived_work_queue.up.sql" || manifest[24].Version != 25 || manifest[24].Name != "0025_progressive_experiment_evidence.up.sql" || manifest[25].Version != 26 || manifest[25].Name != "0026_governed_reasoning_insight_candidates.up.sql" || manifest[26].Version != 27 || manifest[26].Name != "0027_contradiction_review_metadata.up.sql" || manifest[27].Version != 28 || manifest[27].Name != "0028_governed_memory_intent_transitions.up.sql" || manifest[28].Version != 29 || manifest[28].Name != "0029_memory_intent_work_kind.up.sql" || manifest[29].Version != 30 || manifest[29].Name != "0030_governed_operation_precedence.up.sql" || manifest[30].Version != 31 || manifest[30].Name != "0031_governed_goal_metadata.up.sql" || manifest[31].Version != 32 || manifest[31].Name != "0032_goal_visibility.up.sql" || manifest[32].Version != 33 || manifest[32].Name != "0033_release_evidence_reconciliation.up.sql" {
+	if len(manifest) != 34 || manifest[23].Version != 24 || manifest[23].Name != "0024_derived_work_queue.up.sql" || manifest[24].Version != 25 || manifest[24].Name != "0025_progressive_experiment_evidence.up.sql" || manifest[25].Version != 26 || manifest[25].Name != "0026_governed_reasoning_insight_candidates.up.sql" || manifest[26].Version != 27 || manifest[26].Name != "0027_contradiction_review_metadata.up.sql" || manifest[27].Version != 28 || manifest[27].Name != "0028_governed_memory_intent_transitions.up.sql" || manifest[28].Version != 29 || manifest[28].Name != "0029_memory_intent_work_kind.up.sql" || manifest[29].Version != 30 || manifest[29].Name != "0030_governed_operation_precedence.up.sql" || manifest[30].Version != 31 || manifest[30].Name != "0031_governed_goal_metadata.up.sql" || manifest[31].Version != 32 || manifest[31].Name != "0032_goal_visibility.up.sql" || manifest[32].Version != 33 || manifest[32].Name != "0033_release_evidence_reconciliation.up.sql" || manifest[33].Version != 34 || manifest[33].Name != "0034_runtime_capability_event_sync.up.sql" {
 		t.Fatalf("manifest tail = %+v, want versions 24-26 derived evidence", manifest)
 	}
 	contents, err := migrationFS.ReadFile("migrations/0024_derived_work_queue.up.sql")
@@ -21,6 +21,18 @@ func TestMigrationManifestIncludesDerivedWorkQueue(t *testing.T) {
 	for _, required := range []string{"derived_work_items", "derived_work_checkpoints", "derived_work_attempts", "tenant", "project", "namespace", "work_key"} {
 		if !strings.Contains(sql, required) {
 			t.Errorf("migration missing %q", required)
+		}
+	}
+}
+
+func TestMigrationManifestIncludesRuntimeCapabilityEventSync(t *testing.T) {
+	contents, err := migrationFS.ReadFile("migrations/0034_runtime_capability_event_sync.up.sql")
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, required := range []string{"provider_sync_cursors", "binding_id", "acknowledged_sequence", "snapshot_watermark", "expires_at"} {
+		if !strings.Contains(string(contents), required) {
+			t.Fatalf("runtime sync migration missing %q", required)
 		}
 	}
 }

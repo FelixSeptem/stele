@@ -87,6 +87,7 @@ type HTTPDependencies struct {
 	ProviderInitializer       *provider.RuntimeInitializer
 	ProviderBindings          provider.RuntimeBindingStore
 	ProviderAdapter           *provider.Adapter
+	ProviderSynchronizer      *provider.Synchronizer
 	ProviderSchemaVersions    []string
 	ProviderLimits            provider.ProviderLimits
 	ReasoningCapabilities     reasoning.Capability

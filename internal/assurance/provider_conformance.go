@@ -20,11 +20,12 @@ const (
 	ProviderFixtureCitation        ProviderFixtureKind = "citation"
 	ProviderFixtureRestartFallback ProviderFixtureKind = "restart_fallback"
 	ProviderFixtureFreshness       ProviderFixtureKind = "freshness"
+	ProviderFixtureSynchronization ProviderFixtureKind = "synchronization"
 )
 
 func (k ProviderFixtureKind) valid() bool {
 	switch k {
-	case ProviderFixtureCapability, ProviderFixtureScope, ProviderFixtureReplay, ProviderFixtureLifecycle, ProviderFixtureCitation, ProviderFixtureRestartFallback, ProviderFixtureFreshness:
+	case ProviderFixtureCapability, ProviderFixtureScope, ProviderFixtureReplay, ProviderFixtureLifecycle, ProviderFixtureCitation, ProviderFixtureRestartFallback, ProviderFixtureFreshness, ProviderFixtureSynchronization:
 		return true
 	}
 	return false
@@ -33,18 +34,19 @@ func (k ProviderFixtureKind) valid() bool {
 type ProviderEvidenceKind string
 
 const (
-	ProviderEvidenceCompatibility ProviderEvidenceKind = "compatibility"
-	ProviderEvidenceScope         ProviderEvidenceKind = "scope"
-	ProviderEvidenceReplay        ProviderEvidenceKind = "replay"
-	ProviderEvidenceLifecycle     ProviderEvidenceKind = "lifecycle"
-	ProviderEvidenceCitation      ProviderEvidenceKind = "citation"
-	ProviderEvidenceRestart       ProviderEvidenceKind = "restart"
-	ProviderEvidenceFreshness     ProviderEvidenceKind = "freshness"
+	ProviderEvidenceCompatibility   ProviderEvidenceKind = "compatibility"
+	ProviderEvidenceScope           ProviderEvidenceKind = "scope"
+	ProviderEvidenceReplay          ProviderEvidenceKind = "replay"
+	ProviderEvidenceLifecycle       ProviderEvidenceKind = "lifecycle"
+	ProviderEvidenceCitation        ProviderEvidenceKind = "citation"
+	ProviderEvidenceRestart         ProviderEvidenceKind = "restart"
+	ProviderEvidenceFreshness       ProviderEvidenceKind = "freshness"
+	ProviderEvidenceSynchronization ProviderEvidenceKind = "synchronization"
 )
 
 func (k ProviderEvidenceKind) valid() bool {
 	switch k {
-	case ProviderEvidenceCompatibility, ProviderEvidenceScope, ProviderEvidenceReplay, ProviderEvidenceLifecycle, ProviderEvidenceCitation, ProviderEvidenceRestart, ProviderEvidenceFreshness:
+	case ProviderEvidenceCompatibility, ProviderEvidenceScope, ProviderEvidenceReplay, ProviderEvidenceLifecycle, ProviderEvidenceCitation, ProviderEvidenceRestart, ProviderEvidenceFreshness, ProviderEvidenceSynchronization:
 		return true
 	}
 	return false
@@ -105,6 +107,7 @@ type ProviderFixtureExecutor interface {
 type ProviderHandlerExecutor struct {
 	Adapter      *provider.Adapter
 	Capabilities provider.CapabilityDocument
+	Synchronizer *provider.Synchronizer
 }
 
 func (e ProviderHandlerExecutor) ExecuteProviderFixture(ctx context.Context, binding provider.RuntimeBinding, fixture ProviderFixture) (ProviderFixtureOutcome, error) {
@@ -149,6 +152,25 @@ func (e ProviderHandlerExecutor) ExecuteProviderFixture(ctx context.Context, bin
 		return ProviderFixtureOutcome{Passed: true, Evidence: []ProviderEvidenceKind{ProviderEvidenceLifecycle}}, nil
 	case ProviderFixtureRestartFallback:
 		return ProviderFixtureOutcome{Passed: true, Evidence: []ProviderEvidenceKind{ProviderEvidenceRestart}}, nil
+	case ProviderFixtureSynchronization:
+		if e.Synchronizer == nil || !e.Capabilities.Synchronization.Enabled {
+			return ProviderFixtureOutcome{}, fmt.Errorf("provider synchronization is not configured")
+		}
+		first, err := e.Synchronizer.Synchronize(ctx, binding, provider.SyncRequest{SchemaVersion: e.Capabilities.Synchronization.ContractVersion})
+		if err != nil || first.Snapshot == nil || first.NextCursor == "" {
+			if err == nil {
+				err = fmt.Errorf("synchronization initial snapshot is incomplete")
+			}
+			return ProviderFixtureOutcome{}, err
+		}
+		second, err := e.Synchronizer.Synchronize(ctx, binding, provider.SyncRequest{SchemaVersion: e.Capabilities.Synchronization.ContractVersion, Cursor: first.NextCursor})
+		if err != nil || second.SchemaVersion != e.Capabilities.Synchronization.ContractVersion {
+			if err == nil {
+				err = fmt.Errorf("synchronization resume is incompatible")
+			}
+			return ProviderFixtureOutcome{}, err
+		}
+		return ProviderFixtureOutcome{Passed: true, Evidence: []ProviderEvidenceKind{ProviderEvidenceSynchronization}, References: []string{first.SyncID}}, nil
 	default:
 		return ProviderFixtureOutcome{}, fmt.Errorf("unsupported provider fixture")
 	}
