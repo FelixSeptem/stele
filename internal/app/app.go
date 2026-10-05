@@ -1608,7 +1608,7 @@ func registeredEmbeddingProviders(registry embedding.StaticProviderRegistry) []s
 }
 
 func newID() string {
-	return fmt.Sprintf("id_%d", time.Now().UnixNano())
+	return uuid.NewString()
 }
 
 func newReplayID() string {
