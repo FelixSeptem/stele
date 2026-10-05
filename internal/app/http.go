@@ -831,6 +831,48 @@ type memorySearchRequest struct {
 	ValidTo   string `json:"valid_to,omitempty"`
 }
 
+func (req memorySearchRequest) toRetrievalSearchInput() (retrieval.SearchInput, error) {
+	if strings.TrimSpace(req.FeedbackRankingPolicy) != "" {
+		return retrieval.SearchInput{}, errors.New("feedback_ranking_policy is not supported; use per-request feedback_aware_ranking only")
+	}
+	input := retrieval.SearchInput{
+		Query:                      req.Query,
+		Path:                       req.Path,
+		PathPrefix:                 req.PathPrefix,
+		QueryEmbedding:             req.QueryEmbedding,
+		Classes:                    req.Classes,
+		TopK:                       req.TopK,
+		IncludeSummaries:           req.IncludeSummaries,
+		IncludeRelations:           req.IncludeRelations,
+		IncludeFeedbackDiagnostics: req.IncludeFeedbackDiagnostics,
+		FeedbackAwareRanking:       req.FeedbackAwareRanking,
+	}
+	if req.TimeFrom != "" {
+		parsed, err := time.Parse(time.RFC3339, req.TimeFrom)
+		if err != nil {
+			return retrieval.SearchInput{}, errors.New("invalid time_from")
+		}
+		input.TimeFrom = parsed
+	}
+	if req.TimeTo != "" {
+		parsed, err := time.Parse(time.RFC3339, req.TimeTo)
+		if err != nil {
+			return retrieval.SearchInput{}, errors.New("invalid time_to")
+		}
+		input.TimeTo = parsed
+	}
+	// Valid-time selectors must be explicit and internally consistent; they
+	// cannot be silently ignored or reinterpreted as a current search.
+	if req.AsOf != "" || req.ValidFrom != "" || req.ValidTo != "" {
+		constraint, err := parseTemporalSelector(req.AsOf, req.ValidFrom, req.ValidTo)
+		if err != nil {
+			return retrieval.SearchInput{}, err
+		}
+		input.TemporalConstraint = constraint
+	}
+	return input, nil
+}
+
 type contextAssembleRequest struct {
 	Query                      string `json:"query"`
 	Path                       string `json:"path,omitempty"`
@@ -2202,52 +2244,12 @@ func handleMemorySearch(w http.ResponseWriter, r *http.Request, searcher retriev
 		http.Error(w, "scope context is missing", http.StatusInternalServerError)
 		return
 	}
-	if strings.TrimSpace(req.FeedbackRankingPolicy) != "" {
-		http.Error(w, "feedback_ranking_policy is not supported; use per-request feedback_aware_ranking only", http.StatusBadRequest)
+	input, err := req.toRetrievalSearchInput()
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusBadRequest)
 		return
 	}
-
-	input := retrieval.SearchInput{
-		Scope:                      scope,
-		Query:                      req.Query,
-		Path:                       req.Path,
-		PathPrefix:                 req.PathPrefix,
-		QueryEmbedding:             req.QueryEmbedding,
-		Classes:                    req.Classes,
-		TopK:                       req.TopK,
-		IncludeSummaries:           req.IncludeSummaries,
-		IncludeRelations:           req.IncludeRelations,
-		IncludeFeedbackDiagnostics: req.IncludeFeedbackDiagnostics,
-		FeedbackAwareRanking:       req.FeedbackAwareRanking,
-	}
-	if req.TimeFrom != "" {
-		timeFrom, err := time.Parse(time.RFC3339, req.TimeFrom)
-		if err != nil {
-			http.Error(w, "invalid time_from", http.StatusBadRequest)
-			return
-		}
-		input.TimeFrom = timeFrom
-	}
-	if req.TimeTo != "" {
-		timeTo, err := time.Parse(time.RFC3339, req.TimeTo)
-		if err != nil {
-			http.Error(w, "invalid time_to", http.StatusBadRequest)
-			return
-		}
-		input.TimeTo = timeTo
-	}
-	// A valid-time selector is only accepted when it is explicit and internally
-	// consistent; anything else is refused rather than silently reinterpreted as
-	// a current search, so a caller can never believe history was honoured when
-	// it was not.
-	if req.AsOf != "" || req.ValidFrom != "" || req.ValidTo != "" {
-		constraint, err := parseTemporalSelector(req.AsOf, req.ValidFrom, req.ValidTo)
-		if err != nil {
-			http.Error(w, err.Error(), http.StatusBadRequest)
-			return
-		}
-		input.TemporalConstraint = constraint
-	}
+	input.Scope = scope
 
 	result, err := searcher.Search(r.Context(), input)
 	if err != nil {

@@ -151,6 +151,36 @@ func TestProviderRoutesDisabledByDefault(t *testing.T) {
 	}
 }
 
+func TestProviderRetrieveAcceptsOpenAPITopKField(t *testing.T) {
+	now := time.Now().UTC()
+	scope := memory.Scope{Tenant: "tenant-retrieve", Project: "project-retrieve", Namespace: "namespace-retrieve"}
+	principal := auth.Principal{ID: "public-retrieve", Role: auth.PrincipalRolePublic, Status: auth.PrincipalStatusActive, Label: "public", CreatedAt: now}
+	authorizer := providerLifecycleAuthorizer{principals: map[string]auth.Principal{"retrieve-key": principal}}
+	bindings := provider.NewMemoryBindingStore()
+	binding := provider.RuntimeBinding{BindingID: "rb-retrieve", PrincipalID: principal.ID, Scope: scope, AgentID: "agent-a", SessionID: "session-a", ProviderInstanceID: "pi-retrieve", CreatedAt: now, ExpiresAt: now.Add(time.Hour)}
+	if err := bindings.Create(context.Background(), binding); err != nil {
+		t.Fatal(err)
+	}
+	searcher := &stubMemorySearcher{}
+	adapter := provider.NewAdapter(provider.AdapterDependencies{Searcher: searcher})
+	h := NewHTTPHandler(HTTPDependencies{ProviderEnabled: true, ProviderSchemaVersions: []string{"provider-v1"}, ProviderAdapter: adapter, ProviderBindings: bindings, PrincipalAuthorizer: authorizer})
+	request := httptest.NewRequest(http.MethodPost, "/v1/provider/retrieve", strings.NewReader(`{"metadata":{"request_id":"req-1","operation_id":"op-1","schema_version":"provider-v1"},"input":{"query":"smoke query","top_k":7}}`))
+	request.Header.Set("X-API-Key", "retrieve-key")
+	request.Header.Set(provider.HeaderRuntimeBinding, binding.BindingID)
+	request.Header.Set(provider.HeaderRuntimeSession, binding.SessionID)
+	request.Header.Set(auth.HeaderTenant, scope.Tenant)
+	request.Header.Set(auth.HeaderProject, scope.Project)
+	request.Header.Set(auth.HeaderNamespace, scope.Namespace)
+	response := httptest.NewRecorder()
+	h.ServeHTTP(response, request)
+	if response.Code != http.StatusOK {
+		t.Fatalf("retrieve status=%d body=%s; documented top_k must be accepted", response.Code, response.Body.String())
+	}
+	if searcher.gotInput.Query != "smoke query" || searcher.gotInput.TopK != 7 {
+		t.Fatalf("search input=%+v, want query and top_k from OpenAPI request", searcher.gotInput)
+	}
+}
+
 func TestProviderCapabilitiesRouteReturnsBoundedDocument(t *testing.T) {
 	h := NewHTTPHandler(HTTPDependencies{ProviderEnabled: true, ProviderCapabilities: provider.Discover(provider.CapabilityInput{ProviderVersion: "provider-v1", SchemaVersion: "schema-v1"})})
 	r := httptest.NewRequest(http.MethodGet, "/v1/provider/capabilities", nil)

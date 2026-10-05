@@ -207,7 +207,7 @@ func registerProviderOperationRoutes(mux *http.ServeMux, deps HTTPDependencies) 
 		b, _ := provider.RuntimeBindingFromContext(r.Context())
 		var req struct {
 			Metadata provider.OperationMetadata `json:"metadata"`
-			Input    retrieval.SearchInput      `json:"input"`
+			Input    memorySearchRequest        `json:"input"`
 		}
 		if err := provider.DecodeStrict(readBody(r), &req); err != nil {
 			writeProviderError(w, 400, provider.ErrorCategoryValidation, "invalid_request", "invalid request", false)
@@ -217,7 +217,12 @@ func registerProviderOperationRoutes(mux *http.ServeMux, deps HTTPDependencies) 
 			writeProviderCompatibilityError(w, deps.ProviderSchemaVersions)
 			return
 		}
-		out, meta, err := deps.ProviderAdapter.Search(r.Context(), b, req.Metadata, req.Input)
+		input, err := req.Input.toRetrievalSearchInput()
+		if err != nil {
+			writeProviderError(w, 400, provider.ErrorCategoryValidation, "invalid_request", "invalid request", false)
+			return
+		}
+		out, meta, err := deps.ProviderAdapter.Search(r.Context(), b, req.Metadata, input)
 		if err != nil {
 			writeProviderError(w, 400, providerErrorCategory(err), "operation_failed", boundedProviderMessage(err), providerErrorCategory(err) == provider.ErrorCategoryRetryable)
 			return
