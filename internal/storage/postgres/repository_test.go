@@ -466,7 +466,7 @@ func TestRepositoryListCandidatesByRawEvent(t *testing.T) {
 
 	now := time.Date(2026, 5, 31, 16, 50, 0, 0, time.UTC)
 	rows := pgxmock.NewRows([]string{
-		"id", "source_raw_event_id", "tenant", "project", "namespace", "class", "content",
+		"id", "source_raw_event_id", "tenant", "project", "namespace", "memory_path", "class", "content",
 		"confidence", "importance", "freshness", "sensitivity", "mutability", "retention_class",
 		"status", "created_at", "updated_at",
 	}).AddRow(
@@ -475,6 +475,7 @@ func TestRepositoryListCandidatesByRawEvent(t *testing.T) {
 		"tenant-a",
 		"project-a",
 		"namespace-a",
+		"agents/research",
 		memory.MemoryClassProfile,
 		"User prefers concise answers.",
 		0.91,
@@ -488,7 +489,7 @@ func TestRepositoryListCandidatesByRawEvent(t *testing.T) {
 		now,
 	)
 
-	mock.ExpectQuery("SELECT .* FROM candidate_memories").
+	mock.ExpectQuery("SELECT[\\s\\S]*memory_path[\\s\\S]*FROM candidate_memories").
 		WithArgs("evt_123").
 		WillReturnRows(rows)
 
@@ -504,6 +505,10 @@ func TestRepositoryListCandidatesByRawEvent(t *testing.T) {
 
 	if candidates[0].ID != "cand_123" {
 		t.Fatalf("candidates[0].ID = %q, want %q", candidates[0].ID, "cand_123")
+	}
+
+	if candidates[0].MemoryPath != "agents/research" {
+		t.Fatalf("candidates[0].MemoryPath = %q, want %q", candidates[0].MemoryPath, "agents/research")
 	}
 
 	if err := mock.ExpectationsWereMet(); err != nil {

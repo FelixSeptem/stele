@@ -165,6 +165,7 @@ SELECT
 	tenant,
 	project,
 	namespace,
+	memory_path,
 	class,
 	content,
 	confidence,
