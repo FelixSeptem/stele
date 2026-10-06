@@ -1,0 +1,79 @@
+# Version-control metadata and local workspaces
+.git
+.git/**
+.worktrees
+.worktrees/**
+worktrees
+worktrees/**
+
+# Agent/editor metadata that is not part of the runtime image
+.claude
+.codex
+.cursor
+.gemini
+.opencode
+.trae
+.workbuddy
+.github
+.agents
+
+# Go caches created by local test runs
+.gocache*
+.gocache*/**
+
+# Local configuration, credentials, and operator evidence
+.env
+.env.*
+!.env.example
+!.env.local.example
+*.credential
+*.credentials
+*.secret
+*.key
+*.pem
+testdata
+testdata/**
+**/testdata
+**/testdata/**
+
+# Preserve the two production fixtures embedded by the benchmark command.
+!internal/benchmark/testdata
+!internal/benchmark/testdata/**
+
+# Documentation and OpenSpec artifacts are not needed to compile the service.
+docs
+docs/**
+openspec
+openspec/**
+skills
+skills/**
+scripts
+scripts/**
+*.md
+!AGENTS.md
+
+# Tests and local build/coverage output
+**/*_test.go
+bin
+bin/**
+dist
+dist/**
+coverage
+coverage/**
+tmp
+tmp/**
+.tmp
+.tmp/**
+.omo
+.omo/**
+*.out
+*.prof
+*.log
+
+# Common host and IDE files
+.DS_Store
+Thumbs.db
+.idea
+.vscode
+*.swp
+*.swo
