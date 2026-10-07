@@ -2362,6 +2362,7 @@ func TestRepositoryCreateSummaryMemoryWritesCanonicalVersionAndEvidenceProvenanc
 			input.Scope.Tenant,
 			input.Scope.Project,
 			input.Scope.Namespace,
+			memory.MemoryPathRoot,
 			memory.MemoryClassSummary,
 			memory.MemoryStateActive,
 			policy.RetentionClassDurable,
@@ -2370,12 +2371,13 @@ func TestRepositoryCreateSummaryMemoryWritesCanonicalVersionAndEvidenceProvenanc
 			input.CreatedAt,
 		).
 		WillReturnRows(pgxmock.NewRows([]string{
-			"id", "tenant", "project", "namespace", "class", "state", "content", "created_at", "updated_at",
+			"id", "tenant", "project", "namespace", "memory_path", "class", "state", "content", "created_at", "updated_at",
 		}).AddRow(
 			input.MemoryID,
 			input.Scope.Tenant,
 			input.Scope.Project,
 			input.Scope.Namespace,
+			memory.MemoryPathRoot,
 			memory.MemoryClassSummary,
 			memory.MemoryStateActive,
 			input.Content,
@@ -2386,6 +2388,7 @@ func TestRepositoryCreateSummaryMemoryWritesCanonicalVersionAndEvidenceProvenanc
 		WithArgs(
 			input.VersionID,
 			input.MemoryID,
+			memory.MemoryPathRoot,
 			int64(1),
 			memory.MemoryStateActive,
 			input.Content,
@@ -2393,10 +2396,11 @@ func TestRepositoryCreateSummaryMemoryWritesCanonicalVersionAndEvidenceProvenanc
 			"summary_compactor",
 		).
 		WillReturnRows(pgxmock.NewRows([]string{
-			"id", "memory_id", "version", "state", "content", "created_at", "modified_by",
+			"id", "memory_id", "memory_path", "version", "state", "content", "created_at", "modified_by",
 		}).AddRow(
 			input.VersionID,
 			input.MemoryID,
+			memory.MemoryPathRoot,
 			int64(1),
 			memory.MemoryStateActive,
 			input.Content,

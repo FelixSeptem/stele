@@ -1903,8 +1903,8 @@ INSERT INTO canonical_memories (
 	search_text,
 	created_at,
 	updated_at
-) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, to_tsvector('simple', $8), $9, $10)
-RETURNING id, tenant, project, namespace, class, state, content, created_at, updated_at
+) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, to_tsvector('simple', $9), $10, $11)
+RETURNING id, tenant, project, namespace, memory_path, class, state, content, created_at, updated_at
 `
 
 	var canonical memory.CanonicalMemory
@@ -1915,6 +1915,7 @@ RETURNING id, tenant, project, namespace, class, state, content, created_at, upd
 		input.Scope.Tenant,
 		input.Scope.Project,
 		input.Scope.Namespace,
+		memory.MemoryPathRoot,
 		memory.MemoryClassSummary,
 		memory.MemoryStateActive,
 		policy.RetentionClassDurable,
@@ -1926,6 +1927,7 @@ RETURNING id, tenant, project, namespace, class, state, content, created_at, upd
 		&canonical.Scope.Tenant,
 		&canonical.Scope.Project,
 		&canonical.Scope.Namespace,
+		&canonical.MemoryPath,
 		&canonical.Class,
 		&canonical.State,
 		&canonical.Content,
@@ -1939,13 +1941,14 @@ RETURNING id, tenant, project, namespace, class, state, content, created_at, upd
 INSERT INTO memory_versions (
 	id,
 	memory_id,
+	memory_path,
 	version,
 	state,
 	content,
 	created_at,
 	modified_by
-) VALUES ($1, $2, $3, $4, $5, $6, $7)
-RETURNING id, memory_id, version, state, content, created_at, modified_by
+) VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
+RETURNING id, memory_id, memory_path, version, state, content, created_at, modified_by
 `
 
 	var version memory.MemoryVersion
@@ -1954,6 +1957,7 @@ RETURNING id, memory_id, version, state, content, created_at, modified_by
 		versionQuery,
 		input.VersionID,
 		input.MemoryID,
+		memory.MemoryPathRoot,
 		int64(1),
 		memory.MemoryStateActive,
 		input.Content,
@@ -1962,6 +1966,7 @@ RETURNING id, memory_id, version, state, content, created_at, modified_by
 	).Scan(
 		&version.ID,
 		&version.MemoryID,
+		&version.MemoryPath,
 		&version.Version,
 		&version.State,
 		&version.Content,
