@@ -1872,10 +1872,11 @@ func promotedTemporalValidity(input governance.CanonicalPromotion) (memory.Tempo
 }
 
 func promotionProvenanceID(versionID string) string {
-	if _, err := uuid.Parse(versionID); err == nil {
-		return uuid.NewSHA1(uuid.NameSpaceURL, []byte("stele:promotion-provenance:"+versionID)).String()
-	}
-	return versionID + "_prov"
+	return uuid.NewSHA1(uuid.NameSpaceURL, []byte("stele:promotion-provenance:"+versionID)).String()
+}
+
+func summaryProvenanceID(versionID string, index int) string {
+	return uuid.NewSHA1(uuid.NameSpaceURL, []byte(fmt.Sprintf("stele:summary-provenance:%s:%d", versionID, index))).String()
 }
 
 func (r *Repository) CreateSummaryMemory(ctx context.Context, input governance.SummaryMemoryRecord) (memory.CanonicalMemory, memory.MemoryVersion, error) {
@@ -1978,7 +1979,7 @@ RETURNING id, memory_id, memory_path, version, state, content, created_at, modif
 
 	for i, rawEventID := range input.EvidenceRawEventIDs {
 		if err := writeProvenance(ctx, tx, memory.ProvenanceRecord{
-			ID:         fmt.Sprintf("%s_prov_%d", input.VersionID, i),
+			ID:         summaryProvenanceID(input.VersionID, i),
 			Scope:      input.Scope,
 			RawEventID: rawEventID,
 			MemoryID:   input.MemoryID,

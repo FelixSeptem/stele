@@ -27,8 +27,8 @@ func TestPromotionProvenanceIDKeepsUUIDValid(t *testing.T) {
 	if _, err := uuid.Parse(provenanceID); err != nil {
 		t.Fatalf("promotionProvenanceID(%q) = %q, want valid UUID", versionID, provenanceID)
 	}
-	if promotionProvenanceID("version_123") != "version_123_prov" {
-		t.Fatalf("promotionProvenanceID() changed legacy textual fixture behavior")
+	if _, err := uuid.Parse(promotionProvenanceID("version_123")); err != nil {
+		t.Fatalf("promotionProvenanceID(%q) = %q, want valid UUID", "version_123", promotionProvenanceID("version_123"))
 	}
 }
 
@@ -2409,7 +2409,7 @@ func TestRepositoryCreateSummaryMemoryWritesCanonicalVersionAndEvidenceProvenanc
 		))
 	mock.ExpectExec("INSERT INTO provenance_links").
 		WithArgs(
-			pgxmock.AnyArg(),
+			summaryProvenanceID(input.VersionID, 0),
 			"evt_1",
 			nil,
 			input.MemoryID,
@@ -2425,7 +2425,7 @@ func TestRepositoryCreateSummaryMemoryWritesCanonicalVersionAndEvidenceProvenanc
 		WillReturnResult(pgxmock.NewResult("INSERT", 1))
 	mock.ExpectExec("INSERT INTO provenance_links").
 		WithArgs(
-			pgxmock.AnyArg(),
+			summaryProvenanceID(input.VersionID, 1),
 			"evt_2",
 			nil,
 			input.MemoryID,
