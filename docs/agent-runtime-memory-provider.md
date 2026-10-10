@@ -56,6 +56,161 @@ Stable provider error categories are `authentication`, `scope`,
 operation dispatch. A `resync_required` result is fail-closed: the runtime must
 start a fresh snapshot instead of assuming that skipped events were applied.
 
+## Provider context JSON contract
+
+`POST /v1/provider/context` uses the dedicated `ProviderContextRequest` and
+`ProviderContextResponse` schemas in the served `/openapi.yaml`. Send the
+credential in `X-API-Key`, the server-issued `X-Stele-Runtime-Binding` and
+`X-Stele-Runtime-Session`, and the exact `X-Stele-Tenant`, `X-Stele-Project`,
+and `X-Stele-Namespace` headers. Scope and session are binding-derived;
+they cannot be overridden in `input`.
+
+Minimal request (ProviderContextRequest):
+
+```json
+{
+  "metadata": {
+    "request_id": "context-request-1",
+    "operation_id": "context-operation-1",
+    "schema_version": "provider-v1"
+  },
+  "input": {"query": "current task", "budget": 4}
+}
+```
+
+Full request (ProviderContextRequest):
+
+```json
+{
+  "metadata": {
+    "request_id": "context-request-2",
+    "operation_id": "context-operation-2",
+    "schema_version": "provider-v1"
+  },
+  "input": {
+    "query": "current task",
+    "budget": 8,
+    "path_prefix": "tasks/demo",
+    "include_relations": true,
+    "include_experience_insights": true,
+    "include_goal_context": true,
+    "include_diagnostics": true,
+    "include_feedback_diagnostics": true,
+    "feedback_aware_ranking": true,
+    "feedback_ranking_policy": ""
+  }
+}
+```
+
+`query` must be nonblank and `budget` a positive integer. Boolean options
+default to false. Use either exact `path` or explicit `path_prefix`; shared
+path validation normalizes leading/trailing slashes and rejects conflicting
+selectors. A nonempty `feedback_ranking_policy` is always rejected. Optional
+insights, goals, and diagnostics retain their existing authorization, lifecycle,
+and governed policy gates; setting a flag does not grant access.
+
+The result is categorized context. Ordinary section items contain `memory`
+and `citations`, preserving selected order, identity, path, class, active state,
+content, timestamps, and temporal metadata. They omit ranking scores.
+`known_failures`, `experience_lessons`, `goal_context`, and `diagnostics` are
+optional and may be omitted when empty. Insights expose only documented
+identity, summary, confidence, lesson, and timestamp fields; diagnostics expose
+section/status/reason and aggregate counts. Raw feedback, insight payloads,
+derivation metadata, planner state, candidate pools, and query text are absent.
+
+A genuine empty response (ProviderContextResponse):
+
+```json
+{
+  "metadata": {
+    "request_id": "context-request-1",
+    "operation_id": "context-operation-1",
+    "schema_version": "provider-v1"
+  },
+  "result": {
+    "profile": [],
+    "recent_session": [],
+    "recent_episodes": [],
+    "relevant_summaries": [],
+    "related_entities": [],
+    "citations": []
+  },
+  "citations": []
+}
+```
+
+Validate the HTTP response against the dedicated response schema before using
+it. Missing `result` or required sections, null/scalar sections, invalid item
+or citation types, and a substituted `references/content` shape are
+`failed-contract`, never an empty success. Preserve inner memory citations
+(`memory_id/raw_event_id/operation`) as selected evidence. The aggregate
+`result.citations` is deduplicated from the returned memory items in categorized
+order; it excludes citations belonging only to candidates omitted by the item
+budget or section selection. Outer Provider
+citations (`source_kind/reference/availability` plus optional version/watermark)
+are a configured bounded summary and may be shorter. A reference grants no
+permission for another read; missing version/watermark values are not invented.
+
+### Compatibility and maintenance notes
+
+This is a documented `provider-v1` repair, with no database migration or alternate
+legacy route. It deliberately rejects accidental aliases and removes accidental
+raw ranking output. Deploy a consistent repaired revision across API replicas.
+Capabilities now publish `schema_digest=sha256:<hex>` calculated from the same
+served OpenAPI bytes; that digest identifies the API document, not selected
+context or the PostgreSQL migration version.
+
+| Consumer behavior | Repaired behavior | Migration |
+| --- | --- | --- |
+| Documented snake_case options | Accepted and explicitly mapped | Use the request examples above. |
+| Go-name or case aliases, duplicate keys, unknown fields, null/missing required objects | HTTP 400 validation | Use exact canonical property names and typed values. |
+| Caller scope/session/user/role/projection overrides | HTTP 400 validation | Retain binding-owned attribution; business permissions stay in the runtime. |
+| Nonempty `feedback_ranking_policy`, blank query, nonpositive budget, conflicting paths | HTTP 400 validation | Correct the request; do not retry a policy override. |
+| Unsupported schema version | HTTP 400 compatibility before assembly | Use an advertised version. |
+| Foreign binding/session/scope | Authentication or scope denial before assembly | Reinitialize the permitted binding; never widen scope. |
+| Reading ordinary `score` or arbitrary insight/diagnostic fields | Fields omitted | Consume documented content/citations and allowlisted optional fields. |
+| Using aggregate citations to discover unselected candidates | Only returned items contribute aggregate evidence | Read candidate-independent evidence from the selected items; citations do not extend the item budget. |
+| Expecting `references/content` or treating malformed results as empty | Incompatible contract | Validate categorized results and map authorized items without reranking. |
+
+PC2 disclosure profiles, reference-only responses, and source-trust metadata
+remain pending. PC3 remains pending: `budget` counts items and retains the
+existing clamp against `MaxContextBytes`; this does not enforce the byte size
+of the complete serialized response. PC4 Stele-issued context digest and
+continuity remain pending. This repair does not establish PC5 reference or PC6
+turn/outcome contracts. The runtime owns business permissions and final prompt
+construction; Stele owns existing retrieval and selection rules.
+
+### Public live verification
+
+Build a repaired image, then run the owned fresh PostgreSQL/pgvector verifier:
+
+```powershell
+docker build --build-arg STELE_GOPROXY=https://goproxy.cn,direct -t stele-pc1-verify:local .
+pwsh -NoProfile -File scripts/stele-provider-context-verify.ps1 -ReportPath .tmp/provider-context-evidence.json
+```
+
+The script uses official bootstrap, normal `conversation.message` ingestion,
+bounded public governance-completion checks, exact and prefix paths, a genuine
+empty read, scope denial, lifecycle exclusion, event replay, and API/worker
+restart with the original binding. Its retained report contains only bounded
+check names, completion counts, and build/schema/scope/identity/provenance
+hashes. The source revision plus source digest records the verifier's host
+worktree, including uncommitted source changes; the image digest pins the actual
+tested image. Build the image from that worktree before running the verifier.
+The report checks the served OpenAPI against the worktree but does not independently
+prove source-to-image linkage through embedded build metadata. It removes its
+owned stack, volume, and ephemeral credentials.
+Missing dependencies or incomplete verification produce nonpassing evidence.
+Unit tests skip this fixture when no live environment is configured; that skip
+is not readiness evidence. The verification reader's size bound is a fixture
+safety limit, not PC3 runtime response-budget enforcement.
+
+The product verifier can run this same context gate on its owned stack by
+setting `STELE_PRODUCT_VERIFY_PROVIDER_CONTEXT=1`; it writes a separate
+`<ReportPath>.context.json`. An adapter-only conformance result proves no public
+HTTP shape. Context conformance requires HTTP and response-schema evidence plus
+the OpenAPI digest; contract outcomes remain separate from retrieval quality.
+
 ## Snapshot and reconnect synchronization
 
 After the runtime binding handshake, request an initial bounded snapshot through

@@ -254,6 +254,20 @@ try {
             "Content-Type" = "application/json"
         }
 
+        # Public context evidence uses this fresh owned database and official
+        # bootstrap, and validates the served schema before/after API+worker restart.
+        if ($env:STELE_PRODUCT_VERIFY_PROVIDER_CONTEXT -eq "1") {
+            $contextReportPath = "$ReportPath.context.json"
+            & pwsh -NoProfile -File (Join-Path $PSScriptRoot "stele-provider-context-verify.ps1") -ProjectName $ProjectName -ComposeFile $ComposeFile -UseExistingStack -BaseUrl $baseUrl -CredentialDirectory $credentialDir -ReportPath $contextReportPath
+            if ($LASTEXITCODE -ne 0) {
+                Add-ConformancePhase "inspection" "fail" "provider_context_contract" "gt_10s"
+                throw "public Provider context conformance failed"
+            }
+            $contextReport = Get-Content -Raw -LiteralPath $contextReportPath | ConvertFrom-Json
+            if ($contextReport.result -ne "passed" -or $contextReport.stage -ne "restart") { throw "public context restart evidence missing" }
+            Add-ConformancePhase "inspection" "pass" "provider_context_contract" "1s_10s"
+        }
+
         $mcpPath = if ([string]::IsNullOrWhiteSpace($env:STELE_MCP_PATH)) { "/mcp" } else { $env:STELE_MCP_PATH }
         if ($mcpPath -notmatch '^/[a-zA-Z0-9/_-]{1,64}$') { throw "configured MCP path is invalid or unbounded" }
         if ($env:STELE_PRODUCT_VERIFY_MCP -eq "1") {

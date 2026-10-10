@@ -241,7 +241,7 @@ paths:
           description: 'Scoped assembled context with citations'
           content:
             application/json:
-              schema: {$ref: '#/components/schemas/ProviderOperationResponse'}
+              schema: {$ref: '#/components/schemas/ProviderContextResponse'}
         '400': {description: 'Bounded provider error'}
         '403': {description: 'Runtime binding or scope denied'}
   /v1/provider/turns:
@@ -4449,6 +4449,10 @@ components:
         idempotency_key: {type: string, maxLength: 256}
         event_seq: {type: integer, minimum: 0}
         schema_version: {type: string, maxLength: 64}
+        memory_path: {type: string, maxLength: 512}
+        precedence_version: {type: string}
+        precedence_stage: {type: string}
+        precedence_outcome: {type: string}
     ProviderCapabilityDocument:
       type: object
       additionalProperties: false
@@ -4592,7 +4596,7 @@ components:
       required: [metadata, input]
       properties:
         metadata: {$ref: '#/components/schemas/ProviderOperationMetadata'}
-        input: {$ref: '#/components/schemas/ContextAssembleRequest'}
+        input: {$ref: '#/components/schemas/ProviderContextInput'}
     ProviderIntentResponse:
       type: object
       required: [metadata, result]
@@ -9096,5 +9100,5 @@ components:
           items:
             $ref: '#/components/schemas/RankingRolloutPolicy'
 `
-	return strings.Replace(spec, "  /mcp:\n", "  "+mcpPath+":\n", 1)
+	return strings.Replace(spec+providerContextSchemas, "  /mcp:\n", "  "+mcpPath+":\n", 1)
 }

@@ -32,6 +32,7 @@
 - Keep public APIs OpenAPI-first and self-host friendly.
 - Add tests for ingestion, consolidation, retrieval, forgetting, and isolation whenever behavior changes.
 - Update `docs/` when governance, lifecycle, or public API contracts change.
+- Any externally visible semantic change must include corresponding maintenance documentation updates in the same change. Cover affected request/response shapes, validation and error behavior, authorization, defaults, and compatibility or migration notes; update OpenAPI, README, integration guides, and agent skills wherever affected.
 
 ## Library Guidance
 

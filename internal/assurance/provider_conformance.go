@@ -21,11 +21,12 @@ const (
 	ProviderFixtureRestartFallback ProviderFixtureKind = "restart_fallback"
 	ProviderFixtureFreshness       ProviderFixtureKind = "freshness"
 	ProviderFixtureSynchronization ProviderFixtureKind = "synchronization"
+	ProviderFixtureContext         ProviderFixtureKind = "context"
 )
 
 func (k ProviderFixtureKind) valid() bool {
 	switch k {
-	case ProviderFixtureCapability, ProviderFixtureScope, ProviderFixtureReplay, ProviderFixtureLifecycle, ProviderFixtureCitation, ProviderFixtureRestartFallback, ProviderFixtureFreshness, ProviderFixtureSynchronization:
+	case ProviderFixtureCapability, ProviderFixtureScope, ProviderFixtureReplay, ProviderFixtureLifecycle, ProviderFixtureCitation, ProviderFixtureRestartFallback, ProviderFixtureFreshness, ProviderFixtureSynchronization, ProviderFixtureContext:
 		return true
 	}
 	return false
@@ -42,11 +43,13 @@ const (
 	ProviderEvidenceRestart         ProviderEvidenceKind = "restart"
 	ProviderEvidenceFreshness       ProviderEvidenceKind = "freshness"
 	ProviderEvidenceSynchronization ProviderEvidenceKind = "synchronization"
+	ProviderEvidenceContextHTTP     ProviderEvidenceKind = "context_http"
+	ProviderEvidenceContextSchema   ProviderEvidenceKind = "context_schema"
 )
 
 func (k ProviderEvidenceKind) valid() bool {
 	switch k {
-	case ProviderEvidenceCompatibility, ProviderEvidenceScope, ProviderEvidenceReplay, ProviderEvidenceLifecycle, ProviderEvidenceCitation, ProviderEvidenceRestart, ProviderEvidenceFreshness, ProviderEvidenceSynchronization:
+	case ProviderEvidenceCompatibility, ProviderEvidenceScope, ProviderEvidenceReplay, ProviderEvidenceLifecycle, ProviderEvidenceCitation, ProviderEvidenceRestart, ProviderEvidenceFreshness, ProviderEvidenceSynchronization, ProviderEvidenceContextHTTP, ProviderEvidenceContextSchema:
 		return true
 	}
 	return false
@@ -90,11 +93,12 @@ func (p ProviderConformanceProfile) Validate() error {
 }
 
 type ProviderFixtureOutcome struct {
-	Passed     bool
-	OutOfScope bool
-	Hidden     bool
-	Evidence   []ProviderEvidenceKind
-	References []string
+	Passed        bool
+	OutOfScope    bool
+	Hidden        bool
+	Evidence      []ProviderEvidenceKind
+	References    []string
+	OpenAPIDigest string
 }
 type ProviderFixtureExecutor interface {
 	ExecuteProviderFixture(context.Context, provider.RuntimeBinding, ProviderFixture) (ProviderFixtureOutcome, error)
@@ -237,9 +241,15 @@ func (s *Service) RunProviderConformance(ctx context.Context, input ProviderConf
 		if ex, ok := s.providerConformanceExecutor(); ok {
 			for _, f := range input.Profile.Fixtures {
 				out, err := ex.ExecuteProviderFixture(ctx, input.Binding, f)
-				if err != nil || !out.Passed || out.OutOfScope || out.Hidden || !containsAllProviderEvidence(out.Evidence, f.RequiredEvidence) {
+				contextEvidence := f.Kind != ProviderFixtureContext || (containsAllProviderEvidence(out.Evidence, []ProviderEvidenceKind{ProviderEvidenceContextHTTP, ProviderEvidenceContextSchema}) && validContextDigest(out.OpenAPIDigest))
+				fixturePassed := err == nil && out.Passed && !out.OutOfScope && !out.Hidden && containsAllProviderEvidence(out.Evidence, f.RequiredEvidence) && contextEvidence
+				if !fixturePassed {
 					result = ConformanceResultFailed
 					diagnostics = append(diagnostics, MissingEvidenceDiagnostic{ID: s.newID("provider_diagnostic"), ConformanceRunID: id, Scope: input.Profile.Scope, EvidenceKind: ExpectedEvidenceContext, Category: MissingEvidenceHidden, ReadinessImpact: ReadinessStatusBlocked, CreatedAt: now})
+				}
+				if f.Kind == ProviderFixtureContext && fixturePassed {
+					counts["provider"].(map[string]any)["context_http_schema"] = "passed"
+					counts["provider"].(map[string]any)["openapi_digest"] = out.OpenAPIDigest
 				}
 			}
 		} else {

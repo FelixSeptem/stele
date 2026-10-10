@@ -169,6 +169,13 @@ turn an unconstrained search into a destructive bulk action.
 When MCP is disabled, `/mcp` returns not-found while ordinary OpenAPI routes
 remain available. Do not fall back to direct SQL or an unscoped database client.
 
+For a Provider context fallback, use the dedicated
+[Provider JSON contract](../agent-runtime-memory-provider.md#provider-context-json-contract),
+including exact snake_case input and strict categorized-response validation.
+MCP `memory_context` keeps its tool schema and `budget_bytes` contract; Provider
+`input.budget` retains item semantics. Review of `skills/stele-memory/SKILL.md`
+requires no tool-signature changes for this Provider repair.
+
 ## Reference patterns
 
 The roadmap records research on Stash, Letta Code, and Supermemory as design

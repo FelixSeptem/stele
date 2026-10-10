@@ -121,6 +121,7 @@ forgetting, citations, retries, and disabled-MCP recovery.
 | Operate memory safely | [Best practices](docs/best-practices.md) |
 | Deploy, migrate, back up, and verify | [Self-hosting](docs/self-hosting.md) |
 | Integrate a runtime provider | [Agent runtime provider](docs/agent-runtime-memory-provider.md) |
+| Migrate Provider context JSON | [Typed context contract and maintenance notes](docs/agent-runtime-memory-provider.md#provider-context-json-contract) |
 | Understand public API schemas | [OpenAPI specification](openapi/spec.go) |
 | Run optional MCP conformance | [`scripts/stele-mcp-conformance.ps1`](scripts/stele-mcp-conformance.ps1) |
 | Review planned and archived changes | [OpenSpec configuration](openspec/config.yaml) |

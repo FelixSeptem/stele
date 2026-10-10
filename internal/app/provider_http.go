@@ -2,14 +2,16 @@ package app
 
 import (
 	"context"
+	"crypto/sha256"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"github.com/FelixSeptem/stele/internal/auth"
 	"github.com/FelixSeptem/stele/internal/memory"
 	"github.com/FelixSeptem/stele/internal/policy"
 	"github.com/FelixSeptem/stele/internal/provider"
-	"github.com/FelixSeptem/stele/internal/retrieval"
 	"github.com/FelixSeptem/stele/internal/telemetry"
+	"github.com/FelixSeptem/stele/openapi"
 	"io"
 	"net/http"
 	"strings"
@@ -21,6 +23,7 @@ func registerProviderRoutes(mux *http.ServeMux, deps HTTPDependencies) {
 		if err := doc.Validate(); err != nil {
 			doc = provider.Discover(provider.CapabilityInput{ProviderVersion: "provider-v1", SchemaVersion: "schema-v1"})
 		}
+		doc.SchemaDigest = fmt.Sprintf("sha256:%x", sha256.Sum256([]byte(openapi.SpecYAMLWithMCPPath(deps.MCP.Path))))
 		writeJSON(w, http.StatusOK, doc)
 	})
 	runtimeInit := auth.PrincipalMiddleware(deps.PrincipalAuthorizer, auth.PrincipalRolePublic)(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -231,11 +234,8 @@ func registerProviderOperationRoutes(mux *http.ServeMux, deps HTTPDependencies) 
 	})))
 	mux.Handle("POST /v1/provider/context", wrap(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		b, _ := provider.RuntimeBindingFromContext(r.Context())
-		var req struct {
-			Metadata provider.OperationMetadata     `json:"metadata"`
-			Input    retrieval.AssembleContextInput `json:"input"`
-		}
-		if err := provider.DecodeStrict(readBody(r), &req); err != nil {
+		req, err := provider.DecodeContextRequest(readBody(r))
+		if err != nil {
 			writeProviderError(w, 400, provider.ErrorCategoryValidation, "invalid_request", "invalid request", false)
 			return
 		}
@@ -243,12 +243,17 @@ func registerProviderOperationRoutes(mux *http.ServeMux, deps HTTPDependencies) 
 			writeProviderCompatibilityError(w, deps.ProviderSchemaVersions)
 			return
 		}
-		out, meta, err := deps.ProviderAdapter.AssembleContext(r.Context(), b, req.Metadata, req.Input)
+		input, err := req.Input.RetrievalInput(b.Scope)
+		if err != nil {
+			writeProviderError(w, 400, provider.ErrorCategoryValidation, "invalid_request", "invalid request", false)
+			return
+		}
+		out, meta, err := deps.ProviderAdapter.AssembleContext(r.Context(), b, req.Metadata, input)
 		if err != nil {
 			writeProviderError(w, 400, providerErrorCategory(err), "operation_failed", boundedProviderMessage(err), providerErrorCategory(err) == provider.ErrorCategoryRetryable)
 			return
 		}
-		writeJSON(w, http.StatusOK, map[string]any{"metadata": meta, "result": out, "citations": provider.ShapeContextCitationsWithLimit(out, providerCitationLimit(deps.ProviderLimits))})
+		writeJSON(w, http.StatusOK, provider.ShapeContextResponse(out, meta, req.Input, providerCitationLimit(deps.ProviderLimits)))
 	})))
 	mux.Handle("POST /v1/provider/turns", wrap(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		b, _ := provider.RuntimeBindingFromContext(r.Context())

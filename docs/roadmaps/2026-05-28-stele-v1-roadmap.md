@@ -39,7 +39,7 @@ explicitly requested; local branch/worktree cleanup is the default after a
 successful merge and push. Unrelated user or parallel-agent worktrees remain
 outside the proposal cleanup scope.
 
-## Global Status And Priority (2026-09-18)
+## Global Status And Priority (2026-10-10)
 
 The original Phase 1–5 sequence is now the historical foundation path. The
 repository has archived changes covering bootstrap and ingestion, governance,
@@ -68,14 +68,16 @@ not be conflated:
   Archived names include `governed-contradiction-insights`,
   `governed-memory-intents`, `governed-operation-policy-precedence`,
   `governed-goal-insights`, and
-  `governed-goal-review-and-experimental-visibility`. The current bounded
-  candidate is `runtime-capability-and-event-sync-contract`, a narrowly scoped
-  provider-runtime synchronization contract with an OpenAPI pull transport and
-  transport-neutral extension points for future WebSocket/SSE adapters.
-- **Candidate expansion**: useful post-v1 ideas that must wait until the provider
-  contract and quality gates are stable. This includes MCP adapters, namespace
-  subtree conventions, agent self-model conventions, and later autonomous
-  reasoning extensions.
+  `governed-goal-review-and-experimental-visibility`. Changes 067 and 068,
+  `runtime-capability-and-event-sync-contract` and
+  `documentation-and-agent-skill-onboarding`, are also archived baselines.
+- **Candidate expansion**: PC1–PC6 below capture the remaining provider context
+  and runtime integration contract gaps. PC1,
+  `provider-context-openapi-contract-alignment`, is implemented and archived as
+  change 069 with fresh live evidence. PC2–PC6 remain roadmap candidates. MCP, scoped memory paths, agent
+  self-model conventions, runtime sync, and agent-skill onboarding already have
+  archived implementations; follow-up must identify a specific gap rather than
+  re-plan those capabilities.
 
 ### OpenSpec ↔ roadmap reconciliation snapshot
 
@@ -98,6 +100,9 @@ change an archived baseline.
 | RQ2 bi-temporal fact validity | Archived change 041 | Implemented and archived; active rollout still requires fresh owned PostgreSQL + pgvector release evidence. |
 | RQ3 bounded graph-distance retrieval | Archived change 042 | Implemented and archived; active rollout still requires fresh owned PostgreSQL + pgvector release evidence. |
 | RQ4 context efficiency and feedback calibration | Archived change 043, 23/23 tasks | Implemented and archived with owned PostgreSQL + pgvector shadow evidence; calibration remains disabled by default and shadow-only unless a fresh compatible exact-scope summary and separately governed activation are present. |
+| Runtime capability and event sync | Archived change 067 | Implemented OpenAPI pull synchronization with transport-neutral extension points; future WebSocket/SSE transports remain optional. |
+| Documentation and agent-skill onboarding | Archived change 068 | Implemented baseline; update existing documentation and skill guidance when a new public contract ships. |
+| PC1–PC6 provider context and runtime integration | Archived change 069 for PC1; PC2–PC6 remain roadmap candidates | PC1 implementation and fresh PostgreSQL/pgvector restart evidence are complete and archived. PC2–PC6 await individual proposal drafting. |
 
 ### Global priority order
 
@@ -111,7 +116,7 @@ change an archived baseline.
 | P5 | Benchmark expansion and retrieval release evidence | Archived changes 025, 026, 035, and 039 | Implemented baseline; owned real-stack evidence remains a prerequisite for activation. |
 | P6 | Durable multi-scope maintenance and observability | Archived change 037 | Implemented baseline; retain regression, freshness, and SLO evidence. |
 | P7 | Agent runtime memory-provider contract | Archived change 038 | Implemented baseline; integration remains optional to the retrieval path. |
-| P8 | Optional adapters and governed experience insights | Governed insight baseline in changes 013/014; changes 044–066 are archived, including governed contradiction insights, governed memory intents, operation precedence, memory-intent real-stack conformance, goal insights, goal review/experimental visibility, and release-evidence freshness reconciliation; `runtime-capability-and-event-sync-contract` is the current bounded candidate | Keep MCP and future runtime transports as optional adapters over OpenAPI-backed, exact-scope contracts rather than creating a second memory system. |
+| P8 | Optional adapters and governed experience insights | Governed insight baseline in changes 013/014; changes 044–069 are archived; PC1 has fresh live evidence; PC2–PC6 are roadmap candidates | Reuse the archived provider, retrieval, governance, sync, MCP, and skill contracts; close public context and runtime evidence gaps without a second memory system. |
 
 ### Critical path to provider readiness
 
@@ -141,10 +146,10 @@ RQ3 bounded graph-distance retrieval and evidence paths
 RQ4 context efficiency and feedback calibration
 ```
 
-RQ1–RQ4 are the next Stele-native retrieval-quality frontier. Each workstream
+RQ1–RQ4 are the archived Stele-native retrieval-quality frontier. Follow-up
 must preserve the archived P0–P7 contracts, PostgreSQL as the sole system of
 record, exact scope/lifecycle filtering, bounded diagnostics, and reversible
-rollout. RQ2–RQ4 are not implied by the RQ1 implementation.
+rollout. PC1–PC6 extend the public integration contract over these capabilities.
 
 ## Retrieval-quality frontier
 
@@ -1385,10 +1390,13 @@ Changes 060–065 are complete and archived. Change 064,
 `governed-goal-insights`, and change 065,
 `governed-goal-review-and-experimental-visibility`, specialize the reasoning
 envelope to an evidence-backed, review-only goal type while keeping default
-visibility off. The current bounded candidate is
-`runtime-capability-and-event-sync-contract`, which closes the provider-runtime
-snapshot, event replay, reconnect, and retention-gap contract while leaving
-WebSocket/SSE as future adapters over the same transport-neutral semantics.
+visibility off. Runtime snapshot, event replay, reconnect, and retention-gap
+semantics are complete and archived as change 067,
+`runtime-capability-and-event-sync-contract`; WebSocket/SSE remain future
+adapters over the same transport-neutral semantics. Documentation and agent-skill
+onboarding are complete and archived as change 068. PC1 below is implemented and
+archived as change 069; PC2–PC6 are pending provider context and runtime integration
+candidates.
 
 Follow-up candidates for a future P8 proposal:
 
@@ -1405,11 +1413,10 @@ Later P8 candidates:
 - extend the archived governed-insight baseline only where a new insight type
   has its own provenance, lifecycle, replay, feedback, and context-evidence
   contract;
-- define a provider-independent reasoning boundary before considering a new
-  insight type.
-- specialize the archived reasoning envelope for `goal` only with bounded
-  evidence, review, replay, redaction, rollback, and default-visibility
-  requirements in its own change.
+- reuse the archived provider-independent reasoning boundary for any new insight
+  type, preserving its bounded evidence and review requirements;
+- extend the archived `goal` envelope only for an identified gap, preserving
+  evidence, review, replay, redaction, rollback, and default-visibility rules.
 
 Exit signal:
 
@@ -1432,8 +1439,9 @@ Exit signal:
 10. Stage 9 agent runtime memory-provider contract and adapter (P7, archived)
 11. RQ1–RQ4 retrieval-quality frontier (archived changes 040–043)
 12. Stage 10 optional adapters and governed experience insights (P8), with
-    P8.1–P8.8 and changes 054–063 archived;
-    `governed-goal-insights` is the current bounded post-v1 candidate
+    P8.1–P8.8 and changes 054–068 archived
+13. PC1–PC6 provider context and runtime integration; PC1 is archived as 069,
+    and the next candidate is `provider-context-disclosure-and-source-trust`
 
 Reasoning:
 
@@ -1506,7 +1514,7 @@ Stele adaptations and proposal seeds:
 3. `compaction-evidence-and-context-tracking`: record bounded context pressure,
    compaction transitions, source watermarks, summary versions, evidence coverage,
    and follow-up reflection scheduling.
-4. `runtime-capability-and-event-sync-contract`: define provider capability/limit
+4. Archived `runtime-capability-and-event-sync-contract` (change 067): define provider capability/limit
    discovery, server-resolved runtime scope, reconnect snapshots, `sync_complete`,
    ordered event replay, duplicate suppression, and bounded event retention.
 5. `governed-operation-policy-precedence`: publish the evaluation order for scope,
@@ -1516,8 +1524,10 @@ Stele adaptations and proposal seeds:
    lease recovery, duplicate-fire prevention, append-only run history, bounded
    retention, and operator pagination for scheduled maintenance.
 
-These seeds are implementation candidates, not independent storage systems. They
-must continue to use PostgreSQL as the system of record, preserve append-only
+These reference seeds describe capabilities now covered by archived changes
+031, 038, 056, 057, 061, 062, and 067. They are baseline context rather than a
+second pending implementation queue. Any follow-up must identify a specific gap
+and continue to use PostgreSQL as the system of record, preserve append-only
 canonical history and provenance, and enforce tenant/project/namespace isolation.
 
 Patterns explicitly not adopted from Letta Code:
@@ -1545,7 +1555,9 @@ Risks and assumptions to validate before implementation:
 - Product claims are not Stele requirements. Stash's cognitive stages are useful vocabulary, but each stage needs a Stele-specific data model, provenance rule, lifecycle state, and operator contract before adoption.
 - MCP ergonomics should not drive storage or lifecycle design. Any MCP work must remain an adapter over OpenAPI-backed service behavior.
 - Namespace subtree recall may be useful, but it can also weaken Stele's explicit `tenant/project/namespace` mental model if introduced too early.
-- Autonomous hypothesis or causal inference likely requires a reasoning provider boundary that Stele has not yet defined. Do not tie that work to embedding provider configuration.
+- Autonomous hypothesis or causal inference must reuse the archived reasoning
+  provider boundary (change 048) and governed insight contracts. Do not tie that
+  work to embedding provider configuration.
 - Failure-pattern extraction is more concrete than hypothesis inference because Stele already has raw events, procedural memory, job execution records, recovery history, and embedding failure state to derive from.
 
 Stele constraints that remain non-negotiable:
@@ -1650,27 +1662,266 @@ scoped P8.1 MCP adapter):
 3. Agent self-model conventions (archived change 047, P8.2b):
    Standardize scoped memory conventions for capabilities, limits, preferences, and lessons learned while keeping them ordinary governed memories; future work is limited to identified gaps.
 
-4. Self-hosting first-ten-minutes smoke path:
+4. Self-hosting first-ten-minutes smoke path (archived change 054):
    Improve operator onboarding with a short path covering startup, ingest, worker processing, retrieval, context assembly, readiness, and metrics.
 
-5. Reasoning-provider boundary:
+5. Reasoning-provider boundary (archived change 048):
    Define a provider-independent interface for optional LLM-assisted derivation before implementing autonomous hypothesis, causal, contradiction, or goal inference.
 
-6. Progressive context and hierarchical retrieval experiments:
+6. Progressive context and hierarchical retrieval experiments (archived change 058):
    Compare L0/L1/L2-inspired derived projections and parent-first retrieval
    against the stable fusion baseline. Keep the experiment offline or shadowed,
    require exact-scope expansion and deterministic replay, and promote it only
    through the P5 retrieval release gate.
 
-7. Redacted retrieval trajectory and memory-integrity evaluation:
+7. Redacted retrieval trajectory and memory-integrity evaluation (archived change 051):
    Extend evaluation/admin diagnostics with bounded retrieval-path aggregates,
    plus separate action-success and information-integrity metrics for
    consolidation, merge, reclassification, reflection, and projection changes.
 
-8. Governed release-evidence freshness reconciliation: continuously reconcile
+8. Governed release-evidence freshness reconciliation (archived change 066): continuously reconcile
    archived handoffs against exact-scope freshness, source-watermark, policy,
    representation, attestation, and rollback requirements, revoking activation
    eligibility fail-closed while retaining evidence history.
+
+All eight reference follow-up tracks above are archived baselines. The pending
+proposal queue is PC2–PC6 below; an archived track is reopened only for an
+identified contract or regression gap.
+
+## Pending Provider Context And Runtime Integration Proposals (2026-10-10)
+
+These six directions capture the Stele/Danny boundary review. PC1 is now
+[archived change 069](../../openspec/changes/archive/069-provider-context-openapi-contract-alignment/proposal.md).
+Implementation and fresh public PostgreSQL/pgvector restart verification are complete, and its delta requirements are synchronized into the main specifications.
+PC2–PC6 remain **pending proposal drafting and implementation** and are not
+active or approved OpenSpec changes. Each requires its own planning and
+implementation cycle. Existing
+retrieval, governance, memory history, session, feedback, sync, MCP, and skill
+capabilities remain the baseline, not new implementations in these candidates.
+
+### Shared Ownership And Acceptance Rules
+
+- Stele owns scope-aware memory retrieval, ranking, quality and lifecycle
+  eligibility, path selection, provenance, long-term memory selection, memory
+  context assembly, and bounded retrieval diagnostics. Reuse the existing
+  lexical/pgvector/relation retrieval and governance services.
+- Danny owns business roles, tool permissions, write policy, final prompt
+  construction, and the total model context window. It allocates a memory budget
+  to Stele; Stele selects memory inside that budget. Danny may reject an
+  unauthorized or oversized response, but must not reproduce ranking,
+  eligibility, canonicalization, or memory packing in its business modules.
+- Stele enforces credential/runtime-binding grants, exact scope, lifecycle, and
+  disclosure constraints before returning data. A caller-provided role, intent,
+  profile, path, digest, or continuation reference cannot widen access.
+- Danny owns task status/revision, schedule enablement/occurrences, execution
+  leases, generation commit, artifact publication, and webhook delivery. Stele
+  records associated context and reported evidence, never their authoritative
+  business state. Derived insight cannot serve as a completion/commit receipt.
+- Danny retains event/memory/version IDs, scope, path, operation ID, effect key,
+  projection digest, and business-to-memory associations. User preference facts
+  and long-term memory stay in Stele rather than a second local fact store.
+- Each candidate must define OpenAPI inputs, outputs, capability/version
+  compatibility, bounded errors, exact-scope and lifecycle tests, and relevant
+  documentation/MCP/agent-skill updates. Public API fixtures use fresh owned
+  PostgreSQL + pgvector and official principal/bootstrap paths. Governance or
+  persistence claims require database completion and restart evidence, not
+  merely HTTP success or an in-process lookup.
+
+### Candidate Queue And Dependencies
+
+| ID | Proposal seed | Status | Dependencies | Main deliverable |
+| --- | --- | --- | --- | --- |
+| PC1 | `provider-context-openapi-contract-alignment` | Implemented and archived (069) | Archived provider and context baseline | Explicit public DTOs, typed result, documented JSON conformance. |
+| PC2 | `provider-context-disclosure-and-source-trust` | Pending | PC1 | Authorized disclosure profiles, reference-only mode, source trust metadata. |
+| PC3 | `provider-context-budget-and-selection-diagnostics` | Pending | PC1 and PC2 | Explicit budget units, final-response limits, safe selection accounting. |
+| PC4 | `provider-context-digest-and-continuity` | Pending | PC1–PC3 and archived sync/version/provenance contracts | Stele-issued versioned digest and authorization-safe continuity semantics. |
+| PC5 | `provider-durable-context-reference-contract` | Pending | PC1, PC2, and archived ingestion/governance/history/path contracts; PC4 when exposing projection digests | Durable reference write/read and observable governance completion. |
+| PC6 | `provider-turn-outcome-and-feedback-projection-contract` | Pending | PC1, PC2, PC5, and existing session/outcome/feedback/insight contracts; PC4 for context digest attribution | Idempotent runtime evidence projection with explicit business-state ownership. |
+
+Recommended execution is PC1 → PC2 → PC3 → PC4 → PC5 → PC6. PC5 does not need a
+new digest algorithm or retrieval strategy: it consumes PC4 only for projection
+identity, and otherwise reuses existing durable memory contracts.
+
+### PC1: Provider Context OpenAPI Contract Alignment
+
+Goal: make `/v1/provider/context` request and response semantics explicit and
+consistent with OpenAPI, independent of internal Go field names.
+
+Identified gap: at the reviewed `a556ac0` baseline, the route strict-decodes
+directly into `retrieval.AssembleContextInput`. The type has no JSON tags and no
+`Role` field, so documented snake-case options are not consistently expressible
+and Danny's `input.role` is rejected. The actual result contains classified hits
+and citations; Danny's adapter expects `result.references/content`, which is not
+the current response contract. This is a contract alignment issue, not evidence
+that Stele lacks retrieval or context assembly.
+
+Scope and deliverables:
+
+- Introduce explicit public context DTOs and map them to existing service inputs;
+  define supported snake-case selectors/options and reject unknown fields.
+- Publish a typed Provider context result instead of relying on a generic
+  `result: object`. Document categorized hits and citations, including empty
+  results; reserve new projection semantics for PC2–PC4.
+- Specify schema/capability negotiation and compatibility behavior for existing
+  clients. Unsupported policy fields must fail explicitly; a role field must
+  not be silently accepted as an authorization grant.
+- Document the consumer adapter mapping and strict response validation so a
+  missing expected result shape cannot be reported as a successful empty
+  projection. Danny implementation remains in its own repository.
+
+Acceptance: documented JSON examples pass public route conformance; snake-case
+options reach the intended service inputs; unsupported fields fail predictably;
+nonempty, empty, mismatched, and out-of-scope cases have explicit outcomes.
+
+### PC2: Context Disclosure And Source Trust
+
+Goal: let a runtime express authorized disclosure constraints without transferring
+its business role or tool authorization engine into Stele.
+
+Scope and deliverables:
+
+- Define bounded `projection_intent`, `disclosure_profile`, and `response_mode`
+  semantics, including `reference_only` and `bounded_content`. Profiles are
+  versioned constraints intersected with authenticated grants and server policy;
+  unknown or unauthorized profiles fail closed.
+- Define a structured reference/provenance allowlist: memory identity, authorized
+  version identity, normalized path, source/evidence references, and availability.
+  Omit raw provider payloads, raw source text, and unrestricted metadata.
+- Define reference-only disclosure precisely: no source content, free-text
+  summary, or derived lesson text is returned. Any bounded summary/content mode
+  must be separately authorized and budgeted.
+- Persist and propagate explicit source trust/classification metadata through
+  ingestion, candidate promotion, canonical versions, summaries, and projections.
+  Missing trust metadata defaults conservatively to untrusted; consolidation or
+  canonical promotion cannot automatically upgrade text into trusted instructions.
+- Document Danny's final decision about prompt use, compiler submission, write
+  policy, and tools separately from Stele's data-disclosure enforcement.
+
+Acceptance: role/profile/path manipulation cannot widen grants; reference-only
+responses contain only allowed structured fields; trust survives the lifecycle
+and mixed-source derivation; hidden and foreign-scope content is never disclosed.
+
+### PC3: Context Budget And Selection Diagnostics
+
+Goal: enforce the caller's memory allocation on the final disclosed projection
+using explicit units and the existing Stele selection pipeline.
+
+Identified gap: `Budget` currently counts items but the Provider adapter caps it
+using `MaxContextBytes`; chunk `CharacterBudget` accounting uses UTF-8 bytes and
+does not establish a whole-response limit. A bare value such as `2048` must not
+be interpreted as tokens, characters, items, and bytes interchangeably.
+
+Scope and deliverables:
+
+- Define item, UTF-8 byte, citation, and final serialized-response limits,
+  including whether envelope/provenance/diagnostic fields consume each budget.
+  Cap caller allocation by server limits and disclose effective bounds.
+- If token budgets are supported, require a declared tokenizer/accounting version
+  and a defined unsupported-tokenizer outcome. No implicit byte-to-token
+  conversion or promise of exact model tokens is allowed.
+- Apply budgets across ordinary hits, projections, summaries, optional insight
+  sections, and structured references. Reference-only output still consumes
+  item, provenance, and transport budgets.
+- Return bounded budget usage and selection metadata: contract/policy identity,
+  selected counts, and safe omission/degradation categories. Keep query plans,
+  hidden identities, raw scores, and privileged counters out of ordinary results.
+- Explain that Danny allocates memory space after reserving its other prompt
+  components; Stele owns memory selection and packing inside that allocation.
+
+Acceptance: zero/minimum/oversized allocations, multibyte text, large provenance,
+all optional sections, and both response modes obey explicit final bounds;
+deterministic fixtures retain protected recall and lifecycle/scope safety.
+
+### PC4: Context Digest And Continuity
+
+Goal: provide a Stele-owned identity for the final disclosed context and make
+restart/reuse behavior explicit without treating a hash as an access credential.
+
+Scope and deliverables:
+
+- Return a versioned context digest with declared algorithm and canonicalization
+  rules over final ordered selection, immutable memory/version or content
+  identity, authorized provenance, scope, response mode, effective budget, and
+  relevant disclosure/selection policy versions.
+- Exclude volatile request IDs, timestamps, and latency diagnostics from digest
+  identity. The same semantic projection produces the same digest; relevant
+  selection, order, version, content, or policy changes produce a different one.
+- Separate context digest from provider schema digest and sync snapshot digest.
+  Danny stores Stele's digest; a local child/business projection fingerprint, if
+  needed, has a separate name and cannot claim Stele selection equivalence.
+- Distinguish a fresh read after restart, a continuity/watermark reference, and an
+  exact snapshot replay. Ordinary context reads do not gain snapshot semantics
+  merely by carrying `request_id` or `idempotency_key`.
+- Define reference expiry, source change, retention gap, and suppression/deletion
+  outcomes. Every reuse rechecks current grants and lifecycle; previously visible
+  content must not be resurrected by replay. Reuse archived sync semantics.
+- If exact snapshot replay is included in the eventual proposal, define bounded
+  PostgreSQL persistence, retention, and stale/conflicting replay behavior;
+  otherwise advertise it as unsupported rather than implying durable replay.
+
+Acceptance: digest fixtures are deterministic; changes in selected versions or
+ordering are detectable; restart behavior is reproducible; revoked access,
+forgotten/deleted sources, and expired continuity references fail safely.
+
+### PC5: Durable Context Reference Contract
+
+Goal: make task/run/handoff/compilation associations reliable context references
+while keeping business objects and their current state in the runtime.
+
+Scope and deliverables:
+
+- Define a documented public write-to-read path using existing events/intents,
+  governance, paths, versions, and provenance. State supported event types and
+  promotion rules instead of assuming arbitrary event types become searchable.
+- Separate accepted event receipt, pending/failed governance, completed
+  governance, and visible canonical reference. Provide a bounded authorized
+  completion/status contract over existing durable state.
+- Return recorded identifier/value/path and source event/memory/version identity
+  under exact-scope exact-path lookup. Do not conflate ranked top-k search with
+  deterministic reference resolution where reliable lookup is required.
+- Specify reference identity and retention across consolidation, deduplication,
+  summary promotion, suppression, forgetting, and deletion. Define explicit
+  unavailable/redacted outcomes; no guarantee can bypass lifecycle rules.
+- Preserve append idempotency and conflicting-key errors, and demonstrate that
+  canonical/provenance persistence is complete before declaring restart recovery.
+- Keep task revision/status, schedule occurrence, execution lease, generation
+  commit, webhook delivery, and artifact publication outside the reference
+  contract. Add no second canonical or runtime business-state store.
+
+Acceptance: a fresh PostgreSQL public-provider fixture completes compilation and
+task/run reference round trips, preserves non-root paths and UUID lineage,
+supports identical/conflicting replay correctly, and remains readable after
+API/worker restart. Pending/failed governance and later lifecycle removal have
+explicit results. Immediate HTTP 2xx or retrieval alone is insufficient.
+
+### PC6: Turn Outcome And Feedback Projection Contract
+
+Goal: reuse session, turn, outcome, usefulness feedback, and governed insight
+capabilities to record runtime evidence while preserving two independent ledgers.
+
+Scope and deliverables:
+
+- Define public projection mappings for conversation/turn evidence, reported
+  execution outcome, used memory references, context digest, recall usefulness,
+  user feedback, and task-completion context evidence.
+- Carry bounded operation/effect identity, source outcome revision, occurrence
+  time, provenance references, and idempotency keys. Define duplicate,
+  conflicting, delayed, out-of-order, and corrected projection behavior without
+  erasing evidence history.
+- Reuse existing session/outcome/feedback APIs where sufficient; add only missing
+  public DTOs, attribution, or compatibility semantics. Validate scope and
+  reference ownership before admitting feedback into governed derivation.
+- Label business results as runtime-reported evidence. Stele's governance or
+  insight status cannot mark a task complete, commit a generation, release a
+  lease, publish an artifact, or confirm webhook delivery.
+- Keep reflection asynchronous and insights evidence-backed, versioned,
+  lifecycle-filtered, and subject to existing ranking/activation gates. No new
+  autonomous reasoning loop or business workflow engine is introduced.
+
+Acceptance: duplicate and restart delivery preserve one logical projection;
+corrections retain history; unrelated/foreign references are rejected; evidence
+can feed existing governed feedback/insight paths without changing Danny's
+authoritative task, execution, compilation, or delivery state.
 
 ## Execution Order
 
@@ -1695,11 +1946,18 @@ Recommended execution order for the current product baseline and next frontier:
 17. P8.7: MCP adapter real-stack conformance and self-hosting evidence (archived change 052)
 18. P8.8: retrieval release evidence refresh and controlled activation (archived change 053)
 19. Governed release-evidence freshness reconciliation (archived change 066)
-20. Runtime capability and event sync contract (current proposal)
+20. Runtime capability and event sync contract (archived change 067)
+21. Documentation and agent-skill onboarding (archived change 068)
+22. PC1: Provider context OpenAPI contract alignment (implemented, live verified, and archived as 069)
+23. PC2: Context disclosure and source trust (pending)
+24. PC3: Context budget and selection diagnostics (pending)
+25. PC4: Context digest and continuity (pending)
+26. PC5: Durable context reference contract (pending)
+27. PC6: Turn outcome and feedback projection contract (pending)
 
 The original Phase 1–5 order remains the build order for a fresh repository;
-the P0–P7 sequence is the archived baseline and RQ1–RQ4 are the next
-retrieval-quality execution order.
+the P0–P8, RQ1–RQ4, and PC1 sequences are archived baselines. PC2–PC6 are the next
+provider integration execution order, subject to individual proposal review.
 
 Reasoning:
 
@@ -1714,6 +1972,9 @@ Reasoning:
   substitute for the retrieval implementation.
 - every representation or ranking change must remain reversible and must not bypass
   lifecycle or scope enforcement.
+- PC1 stabilizes public JSON before disclosure and budgets are extended; PC4
+  identifies the final PC2/PC3 projection; PC5 establishes durable associations
+  before PC6 attributes runtime outcomes and feedback to them.
 
 ## Review Gates
 
@@ -1768,6 +2029,17 @@ Before moving between phases, verify:
   source of record.
 - RQ4 gate: context efficiency improves without protected-recall loss and weak
   feedback remains capped, decayed, auditable, and independently disableable.
+- PC1 gate: documented JSON and typed responses conform at the public Provider
+  route; unsupported inputs and incompatible result shapes cannot masquerade as
+  successful empty projections.
+- PC2/PC3 gate: grants and disclosure constraints are enforced before response
+  generation; trust remains explicit; every section and provenance field fits
+  the declared item/byte/citation/transport envelope.
+- PC4 gate: context digest identifies the final authorized selection; restart,
+  continuity, and replay semantics are distinct and recheck lifecycle and grants.
+- PC5/PC6 gate: fresh PostgreSQL + pgvector public fixtures prove completed
+  governance, idempotent durable references, restart recovery, and evidence
+  attribution while leaving runtime business-state authority outside Stele.
 
 ## Immediate Next Step
 
@@ -1794,13 +2066,25 @@ change 056, `durable-scheduler-run-history-operational-closure`, and change 057,
 `reflection-compaction-durable-work-closure`, and changes 060–065 are also
 archived. Change 059, `governed-autonomous-reasoning-insights`, is now
 archived. Changes 064 and 065, `governed-goal-insights` and
-`governed-goal-review-and-experimental-visibility`, are also archived. The
-  current bounded post-v1 candidate is
-  `runtime-capability-and-event-sync-contract`, focused on a transport-neutral
-  runtime synchronization contract with an OpenAPI pull implementation and future
-  WebSocket/SSE adapter space. The archived release-evidence freshness work
-  (`governed-release-evidence-freshness-reconciliation`) focused on reconciling
-  post-activation evidence freshness and eligibility. The archived P8.8 work does not
-add a second rollout system,
-change default retrieval or OpenAPI behavior, or widen the canonical
-authorization boundary.
+`governed-goal-review-and-experimental-visibility`, are also archived. Change 066,
+`governed-release-evidence-freshness-reconciliation`, closes post-activation
+freshness/eligibility reconciliation. Change 067,
+`runtime-capability-and-event-sync-contract`, provides OpenAPI pull sync with
+future WebSocket/SSE extension space; change 068,
+`documentation-and-agent-skill-onboarding`, completes the documentation and
+agent-skill baseline. None of these archived tracks is a pending proposal.
+
+The current bounded post-v1 candidate is
+`provider-context-disclosure-and-source-trust` (PC2), pending its own proposal.
+PC1 `provider-context-openapi-contract-alignment` is implemented as
+[archived change 069](../../openspec/changes/archive/069-provider-context-openapi-contract-alignment/proposal.md).
+Its canonical DTOs, typed/redacted responses, strict public
+consumer conformance, and fresh PostgreSQL/pgvector restart checks passed.
+The [bounded live report](../../testdata/providercontext/pc1-live.evidence.json)
+records the repaired image, baseline source revision plus source digest, OpenAPI
+digest, two completed governed events, and stable identity/provenance hashes.
+It contains no credential, scope value, memory identifier, or content.
+PC1 completion does not imply PC2–PC6 completion. Use the queue above for each
+remaining proposal's scope, dependency order, deliverables, and acceptance
+criteria; full response-byte enforcement and context selection digests remain
+pending PC3 and PC4 work.

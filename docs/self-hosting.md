@@ -2526,6 +2526,13 @@ an aggregate summary of phase/result/category counts, recovery/rollback/cleanup
 gate observations, and a consumability verdict. It never writes credentials, DSNs, scopes,
 intent/memory/evidence identifiers, payloads, or raw dependency errors.
 
+Set `STELE_PRODUCT_VERIFY_PROVIDER_CONTEXT=1` to include the public Provider
+context schema, governed ingestion, exact-path/prefix, isolation, lifecycle,
+replay, and API/worker restart gate on the verifier's owned stack. It retains a
+separate bounded `<ReportPath>.context.json`; missing or failed context evidence
+fails this enabled gate. The standalone fresh-stack command and public contract
+migration notes are in the [Provider guide](agent-runtime-memory-provider.md#public-live-verification).
+
 Set `STELE_PRODUCT_VERIFY_MCP=1` to include the optional MCP prerequisite
 check and, when the configured endpoint is enabled, run the same PostgreSQL
 MCP matrix used by the focused conformance command. The matrix covers

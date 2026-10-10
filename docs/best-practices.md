@@ -24,6 +24,12 @@ the server-issued binding and session identity.
 Read results are lifecycle-filtered evidence. Suppressed, forgotten, deleted,
 stale, and foreign records must remain unavailable through ordinary reads.
 
+Provider clients must validate the categorized context response before treating
+it as usable or empty. Use canonical snake_case fields and binding-owned scope;
+preserve citations rather than depending on ranking scores. See the
+[Provider contract and migration notes](agent-runtime-memory-provider.md#provider-context-json-contract)
+for item-budget limits and pending disclosure, digest, and continuity work.
+
 ## Write through governed paths
 
 Memory writes should be explicit, attributable, and idempotent. Include a

@@ -1,0 +1,26 @@
+{
+  "result": "passed",
+  "stage": "restart",
+  "schema_version": "provider-v1",
+  "openapi_digest": "a0b86ee7b07b8708229c0a003954d23ffd54a350fdb1dd1d63b2218ad4c7059c",
+  "image_digest": "sha256:ab5353f39d3b64d84cd0b0da448cf3e0c417768010b32d32022055af9a41240f",
+  "source_revision": "a556ac0ddacc4026a1bd7b02d7123d884185001a",
+  "source_digest": "d2faf1e2e21247b95d61bfd3189c3d18f0648a7b3496e01b123e904b31bdf70f",
+  "scope_hash": "05e436e336404316bfbb6bba076d2e3d7a7915a0238e8b00d4aab280a42792e6",
+  "identity_hash": "4b4e8fd1621776ce7c8b7267945a28c89ad52da1491b60269222b473ef9f5da5",
+  "citation_hash": "c63328484dfd3485dafb58fbe5c674912f218d8a26f0f0534f128cde31902d4e",
+  "governance_completed": 2,
+  "checks": [
+    "public_http_schema",
+    "capability_digest",
+    "governance_completed",
+    "event_replay",
+    "nonroot_exact_path",
+    "explicit_prefix",
+    "genuine_empty",
+    "foreign_scope_denied",
+    "lifecycle_excluded",
+    "citations_present",
+    "api_worker_restart_identity"
+  ]
+}
