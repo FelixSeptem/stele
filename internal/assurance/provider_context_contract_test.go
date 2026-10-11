@@ -18,7 +18,13 @@ import (
 func contextContractFixture() (memory.Scope, provider.DisclosedContextResponse) {
 	scope := memory.Scope{Tenant: "t", Project: "p", Namespace: "n"}
 	decision, _ := (auth.DisclosureEntitlements{AllowedProfiles: []string{auth.DisclosureProfileReference}, DefaultProfile: auth.DisclosureProfileReference}).Resolve("", "")
-	return scope, provider.ShapeDisclosedContextResponse(retrieval.AssembledContext{}, provider.OperationMetadata{RequestID: "r", OperationID: "o", SchemaVersion: "provider-v1"}, decision, 8)
+	meta := provider.OperationMetadata{RequestID: "r", OperationID: "o", SchemaVersion: "provider-v1"}
+	a, _ := provider.NewContextAdmission(provider.ContextInput{Budget: 1}, provider.Discover(provider.CapabilityInput{}).Limits, scope, decision, meta)
+	data, _ := a.Finalize(retrieval.AssembledContext{}, meta)
+	var r provider.DisclosedContextResponse
+	_ = json.Unmarshal(data, &r)
+	r.Result.Disclosure.ResponseMode = r.Result.ResponseMode
+	return scope, r
 }
 
 func TestContextConsumerRejectsMalformedEmptySubstitutes(t *testing.T) {
@@ -32,6 +38,13 @@ func TestContextConsumerRejectsMalformedEmptySubstitutes(t *testing.T) {
 		t.Fatal("genuine empty result failed", err)
 	}
 	cases := map[string]func(map[string]any){
+		"missing accounting": func(v map[string]any) { delete(v["result"].(map[string]any), "budget_accounting") },
+		"wrong byte count": func(v map[string]any) {
+			v["result"].(map[string]any)["budget_accounting"].(map[string]any)["usage"].(map[string]any)["response_bytes"] = 1
+		},
+		"wrong outcome": func(v map[string]any) {
+			v["result"].(map[string]any)["budget_accounting"].(map[string]any)["selection"].(map[string]any)["outcome"] = "selected"
+		},
 		"missing result":               func(v map[string]any) { delete(v, "result") },
 		"missing section":              func(v map[string]any) { delete(v["result"].(map[string]any), "profile") },
 		"null section":                 func(v map[string]any) { v["result"].(map[string]any)["profile"] = nil },
@@ -57,7 +70,10 @@ func TestContextConsumerRejectsMalformedEmptySubstitutes(t *testing.T) {
 	hit.Memory.SourceMetadata = memory.SourceMetadata{Version: memory.SourceMetadataVersion, Trust: memory.SourceTrustUntrusted, Classification: memory.SourceClassificationLow}
 	hit.Memory.SourceVersion = 1
 	nonempty := provider.ShapeDisclosedContextResponse(retrieval.AssembledContext{RecentEpisodes: []retrieval.SearchHit{hit}}, empty.Metadata, empty.Result.Disclosure, 8, scope)
-	data, _ = json.Marshal(nonempty)
+	a, _ := provider.NewContextAdmission(provider.ContextInput{Budget: 1}, provider.Discover(provider.CapabilityInput{}).Limits, scope, empty.Result.Disclosure, empty.Metadata)
+	a.AdmitContextItem("recent_episodes", hit)
+	data, _ = a.Finalize(retrieval.AssembledContext{RecentEpisodes: []retrieval.SearchHit{hit}}, empty.Metadata)
+	_ = json.Unmarshal(data, &nonempty)
 	if _, err = contract.Validate(data, scope, "provider-v1"); err != nil {
 		t.Fatal(err)
 	}
@@ -103,6 +119,66 @@ func TestContextPublicHTTPExecutorRequiresSchemaEvidence(t *testing.T) {
 	}
 	if _, err = (ProviderHandlerExecutor{Adapter: provider.NewAdapter(provider.AdapterDependencies{})}).ExecuteProviderFixture(context.Background(), binding, fixture); err == nil {
 		t.Fatal("adapter-only context passed")
+	}
+}
+
+func TestContextPublicHTTPExecutorRejectsDifferentAllocation(t *testing.T) {
+	contract, err := DefaultProviderContextContract()
+	if err != nil {
+		t.Fatal(err)
+	}
+	scope, empty := contextContractFixture()
+	hit := retrieval.SearchHit{Memory: memory.CanonicalMemory{ID: "m", Scope: scope, MemoryPath: "tasks/one", Class: memory.MemoryClassEpisodic, State: memory.MemoryStateActive, SourceVersion: 1, SourceMetadata: memory.SourceMetadata{Version: memory.SourceMetadataVersion, Trust: memory.SourceTrustUntrusted, Classification: memory.SourceClassificationLow}}}
+	a, err := provider.NewContextAdmission(provider.ContextInput{Budget: 2}, provider.Discover(provider.CapabilityInput{}).Limits, scope, empty.Result.Disclosure, empty.Metadata)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !a.AdmitContextItem("profile", hit) || !a.AdmitContextItem("recent_session", hit) {
+		t.Fatal("fixture did not admit two placements")
+	}
+	data, err := a.Finalize(retrieval.AssembledContext{Profile: []retrieval.SearchHit{hit}, RecentSession: []retrieval.SearchHit{hit}}, empty.Metadata)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err = contract.Validate(data, scope, "provider-v1"); err != nil {
+		t.Fatal("fixture must be internally consistent", err)
+	}
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) { _, _ = w.Write(data) }))
+	defer server.Close()
+	executor := ProviderContextHTTPExecutor{Client: server.Client(), BaseURL: server.URL, Contract: contract, SchemaVersion: "provider-v1"}
+	if _, err = executor.ExecuteProviderFixture(context.Background(), provider.RuntimeBinding{BindingID: "binding", SessionID: "session", Scope: scope}, ProviderFixture{ID: "context", Kind: ProviderFixtureContext, Operation: "context", Scope: scope}); err == nil {
+		t.Fatal("response for budget=2 passed a request for budget=1")
+	}
+}
+
+func TestContextConsumerBindsLimitsOmissionSectionsAndDiscovery(t *testing.T) {
+	contract, err := DefaultProviderContextContract()
+	if err != nil {
+		t.Fatal(err)
+	}
+	scope, empty := contextContractFixture()
+	zero := 0
+	input := provider.ContextInput{Budget: 1, BudgetLimits: &provider.ContextBudgetLimits{MaxContentBytes: &zero}, IncludeDiagnostics: true}
+	limits := provider.Discover(provider.CapabilityInput{}).Limits
+	a, err := provider.NewContextAdmission(input, limits, scope, empty.Result.Disclosure, empty.Metadata)
+	if err != nil {
+		t.Fatal(err)
+	}
+	data, err := a.Finalize(retrieval.AssembledContext{}, empty.Metadata)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err = contract.ValidateForRequest(data, scope, "provider-v1", input, &limits); err != nil {
+		t.Fatal(err)
+	}
+	for _, wrong := range []provider.ContextInput{{Budget: 1, IncludeDiagnostics: true}, {Budget: 1, BudgetLimits: input.BudgetLimits}, {Budget: 2, BudgetLimits: input.BudgetLimits, IncludeDiagnostics: true}} {
+		if _, err = contract.ValidateForRequest(data, scope, "provider-v1", wrong, &limits); err == nil {
+			t.Fatal("different request passed")
+		}
+	}
+	limits.MaxContextBytes--
+	if _, err = contract.ValidateForRequest(data, scope, "provider-v1", input, &limits); err == nil {
+		t.Fatal("different discovered ceiling passed")
 	}
 }
 

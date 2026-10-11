@@ -1,0 +1,228 @@
+{
+  "result": "passed",
+  "stage": "initial",
+  "schema_version": "provider-v1",
+  "openapi_digest": "42a60b7bb0acb9506ea3adc78e5880cd97ce865380df66aa8694b859b6eaeab6",
+  "image_digest": "sha256:c85846fbf802d876d91f475cc9f1095a967a88dfc0f065d09a9b6f6dff9fc091",
+  "source_revision": "e53b8b7babee544a86f6893ec76acffb33d71920",
+  "source_digest": "f87bef6c1ceee3816cbe64146a281fd990e315f94b1e2fff153dfec8d81fae1a",
+  "scope_hash": "cbd73eb6726e9b012d02e6751332a8a1951ae94a692ceb7aa2778f965d89a9fa",
+  "identity_hash": "1592ea6040559110204a91370ceb5039ca9e6d62dbfc1e9a2673385ee4754915",
+  "citation_hash": "53a85b95623a666594a2c04b0c8c97e15ac023cb4962a2facd8b04698fbc391b",
+  "governance_completed": 7,
+  "disclosure_policy_version": "context-disclosure-v1",
+  "source_metadata_version": "source-metadata-v1",
+  "durable_labels_verified": true,
+  "checks": [
+    "public_http_schema",
+    "capability_digest",
+    "governance_completed",
+    "event_replay",
+    "nonroot_exact_path",
+    "explicit_prefix",
+    "genuine_empty",
+    "foreign_scope_denied",
+    "lifecycle_excluded",
+    "citations_present",
+    "durable_source_labels",
+    "label_replay_conflict",
+    "reference_only_schema",
+    "old_binding_downgrade",
+    "alternate_route_denials",
+    "attestation_authorization",
+    "attestation_replay_reauthorization",
+    "revoked_binding_denied",
+    "unconfigured_profile_denied",
+    "forgotten_deleted_excluded",
+    "high_restricted_excluded",
+    "budget_discovery",
+    "budget_actual_body_bytes",
+    "budget_utf8_content_bytes",
+    "budget_unique_citations",
+    "budget_zero_content",
+    "budget_zero_citations",
+    "budget_omitted_limits",
+    "budget_server_intersection",
+    "budget_minimum_response_413",
+    "budget_unsupported_sections",
+    "budget_safe_empty_no_reasons"
+  ],
+  "budget_contract_version": "context-budget-v1",
+  "budget_packing_version": "context-packing-v1",
+  "budget_outcomes": [
+    "content-omitted:selected",
+    "content-empty-limits:selected",
+    "content-oversized:selected",
+    "content-zero-content:budget_exhausted",
+    "content-zero-citations:budget_exhausted",
+    "content-unsupported:selected",
+    "content-safe-empty-0:empty",
+    "content-safe-empty-1:empty",
+    "content-safe-empty-2:empty",
+    "content-safe-empty-3:empty",
+    "content-safe-empty-4:empty",
+    "content-safe-empty-5:empty",
+    "content-minimum-response:413",
+    "reference-omitted:selected",
+    "reference-empty-limits:selected",
+    "reference-oversized:selected",
+    "reference-zero-content:selected",
+    "reference-zero-citations:budget_exhausted",
+    "reference-unsupported:selected",
+    "reference-safe-empty-0:empty",
+    "reference-safe-empty-1:empty",
+    "reference-safe-empty-2:empty",
+    "reference-safe-empty-3:empty",
+    "reference-safe-empty-4:empty",
+    "reference-safe-empty-5:empty",
+    "reference-minimum-response:413"
+  ],
+  "budget_usage": [
+    {
+      "citations": 1,
+      "content_bytes": 118,
+      "items": 1,
+      "response_bytes": 1892
+    },
+    {
+      "citations": 1,
+      "content_bytes": 118,
+      "items": 1,
+      "response_bytes": 1902
+    },
+    {
+      "citations": 1,
+      "content_bytes": 118,
+      "items": 1,
+      "response_bytes": 1923
+    },
+    {
+      "citations": 0,
+      "content_bytes": 0,
+      "items": 0,
+      "response_bytes": 976
+    },
+    {
+      "citations": 0,
+      "content_bytes": 0,
+      "items": 0,
+      "response_bytes": 980
+    },
+    {
+      "citations": 1,
+      "content_bytes": 118,
+      "items": 1,
+      "response_bytes": 1973
+    },
+    {
+      "citations": 0,
+      "content_bytes": 0,
+      "items": 0,
+      "response_bytes": 945
+    },
+    {
+      "citations": 0,
+      "content_bytes": 0,
+      "items": 0,
+      "response_bytes": 945
+    },
+    {
+      "citations": 0,
+      "content_bytes": 0,
+      "items": 0,
+      "response_bytes": 945
+    },
+    {
+      "citations": 0,
+      "content_bytes": 0,
+      "items": 0,
+      "response_bytes": 945
+    },
+    {
+      "citations": 0,
+      "content_bytes": 0,
+      "items": 0,
+      "response_bytes": 945
+    },
+    {
+      "citations": 0,
+      "content_bytes": 0,
+      "items": 0,
+      "response_bytes": 945
+    },
+    {
+      "citations": 1,
+      "content_bytes": 0,
+      "items": 1,
+      "response_bytes": 1763
+    },
+    {
+      "citations": 1,
+      "content_bytes": 0,
+      "items": 1,
+      "response_bytes": 1773
+    },
+    {
+      "citations": 1,
+      "content_bytes": 0,
+      "items": 1,
+      "response_bytes": 1794
+    },
+    {
+      "citations": 1,
+      "content_bytes": 0,
+      "items": 1,
+      "response_bytes": 1764
+    },
+    {
+      "citations": 0,
+      "content_bytes": 0,
+      "items": 0,
+      "response_bytes": 985
+    },
+    {
+      "citations": 1,
+      "content_bytes": 0,
+      "items": 1,
+      "response_bytes": 1844
+    },
+    {
+      "citations": 0,
+      "content_bytes": 0,
+      "items": 0,
+      "response_bytes": 950
+    },
+    {
+      "citations": 0,
+      "content_bytes": 0,
+      "items": 0,
+      "response_bytes": 950
+    },
+    {
+      "citations": 0,
+      "content_bytes": 0,
+      "items": 0,
+      "response_bytes": 950
+    },
+    {
+      "citations": 0,
+      "content_bytes": 0,
+      "items": 0,
+      "response_bytes": 950
+    },
+    {
+      "citations": 0,
+      "content_bytes": 0,
+      "items": 0,
+      "response_bytes": 950
+    },
+    {
+      "citations": 0,
+      "content_bytes": 0,
+      "items": 0,
+      "response_bytes": 950
+    }
+  ],
+  "budget_identity_hash": "6a74b915dbfdc7d9e2f47eae4aa8ee08920fe97107347927033a099aaa058d03",
+  "budget_citation_hash": "265efca5db4388ca42050f3c4d47bb2ad71f90a2fd8e802aae443314151b30be"
+}

@@ -38,6 +38,27 @@ safe not-found or denied outcomes without confirming foreign records.
 Retrieval output is evidence for an agent response. It is not canonical memory
 and must not be written back unchanged as if it were a new fact.
 
+For public `context-budget-v1`, retrieval owns optional final-projection admission
+inside existing context selection. `internal/provider` costs the authorized
+mode-specific item DTO, resolves independent caller/server item/content/body/
+citation minima and reserves bounded accounting space under `context-packing-v1`.
+It finalizes required closed requested/effective/usage/selection accounting and
+exact self-counting JSON size. `internal/app` writes those finalized bytes without
+a newline; it never runs another packer. `internal/config` resolves item default
+100, content inherited from response default 1 MiB, citation default 100 and their
+hard bounds; invalid settings fail startup. `openapi` publishes portable integers,
+response-only omission nulls, fixed identities and typed bounded errors.
+
+The mandatory envelope preflight and final refusal return 413 without a partial
+projection. Current exact-scope disclosure/source/version eligibility precedes
+budget reasons; denied/hidden evidence contributes no private counters. Native
+assembly retains its previous defaults, and public optional sections stay closed.
+`internal/assurance` validates actual serialized usage and fresh initial/restart
+evidence separately from ranking metrics and archived PC1/PC2 readiness. Consumers
+must discover PC3 and migrate strict schemas; rollback disables dependent access
+before removing the extension. See [Provider contract](agent-runtime-memory-provider.md)
+for allocation units, zero/omission, errors and compatibility.
+
 ## Worker and scheduler
 
 - `internal/jobs`: worker loops, scheduler dispatch, leases, retry/backoff,

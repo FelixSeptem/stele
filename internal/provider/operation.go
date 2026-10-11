@@ -166,7 +166,7 @@ type Adapter struct {
 }
 
 func NewAdapter(deps AdapterDependencies) *Adapter {
-	limits := deps.Limits
+	limits := deps.Limits.Resolved()
 	if limits.Validate() != nil {
 		limits = Discover(CapabilityInput{}).Limits
 	}
@@ -349,8 +349,8 @@ func (a *Adapter) AssembleContext(ctx context.Context, binding RuntimeBinding, m
 	}
 	input.Scope = binding.Scope
 	input.SessionID = binding.SessionID
-	if input.Budget > a.limits.MaxContextBytes {
-		input.Budget = a.limits.MaxContextBytes
+	if input.Budget > a.limits.MaxContextItems {
+		input.Budget = a.limits.MaxContextItems
 	}
 	if input.CharacterBudget > a.limits.MaxContextBytes {
 		input.CharacterBudget = a.limits.MaxContextBytes

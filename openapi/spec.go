@@ -225,6 +225,7 @@ paths:
   /v1/provider/context:
     post:
       operationId: providerAssembleContext
+      description: Authorized context under context-budget-v1 independent item/content/citation/body allocations. Whole-item admission preserves existing selection and disclosure gates. Success accounting measures the exact JSON body including envelope and repeated evidence. Mandatory empty envelopes that cannot fit fail before retrieval; errors are separately server-bounded and need not fit caller success-body allocations.
       security:
         - PublicAPIKey: []
       parameters:
@@ -242,8 +243,30 @@ paths:
           content:
             application/json:
               schema: {$ref: '#/components/schemas/ProviderContextResponse'}
-        '400': {description: 'Bounded provider error'}
-        '403': {description: 'Runtime binding or scope denied'}
+        '400':
+          description: Bounded invalid_request for malformed/null/unknown/token limits, noninteger or overflowing values, aliases, duplicates and trailing JSON. Unsupported base schema uses the existing bounded compatibility outcome.
+          content:
+            application/json:
+              schema: {$ref: '#/components/schemas/ProviderErrorResponse'}
+              example: {error: {category: validation, code: invalid_request, message: invalid request, retryable: false}}
+        '403':
+          description: Current exact-scope disclosure authorization denied; no protected evidence or record-existence detail.
+          content:
+            application/json:
+              schema: {$ref: '#/components/schemas/ProviderErrorResponse'}
+              example: {error: {category: scope, code: disclosure_denied, message: disclosure denied, retryable: false}}
+        '413':
+          description: Mandatory empty envelope cannot fit effective response limit, or finalized body/accounting fails limit defense. No result or partial projection is emitted.
+          content:
+            application/json:
+              schema: {$ref: '#/components/schemas/ProviderErrorResponse'}
+              example: {error: {category: validation, code: context_limit_exceeded, message: context response exceeds limit, retryable: false}}
+        '503':
+          description: Retryable authoritative dependency failure; never an empty or budget-exhausted success.
+          content:
+            application/json:
+              schema: {$ref: '#/components/schemas/ProviderErrorResponse'}
+              example: {error: {category: dependency, code: disclosure_unavailable, message: disclosure authority unavailable, retryable: true}}
   /v1/provider/turns:
     post:
       operationId: providerCreateTurn
@@ -4456,8 +4479,11 @@ components:
     ProviderCapabilityDocument:
       type: object
       additionalProperties: false
-      required: [provider_version, schema_version, operations, scope_dimensions, limits, synchronization, schema_digest, disclosure_policy_version, source_metadata_version, response_modes, disclosure_profiles]
+      required: [provider_version, schema_version, operations, scope_dimensions, limits, synchronization, schema_digest, disclosure_policy_version, source_metadata_version, response_modes, disclosure_profiles, context_budget_version, context_packing_policy_version, token_budget_supported]
       properties:
+        context_budget_version: {type: string, enum: [context-budget-v1]}
+        context_packing_policy_version: {type: string, enum: [context-packing-v1], description: Fixed deterministic admission and conservative accounting-reserve policy identity; not a context digest or privileged ranking-plan identity.}
+        token_budget_supported: {type: boolean, enum: [false], description: Byte allocations are not model token budgets; token/tokenizer request fields are rejected.}
         disclosure_policy_version: {type: string, enum: [context-disclosure-v1]}
         source_metadata_version: {type: string, enum: [source-metadata-v1]}
         response_modes: {type: array, items: {type: string, enum: [reference_only, bounded_content]}}
@@ -4468,7 +4494,7 @@ components:
         build_id: {type: string}
         operations: {type: array, maxItems: 32, items: {type: string}}
         scope_dimensions: {type: array, maxItems: 16, items: {type: string}}
-        limits: {type: object, additionalProperties: {type: integer}}
+        limits: {$ref: '#/components/schemas/ProviderLimits'}
         synchronization:
           type: object
           additionalProperties: false
@@ -4483,6 +4509,20 @@ components:
             max_cursor_bytes: {type: integer, minimum: 1, maximum: 512}
             retention_window_hours: {type: integer, minimum: 1}
         schema_digest: {type: string}
+    ProviderLimits:
+      type: object
+      additionalProperties: false
+      required: [max_event_bytes, max_intent_bytes, max_retrieval_results, max_context_items, max_context_content_bytes, max_context_bytes, max_citations, max_metadata_bytes]
+      description: Resolved independent service ceilings. Invalid settings fail startup. Omitted content configuration inherits the resolved response ceiling; explicit content zero is valid, and content must not exceed response bytes. Retrieval-result limits retain their separate meaning.
+      properties:
+        max_event_bytes: {type: integer, minimum: 1, maximum: 1048576, default: 1048576}
+        max_intent_bytes: {type: integer, minimum: 1, maximum: 1048576, default: 1048576}
+        max_retrieval_results: {type: integer, minimum: 1, maximum: 1000, default: 100}
+        max_context_items: {type: integer, minimum: 1, maximum: 1000, default: 100, description: Maximum returned context item placements.}
+        max_context_content_bytes: {type: integer, minimum: 0, maximum: 4194304, description: Returned UTF-8 content-byte ceiling; inherits max_context_bytes when unconfigured (1048576 by default).}
+        max_context_bytes: {type: integer, minimum: 1, maximum: 4194304, default: 1048576, description: Complete uncompressed context JSON body-byte ceiling including accounting.}
+        max_citations: {type: integer, minimum: 1, maximum: 1000, default: 100, description: Unique canonical citation-identity ceiling.}
+        max_metadata_bytes: {type: integer, minimum: 1, maximum: 1048576, default: 65536}
     ReasoningCapability:
       type: object
       additionalProperties: false
@@ -4647,6 +4687,13 @@ components:
         code: {type: string, maxLength: 64}
         message: {type: string, maxLength: 256}
         retryable: {type: boolean}
+        supported_versions: {type: array, maxItems: 16, items: {type: string, maxLength: 64}}
+    ProviderErrorResponse:
+      type: object
+      additionalProperties: false
+      required: [error]
+      properties:
+        error: {$ref: '#/components/schemas/ProviderError'}
     Principal:
       type: object
       required: [id, role, status, label, created_at]

@@ -53,6 +53,19 @@ func TestProviderContextGuideExamplesMatchOpenAPI(t *testing.T) {
 			if err = doc.Components.Schemas[schemaName].Value.VisitJSON(value); err != nil {
 				t.Fatalf("%s documentation example: %v", schemaName, err)
 			}
+			if schemaName == "ProviderContextResponse" {
+				body, err := json.Marshal(value)
+				if err != nil {
+					t.Fatal(err)
+				}
+				response := value.(map[string]any)
+				result := response["result"].(map[string]any)
+				accounting := result["budget_accounting"].(map[string]any)
+				usage := accounting["usage"].(map[string]any)
+				if got := usage["response_bytes"].(float64); got != float64(len(body)) {
+					t.Fatalf("guide response_bytes=%.0f, actual compact example size=%d", got, len(body))
+				}
+			}
 			count++
 			remaining = remaining[close+3:]
 		}

@@ -23,12 +23,67 @@ type contextContractAssembler struct {
 	input  retrieval.AssembleContextInput
 	calls  int
 	result retrieval.AssembledContext
+	err    error
 }
 
 func (a *contextContractAssembler) AssembleContext(_ context.Context, in retrieval.AssembleContextInput) (retrieval.AssembledContext, error) {
 	a.input = in
 	a.calls++
-	return a.result, nil
+	if a.err != nil {
+		return retrieval.AssembledContext{}, a.err
+	}
+	if in.FinalAdmission == nil {
+		return a.result, nil
+	}
+	out := retrieval.AssembledContext{}
+	for _, section := range []struct {
+		name   string
+		hits   []retrieval.SearchHit
+		target *[]retrieval.SearchHit
+	}{{"profile", a.result.Profile, &out.Profile}, {"relevant_summaries", a.result.RelevantSummaries, &out.RelevantSummaries}, {"related_entities", a.result.RelatedEntities, &out.RelatedEntities}, {"recent_session", a.result.RecentSession, &out.RecentSession}, {"recent_episodes", a.result.RecentEpisodes, &out.RecentEpisodes}} {
+		for _, hit := range section.hits {
+			if in.FinalAdmission.AdmitContextItem(section.name, hit) {
+				*section.target = append(*section.target, hit)
+			}
+		}
+	}
+	return out, nil
+}
+
+func TestProviderContextAssemblerDependencyFailureIsRetryable503(t *testing.T) {
+	a := &contextContractAssembler{err: fmt.Errorf("retrieval dependency unavailable")}
+	w := contextContractHandler(t, a)(`{` + contextMetadata + `,"input":{"query":"q","budget":1}}`)
+	if w.Code != http.StatusServiceUnavailable || !strings.Contains(w.Body.String(), `"category":"dependency"`) || !strings.Contains(w.Body.String(), `"retryable":true`) {
+		t.Fatalf("status=%d body=%s", w.Code, w.Body.String())
+	}
+	if strings.Contains(w.Body.String(), "retrieval dependency unavailable") || strings.Contains(w.Body.String(), `"result"`) {
+		t.Fatalf("dependency detail leaked: %s", w.Body.String())
+	}
+}
+
+func TestProviderContextInvalidMetadataPrecedesBudgetPreflight(t *testing.T) {
+	for _, field := range []string{`"request_id":""`, `"operation_id":"invalid token"`, `"event_seq":-1`, `"idempotency_key":"invalid token"`, `"memory_path":"../secret"`} {
+		for _, tiny := range []bool{false, true} {
+			t.Run(fmt.Sprintf("%s/tiny=%v", field, tiny), func(t *testing.T) {
+				metadata := map[string]any{"request_id": "r", "operation_id": "o", "schema_version": "provider-v1"}
+				var invalid map[string]any
+				_ = json.Unmarshal([]byte("{"+field+"}"), &invalid)
+				for key, value := range invalid {
+					metadata[key] = value
+				}
+				input := map[string]any{"query": "q", "budget": 1}
+				if tiny {
+					input["budget_limits"] = map[string]int{"max_response_bytes": 1}
+				}
+				body, _ := json.Marshal(map[string]any{"metadata": metadata, "input": input})
+				a := &contextContractAssembler{}
+				w := contextContractHandler(t, a)(string(body))
+				if w.Code != http.StatusBadRequest || a.calls != 0 || !strings.Contains(w.Body.String(), `"code":"invalid_request"`) {
+					t.Fatalf("status=%d calls=%d body=%s", w.Code, a.calls, w.Body.String())
+				}
+			})
+		}
+	}
 }
 
 func contextContractHandler(t *testing.T, a *contextContractAssembler, overrides ...http.Header) func(string) *httptest.ResponseRecorder {

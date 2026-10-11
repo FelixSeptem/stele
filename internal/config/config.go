@@ -721,6 +721,12 @@ func loadProviderConfig() (ProviderConfig, error) {
 	if limits.MaxContextBytes, err = loadIntWithDefault("STELE_PROVIDER_MAX_CONTEXT_BYTES", 1<<20); err != nil {
 		return ProviderConfig{}, err
 	}
+	if limits.MaxContextItems, err = loadIntWithDefault("STELE_PROVIDER_MAX_CONTEXT_ITEMS", 100); err != nil {
+		return ProviderConfig{}, err
+	}
+	if limits.MaxContextContentBytes, err = loadIntWithDefault("STELE_PROVIDER_MAX_CONTEXT_CONTENT_BYTES", limits.MaxContextBytes); err != nil {
+		return ProviderConfig{}, err
+	}
 	if limits.MaxCitations, err = loadIntWithDefault("STELE_PROVIDER_MAX_CITATIONS", 100); err != nil {
 		return ProviderConfig{}, err
 	}

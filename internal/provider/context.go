@@ -18,20 +18,21 @@ type ContextRequest struct {
 	Input    ContextInput      `json:"input"`
 }
 type ContextInput struct {
-	ProjectionIntent           string `json:"projection_intent,omitempty"`
-	DisclosureProfile          string `json:"disclosure_profile,omitempty"`
-	ResponseMode               string `json:"response_mode,omitempty"`
-	Query                      string `json:"query"`
-	Budget                     int    `json:"budget"`
-	Path                       string `json:"path,omitempty"`
-	PathPrefix                 string `json:"path_prefix,omitempty"`
-	IncludeRelations           bool   `json:"include_relations,omitempty"`
-	IncludeExperienceInsights  bool   `json:"include_experience_insights,omitempty"`
-	IncludeGoalContext         bool   `json:"include_goal_context,omitempty"`
-	IncludeDiagnostics         bool   `json:"include_diagnostics,omitempty"`
-	IncludeFeedbackDiagnostics bool   `json:"include_feedback_diagnostics,omitempty"`
-	FeedbackAwareRanking       bool   `json:"feedback_aware_ranking,omitempty"`
-	FeedbackRankingPolicy      string `json:"feedback_ranking_policy,omitempty"`
+	BudgetLimits               *ContextBudgetLimits `json:"budget_limits,omitempty"`
+	ProjectionIntent           string               `json:"projection_intent,omitempty"`
+	DisclosureProfile          string               `json:"disclosure_profile,omitempty"`
+	ResponseMode               string               `json:"response_mode,omitempty"`
+	Query                      string               `json:"query"`
+	Budget                     int                  `json:"budget"`
+	Path                       string               `json:"path,omitempty"`
+	PathPrefix                 string               `json:"path_prefix,omitempty"`
+	IncludeRelations           bool                 `json:"include_relations,omitempty"`
+	IncludeExperienceInsights  bool                 `json:"include_experience_insights,omitempty"`
+	IncludeGoalContext         bool                 `json:"include_goal_context,omitempty"`
+	IncludeDiagnostics         bool                 `json:"include_diagnostics,omitempty"`
+	IncludeFeedbackDiagnostics bool                 `json:"include_feedback_diagnostics,omitempty"`
+	FeedbackAwareRanking       bool                 `json:"feedback_aware_ranking,omitempty"`
+	FeedbackRankingPolicy      string               `json:"feedback_ranking_policy,omitempty"`
 }
 
 // canonicalObject also rejects duplicate keys, null values, and Go's case aliases.
@@ -94,17 +95,31 @@ func DecodeContextRequest(data []byte) (ContextRequest, error) {
 	if err != nil {
 		return out, err
 	}
-	_, err = canonicalObject(obj["input"], []string{"query", "budget", "path", "path_prefix", "include_relations", "include_experience_insights", "include_goal_context", "include_diagnostics", "include_feedback_diagnostics", "feedback_aware_ranking", "feedback_ranking_policy", "projection_intent", "disclosure_profile", "response_mode"}, []string{"query", "budget"})
+	inputObject, err := canonicalObject(obj["input"], []string{"budget_limits", "query", "budget", "path", "path_prefix", "include_relations", "include_experience_insights", "include_goal_context", "include_diagnostics", "include_feedback_diagnostics", "feedback_aware_ranking", "feedback_ranking_policy", "projection_intent", "disclosure_profile", "response_mode"}, []string{"query", "budget"})
 	if err != nil {
 		return out, err
 	}
+	if raw := inputObject["budget_limits"]; raw != nil {
+		if _, err := canonicalObject(raw, []string{"max_content_bytes", "max_response_bytes", "max_citations"}, nil); err != nil {
+			return out, err
+		}
+	}
 	if err = DecodeStrict(data, &out); err != nil {
+		return out, err
+	}
+	if err := out.Metadata.NormalizeValidate(); err != nil {
+		return out, err
+	}
+	if err := out.Input.ValidateBudget(); err != nil {
 		return out, err
 	}
 	return out, nil
 }
 
 func (i ContextInput) RetrievalInput(scope memory.Scope) (retrieval.AssembleContextInput, error) {
+	if err := i.ValidateBudget(); err != nil {
+		return retrieval.AssembleContextInput{}, err
+	}
 	out := retrieval.AssembleContextInput{Scope: scope, Query: i.Query, Budget: i.Budget, IncludeRelations: i.IncludeRelations, IncludeExperienceInsights: i.IncludeExperienceInsights, IncludeGoalContext: i.IncludeGoalContext, IncludeDiagnostics: i.IncludeDiagnostics, IncludeFeedbackDiagnostics: i.IncludeFeedbackDiagnostics, FeedbackAwareRanking: i.FeedbackAwareRanking}
 	if i.ProjectionIntent != "" && i.ProjectionIntent != "conversation" && i.ProjectionIntent != "task_context" && i.ProjectionIntent != "compilation" && i.ProjectionIntent != "handoff" {
 		return out, fmt.Errorf("invalid projection intent")

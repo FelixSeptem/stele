@@ -9,6 +9,7 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"reflect"
 
 	"github.com/FelixSeptem/stele/internal/memory"
 	"github.com/FelixSeptem/stele/internal/provider"
@@ -65,14 +66,23 @@ func (c *ProviderContextContract) Validate(data []byte, scope memory.Scope, sche
 	if err := response.Metadata.NormalizeValidate(); err != nil || response.Metadata.SchemaVersion != schemaVersion {
 		return fail()
 	}
+	accounting := response.Result.BudgetAccounting
+	u := provider.ContextBudgetUsage{ResponseBytes: len(data)}
+	if len(data) == 0 || data[len(data)-1] == '\n' || accounting.ContractVersion != provider.ContextBudgetVersion || accounting.PackingPolicyVersion != provider.ContextPackingPolicyVersion {
+		return fail()
+	}
 	authorized := make(map[provider.Citation]bool)
 	for _, section := range [][]provider.DisclosedContextItem{response.Result.Profile, response.Result.RecentSession, response.Result.RecentEpisodes, response.Result.RelevantSummaries, response.Result.RelatedEntities} {
 		for _, item := range section {
+			u.Items++
+			if item.Memory != nil {
+				u.ContentBytes += len(item.Memory.Content)
+			}
 			ref := item.Reference
 			if item.Memory != nil {
 				ref = &item.Memory.ContextReference
 			}
-			if ref == nil || !ref.SourceMetadata.Disclosable() || ref.Availability != "available" {
+			if ref == nil || !ref.SourceMetadata.Disclosable() || ref.Availability != "available" || len(item.Citations) != 1 {
 				return fail()
 			}
 			for _, citation := range item.Citations {
@@ -86,17 +96,113 @@ func (c *ProviderContextContract) Validate(data []byte, scope memory.Scope, sche
 	// Scope is authenticated by the HTTP binding. The closed public DTO omits
 	// scope echoes; evidence may only name an item actually returned by that binding.
 	for _, citations := range [][]provider.Citation{response.Citations, response.Result.Citations} {
+		seen := map[provider.Citation]bool{}
 		for _, citation := range citations {
-			if !authorized[citation] {
+			if !authorized[citation] || seen[citation] {
 				return fail()
 			}
+			seen[citation] = true
 		}
+		if len(seen) != len(authorized) {
+			return fail()
+		}
+	}
+	u.Citations = len(authorized)
+	e := accounting.Effective
+	if accounting.Usage != u || u.Items > e.MaxItems || u.ContentBytes > e.MaxContentBytes || u.Citations > e.MaxCitations || u.ResponseBytes > e.MaxResponseBytes {
+		return fail()
+	}
+	if e.MaxItems > accounting.Requested.MaxItems {
+		return fail()
+	}
+	for _, x := range []struct {
+		requested *int
+		effective int
+	}{{accounting.Requested.MaxContentBytes, e.MaxContentBytes}, {accounting.Requested.MaxResponseBytes, e.MaxResponseBytes}, {accounting.Requested.MaxCitations, e.MaxCitations}} {
+		if x.requested != nil && x.effective > *x.requested {
+			return fail()
+		}
+	}
+	ordered := func(values, allowed []string) bool {
+		last := -1
+		for _, v := range values {
+			index := -1
+			for i, a := range allowed {
+				if a == v {
+					index = i
+					break
+				}
+			}
+			if index <= last {
+				return false
+			}
+			last = index
+		}
+		return true
+	}
+	s := accounting.Selection
+	if !ordered(s.OmissionReasons, []string{"item_limit", "content_bytes", "citations", "response_bytes"}) || !ordered(s.UnsupportedSections, []string{"experience_insights", "goal_context", "diagnostics", "feedback_diagnostics"}) {
+		return fail()
+	}
+	if (u.Items > 0) != (s.Outcome == "selected") || s.Outcome == "empty" && len(s.OmissionReasons) > 0 || s.Outcome == "budget_exhausted" && len(s.OmissionReasons) == 0 {
+		return fail()
 	}
 	return response, nil
 }
 
 type ProviderHTTPDoer interface {
 	Do(*http.Request) (*http.Response, error)
+}
+
+// ValidateForRequest binds self-consistent accounting to the originating
+// allocation. When discovery is available, it also verifies the exact ceilings.
+func (c *ProviderContextContract) ValidateForRequest(data []byte, scope memory.Scope, schemaVersion string, input provider.ContextInput, limits *provider.ProviderLimits) (provider.DisclosedContextResponse, error) {
+	r, err := c.Validate(data, scope, schemaVersion)
+	if err != nil {
+		return r, err
+	}
+	fail := func() (provider.DisclosedContextResponse, error) {
+		return provider.DisclosedContextResponse{}, fmt.Errorf("provider context failed-contract")
+	}
+	if input.ValidateBudget() != nil {
+		return fail()
+	}
+	want := provider.ContextBudgetRequested{MaxItems: input.Budget}
+	if input.BudgetLimits != nil {
+		want.MaxContentBytes = input.BudgetLimits.MaxContentBytes
+		want.MaxResponseBytes = input.BudgetLimits.MaxResponseBytes
+		want.MaxCitations = input.BudgetLimits.MaxCitations
+	}
+	accounting := r.Result.BudgetAccounting
+	if !reflect.DeepEqual(want, accounting.Requested) {
+		return fail()
+	}
+	unsupported := []string{}
+	for _, section := range []struct {
+		requested bool
+		name      string
+	}{{input.IncludeExperienceInsights, "experience_insights"}, {input.IncludeGoalContext, "goal_context"}, {input.IncludeDiagnostics, "diagnostics"}, {input.IncludeFeedbackDiagnostics, "feedback_diagnostics"}} {
+		if section.requested {
+			unsupported = append(unsupported, section.name)
+		}
+	}
+	if !reflect.DeepEqual(unsupported, accounting.Selection.UnsupportedSections) {
+		return fail()
+	}
+	if limits != nil {
+		l := limits.Resolved()
+		cap := func(requested *int, ceiling int) int {
+			if requested != nil {
+				return min(*requested, ceiling)
+			}
+			return ceiling
+		}
+		effective := provider.ContextBudgetEffective{MaxItems: min(input.Budget, l.MaxContextItems), MaxContentBytes: cap(want.MaxContentBytes, l.MaxContextContentBytes), MaxResponseBytes: cap(want.MaxResponseBytes, l.MaxContextBytes), MaxCitations: cap(want.MaxCitations, l.MaxCitations)}
+		if effective != accounting.Effective {
+			return fail()
+		}
+	}
+	return r, nil
 }
 
 // ProviderContextHTTPExecutor requires the HTTP boundary and schema evidence.
@@ -107,6 +213,7 @@ type ProviderContextHTTPExecutor struct {
 	Headers       http.Header
 	SchemaVersion string
 	Contract      *ProviderContextContract
+	Limits        *provider.ProviderLimits
 	Fallback      ProviderFixtureExecutor
 }
 
@@ -120,7 +227,8 @@ func (e ProviderContextHTTPExecutor) ExecuteProviderFixture(ctx context.Context,
 	if e.Client == nil || e.Contract == nil || e.SchemaVersion == "" {
 		return ProviderFixtureOutcome{}, fmt.Errorf("context public evidence unavailable")
 	}
-	body, err := json.Marshal(provider.ContextRequest{Metadata: provider.OperationMetadata{RequestID: "conformance-" + fixture.ID, OperationID: fixture.Operation, SchemaVersion: e.SchemaVersion}, Input: provider.ContextInput{Query: fixture.ID, Budget: 1}})
+	input := provider.ContextInput{Query: fixture.ID, Budget: 1}
+	body, err := json.Marshal(provider.ContextRequest{Metadata: provider.OperationMetadata{RequestID: "conformance-" + fixture.ID, OperationID: fixture.Operation, SchemaVersion: e.SchemaVersion}, Input: input})
 	if err != nil {
 		return ProviderFixtureOutcome{}, fmt.Errorf("context fixture invalid")
 	}
@@ -150,7 +258,7 @@ func (e ProviderContextHTTPExecutor) ExecuteProviderFixture(ctx context.Context,
 	if err != nil || len(data) > 4<<20 {
 		return ProviderFixtureOutcome{}, fmt.Errorf("context fixture response unavailable")
 	}
-	if _, err = e.Contract.Validate(data, binding.Scope, e.SchemaVersion); err != nil {
+	if _, err = e.Contract.ValidateForRequest(data, binding.Scope, e.SchemaVersion, input, e.Limits); err != nil {
 		return ProviderFixtureOutcome{}, err
 	}
 	return ProviderFixtureOutcome{Passed: true, Evidence: []ProviderEvidenceKind{ProviderEvidenceContextHTTP, ProviderEvidenceContextSchema}, OpenAPIDigest: e.Contract.Digest}, nil

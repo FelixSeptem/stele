@@ -106,6 +106,7 @@ func (i SearchInput) Validate() error {
 }
 
 type AssembleContextInput struct {
+	FinalAdmission            ContextItemAdmission
 	DisclosureRequired        bool
 	Scope                     memory.Scope
 	Query                     string
@@ -2901,7 +2902,7 @@ func (s *Service) AssembleContext(ctx context.Context, input AssembleContextInpu
 		}
 		priorities = preserveContextSummaryPreference(priorities)
 		for _, class := range priorities {
-			if remaining <= 0 {
+			if remaining <= 0 && input.FinalAdmission == nil {
 				break
 			}
 			if _, duplicate := seenClasses[class]; duplicate {
@@ -2912,29 +2913,30 @@ func (s *Service) AssembleContext(ctx context.Context, input AssembleContextInpu
 			if class == memory.MemoryClassRelation && !input.IncludeRelations {
 				continue
 			}
-			if quota := result.retrievalPlan.MemoryClassQuotas[class]; quota > 0 && len(candidates) > quota {
-				candidates = candidates[:quota]
+			quota := len(candidates)
+			if q := result.retrievalPlan.MemoryClassQuotas[class]; q > 0 && q < quota {
+				quota = q
 			}
-			take := minInt(len(candidates), remaining)
+			section := map[memory.MemoryClass]string{memory.MemoryClassProfile: "profile", memory.MemoryClassSummary: "relevant_summaries", memory.MemoryClassRelation: "related_entities", memory.MemoryClassEpisodic: "recent_session", memory.MemoryClassProcedural: "recent_episodes"}[class]
+			selected := selectContextSection(candidates, section, quota, &remaining, input.FinalAdmission)
 			switch class {
 			case memory.MemoryClassProfile:
-				output.Profile = append(output.Profile, candidates[:take]...)
+				output.Profile = append(output.Profile, selected...)
 			case memory.MemoryClassSummary:
-				output.RelevantSummaries = append(output.RelevantSummaries, candidates[:take]...)
+				output.RelevantSummaries = append(output.RelevantSummaries, selected...)
 			case memory.MemoryClassRelation:
-				output.RelatedEntities = append(output.RelatedEntities, candidates[:take]...)
+				output.RelatedEntities = append(output.RelatedEntities, selected...)
 			case memory.MemoryClassEpisodic:
-				output.RecentSession = append(output.RecentSession, candidates[:take]...)
+				output.RecentSession = append(output.RecentSession, selected...)
 			case memory.MemoryClassProcedural:
-				output.RecentEpisodes = append(output.RecentEpisodes, candidates[:take]...)
+				output.RecentEpisodes = append(output.RecentEpisodes, selected...)
 			}
-			remaining -= take
-			includedContextItems += take
+			includedContextItems += len(selected)
 		}
 		if input.retrievalPlannerDiagnosticsAuthorized && availableContextItems > includedContextItems {
 			output.plannerDiagnostics = append(output.plannerDiagnostics, ContextDiagnostic{Section: "context_planner", Status: "omitted_by_quota_or_budget", Reason: "planned context quota or caller budget omitted visible items", Omitted: availableContextItems - includedContextItems})
 		}
-		if !input.DisclosureRequired && input.IncludeExperienceInsights && remaining > 0 && s.insights != nil {
+		if input.FinalAdmission == nil && !input.DisclosureRequired && input.IncludeExperienceInsights && remaining > 0 && s.insights != nil {
 			if err := s.appendExperienceInsights(ctx, input.Scope, input.IncludeDiagnostics, &output, &remaining); err != nil {
 				return AssembledContext{}, err
 			}
@@ -2946,42 +2948,20 @@ func (s *Service) AssembleContext(ctx context.Context, input AssembleContextInpu
 	}
 
 	remaining := input.Budget
-	if remaining > 0 && len(profiles) > 0 {
-		output.Profile = append(output.Profile, profiles[0])
-		remaining--
+	output.Profile = selectContextSection(profiles, "profile", 1, &remaining, input.FinalAdmission)
+	output.RelevantSummaries = selectContextSection(summaries, "relevant_summaries", len(summaries), &remaining, input.FinalAdmission)
+	if input.IncludeRelations {
+		output.RelatedEntities = selectContextSection(relations, "related_entities", len(relations), &remaining, input.FinalAdmission)
+	}
+	if len(summaries) == 0 {
+		output.RecentSession = selectContextSection(episodes, "recent_session", len(episodes), &remaining, input.FinalAdmission)
+	}
+	output.RecentEpisodes = selectContextSection(others, "recent_episodes", len(others), &remaining, input.FinalAdmission)
+	if len(summaries) > 0 {
+		output.RecentSession = selectContextSection(episodes, "recent_session", len(episodes), &remaining, input.FinalAdmission)
 	}
 
-	if remaining > 0 && len(summaries) > 0 {
-		take := minInt(len(summaries), remaining)
-		output.RelevantSummaries = append(output.RelevantSummaries, summaries[:take]...)
-		remaining -= take
-	}
-
-	if remaining > 0 && input.IncludeRelations && len(relations) > 0 {
-		take := minInt(len(relations), remaining)
-		output.RelatedEntities = append(output.RelatedEntities, relations[:take]...)
-		remaining -= take
-	}
-
-	if remaining > 0 && len(summaries) == 0 && len(episodes) > 0 {
-		take := minInt(len(episodes), remaining)
-		output.RecentSession = append(output.RecentSession, episodes[:take]...)
-		remaining -= take
-	}
-
-	if remaining > 0 && len(others) > 0 {
-		take := minInt(len(others), remaining)
-		output.RecentEpisodes = append(output.RecentEpisodes, others[:take]...)
-		remaining -= take
-	}
-
-	if remaining > 0 && len(summaries) > 0 && len(episodes) > 0 {
-		take := minInt(len(episodes), remaining)
-		output.RecentSession = append(output.RecentSession, episodes[:take]...)
-		remaining -= take
-	}
-
-	if !input.DisclosureRequired && input.IncludeExperienceInsights && remaining > 0 && s.insights != nil {
+	if input.FinalAdmission == nil && !input.DisclosureRequired && input.IncludeExperienceInsights && remaining > 0 && s.insights != nil {
 		if err := s.appendExperienceInsights(ctx, input.Scope, input.IncludeDiagnostics, &output, &remaining); err != nil {
 			return AssembledContext{}, err
 		}
@@ -2994,7 +2974,7 @@ func (s *Service) AssembleContext(ctx context.Context, input AssembleContextInpu
 }
 
 func (s *Service) appendGoalContext(ctx context.Context, input AssembleContextInput, output *AssembledContext) {
-	if input.DisclosureRequired || !input.IncludeGoalContext {
+	if input.DisclosureRequired || input.FinalAdmission != nil || !input.IncludeGoalContext {
 		return
 	}
 	if s.goalContext == nil {
@@ -3065,7 +3045,7 @@ func (s *Service) boundChunkContextEvidence(input AssembleContextInput, hits []S
 			continue
 		}
 		chunkBytes := len([]byte(hit.Chunk.Content))
-		if input.CharacterBudget > 0 && used+chunkBytes > input.CharacterBudget {
+		if input.FinalAdmission == nil && input.CharacterBudget > 0 && used+chunkBytes > input.CharacterBudget {
 			omitted++
 			continue
 		}
@@ -3108,7 +3088,7 @@ func (s *Service) readProjectionHits(ctx context.Context, input AssembleContextI
 				continue
 			}
 			itemBytes := len([]byte(item.Text))
-			if itemBytes == 0 || (input.CharacterBudget > 0 && usedBytes+itemBytes > input.CharacterBudget) {
+			if itemBytes == 0 || (input.FinalAdmission == nil && input.CharacterBudget > 0 && usedBytes+itemBytes > input.CharacterBudget) {
 				budgetOmitted++
 				continue
 			}

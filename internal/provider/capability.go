@@ -149,12 +149,14 @@ func validErrorCategory(c ErrorCategory) bool {
 }
 
 type ProviderLimits struct {
-	MaxEventBytes       int `json:"max_event_bytes"`
-	MaxIntentBytes      int `json:"max_intent_bytes"`
-	MaxRetrievalResults int `json:"max_retrieval_results"`
-	MaxContextBytes     int `json:"max_context_bytes"`
-	MaxCitations        int `json:"max_citations"`
-	MaxMetadataBytes    int `json:"max_metadata_bytes"`
+	MaxContextItems        int `json:"max_context_items"`
+	MaxContextContentBytes int `json:"max_context_content_bytes"`
+	MaxEventBytes          int `json:"max_event_bytes"`
+	MaxIntentBytes         int `json:"max_intent_bytes"`
+	MaxRetrievalResults    int `json:"max_retrieval_results"`
+	MaxContextBytes        int `json:"max_context_bytes"`
+	MaxCitations           int `json:"max_citations"`
+	MaxMetadataBytes       int `json:"max_metadata_bytes"`
 }
 
 // SynchronizationCapabilities describes the transport-neutral replay
@@ -195,29 +197,35 @@ func (s SynchronizationCapabilities) Validate() error {
 }
 
 func (l ProviderLimits) Validate() error {
-	if l.MaxEventBytes <= 0 || l.MaxEventBytes > 1<<20 || l.MaxIntentBytes <= 0 || l.MaxIntentBytes > 1<<20 || l.MaxRetrievalResults <= 0 || l.MaxRetrievalResults > 1000 || l.MaxContextBytes <= 0 || l.MaxContextBytes > 4<<20 || l.MaxCitations <= 0 || l.MaxCitations > 1000 || l.MaxMetadataBytes <= 0 || l.MaxMetadataBytes > 1<<20 {
+	if l.MaxContextItems <= 0 || l.MaxContextItems > 1000 || l.MaxContextContentBytes < 0 || l.MaxContextContentBytes > l.MaxContextBytes || l.MaxEventBytes <= 0 || l.MaxEventBytes > 1<<20 || l.MaxIntentBytes <= 0 || l.MaxIntentBytes > 1<<20 || l.MaxRetrievalResults <= 0 || l.MaxRetrievalResults > 1000 || l.MaxContextBytes <= 0 || l.MaxContextBytes > 4<<20 || l.MaxCitations <= 0 || l.MaxCitations > 1000 || l.MaxMetadataBytes <= 0 || l.MaxMetadataBytes > 1<<20 {
 		return fmt.Errorf("provider limits are invalid")
 	}
 	return nil
 }
 
 type CapabilityDocument struct {
-	DisclosurePolicyVersion string                      `json:"disclosure_policy_version"`
-	SourceMetadataVersion   string                      `json:"source_metadata_version"`
-	ResponseModes           []string                    `json:"response_modes"`
-	DisclosureProfiles      []string                    `json:"disclosure_profiles"`
-	ProviderVersion         string                      `json:"provider_version"`
-	SchemaVersion           string                      `json:"schema_version"`
-	ServiceVersion          string                      `json:"service_version,omitempty"`
-	BuildID                 string                      `json:"build_id,omitempty"`
-	Operations              []string                    `json:"operations"`
-	ScopeDimensions         []string                    `json:"scope_dimensions"`
-	Limits                  ProviderLimits              `json:"limits"`
-	Synchronization         SynchronizationCapabilities `json:"synchronization"`
-	SchemaDigest            string                      `json:"schema_digest"`
+	ContextBudgetVersion        string                      `json:"context_budget_version"`
+	ContextPackingPolicyVersion string                      `json:"context_packing_policy_version"`
+	TokenBudgetSupported        bool                        `json:"token_budget_supported"`
+	DisclosurePolicyVersion     string                      `json:"disclosure_policy_version"`
+	SourceMetadataVersion       string                      `json:"source_metadata_version"`
+	ResponseModes               []string                    `json:"response_modes"`
+	DisclosureProfiles          []string                    `json:"disclosure_profiles"`
+	ProviderVersion             string                      `json:"provider_version"`
+	SchemaVersion               string                      `json:"schema_version"`
+	ServiceVersion              string                      `json:"service_version,omitempty"`
+	BuildID                     string                      `json:"build_id,omitempty"`
+	Operations                  []string                    `json:"operations"`
+	ScopeDimensions             []string                    `json:"scope_dimensions"`
+	Limits                      ProviderLimits              `json:"limits"`
+	Synchronization             SynchronizationCapabilities `json:"synchronization"`
+	SchemaDigest                string                      `json:"schema_digest"`
 }
 
 func (d CapabilityDocument) Validate() error {
+	if d.ContextBudgetVersion != ContextBudgetVersion || d.ContextPackingPolicyVersion != ContextPackingPolicyVersion || d.TokenBudgetSupported {
+		return fmt.Errorf("unsupported context budget capabilities")
+	}
 	if d.DisclosurePolicyVersion != auth.DisclosurePolicyVersion || d.SourceMetadataVersion != memory.SourceMetadataVersion || len(d.ResponseModes) != 2 || d.ResponseModes[0] != auth.ResponseModeReferenceOnly || d.ResponseModes[1] != auth.ResponseModeBoundedContent || len(d.DisclosureProfiles) != 2 || d.DisclosureProfiles[0] != auth.DisclosureProfileReference || d.DisclosureProfiles[1] != auth.DisclosureProfileContent {
 		return fmt.Errorf("unsupported context disclosure capabilities")
 	}
@@ -249,10 +257,10 @@ func (d CapabilityDocument) Validate() error {
 type CapabilityInput struct{ ProviderVersion, SchemaVersion, ServiceVersion, BuildID, SchemaDigest string }
 
 func Discover(in CapabilityInput) CapabilityDocument {
-	d := CapabilityDocument{DisclosurePolicyVersion: auth.DisclosurePolicyVersion, SourceMetadataVersion: memory.SourceMetadataVersion, ResponseModes: []string{auth.ResponseModeReferenceOnly, auth.ResponseModeBoundedContent}, DisclosureProfiles: []string{auth.DisclosureProfileReference, auth.DisclosureProfileContent}, ProviderVersion: in.ProviderVersion, SchemaVersion: in.SchemaVersion, ServiceVersion: in.ServiceVersion, BuildID: in.BuildID, SchemaDigest: in.SchemaDigest,
+	d := CapabilityDocument{ContextBudgetVersion: ContextBudgetVersion, ContextPackingPolicyVersion: ContextPackingPolicyVersion, DisclosurePolicyVersion: auth.DisclosurePolicyVersion, SourceMetadataVersion: memory.SourceMetadataVersion, ResponseModes: []string{auth.ResponseModeReferenceOnly, auth.ResponseModeBoundedContent}, DisclosureProfiles: []string{auth.DisclosureProfileReference, auth.DisclosureProfileContent}, ProviderVersion: in.ProviderVersion, SchemaVersion: in.SchemaVersion, ServiceVersion: in.ServiceVersion, BuildID: in.BuildID, SchemaDigest: in.SchemaDigest,
 		Operations: []string{"ingest", "intent", "retrieve", "context", "forget", "status", "sync"}, ScopeDimensions: []string{"tenant", "project", "namespace", "agent", "session", "conversation", "provider_instance"},
 		Synchronization: SynchronizationCapabilities{Enabled: true, ContractVersion: "sync-v1", Transports: []string{"openapi_pull"}, EventKinds: []string{"raw_event", "canonical_memory", "lifecycle", "sync_complete"}, MaxBatchEvents: 100, MaxSnapshotBytes: 1 << 20, MaxCursorBytes: MaxSyncCursorBytes, RetentionWindowHours: 24 * 30},
-		Limits:          ProviderLimits{MaxEventBytes: 1 << 20, MaxIntentBytes: 1 << 20, MaxRetrievalResults: 100, MaxContextBytes: 1 << 20, MaxCitations: 100, MaxMetadataBytes: 64 << 10}}
+		Limits:          ProviderLimits{MaxContextItems: 100, MaxContextContentBytes: 1 << 20, MaxEventBytes: 1 << 20, MaxIntentBytes: 1 << 20, MaxRetrievalResults: 100, MaxContextBytes: 1 << 20, MaxCitations: 100, MaxMetadataBytes: 64 << 10}}
 	if strings.TrimSpace(d.ProviderVersion) == "" {
 		d.ProviderVersion = "unknown"
 	}

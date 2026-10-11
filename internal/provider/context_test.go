@@ -29,7 +29,16 @@ func TestContextResponseAllSectionsAreSafeAndConformant(t *testing.T) {
 		t.Fatal(err)
 	}
 	result := ShapeDisclosedContextResponse(out, meta, decision, 1, scope)
-	data, err := json.Marshal(result)
+	admission, err := NewContextAdmission(ContextInput{Budget: 5}, Discover(CapabilityInput{}).Limits, scope, decision, meta)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, s := range []string{"profile", "recent_session", "recent_episodes", "relevant_summaries", "related_entities"} {
+		if !admission.AdmitContextItem(s, hit) {
+			t.Fatal("ample budget refused item")
+		}
+	}
+	data, err := admission.Finalize(out, meta)
 	if err != nil {
 		t.Fatal(err)
 	}

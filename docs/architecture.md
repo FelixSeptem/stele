@@ -92,6 +92,33 @@ See [components](components.md), [best practices](best-practices.md),
 
 ## Context disclosure and source trust
 
+Provider final context uses `context-budget-v1` independent item-placement,
+UTF-8 content-byte, unique canonical-citation and complete serialized-body
+allocations. Retrieval owns whole-item admission inside its existing eligibility,
+ordering, summary preference, deduplication and section policy. Provider supplies
+costs from the same authorized mode-specific DTO used for emission, plus a
+bounded conservative accounting reserve under `context-packing-v1`. The HTTP
+route writes the finalized exact bytes including mandatory `budget_accounting`;
+it performs no alternate ranking or suffix clipping. Paths, source metadata,
+escaping and repeated citations consume body bytes; references consume zero
+content bytes. Native/admin requests retain existing semantics.
+
+Defaults are 100 items/100 citations, 1 MiB response bytes and content inherited
+from the response ceiling; items/citations cap at 1000 and bytes at 4 MiB. Caller
+limits independently intersect resolved server ceilings, with explicit content/
+citation zero supported. Infeasible mandatory envelopes fail before retrieval
+with 413 and no partial projection. Current disclosure denies use 403; unavailable
+authority uses retryable 503 rather than an empty outcome. Closed safe accounting
+does not reopen public insight/goal/projection/feedback/diagnostic paths or expose
+hidden evidence. Token allocations remain unsupported.
+
+Consumers negotiate versions and validate exact actual usage; strict schema and
+independent item-ceiling migration is required. Disable consumers requiring PC3
+before rollback to a binary without it, retaining durable data and PC2 grants.
+See the [Provider guide](agent-runtime-memory-provider.md) and
+[configuration guidance](self-hosting.md#provider-context-allocation-configuration)
+for validation, units, errors, and rollout evidence.
+
 Public runtime credentials require explicit exact-scope disclosure provisioning.
 Provider context defaults to structured references; bounded content requires the
 content profile and explicit mode. Unsupported native/MCP data routes deny public

@@ -60,7 +60,10 @@ start a fresh snapshot instead of assuming that skipped events were applied.
 
 `POST /v1/provider/context` uses the served `ProviderContextRequest` and
 `ProviderContextResponse` OpenAPI schemas. Discover `context-disclosure-v1` and
-`source-metadata-v1` and compare `schema_digest` with `/openapi.yaml` before use.
+`source-metadata-v1`, `context_budget_version=context-budget-v1`,
+`context_packing_policy_version=context-packing-v1` and
+`token_budget_supported=false`; compare `schema_digest` with `/openapi.yaml`
+before use. The base `provider-v1` alone does not establish budget compatibility.
 Send `X-API-Key`, server-issued `X-Stele-Runtime-Binding` and
 `X-Stele-Runtime-Session`, and exact tenant/project/namespace headers. Scope and
 session are binding-owned. The current exact-scope grant must be explicitly
@@ -87,13 +90,24 @@ Full request (ProviderContextRequest):
   "metadata": {"request_id":"context-request-2","operation_id":"context-operation-2","schema_version":"provider-v1"},
   "input": {
     "query":"current task","budget":8,"path_prefix":"tasks/demo",
+    "budget_limits":{"max_content_bytes":4096,"max_response_bytes":16384,"max_citations":8},
     "projection_intent":"task_context","disclosure_profile":"memory-content-v1",
     "response_mode":"bounded_content","include_relations":true
   }
 }
 ```
 
-`query` must be nonblank and `budget` a positive item count. Use exact `path` or
+`query` must be nonblank and `budget` a positive item-placement count through
+2,147,483,647. Optional closed `budget_limits` contains only
+`max_content_bytes`, `max_response_bytes`, and `max_citations`, each an integer
+through 2,147,483,647. Response bytes require at least one; content bytes and
+citations permit zero. Omitted objects/fields and an empty object use published
+server ceilings; explicit zero survives independent caller/server clamping.
+Zero content does not switch content mode to references: only whole items with
+actually empty content can fit. Zero citations returns no memory item because
+every public item requires a canonical citation. Token fields (`max_tokens`,
+`tokenizer`) are unknown and fail validation; bytes are not token estimates.
+Use exact `path` or
 explicit `path_prefix`; conflicting selectors are invalid. Canonical spellings,
 closed objects and typed values are required: aliases, duplicate keys, nulls,
 unknown fields and trailing JSON fail with bounded 400. Unknown or unauthorized
@@ -118,12 +132,23 @@ A genuine empty response (ProviderContextResponse):
       "profile":"memory-reference-v1","policy_version":"context-disclosure-v1",
       "projection_intent":"conversation","source_metadata_version":"source-metadata-v1"
     },
+    "budget_accounting": {
+      "contract_version":"context-budget-v1","packing_policy_version":"context-packing-v1",
+      "requested":{"max_items":4,"max_content_bytes":null,"max_response_bytes":null,"max_citations":null},
+      "effective":{"max_items":4,"max_content_bytes":1048576,"max_response_bytes":1048576,"max_citations":100},
+      "usage":{"items":0,"content_bytes":0,"response_bytes":924,"citations":0},
+      "selection":{"outcome":"empty","omission_reasons":[],"unsupported_sections":[]}
+    },
     "profile":[],"recent_session":[],"recent_episodes":[],
     "relevant_summaries":[],"related_entities":[],"citations":[]
   },
   "citations":[]
 }
 ```
+
+The example is pretty-printed for reading; its usage describes its compact JSON
+form, without a terminal newline. Actual usage always describes the exact body
+sent by the route, rather than a reformatted copy.
 
 Validate the mode-discriminated response before use. Missing `result`, missing or
 null required arrays, mixed item modes, unknown fields or substituted shapes are
@@ -132,11 +157,71 @@ returned canonical IDs and versions. Raw-event/provenance evidence is omitted.
 References confer no permission for a subsequent read. No query, stored application
 metadata, hidden counts, ranking scores or arbitrary policy attribution is echoed.
 
-The complete serialized response must fit the configured ceiling; excess returns
-413 with no partial response. PC3 byte/token accounting, PC4 digest/continuity,
-and PC5/PC6 reference/outcome protocols remain pending.
+`budget_accounting` is required and closed in both modes, independently of
+`include_diagnostics`. Its requested object repeats `budget` as `max_items`;
+response-only nulls identify omitted optional limits, while explicit zeros remain
+zeros. Effective values are independent minima of caller and server ceilings.
+Usage counts returned item appearances across categories, unescaped UTF-8 bytes
+of every content string, unique canonical `(kind,id,version)` citation identities,
+and the exact uncompressed serialized JSON body. Paths, source metadata, JSON
+escaping, metadata, all arrays, repeated inner/outer citations and accounting
+itself consume response bytes; headers, compression and framing do not. Reference
+mode consumes zero content bytes. Required citations stay with every whole item.
+
+Selection preserves eligibility, current sources/versions, ranking, section
+priority, summary preference, quotas and deduplication. An oversized item is
+omitted whole; Stele continues through the existing bounded candidate stream,
+without truncation, citation stripping, version replacement, wider lookup or a
+second consumer packing/ranking pass. Deterministic admission reserves bounded
+accounting space conservatively under `context-packing-v1`; unused space is
+possible and maximal packing is not promised. Final `response_bytes` includes
+its own digit width and equals the length of the exact emitted compact body.
+
+`selection.outcome` is `selected` when any item is returned (even with omissions),
+`empty` only when no disclosable candidate remained, or `budget_exhausted` when
+eligible candidates existed but no whole item fit. Ordered unique
+`omission_reasons` are `item_limit`, `content_bytes`, `citations`, `response_bytes`.
+Only evaluated authorized candidates contribute; hidden, foreign, grant-,
+quality- or lifecycle-rejected evidence contributes no reason, private count,
+identity or text. Ordered unique `unsupported_sections` are
+`experience_insights`, `goal_context`, `diagnostics`, `feedback_diagnostics`, only
+when explicitly requested. Those fixed capability labels do not reopen public
+insight/goal/projection/feedback/raw-diagnostic gates or reveal stored evidence.
+
+Before retrieval, the mandatory empty envelope must fit the effective response
+ceiling. Infeasible allocation returns 413 `context_limit_exceeded` with no result
+or partial stream. Final serializer/accounting/ceiling disagreements fail closed.
+Malformed limits use 400 `invalid_request`; current disclosure denial uses 403
+`disclosure_denied`; unavailable authoritative dependencies use retryable 503,
+never empty or budget-exhausted success. Error bodies have separate server bounds
+and need not fit caller success allocations. Reducing only the item budget cannot
+repair an envelope that itself exceeds the body allocation.
+
+Consumers reserve their other prompt components before allocating memory space.
+Require fixed budget/packing versions, correct mode, all categories, all closed
+accounting fields, ordered enums, actual item/content/citation counts and exact
+captured response-byte length; ensure every usage dimension fits its effective
+limit and effective values match discovered ceilings and the request. Compare
+reported requested limits with the originating request, preserving omitted/null
+versus explicit zero, and require unsupported-section labels to match its section
+flags. A self-consistent response for a different allocation is a contract failure. Missing
+accounting, overflow, incompatible versions, impossible usage or over-limit bodies
+are `failed-contract`, never empty results. Source data still grants no business,
+tool, write or compiler authority. Tokenizers/token budgets remain unsupported;
+PC4 digest/continuity and PC5/PC6 reference/outcome protocols remain pending.
 
 ### Compatibility and maintenance notes
+
+PC3 requires updating strict consumer schemas for mandatory accounting and
+explicit budget/packing discovery. The independent server item ceiling (default
+100) can reduce formerly oversized item requests; budget omissions may now yield
+a bounded selection where PC2 refused a large body. There is no PC3 database
+migration or new persistence store. PC1/PC2 archived evidence does not prove PC3
+readiness; verify fresh initial and API/worker restart allocation/isolation/
+lifecycle evidence before rollout. Before rollback to a service without PC3,
+disable access for consumers requiring the extension while retaining PC2 grants,
+source enforcement and durable data. Consumers must fail compatibility rather
+than stripping limits, broadening disclosure, switching routes or packing locally.
 
 This changes public defaults and requires migration 0035 plus explicit grant
 provisioning. Old bindings are checked against current grants on every supported

@@ -117,11 +117,26 @@ read. Raw-event/provenance IDs are omitted because they need independent evidenc
 authorization. Validate the mode-discriminated OpenAPI shape before use. Missing
 fields or malformed results are contract failures, never empty successes.
 
-The service checks the size of the complete serialized response. Exceeding its
-configured ceiling returns 413 with no partial projection. `budget` still counts
-items. Caller byte/token budgets and selection accounting belong to PC3; digest
-and continuity belong to PC4; reference writes/receipts and outcome projection
-belong to PC5/PC6.
+PC3 `context-budget-v1` retains positive item-placement `budget` and adds optional
+closed `budget_limits` for UTF-8 content bytes, complete JSON body bytes and
+unique canonical citations. Omitted fields inherit independent server ceilings;
+content/citation zero is valid without changing disclosure mode. Whole authorized
+items retain their mandatory citations, and deterministic `context-packing-v1`
+admission conservatively reserves accounting space. Required closed
+`budget_accounting` reports requested omission nulls, effective limits, exact
+usage and safe ordered reasons. Hidden/denied evidence contributes no counters
+or existence hints; unsupported public sections stay closed.
+
+Infeasible mandatory envelopes or finalized accounting/serialization refusal
+return bounded 413 without partial projection. Current authority remains checked
+before packing: malformed allocations use 400, disclosure denial 403, unavailable
+authority retryable 503. Tokens/tokenizers remain unsupported. Discover budget
+versions explicitly, update strict consumer schemas and validate actual body
+usage. Disable dependent consumer access before rollback to an older binary;
+retain PC2 enforcement/data. See [Provider allocation and migration](agent-runtime-memory-provider.md)
+and [independent configuration](self-hosting.md#provider-context-allocation-configuration).
+Digest/continuity remains PC4 and reference/outcome workflows PC5/PC6; archived
+PC2 evidence does not establish PC3 readiness.
 
 Danny owns business roles, tool/write permissions, compiler submission and task
 completion. Stele owns scoped selection and durable memory evidence. All recalled

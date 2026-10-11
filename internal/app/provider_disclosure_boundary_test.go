@@ -11,6 +11,7 @@ import (
 
 	"github.com/FelixSeptem/stele/internal/auth"
 	"github.com/FelixSeptem/stele/internal/memory"
+	"github.com/FelixSeptem/stele/internal/provider"
 	"github.com/FelixSeptem/stele/internal/retrieval"
 )
 
@@ -25,7 +26,7 @@ func TestProviderDisclosureDeniesAlternateHTTPRoutesWithoutBinding(t *testing.T)
 		{"POST", "/v1/provider/forget"}, {"POST", "/v1/mcp"},
 		{"GET", "/v1/future-content-route/hidden-identity-marker"},
 	} {
-		 t.Run(route.method+route.path, func(t *testing.T) {
+		t.Run(route.method+route.path, func(t *testing.T) {
 			r := httptest.NewRequest(route.method, route.path, strings.NewReader(`{"query":"private-content-marker"}`))
 			r.Header.Set(auth.HeaderAPIKey, "context-key")
 			r.Header.Set(auth.HeaderTenant, "tenant-a")
@@ -52,22 +53,27 @@ func TestProviderContextSerializedCeilingRejectsWholeResponse(t *testing.T) {
 			if baseline.Code != http.StatusOK || !strings.Contains(baseline.Body.String(), "selected-identity-marker") {
 				t.Fatalf("invalid baseline: %d", baseline.Code)
 			}
-			for _, delta := range []int{0, -1} {
-				request := contextContractHandlerWithDependencies(t, a, func(deps *HTTPDependencies) { deps.ProviderLimits.MaxContextBytes = baseline.Body.Len() + delta })
-				w := request(body)
-				if delta == 0 {
-					if w.Code != http.StatusOK || w.Body.String() != baseline.Body.String() {
-						t.Fatal("response at exact serialized ceiling changed or was rejected")
-					}
-					continue
-				}
-				if w.Code != http.StatusRequestEntityTooLarge || !strings.Contains(w.Body.String(), `"code":"context_limit_exceeded"`) || strings.Contains(w.Body.String(), "selected-") || strings.Contains(w.Body.String(), `"result"`) {
-					t.Fatalf("oversize response was partially disclosed: %d %s", w.Code, w.Body.String())
-				}
-				if !json.Valid(w.Body.Bytes()) {
-					t.Fatal("refusal is not a complete JSON response")
-				}
+			// PC3 omits a whole item when the conservative envelope reserve
+			// cannot fit. It still emits exact accounting for the bounded result.
+			request := contextContractHandlerWithDependencies(t, a, func(deps *HTTPDependencies) { deps.ProviderLimits.MaxContextBytes = baseline.Body.Len() - 1 })
+			w := request(body)
+			if w.Code != 200 || strings.Contains(w.Body.String(), "selected-") {
+				t.Fatalf("whole-item admission: %d %s", w.Code, w.Body.String())
 			}
+			var response provider.DisclosedContextResponse
+			if err := json.Unmarshal(w.Body.Bytes(), &response); err != nil {
+				t.Fatal(err)
+			}
+			if response.Result.BudgetAccounting.Usage.ResponseBytes != w.Body.Len() || response.Result.BudgetAccounting.Selection.Outcome != "budget_exhausted" {
+				t.Fatal("incorrect exact accounting")
+			}
+			before := a.calls
+			tiny := strings.Replace(body, `"budget":1`, `"budget":1,"budget_limits":{"max_response_bytes":1}`, 1)
+			refused := request(tiny)
+			if refused.Code != 413 || a.calls != before || strings.Contains(refused.Body.String(), `"result"`) || !json.Valid(refused.Body.Bytes()) {
+				t.Fatalf("infeasible envelope leaked/queried: %d", refused.Code)
+			}
+
 		})
 	}
 }

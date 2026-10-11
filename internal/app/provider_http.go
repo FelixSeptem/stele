@@ -3,7 +3,6 @@ package app
 import (
 	"context"
 	"crypto/sha256"
-	"encoding/json"
 	"errors"
 	"fmt"
 	"github.com/FelixSeptem/stele/internal/auth"
@@ -281,6 +280,13 @@ func registerProviderOperationRoutes(mux *http.ServeMux, deps HTTPDependencies) 
 		if req.Input.ProjectionIntent != "" {
 			decision.ProjectionIntent = req.Input.ProjectionIntent
 		}
+		admission, err := provider.NewContextAdmission(req.Input, deps.ProviderLimits, b.Scope, decision, req.Metadata)
+		if err != nil {
+			writeProviderError(w, 413, "validation", "context_limit_exceeded", "context response exceeds allocation", false)
+			return
+		}
+		input.Budget = min(input.Budget, deps.ProviderLimits.Resolved().MaxContextItems)
+		input.FinalAdmission = admission
 		input.DisclosureRequired = true
 		input.IncludeExperienceInsights = false
 		input.IncludeGoalContext = false
@@ -289,19 +295,22 @@ func registerProviderOperationRoutes(mux *http.ServeMux, deps HTTPDependencies) 
 		input.UseProjections = false
 		out, meta, err := deps.ProviderAdapter.AssembleContext(r.Context(), b, req.Metadata, input)
 		if err != nil {
-			writeProviderError(w, 400, providerErrorCategory(err), "operation_failed", boundedProviderMessage(err), providerErrorCategory(err) == provider.ErrorCategoryRetryable)
+			// The request and current disclosure were already validated. An
+			// assembly/read failure must not become an empty successful context.
+			category := providerErrorCategory(err)
+			if category == provider.ErrorCategoryScope {
+				writeProviderError(w, http.StatusForbidden, category, "disclosure_denied", "disclosure denied", false)
+			} else {
+				writeProviderError(w, http.StatusServiceUnavailable, provider.ErrorCategoryDependency, "provider_unavailable", "provider context unavailable", true)
+			}
 			return
 		}
-		response := provider.ShapeDisclosedContextResponse(out, meta, decision, providerCitationLimit(deps.ProviderLimits), b.Scope)
-		serialized, err := json.Marshal(response)
-		ceiling := deps.ProviderLimits.MaxContextBytes
-		if ceiling <= 0 {
-			ceiling = provider.Discover(provider.CapabilityInput{}).Limits.MaxContextBytes
-		}
-		if err != nil || len(serialized) > ceiling {
-			writeProviderError(w, 413, "validation", "context_limit_exceeded", "context response exceeds server limit", false)
+		serialized, err := admission.Finalize(out, meta)
+		if err != nil {
+			writeProviderError(w, 413, "validation", "context_limit_exceeded", "context response exceeds allocation", false)
 			return
 		}
+
 		w.Header().Set("Content-Type", "application/json")
 		w.WriteHeader(200)
 		_, _ = w.Write(serialized)

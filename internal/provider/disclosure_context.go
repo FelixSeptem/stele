@@ -26,6 +26,7 @@ type DisclosedContextMemory struct {
 	Content string `json:"content"`
 }
 type DisclosedContextResult struct {
+	BudgetAccounting  ContextBudgetAccounting `json:"budget_accounting"`
 	ResponseMode      string                  `json:"response_mode"`
 	Disclosure        auth.DisclosureDecision `json:"disclosure"`
 	Profile           []DisclosedContextItem  `json:"profile"`

@@ -76,7 +76,7 @@ func TestProviderAdapterEnforcesConfiguredLimits(t *testing.T) {
 	assembler := &adapterAssembler{}
 	a := NewAdapter(AdapterDependencies{
 		Searcher: searcher, Assembler: assembler,
-		Limits: ProviderLimits{MaxEventBytes: 128, MaxIntentBytes: 128, MaxRetrievalResults: 2, MaxContextBytes: 32, MaxCitations: 1, MaxMetadataBytes: 64},
+		Limits: ProviderLimits{MaxContextItems: 3, MaxContextContentBytes: 32, MaxEventBytes: 128, MaxIntentBytes: 128, MaxRetrievalResults: 2, MaxContextBytes: 32, MaxCitations: 1, MaxMetadataBytes: 64},
 	})
 	b := RuntimeBinding{BindingID: "b", PrincipalID: "p", Scope: memory.Scope{Tenant: "t", Project: "p", Namespace: "n"}, AgentID: "a", SessionID: "s", ProviderInstanceID: "pi"}
 	meta := OperationMetadata{RequestID: "r", OperationID: "o", SchemaVersion: "schema-v1"}
@@ -89,7 +89,7 @@ func TestProviderAdapterEnforcesConfiguredLimits(t *testing.T) {
 	if _, _, err := a.AssembleContext(context.Background(), b, meta, retrieval.AssembleContextInput{Query: "q", Budget: 99, CharacterBudget: 99}); err != nil {
 		t.Fatal(err)
 	}
-	if assembler.got.Budget > 32 || assembler.got.CharacterBudget > 32 {
+	if assembler.got.Budget != 3 || assembler.got.CharacterBudget > 32 {
 		t.Fatalf("context limits not enforced: %+v", assembler.got)
 	}
 }

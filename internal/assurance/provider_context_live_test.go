@@ -6,6 +6,7 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
+	"fmt"
 	"io"
 	"net/http"
 	"os"
@@ -23,21 +24,197 @@ import (
 )
 
 type contextLiveReport struct {
-	Result                string   `json:"result"`
-	Stage                 string   `json:"stage"`
-	SchemaVersion         string   `json:"schema_version"`
-	OpenAPIDigest         string   `json:"openapi_digest"`
-	ImageDigest           string   `json:"image_digest"`
-	SourceRevision        string   `json:"source_revision"`
-	SourceDigest          string   `json:"source_digest"`
-	ScopeHash             string   `json:"scope_hash"`
-	IdentityHash          string   `json:"identity_hash"`
-	CitationHash          string   `json:"citation_hash"`
-	GovernanceCompleted   int      `json:"governance_completed"`
-	DisclosureVersion     string   `json:"disclosure_policy_version"`
-	SourceMetadataVersion string   `json:"source_metadata_version"`
-	DurableLabelsVerified bool     `json:"durable_labels_verified"`
-	Checks                []string `json:"checks"`
+	Result                string           `json:"result"`
+	Stage                 string           `json:"stage"`
+	SchemaVersion         string           `json:"schema_version"`
+	OpenAPIDigest         string           `json:"openapi_digest"`
+	ImageDigest           string           `json:"image_digest"`
+	SourceRevision        string           `json:"source_revision"`
+	SourceDigest          string           `json:"source_digest"`
+	ScopeHash             string           `json:"scope_hash"`
+	IdentityHash          string           `json:"identity_hash"`
+	CitationHash          string           `json:"citation_hash"`
+	GovernanceCompleted   int              `json:"governance_completed"`
+	DisclosureVersion     string           `json:"disclosure_policy_version"`
+	SourceMetadataVersion string           `json:"source_metadata_version"`
+	DurableLabelsVerified bool             `json:"durable_labels_verified"`
+	Checks                []string         `json:"checks"`
+	BudgetContractVersion string           `json:"budget_contract_version,omitempty"`
+	BudgetPackingVersion  string           `json:"budget_packing_version,omitempty"`
+	BudgetOutcomes        []string         `json:"budget_outcomes,omitempty"`
+	BudgetUsage           []map[string]int `json:"budget_usage,omitempty"`
+	BudgetIdentityHash    string           `json:"budget_identity_hash,omitempty"`
+	BudgetCitationHash    string           `json:"budget_citation_hash,omitempty"`
+}
+
+type liveBudgetUsage struct {
+	Items         int
+	ContentBytes  int
+	ResponseBytes int
+	Citations     int
+}
+
+func budgetLiveFixturePath() string {
+	return "pc3/budget/multilingual/" + strings.Repeat("provenance/", 12) + "fixture"
+}
+
+func TestProviderContextBudgetLiveFixturePathIsCanonical(t *testing.T) {
+	path := budgetLiveFixturePath()
+	if normalized, err := memory.NormalizeMemoryPath(path); err != nil || normalized != path {
+		t.Fatalf("live fixture path violates public ingestion contract: %v", err)
+	}
+}
+
+func TestProviderContextBudgetUsageMeasuresUTF8AndUniqueCitations(t *testing.T) {
+	body := []byte(`{"metadata":{},"result":{"profile":[{"memory":{"content":"中文🙂\"\\\n","id":"m1"},"citations":[{"source_kind":"canonical_memory","reference":"m1","version":"1","availability":"available"}]}],"citations":[{"source_kind":"canonical_memory","reference":"m1","version":"1","availability":"available"}],"budget_accounting":{"usage":{"items":1,"content_bytes":13,"response_bytes":353,"citations":1}}},"citations":[]}`)
+	usage, err := measureLiveBudgetUsage(body)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if usage.Items != 1 || usage.ContentBytes != len([]byte("中文🙂\"\\\n")) || usage.Citations != 1 || usage.ResponseBytes != len(body) {
+		t.Fatalf("unexpected budget usage: %+v", usage)
+	}
+}
+
+func TestProviderContextLiveAccountingRejectsFalseReportedUsage(t *testing.T) {
+	fixture := map[string]any{"result": map[string]any{
+		"profile":           []any{map[string]any{"memory": map[string]any{"content": "中文🙂"}, "citations": []any{map[string]any{"source_kind": "canonical_memory", "reference": "m1", "version": "1"}}}},
+		"budget_accounting": map[string]any{"contract_version": "context-budget-v1", "packing_policy_version": "context-packing-v1", "usage": map[string]any{"items": 1, "content_bytes": 10, "response_bytes": 0, "citations": 1}},
+	}}
+	result := fixture["result"].(map[string]any)
+	accounting := result["budget_accounting"].(map[string]any)
+	usage := accounting["usage"].(map[string]any)
+	marshal := func() []byte {
+		for i := 0; i < 8; i++ {
+			data, err := json.Marshal(fixture)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if usage["response_bytes"] == len(data) {
+				return data
+			}
+			usage["response_bytes"] = len(data)
+		}
+		t.Fatal("fixture accounting did not converge")
+		return nil
+	}
+	valid := marshal()
+	if _, _, _, err := validateLiveBudgetAccounting(valid, map[string]int{"items": 1, "content_bytes": 10, "response_bytes": len(valid), "citations": 1}); err != nil {
+		t.Fatal(err)
+	}
+	for _, tc := range []struct {
+		name   string
+		mutate func()
+	}{
+		{"characters-as-bytes", func() { usage["content_bytes"] = 3 }},
+		{"citation-appearances-as-identities", func() { usage["citations"] = 2 }},
+		{"wrong-items", func() { usage["items"] = 0 }},
+		{"unsupported-version", func() { accounting["contract_version"] = "context-budget-v0" }},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			tc.mutate()
+			if _, _, _, err := validateLiveBudgetAccounting(marshal(), nil); err == nil {
+				t.Fatal("incorrect accounting accepted")
+			}
+			usage["content_bytes"], usage["citations"], usage["items"] = 10, 1, 1
+			accounting["contract_version"] = "context-budget-v1"
+		})
+	}
+	for _, data := range [][]byte{append(append([]byte{}, valid...), '\n'), bytes.Replace(valid, []byte(fmt.Sprintf(`"response_bytes":%d`, len(valid))), []byte(`"response_bytes":0`), 1), []byte(`{"result":{}}`)} {
+		if _, _, _, err := validateLiveBudgetAccounting(data, nil); err == nil {
+			t.Fatal("missing or false body accounting accepted")
+		}
+	}
+	if _, _, _, err := validateLiveBudgetAccounting(valid, map[string]int{"content_bytes": 9}); err == nil {
+		t.Fatal("over-limit content accounting accepted")
+	}
+}
+
+func measureLiveBudgetUsage(data []byte) (liveBudgetUsage, error) {
+	var doc struct {
+		Result struct {
+			Profile           []provider.DisclosedContextItem `json:"profile"`
+			RecentSession     []provider.DisclosedContextItem `json:"recent_session"`
+			RecentEpisodes    []provider.DisclosedContextItem `json:"recent_episodes"`
+			RelevantSummaries []provider.DisclosedContextItem `json:"relevant_summaries"`
+			RelatedEntities   []provider.DisclosedContextItem `json:"related_entities"`
+			Citations         []provider.Citation             `json:"citations"`
+		} `json:"result"`
+		Citations []provider.Citation `json:"citations"`
+	}
+	if err := json.Unmarshal(data, &doc); err != nil {
+		return liveBudgetUsage{}, fmt.Errorf("budget response invalid")
+	}
+	usage := liveBudgetUsage{ResponseBytes: len(data)}
+	type identity struct{ kind, id, version string }
+	seen := map[identity]bool{}
+	add := func(citations []provider.Citation) {
+		for _, citation := range citations {
+			seen[identity{citation.SourceKind, citation.Reference, citation.Version}] = true
+		}
+	}
+	for _, items := range [][]provider.DisclosedContextItem{doc.Result.Profile, doc.Result.RecentSession, doc.Result.RecentEpisodes, doc.Result.RelevantSummaries, doc.Result.RelatedEntities} {
+		for _, item := range items {
+			usage.Items++
+			if item.Memory != nil {
+				usage.ContentBytes += len(item.Memory.Content)
+			}
+			add(item.Citations)
+		}
+	}
+	add(doc.Result.Citations)
+	add(doc.Citations)
+	usage.Citations = len(seen)
+	return usage, nil
+}
+
+func budgetNumber(value any) (int, bool) {
+	n, ok := value.(float64)
+	if !ok || n < 0 || n > float64(int(^uint(0)>>1)) || n != float64(int(n)) {
+		return 0, false
+	}
+	return int(n), true
+}
+
+func validateLiveBudgetAccounting(data []byte, expected map[string]int) (liveBudgetUsage, string, string, error) {
+	if !bytes.Equal(bytes.TrimSpace(data), data) {
+		return liveBudgetUsage{}, "", "", fmt.Errorf("budget response has unmeasured formatting")
+	}
+	usage, err := measureLiveBudgetUsage(data)
+	if err != nil {
+		return liveBudgetUsage{}, "", "", err
+	}
+	var doc map[string]any
+	if err := json.Unmarshal(data, &doc); err != nil {
+		return liveBudgetUsage{}, "", "", err
+	}
+	result, ok := doc["result"].(map[string]any)
+	if !ok {
+		return liveBudgetUsage{}, "", "", fmt.Errorf("result missing")
+	}
+	accounting, ok := result["budget_accounting"].(map[string]any)
+	if !ok {
+		return liveBudgetUsage{}, "", "", fmt.Errorf("budget_accounting missing")
+	}
+	contract, _ := accounting["contract_version"].(string)
+	packing, _ := accounting["packing_policy_version"].(string)
+	if contract != "context-budget-v1" || packing != "context-packing-v1" {
+		return liveBudgetUsage{}, contract, packing, fmt.Errorf("unsupported budget versions")
+	}
+	reported, ok := accounting["usage"].(map[string]any)
+	if !ok {
+		return liveBudgetUsage{}, contract, packing, fmt.Errorf("budget usage missing")
+	}
+	for key, actual := range map[string]int{"items": usage.Items, "content_bytes": usage.ContentBytes, "response_bytes": usage.ResponseBytes, "citations": usage.Citations} {
+		n, valid := budgetNumber(reported[key])
+		if !valid || n != actual {
+			return liveBudgetUsage{}, contract, packing, fmt.Errorf("budget usage mismatch: %s", key)
+		}
+		if limit, exists := expected[key]; exists && actual > limit {
+			return liveBudgetUsage{}, contract, packing, fmt.Errorf("budget usage exceeds %s", key)
+		}
+	}
+	return usage, contract, packing, nil
 }
 
 func contextLiveHash(v any) string {
@@ -127,6 +304,20 @@ func TestProviderContextFreshPostgresLive(t *testing.T) {
 	if status != 200 || json.Unmarshal(capsData, &caps) != nil || caps.Validate() != nil || caps.SchemaDigest != "sha256:"+contract.Digest {
 		t.Fatal("capability OpenAPI digest mismatch")
 	}
+	var budgetCaps struct {
+		ContractVersion string `json:"context_budget_version"`
+		PackingVersion  string `json:"context_packing_policy_version"`
+		TokenSupported  *bool  `json:"token_budget_supported"`
+		Limits          struct {
+			Items         int `json:"max_context_items"`
+			ContentBytes  int `json:"max_context_content_bytes"`
+			ResponseBytes int `json:"max_context_bytes"`
+			Citations     int `json:"max_citations"`
+		} `json:"limits"`
+	}
+	if json.Unmarshal(capsData, &budgetCaps) != nil || budgetCaps.ContractVersion != "context-budget-v1" || budgetCaps.PackingVersion != "context-packing-v1" || budgetCaps.TokenSupported == nil || *budgetCaps.TokenSupported || budgetCaps.Limits.Items < 1 || budgetCaps.Limits.ContentBytes < 0 || budgetCaps.Limits.ContentBytes > budgetCaps.Limits.ResponseBytes || budgetCaps.Limits.ResponseBytes < 1 || budgetCaps.Limits.Citations < 1 {
+		t.Fatal("context budget discovery unavailable or invalid")
+	}
 	var binding provider.RuntimeBinding
 	bindPath := filepath.Join(dir, "context-binding.json")
 	if stage == "initial" {
@@ -153,8 +344,11 @@ func TestProviderContextFreshPostgresLive(t *testing.T) {
 		if status != 200 {
 			t.Fatal("public context request failed")
 		}
-		result, err := contract.Validate(data, scope, "provider-v1")
+		result, err := contract.ValidateForRequest(data, scope, "provider-v1", body.Input, &caps.Limits)
 		if err != nil {
+			t.Fatal(err)
+		}
+		if _, _, _, err := validateLiveBudgetAccounting(data, map[string]int{"items": min(20, budgetCaps.Limits.Items), "content_bytes": budgetCaps.Limits.ContentBytes, "response_bytes": budgetCaps.Limits.ResponseBytes, "citations": budgetCaps.Limits.Citations}); err != nil {
 			t.Fatal(err)
 		}
 		return result
@@ -171,13 +365,14 @@ func TestProviderContextFreshPostgresLive(t *testing.T) {
 	}
 	visiblePath, hiddenPath := "pc1/context/visible", "pc1/context/hidden"
 	report := contextLiveReport{Result: "failed", Stage: stage, SchemaVersion: "provider-v1", DisclosureVersion: auth.DisclosurePolicyVersion, SourceMetadataVersion: memory.SourceMetadataVersion, OpenAPIDigest: contract.Digest, ImageDigest: os.Getenv("STELE_CONTEXT_VERIFY_IMAGE_DIGEST"), SourceRevision: os.Getenv("STELE_CONTEXT_VERIFY_SOURCE_REVISION"), SourceDigest: os.Getenv("STELE_CONTEXT_VERIFY_SOURCE_DIGEST"), ScopeHash: contextLiveHash(scope)}
+	report.BudgetContractVersion, report.BudgetPackingVersion = budgetCaps.ContractVersion, budgetCaps.PackingVersion
 	if !strings.HasPrefix(report.ImageDigest, "sha256:") || len(report.SourceRevision) != 40 || !validContextDigest(report.SourceDigest) {
 		t.Fatal("pinned build provenance missing")
 	}
 	var previous contextLiveReport
 	if stage == "restart" {
 		data, err := os.ReadFile(reportPath)
-		if err != nil || json.Unmarshal(data, &previous) != nil || previous.Result != "passed" || previous.Stage != "initial" || previous.OpenAPIDigest != report.OpenAPIDigest || previous.ImageDigest != report.ImageDigest || previous.SourceDigest != report.SourceDigest || previous.ScopeHash != report.ScopeHash {
+		if err != nil || json.Unmarshal(data, &previous) != nil || previous.Result != "passed" || previous.Stage != "initial" || previous.OpenAPIDigest != report.OpenAPIDigest || previous.ImageDigest != report.ImageDigest || previous.SourceDigest != report.SourceDigest || previous.ScopeHash != report.ScopeHash || previous.BudgetContractVersion != report.BudgetContractVersion || previous.BudgetPackingVersion != report.BudgetPackingVersion || len(previous.BudgetUsage) == 0 || len(previous.BudgetOutcomes) == 0 {
 			t.Fatal("initial live evidence missing or incompatible")
 		}
 		report.GovernanceCompleted = previous.GovernanceCompleted
@@ -191,6 +386,170 @@ func TestProviderContextFreshPostgresLive(t *testing.T) {
 			t.Error("bounded report write failed")
 		}
 	}()
+	// This separate non-root path keeps the earlier lifecycle/prefix fixture
+	// unchanged while exercising UTF-8 source bytes and JSON escaping.
+	budgetPath := budgetLiveFixturePath()
+	budgetContent := "Durable context fixture for byte accounting. 中文🙂 quoted \"context\", backslash \\, and newline\nremain source data."
+	budgetMeta := provider.OperationMetadata{RequestID: "pc3-budget-fixture", OperationID: "pc3-budget-fixture", IdempotencyKey: "pc3-budget-fixture", SchemaVersion: "provider-v1"}
+	budgetBody := map[string]any{"metadata": budgetMeta, "event_type": "conversation.message", "memory_path": budgetPath, "content": budgetContent, "metadata_map": map[string]any{"fixture": "pc3"}, "source_metadata": memory.SourceMetadata{Version: memory.SourceMetadataVersion, Trust: memory.SourceTrustUntrusted, Classification: memory.SourceClassificationMedium}}
+	budgetEventData, budgetEventStatus := call("POST", "/v1/provider/events", runtimeKey, budgetBody, &binding, false)
+	var budgetEvent provider.IngestResult
+	if budgetEventStatus != 201 || json.Unmarshal(budgetEventData, &budgetEvent) != nil || budgetEvent.EventID == "" || (stage == "restart" && !budgetEvent.Replayed) {
+		t.Fatal("budget governed event write or durable replay failed")
+	}
+	budgetDeadline := time.Now().Add(45 * time.Second)
+	for {
+		data, code := call("GET", "/v1/admin/governance/raw-events/"+budgetEvent.EventID, adminKey, nil, nil, false)
+		var raw governance.GovernanceRawEvent
+		if code == 200 && json.Unmarshal(data, &raw) == nil && raw.State == governance.GovernanceRawEventStateProcessed && !raw.ProcessedAt.IsZero() {
+			break
+		}
+		if time.Now().After(budgetDeadline) {
+			t.Fatal("budget event governance completion missing within bound")
+		}
+		time.Sleep(250 * time.Millisecond)
+	}
+	if stage == "initial" {
+		report.GovernanceCompleted++
+	}
+	readBudget := func(label, path, mode string, itemLimit int, limits map[string]int, optionalSections bool, outcome string) (provider.DisclosedContextResponse, liveBudgetUsage) {
+		input := map[string]any{"query": "context fixture", "budget": itemLimit, "path": path, "response_mode": mode}
+		if limits != nil {
+			input["budget_limits"] = limits
+		}
+		if optionalSections {
+			for _, flag := range []string{"include_experience_insights", "include_goal_context", "include_diagnostics", "include_feedback_diagnostics"} {
+				input[flag] = true
+			}
+		}
+		data, code := call("POST", "/v1/provider/context", runtimeKey, map[string]any{"metadata": metadata("budget-" + label), "input": input}, &binding, false)
+		if code != 200 {
+			t.Fatalf("budget fixture %s failed (HTTP %d)", label, code)
+		}
+		encodedInput, _ := json.Marshal(input)
+		var originalInput provider.ContextInput
+		if json.Unmarshal(encodedInput, &originalInput) != nil {
+			t.Fatal("live request allocation unavailable")
+		}
+		result, err := contract.ValidateForRequest(data, scope, "provider-v1", originalInput, &caps.Limits)
+		if err != nil {
+			t.Fatal(err)
+		}
+		effective := map[string]int{"max_items": min(itemLimit, budgetCaps.Limits.Items), "max_content_bytes": budgetCaps.Limits.ContentBytes, "max_response_bytes": budgetCaps.Limits.ResponseBytes, "max_citations": budgetCaps.Limits.Citations}
+		for key, value := range limits {
+			effective[key] = min(value, effective[key])
+		}
+		usage, _, _, err := validateLiveBudgetAccounting(data, map[string]int{"items": effective["max_items"], "content_bytes": effective["max_content_bytes"], "response_bytes": effective["max_response_bytes"], "citations": effective["max_citations"]})
+		if err != nil {
+			t.Fatal(err)
+		}
+		var decoded struct {
+			Result struct {
+				Accounting struct {
+					Requested map[string]*int `json:"requested"`
+					Effective map[string]int  `json:"effective"`
+					Selection struct {
+						Outcome     string   `json:"outcome"`
+						Reasons     []string `json:"omission_reasons"`
+						Unsupported []string `json:"unsupported_sections"`
+					} `json:"selection"`
+				} `json:"budget_accounting"`
+			} `json:"result"`
+		}
+		if json.Unmarshal(data, &decoded) != nil {
+			t.Fatal("budget accounting decode failed")
+		}
+		a := decoded.Result.Accounting
+		for key, value := range effective {
+			if a.Effective[key] != value {
+				t.Fatalf("budget fixture %s intersection mismatch: %s", label, key)
+			}
+			requested, exists := a.Requested[key]
+			expected, specified := limits[key]
+			if key == "max_items" {
+				expected, specified = itemLimit, true
+			}
+			if !exists || (specified && (requested == nil || *requested != expected)) || (!specified && requested != nil) {
+				t.Fatalf("budget fixture %s requested allocation mismatch: %s", label, key)
+			}
+		}
+		if result.Result.ResponseMode != mode || a.Selection.Outcome != outcome {
+			t.Fatalf("budget fixture %s mode or selection mismatch", label)
+		}
+		if outcome == "empty" && len(a.Selection.Reasons) != 0 {
+			t.Fatal("ineligible evidence contributed budget reasons")
+		}
+		if outcome == "budget_exhausted" && len(a.Selection.Reasons) == 0 {
+			t.Fatal("budget exhaustion reason missing")
+		}
+		if limit, specified := limits["max_citations"]; specified && limit == 0 && outcome == "budget_exhausted" && !strings.Contains(","+strings.Join(a.Selection.Reasons, ",")+",", ",citations,") {
+			t.Fatal("zero citation budget reason missing")
+		}
+		if limit, specified := limits["max_content_bytes"]; specified && limit == 0 && outcome == "budget_exhausted" && !strings.Contains(","+strings.Join(a.Selection.Reasons, ",")+",", ",content_bytes,") {
+			t.Fatal("zero content budget reason missing")
+		}
+		expectedUnsupported := ""
+		if optionalSections {
+			expectedUnsupported = "experience_insights,goal_context,diagnostics,feedback_diagnostics"
+		}
+		if strings.Join(a.Selection.Unsupported, ",") != expectedUnsupported {
+			t.Fatal("fixed unsupported section accounting mismatch")
+		}
+		if mode == auth.ResponseModeReferenceOnly && usage.ContentBytes != 0 {
+			t.Fatal("reference-only content usage was nonzero")
+		}
+		report.BudgetOutcomes = append(report.BudgetOutcomes, label+":"+outcome)
+		report.BudgetUsage = append(report.BudgetUsage, map[string]int{"items": usage.Items, "content_bytes": usage.ContentBytes, "response_bytes": usage.ResponseBytes, "citations": usage.Citations})
+		return result, usage
+	}
+	checkBudgetMode := func(mode string) {
+		label := "content"
+		if mode == auth.ResponseModeReferenceOnly {
+			label = "reference"
+		}
+		ample, usage := readBudget(label+"-omitted", budgetPath, mode, 20, nil, false, "selected")
+		if usage.Items == 0 || usage.Citations == 0 {
+			t.Fatal("ample budget lost eligible evidence")
+		}
+		if mode == auth.ResponseModeBoundedContent {
+			multibyte := false
+			identities, citations := []string{}, []string{}
+			for _, item := range flatten(ample) {
+				multibyte = multibyte || strings.Contains(item.Memory.Content, "中文🙂")
+				identities = append(identities, item.Memory.MemoryID+"|"+item.Memory.Version)
+			}
+			for _, citation := range ample.Result.Citations {
+				citations = append(citations, citation.SourceKind+"|"+citation.Reference+"|"+citation.Version)
+			}
+			if !multibyte {
+				t.Fatal("budget source did not retain multilingual content")
+			}
+			sort.Strings(identities)
+			sort.Strings(citations)
+			report.BudgetIdentityHash, report.BudgetCitationHash = contextLiveHash(identities), contextLiveHash(citations)
+		}
+		readBudget(label+"-empty-limits", budgetPath, mode, 20, map[string]int{}, false, "selected")
+		readBudget(label+"-oversized", budgetPath, mode, 2147483647, map[string]int{"max_content_bytes": 2147483647, "max_response_bytes": 2147483647, "max_citations": 2147483647}, false, "selected")
+		zeroContentOutcome := "budget_exhausted"
+		if mode == auth.ResponseModeReferenceOnly {
+			zeroContentOutcome = "selected"
+		}
+		readBudget(label+"-zero-content", budgetPath, mode, 20, map[string]int{"max_content_bytes": 0}, false, zeroContentOutcome)
+		readBudget(label+"-zero-citations", budgetPath, mode, 20, map[string]int{"max_citations": 0}, false, "budget_exhausted")
+		readBudget(label+"-unsupported", budgetPath, mode, 20, nil, true, "selected")
+		for i, path := range []string{"pc1/context/absent", hiddenPath, "pc1/context/forgotten", "pc1/context/deleted", "pc1/context/high", "pc1/context/restricted"} {
+			readBudget(fmt.Sprintf("%s-safe-empty-%d", label, i), path, mode, 20, map[string]int{"max_content_bytes": 0, "max_citations": 0}, false, "empty")
+		}
+		data, code := call("POST", "/v1/provider/context", runtimeKey, map[string]any{"metadata": metadata(label + "-minimum-response"), "input": map[string]any{"query": "context fixture", "budget": 20, "path": budgetPath, "response_mode": mode, "budget_limits": map[string]int{"max_response_bytes": 1}}}, &binding, false)
+		var failure struct {
+			Error  provider.ProviderError `json:"error"`
+			Result json.RawMessage        `json:"result"`
+		}
+		if code != http.StatusRequestEntityTooLarge || json.Unmarshal(data, &failure) != nil || failure.Error.Validate() != nil || failure.Error.Code != "context_limit_exceeded" || len(failure.Result) != 0 || len(data) > 4096 || bytes.Contains(data, []byte(budgetContent)) {
+			t.Fatal("infeasible response allocation did not fail without projection")
+		}
+		report.BudgetOutcomes = append(report.BudgetOutcomes, label+"-minimum-response:413")
+	}
 	if stage == "initial" {
 		for _, fixture := range []struct {
 			path           string
@@ -325,6 +684,7 @@ func TestProviderContextFreshPostgresLive(t *testing.T) {
 			t.Fatal("lifecycle or classified source disclosed after restart")
 		}
 	}
+	checkBudgetMode(auth.ResponseModeBoundedContent)
 	_, status = call("POST", "/v1/provider/context", runtimeKey, provider.ContextRequest{Metadata: metadata("foreign"), Input: provider.ContextInput{Query: "context fixture", Budget: 2}}, &binding, true)
 	if status != 403 {
 		t.Fatal("foreign scope was not denied")
@@ -367,6 +727,7 @@ AND r.source_metadata->>'trust'='untrusted' AND r.source_metadata->>'classificat
 		}
 	}
 	provision(auth.DisclosureProfileReference, false)
+	checkBudgetMode(auth.ResponseModeReferenceOnly)
 	references := readMode(visiblePath, "", auth.ResponseModeReferenceOnly)
 	if references.Result.ResponseMode != auth.ResponseModeReferenceOnly || len(flatten(references)) == 0 {
 		t.Fatal("reference-only projection missing")
@@ -488,8 +849,9 @@ AND r.source_metadata->>'trust'='untrusted' AND r.source_metadata->>'classificat
 	}
 	report.Checks = []string{"public_http_schema", "capability_digest", "governance_completed", "event_replay", "nonroot_exact_path", "explicit_prefix", "genuine_empty", "foreign_scope_denied", "lifecycle_excluded", "citations_present"}
 	report.Checks = append(report.Checks, "durable_source_labels", "label_replay_conflict", "reference_only_schema", "old_binding_downgrade", "alternate_route_denials", "attestation_authorization", "attestation_replay_reauthorization", "revoked_binding_denied", "unconfigured_profile_denied", "forgotten_deleted_excluded", "high_restricted_excluded")
+	report.Checks = append(report.Checks, "budget_discovery", "budget_actual_body_bytes", "budget_utf8_content_bytes", "budget_unique_citations", "budget_zero_content", "budget_zero_citations", "budget_omitted_limits", "budget_server_intersection", "budget_minimum_response_413", "budget_unsupported_sections", "budget_safe_empty_no_reasons")
 	if stage == "restart" {
-		if previous.IdentityHash != report.IdentityHash || previous.CitationHash != report.CitationHash {
+		if previous.IdentityHash != report.IdentityHash || previous.CitationHash != report.CitationHash || previous.BudgetIdentityHash != report.BudgetIdentityHash || previous.BudgetCitationHash != report.BudgetCitationHash {
 			t.Fatal("restart changed context identities or provenance")
 		}
 		report.Checks = append(report.Checks, "api_worker_restart_identity")

@@ -203,6 +203,62 @@ scope handshake, bounded metadata/citation contract, configuration, conformance,
 and rollback procedure are documented in
 [`docs/agent-runtime-memory-provider.md`](agent-runtime-memory-provider.md).
 
+#### Provider context allocation configuration
+
+PC3 publishes `context_budget_version=context-budget-v1`,
+`context_packing_policy_version=context-packing-v1` and
+`token_budget_supported=false`. Deploy matching settings across API replicas and
+verify capability discovery after every change. These independent limits govern
+the final authorized Provider projection; native/admin/MCP assembly retains its
+existing defaults and retrieval-result limits retain their separate meaning.
+
+| Environment variable | Resolved default | Valid server bound / unit |
+| --- | --- | --- |
+| `STELE_PROVIDER_MAX_CONTEXT_ITEMS` | `100` | `1..1000` returned item placements |
+| `STELE_PROVIDER_MAX_CONTEXT_CONTENT_BYTES` | Inherits resolved `STELE_PROVIDER_MAX_CONTEXT_BYTES` when omitted or blank | `0..4194304` UTF-8 content bytes; cannot exceed response ceiling |
+| `STELE_PROVIDER_MAX_CONTEXT_BYTES` | `1048576` (1 MiB) | `1..4194304` complete uncompressed serialized JSON body bytes |
+| `STELE_PROVIDER_MAX_CITATIONS` | `100` | `1..1000` unique canonical kind/id/version citation identities |
+
+Unconfigured content inherits response overrides as well as the default; explicit
+content `0` is valid. Negative, overflowing, noninteger, zero item/body/citation,
+over-hard-bound or content-greater-than-response settings fail startup rather
+than being silently corrected. For example, setting response bytes to `65536`
+with content unset resolves both byte ceilings to `65536`; setting content to
+`0` retains that zero without changing disclosure mode.
+
+Caller `input.budget` is a positive portable integer (at most 2147483647), with
+optional closed `budget_limits.max_content_bytes`, `max_response_bytes` and
+`max_citations`. Optional omission or `{}` uses discovered ceilings. Caller
+content/citation zero is valid, body bytes require at least one, and effective
+limits are independent caller/server minima. Null/duplicate/case/unknown/token
+fields, fractions, negatives, overflow and trailing JSON return bounded 400
+`invalid_request`. Token budgets and tokenizers are unsupported.
+
+Every successful context body includes required closed `budget_accounting`.
+Content measures unescaped UTF-8 strings (reference mode is zero); body bytes
+include envelope, paths, source metadata, JSON escaping, repeated citations and
+accounting itself, with no added newline. Whole-item admission preserves existing
+eligibility/order/section policy, retains mandatory citations and reserves bounded
+diagnostic space conservatively, so it need not fill every byte. Hidden or denied
+evidence cannot contribute private counts or existence hints; optional public
+insight/goal/feedback/raw-diagnostic paths remain closed.
+
+An empty envelope that cannot fit caller/server body space returns 413
+`context_limit_exceeded` before retrieval; final serialization/accounting refusal
+also emits no partial result. Errors have separate server bounds. Disclosure uses
+current exact-scope grants (403 `disclosure_denied`), and unavailable authority
+uses retryable 503 instead of empty/budget-exhausted success. Allocate enough for
+the mandatory envelope rather than relying on smaller item requests to repair it.
+
+Upgrade strict consumers for required accounting and independent item ceilings;
+discover both budget/packing identities and validate actual body usage. Run fresh
+owned PostgreSQL/pgvector initial and API/worker restart evidence, separately from
+archived PC1/PC2 evidence, before claiming readiness. Rollback requires disabling
+access for consumers needing PC3 before deploying a binary lacking it; retain PC2
+source/grant enforcement and durable data. PC3 adds no database migration. Missing
+capability is incompatibility, not permission to strip budgets or use another
+route, local packing or byte-to-token estimation.
+
 ### Reasoning provider boundary
 
 Optional model-assisted reasoning is disabled by default and is never required

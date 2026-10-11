@@ -75,6 +75,30 @@ initialize a runtime binding, then request `/v1/provider/context`. The default
 the `memory-content-v1` profile and an explicit mode request. Public credentials
 cannot use native retrieval or MCP tools, including `who_am_i`.
 
+Discover `context_budget_version=context-budget-v1`,
+`context_packing_policy_version=context-packing-v1`, and
+`token_budget_supported=false` alongside the disclosure/source versions. Required
+`input.budget` counts item placements; optional `budget_limits` allocates UTF-8
+content bytes, complete serialized response bytes and unique citations. Omitted
+limits use independently published server ceilings; zero content/citations is
+valid. Defaults are 100 items, 100 citations, 1 MiB response bytes and content
+bytes inherited from the resolved response ceiling. Every successful response
+includes closed `result.budget_accounting` with requested/effective limits, exact
+usage and safe selection reasons. Whole items and their citations share one
+allocation; deterministic accounting reservation can leave unused space.
+
+Consumers reserve other prompt space, validate actual body length and all usage
+against effective limits, and treat missing/incompatible accounting as a contract
+failure. Bytes are never token estimates, and optional public insights/goals/raw
+diagnostics remain closed. An infeasible empty envelope returns bounded 413 with
+no partial result; malformed limits use 400, current disclosure denial 403 and
+unavailable authority retryable 503. Strict consumers must migrate schemas and
+discover the extension explicitly; disable affected access before rolling back
+to a service that lacks it. The [Provider guide](docs/agent-runtime-memory-provider.md)
+covers units, ordering, errors and migration, and [self-hosting](docs/self-hosting.md)
+covers independent configuration. Historical PC1/PC2 evidence does not prove PC3
+readiness or completion of pending digest/reference/outcome work.
+
 Read the [disclosure and source trust guide](docs/context-disclosure-and-source-trust.md)
 for profile administration, source labels, endpoint denials and migration.
 

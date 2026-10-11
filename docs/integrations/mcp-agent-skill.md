@@ -192,9 +192,36 @@ local ranking or a local reference/fact store. Consult the
 [Provider JSON contract](../agent-runtime-memory-provider.md#provider-context-json-contract)
 and [upgrade/rollback guide](../context-disclosure-and-source-trust.md).
 MCP `budget_bytes` remains its administrator tool contract; Provider `input.budget`
-counts items. The complete serialized Provider output also has a server ceiling;
-an oversize result is refused without partial output. PC3 will define caller
-byte/token accounting.
+counts returned placements and uses `context-budget-v1` optional closed
+`budget_limits` for `max_content_bytes`, `max_response_bytes` and `max_citations`.
+Discover `context_budget_version=context-budget-v1`,
+`context_packing_policy_version=context-packing-v1` and
+`token_budget_supported=false` explicitly. Omitted fields inherit independent
+server ceilings; content/citation zero is valid without changing mode. Item/body
+must be positive, all request integers are at most 2147483647, and token/null/
+duplicate/case/unknown/fractional/overflow inputs return bounded 400.
+
+Public Provider defaults are 100 placements, 100 unique citations, default 1 MiB
+complete JSON bytes and content inherited from the resolved body ceiling. Required
+closed `budget_accounting` measures returned item appearances, unescaped UTF-8
+content (zero in reference mode), unique canonical kind/id/version citations and
+the actual complete body including paths, labels, escaping, repeated citations
+and accounting. Validate fixed versions, omission nulls, independently clamped
+effective limits and actual usage. Missing/incorrect accounting is a failed
+contract. `selected`, `empty` and `budget_exhausted` remain distinct; safe ordered
+reasons disclose no hidden candidate counts. Requested unsupported public insight,
+goal and diagnostic labels describe capability and keep those paths closed.
+
+Stele owns whole-item admission with mandatory citations and a deterministic
+conservative reserve that can leave bytes unused. Consumers reserve other prompt
+space and do no local ranking/packing, content truncation or byte-to-token
+conversion. Infeasible mandatory envelopes/final limit refusal return 413 without
+partial output; smaller item limits cannot repair envelope space. Errors have
+separate server bounds. Current disclosure denial is 403; unavailable authority
+is retryable 503 rather than empty success. PC3 does not alter native/admin/MCP
+defaults. Strict consumers require schema migration and explicit negotiation;
+disable dependent access before rollback, retain durable data/PC2 enforcement,
+and do not count archived PC1/PC2 evidence as fresh PC3 readiness.
 
 ## Reference patterns
 

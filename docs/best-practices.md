@@ -29,7 +29,28 @@ Provider clients must validate the categorized context response before treating
 it as usable or empty. Use canonical snake_case fields and binding-owned scope;
 preserve citations rather than depending on ranking scores. See the
 [Provider contract and migration notes](agent-runtime-memory-provider.md#provider-context-json-contract)
-for disclosure provisioning, item-budget limits and pending digest/continuity work.
+for disclosure provisioning, independent allocations and pending digest/continuity work.
+
+Discover `context-budget-v1` and `context-packing-v1` explicitly; require
+`token_budget_supported=false`. Reserve the agent's other prompt components,
+then allocate positive item `budget` and optional content/body/citation limits.
+Omission inherits server ceilings (100 items, 100 citations, default 1 MiB body
+and inherited content); explicit zero content/citations is meaningful and never
+changes the mode. Bytes measure UTF-8 content or the complete serialized body,
+not model tokens. Whole-item selection retains required citations and may leave
+space unused for deterministic accounting reservation.
+
+Require closed `budget_accounting` even with diagnostics disabled. Check mode,
+requested/effective limits, exact captured body bytes, content bytes, items and
+unique citations; invalid/missing/version-incompatible accounting is a contract
+failure. `empty` and `budget_exhausted` are distinct successful outcomes, while
+dependency 503 is retryable failure. 400 malformed allocation needs correction,
+403 disclosure denial needs operator review, and 413 means no partial projection
+may be consumed; an infeasible envelope requires enough body space. Public section
+labels describe unsupported capability, never hidden stored evidence. Avoid local
+packing/reranking, byte-to-token guesses, alternate-route fallback or stripped
+limits. Before rollback, disable access for consumers requiring PC3; historical
+PC1/PC2 evidence is not allocation readiness.
 
 ## Write through governed paths
 
