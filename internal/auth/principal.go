@@ -158,16 +158,19 @@ func (c Credential) SafeProjection() CredentialProjection {
 }
 
 type ScopeGrant struct {
-	ID          string               `json:"id"`
-	PrincipalID string               `json:"principal_id"`
-	Scope       memory.Scope         `json:"scope"`
-	Status      ScopeGrantStatus     `json:"status"`
-	AccessMode  ScopeGrantAccessMode `json:"access_mode"`
-	CreatedAt   time.Time            `json:"created_at"`
-	RevokedAt   time.Time            `json:"revoked_at,omitempty"`
+	Disclosure  *DisclosureEntitlements `json:"disclosure,omitempty"`
+	ID          string                  `json:"id"`
+	PrincipalID string                  `json:"principal_id"`
+	Scope       memory.Scope            `json:"scope"`
+	Status      ScopeGrantStatus        `json:"status"`
+	AccessMode  ScopeGrantAccessMode    `json:"access_mode"`
+	CreatedAt   time.Time               `json:"created_at"`
+	RevokedAt   time.Time               `json:"revoked_at,omitempty"`
 }
 
 type AuditRecord struct {
+	Actor        string       `json:"actor,omitempty"`
+	Reason       string       `json:"reason,omitempty"`
 	ID           string       `json:"id"`
 	PrincipalID  string       `json:"principal_id,omitempty"`
 	CredentialID string       `json:"credential_id,omitempty"`

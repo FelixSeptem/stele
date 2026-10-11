@@ -20,7 +20,7 @@ func TestProviderContextGuideExamplesMatchOpenAPI(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	text := string(data)
+	text := strings.ReplaceAll(string(data), "\r\n", "\n")
 	start := strings.Index(text, "## Provider context JSON contract")
 	end := strings.Index(text, "## Snapshot and reconnect synchronization")
 	if start < 0 || end <= start {

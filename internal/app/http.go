@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"log"
 	"math/rand"
 	"net/http"
@@ -725,11 +726,12 @@ type manualReclassifyMemoryRequest struct {
 }
 
 type eventIngestRequest struct {
-	EventType       string         `json:"event_type"`
-	Content         string         `json:"content"`
-	MemoryPath      string         `json:"memory_path,omitempty"`
-	Metadata        map[string]any `json:"metadata"`
-	SourceTimestamp string         `json:"source_timestamp"`
+	SourceMetadata  memory.SourceMetadata `json:"source_metadata,omitempty"`
+	EventType       string                `json:"event_type"`
+	Content         string                `json:"content"`
+	MemoryPath      string                `json:"memory_path,omitempty"`
+	Metadata        map[string]any        `json:"metadata"`
+	SourceTimestamp string                `json:"source_timestamp"`
 }
 
 type eventIngestResponse struct {
@@ -968,7 +970,7 @@ func NewHTTPHandler(deps HTTPDependencies) http.Handler {
 	protectedEvents := auth.APIKeyMiddleware(deps.APIKeys)(
 		auth.ScopeMiddleware()(
 			http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-				handleEventIngest(w, r, deps.EventIngestor)
+				handleEventIngest(w, r, deps.EventIngestor, deps.PrincipalAuthorizer)
 			}),
 		),
 	)
@@ -1138,6 +1140,7 @@ func NewHTTPHandler(deps HTTPDependencies) http.Handler {
 	mux.Handle("GET /v1/admin/principals/{principal_id}/grants", adminPrincipals)
 	mux.Handle("POST /v1/admin/principals/{principal_id}/grants", adminPrincipals)
 	mux.Handle("POST /v1/admin/principals/{principal_id}/grants/{grant_id}/revoke", adminPrincipals)
+	mux.Handle("PUT /v1/admin/principals/{principal_id}/grants/{grant_id}/disclosure", auth.APIKeyMiddleware(deps.AdminAPIKeys)(auth.ScopeMiddleware()(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) { handleGrantDisclosure(w, r, deps.PrincipalAdmin) }))))
 
 	adminAccessAudit := auth.APIKeyMiddleware(deps.AdminAPIKeys)(
 		auth.ScopeMiddleware()(
@@ -1763,7 +1766,7 @@ func principalProtectedRoutes(next http.Handler, authorizer auth.PrincipalAuthor
 		if strings.HasPrefix(r.URL.Path, "/v1/admin/") {
 			requiredRole = auth.PrincipalRoleAdmin
 		}
-		auth.PrincipalMiddlewareWithObserver(authorizer, requiredRole, observer)(next).ServeHTTP(w, r)
+		auth.PrincipalMiddlewareWithObserver(authorizer, requiredRole, observer)(disclosureRouteGate(next)).ServeHTTP(w, r)
 	})
 }
 
@@ -1823,22 +1826,21 @@ func newTaskEvaluationID() string {
 	return "task_eval_" + strings.TrimPrefix(newID(), "id_")
 }
 
-func handleEventIngest(w http.ResponseWriter, r *http.Request, ingestor memory.EventIngestor) {
+func handleEventIngest(w http.ResponseWriter, r *http.Request, ingestor memory.EventIngestor, authorizers ...auth.PrincipalAuthorizer) {
 	if ingestor == nil {
 		http.Error(w, "event ingestor is not configured", http.StatusServiceUnavailable)
 		return
 	}
 
 	var req eventIngestRequest
-	decoder := json.NewDecoder(r.Body)
-	decoder.DisallowUnknownFields()
-	if err := decoder.Decode(&req); err != nil {
-		writeJSONDecodeError(w, err)
+	data, bodyErr := io.ReadAll(r.Body)
+	if bodyErr != nil {
+		writeJSONDecodeError(w, bodyErr)
 		return
 	}
-
-	if decoder.More() {
-		http.Error(w, "invalid request body", http.StatusBadRequest)
+	_, shapeErr := provider.CanonicalObject(data, []string{"event_type", "content", "memory_path", "metadata", "source_timestamp", "source_metadata"}, []string{"event_type", "content"})
+	if err := provider.DecodeStrict(data, &req); err != nil || shapeErr != nil {
+		writeProviderError(w, 400, "validation", "invalid_request", "invalid request", false)
 		return
 	}
 
@@ -1850,7 +1852,7 @@ func handleEventIngest(w http.ResponseWriter, r *http.Request, ingestor memory.E
 
 	input := memory.IngestEventInput{
 		Scope: scope, EventType: req.EventType, Content: req.Content,
-		MemoryPath: req.MemoryPath, Metadata: req.Metadata,
+		MemoryPath: req.MemoryPath, Metadata: req.Metadata, SourceMetadata: req.SourceMetadata,
 	}
 	if req.SourceTimestamp != "" {
 		sourceTime, err := time.Parse(time.RFC3339, req.SourceTimestamp)
@@ -1862,11 +1864,23 @@ func handleEventIngest(w http.ResponseWriter, r *http.Request, ingestor memory.E
 	}
 
 	if err := input.Validate(); err != nil {
-		http.Error(w, err.Error(), http.StatusBadRequest)
+		writeProviderError(w, 400, "validation", "invalid_request", "invalid request", false)
 		return
 	}
 	principal, principalAuthorized := auth.PrincipalFromContext(r.Context())
 	if principalAuthorized {
+		if len(authorizers) == 0 {
+			writeProviderError(w, 503, "dependency", "disclosure_unavailable", "disclosure authority unavailable", true)
+			return
+		}
+		entitlements, allowed := currentDisclosure(w, r, authorizers[0], principal.ID, scope)
+		if !allowed {
+			return
+		}
+		if input.SourceMetadata.Trust == memory.SourceTrustAttestedData && !entitlements.SourceAttestation {
+			writeProviderError(w, 403, "scope", "disclosure_denied", "disclosure denied", false)
+			return
+		}
 		idempotencyKey := strings.TrimSpace(r.Header.Get("Idempotency-Key"))
 		if err := auth.ValidateIdempotencyKey(idempotencyKey); err != nil {
 			http.Error(w, "invalid idempotency key", http.StatusBadRequest)
@@ -1898,10 +1912,18 @@ func handleEventIngest(w http.ResponseWriter, r *http.Request, ingestor memory.E
 		if result.Replayed {
 			status = http.StatusOK
 		}
-		writeJSON(w, status, eventIngestResponse{EventID: result.Event.ID, Admission: result.Event.Admission, Replayed: result.Replayed})
+		admission := result.Event.Admission
+		if principal.Role != auth.PrincipalRoleAdmin {
+			admission = nil
+		}
+		writeJSON(w, status, eventIngestResponse{EventID: result.Event.ID, Admission: admission, Replayed: result.Replayed})
 		return
 	}
 
+	if input.SourceMetadata.Trust == memory.SourceTrustAttestedData {
+		writeProviderError(w, 403, "scope", "disclosure_denied", "disclosure denied", false)
+		return
+	}
 	event, err := ingestor.Ingest(r.Context(), input)
 	if err != nil {
 		status := http.StatusInternalServerError

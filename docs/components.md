@@ -80,3 +80,13 @@ transport-neutral synchronization contract in
 Telemetry must not contain raw queries, payloads, scopes, credentials, cursors,
 or unbounded identifiers. Assurance evidence is separate from retrieval quality
 metrics.
+
+## Context disclosure and source trust
+
+Public runtime credentials require explicit exact-scope disclosure provisioning.
+Provider context defaults to structured references; bounded content requires the
+content profile and explicit mode. Unsupported native/MCP data routes deny public
+credentials before lookup. Source labels persist through governance and history;
+missing lineage is untrusted/restricted. Attested source data grants no instruction,
+tool, write or business-state authority. See the [disclosure/source guide](context-disclosure-and-source-trust.md)
+for endpoint behavior, administration, versioning and upgrade/rollback.

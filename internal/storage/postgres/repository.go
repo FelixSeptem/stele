@@ -176,7 +176,7 @@ SELECT
 	retention_class,
 	status,
 	created_at,
-	updated_at
+	updated_at, source_metadata
 FROM candidate_memories
 WHERE source_raw_event_id = $1
 ORDER BY created_at ASC
@@ -234,7 +234,7 @@ SELECT
 	retention_class,
 	status,
 	created_at,
-	updated_at
+	updated_at, source_metadata
 FROM candidate_memories
 WHERE tenant = $1
 	AND project = $2
@@ -356,7 +356,7 @@ WITH claimed AS (
 		governance_worker_id,
 		governance_claimed_at,
 		governance_lease_until,
-		governance_attempt
+		governance_attempt, source_metadata
 )
 SELECT
 	id,
@@ -371,7 +371,7 @@ SELECT
 	governance_worker_id,
 	governance_claimed_at,
 	governance_lease_until,
-	governance_attempt
+	governance_attempt, source_metadata
 FROM claimed
 ORDER BY created_at ASC
 `
@@ -403,7 +403,7 @@ ORDER BY created_at ASC
 			&claim.Event.ID, &claim.Event.Scope.Tenant, &claim.Event.Scope.Project, &claim.Event.Scope.Namespace,
 			&claim.Event.EventType, &claim.Event.Content, &claim.Event.SourceTimestamp, &claim.Event.CreatedAt,
 			&claim.WorkerID, &claim.ClaimedAt, &claim.LeaseUntil, &claim.Attempt,
-		}); err != nil {
+		}, &claim.Event.SourceMetadata); err != nil {
 			return nil, fmt.Errorf("scan claimed raw event: %w", err)
 		}
 
@@ -1635,7 +1635,7 @@ RETURNING id, tenant, project, namespace, memory_path, class, state, content, cr
 		var canonical memory.CanonicalMemory
 		if err := tx.QueryRow(
 			ctx,
-			canonicalInsertQuery,
+			sourceReturning(sourceSnapshotInsert(canonicalInsertQuery, candidateSourceExpression(input.Candidate.ID, input.Candidate.Scope))),
 			input.MemoryID,
 			input.Candidate.Scope.Tenant,
 			input.Candidate.Scope.Project,
@@ -1668,6 +1668,7 @@ RETURNING id, tenant, project, namespace, memory_path, class, state, content, cr
 			&canonical.TemporalValidity.ValidFrom,
 			&canonical.TemporalValidity.ValidTo,
 			&canonical.TemporalValidity.ValiditySource,
+			&canonical.SourceMetadata,
 		); err != nil {
 			return memory.CanonicalMemory{}, memory.MemoryVersion{}, fmt.Errorf("insert canonical memory: %w", err)
 		}
@@ -1697,6 +1698,8 @@ RETURNING id, tenant, project, namespace, memory_path, class, state, content, cr
 			return memory.CanonicalMemory{}, memory.MemoryVersion{}, fmt.Errorf("commit canonical promotion transaction: %w", err)
 		}
 
+		canonical.SourceVersion = version.Version
+		version.SourceMetadata = canonical.SourceMetadata
 		return canonical, version, nil
 	}
 	const canonicalUpdateQuery = `
@@ -1723,7 +1726,7 @@ RETURNING id, tenant, project, namespace, memory_path, class, state, content, cr
 	var canonical memory.CanonicalMemory
 	if err := tx.QueryRow(
 		ctx,
-		canonicalUpdateQuery,
+		sourceReturning(strings.Replace(canonicalUpdateQuery, "SET state", "SET source_metadata = "+candidateSourceExpression(input.Candidate.ID, input.Candidate.Scope)+", state", 1)),
 		input.MemoryID,
 		memory.MemoryStateActive,
 		input.Candidate.RetentionClass,
@@ -1750,6 +1753,7 @@ RETURNING id, tenant, project, namespace, memory_path, class, state, content, cr
 		&canonical.TemporalValidity.ValidFrom,
 		&canonical.TemporalValidity.ValidTo,
 		&canonical.TemporalValidity.ValiditySource,
+		&canonical.SourceMetadata,
 	); err != nil {
 		return memory.CanonicalMemory{}, memory.MemoryVersion{}, fmt.Errorf("update canonical memory: %w", err)
 	}
@@ -1779,6 +1783,8 @@ RETURNING id, tenant, project, namespace, memory_path, class, state, content, cr
 		return memory.CanonicalMemory{}, memory.MemoryVersion{}, fmt.Errorf("commit canonical promotion transaction: %w", err)
 	}
 
+	canonical.SourceVersion = version.Version
+	version.SourceMetadata = canonical.SourceMetadata
 	return canonical, version, nil
 }
 
@@ -1811,7 +1817,7 @@ RETURNING id, memory_id, memory_path, version, state, content, created_at, modif
 	var version memory.MemoryVersion
 	if err := tx.QueryRow(
 		ctx,
-		versionQuery,
+		sourceReturning(versionQuery),
 		input.VersionID,
 		input.MemoryID,
 		input.Candidate.MemoryPath,
@@ -1839,6 +1845,7 @@ RETURNING id, memory_id, memory_path, version, state, content, created_at, modif
 		&version.TemporalValidity.ValidFrom,
 		&version.TemporalValidity.ValidTo,
 		&version.TemporalValidity.ValiditySource,
+		&version.SourceMetadata,
 	); err != nil {
 		return memory.MemoryVersion{}, fmt.Errorf("insert memory version: %w", err)
 	}
@@ -1911,7 +1918,7 @@ RETURNING id, tenant, project, namespace, memory_path, class, state, content, cr
 	var canonical memory.CanonicalMemory
 	if err := tx.QueryRow(
 		ctx,
-		canonicalQuery,
+		sourceReturning(sourceSnapshotInsert(canonicalQuery, rawSourcesExpression(input.EvidenceRawEventIDs, input.Scope))),
 		input.MemoryID,
 		input.Scope.Tenant,
 		input.Scope.Project,
@@ -1934,6 +1941,7 @@ RETURNING id, tenant, project, namespace, memory_path, class, state, content, cr
 		&canonical.Content,
 		&canonical.CreatedAt,
 		&canonical.ModifiedAt,
+		&canonical.SourceMetadata,
 	); err != nil {
 		return memory.CanonicalMemory{}, memory.MemoryVersion{}, fmt.Errorf("insert summary canonical memory: %w", err)
 	}
@@ -1955,7 +1963,7 @@ RETURNING id, memory_id, memory_path, version, state, content, created_at, modif
 	var version memory.MemoryVersion
 	if err := tx.QueryRow(
 		ctx,
-		versionQuery,
+		sourceReturning(versionQuery),
 		input.VersionID,
 		input.MemoryID,
 		memory.MemoryPathRoot,
@@ -1973,6 +1981,7 @@ RETURNING id, memory_id, memory_path, version, state, content, created_at, modif
 		&version.Content,
 		&version.CreatedAt,
 		&version.ModifiedBy,
+		&version.SourceMetadata,
 	); err != nil {
 		return memory.CanonicalMemory{}, memory.MemoryVersion{}, fmt.Errorf("insert summary memory version: %w", err)
 	}
@@ -1994,6 +2003,7 @@ RETURNING id, memory_id, memory_path, version, state, content, created_at, modif
 		return memory.CanonicalMemory{}, memory.MemoryVersion{}, fmt.Errorf("commit summary memory transaction: %w", err)
 	}
 
+	canonical.SourceVersion = version.Version
 	return canonical, version, nil
 }
 
@@ -2087,34 +2097,20 @@ INSERT INTO canonical_memories (
 	validity_source
 	) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, to_tsvector('simple', $8), $9, $10, $11, $12, $13, $14, $15)
 RETURNING id, tenant, project, namespace, class, state, content, created_at, updated_at,
-	temporal_fact_id, ingested_at, valid_from, valid_to, validity_source
+	temporal_fact_id, ingested_at, valid_from, valid_to, validity_source, source_metadata
 `
 	args := []any{record.MemoryID, record.Scope.Tenant, record.Scope.Project, record.Scope.Namespace, record.Class, memory.MemoryStateActive, policy.RetentionClassDurable, record.Content, record.CreatedAt, record.CreatedAt, validity.TemporalFactID, validity.IngestedAt, validity.ValidFrom, validity.ValidTo, string(validity.ValiditySource)}
 	if path != memory.MemoryPathRoot {
-		canonicalQuery = `INSERT INTO canonical_memories (id,tenant,project,namespace,memory_path,class,state,retention_class,content,search_text,created_at,updated_at,temporal_fact_id,ingested_at,valid_from,valid_to,validity_source) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,to_tsvector('simple',$9),$10,$11,$12,$13,$14,$15,$16) RETURNING id,tenant,project,namespace,memory_path,class,state,content,created_at,updated_at,temporal_fact_id,ingested_at,valid_from,valid_to,validity_source`
+		canonicalQuery = `INSERT INTO canonical_memories (id,tenant,project,namespace,memory_path,class,state,retention_class,content,search_text,created_at,updated_at,temporal_fact_id,ingested_at,valid_from,valid_to,validity_source) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,to_tsvector('simple',$9),$10,$11,$12,$13,$14,$15,$16) RETURNING id,tenant,project,namespace,memory_path,class,state,content,created_at,updated_at,temporal_fact_id,ingested_at,valid_from,valid_to,validity_source,source_metadata`
 		args = []any{record.MemoryID, record.Scope.Tenant, record.Scope.Project, record.Scope.Namespace, path, record.Class, memory.MemoryStateActive, policy.RetentionClassDurable, record.Content, record.CreatedAt, record.CreatedAt, validity.TemporalFactID, validity.IngestedAt, validity.ValidFrom, validity.ValidTo, string(validity.ValiditySource)}
 	}
 
 	var canonical memory.CanonicalMemory
-	if err := tx.QueryRow(
-		ctx,
-		canonicalQuery, args...,
-	).Scan(
-		&canonical.ID,
-		&canonical.Scope.Tenant,
-		&canonical.Scope.Project,
-		&canonical.Scope.Namespace,
-		&canonical.Class,
-		&canonical.State,
-		&canonical.Content,
-		&canonical.CreatedAt,
-		&canonical.ModifiedAt,
-		&canonical.TemporalValidity.TemporalFactID,
-		&canonical.TemporalValidity.IngestedAt,
-		&canonical.TemporalValidity.ValidFrom,
-		&canonical.TemporalValidity.ValidTo,
-		&canonical.TemporalValidity.ValiditySource,
-	); err != nil {
+	scanDest := []any{&canonical.ID, &canonical.Scope.Tenant, &canonical.Scope.Project, &canonical.Scope.Namespace, &canonical.Class, &canonical.State, &canonical.Content, &canonical.CreatedAt, &canonical.ModifiedAt, &canonical.TemporalValidity.TemporalFactID, &canonical.TemporalValidity.IngestedAt, &canonical.TemporalValidity.ValidFrom, &canonical.TemporalValidity.ValidTo, &canonical.TemporalValidity.ValiditySource, &canonical.SourceMetadata}
+	if path != memory.MemoryPathRoot {
+		scanDest = append([]any{&canonical.ID, &canonical.Scope.Tenant, &canonical.Scope.Project, &canonical.Scope.Namespace, &canonical.MemoryPath}, scanDest[4:]...)
+	}
+	if err := tx.QueryRow(ctx, canonicalQuery, args...).Scan(scanDest...); err != nil {
 		return memory.CanonicalMemory{}, fmt.Errorf("insert manual canonical memory: %w", err)
 	}
 
@@ -2182,6 +2178,7 @@ func (r *Repository) UpdateMemory(ctx context.Context, record memory.ManualUpdat
 	updateQuery := `
 UPDATE canonical_memories
 SET content = $5,
+	source_metadata=stele_source_join(ARRAY[source_metadata,'{"version":"source-metadata-v1","trust":"untrusted","classification":"restricted"}'::jsonb]),
 	search_text = to_tsvector('simple', $5),
 	embedding = NULL,
 	updated_at = $6,
@@ -2196,7 +2193,7 @@ WHERE id = $1
 	AND namespace = $4
 	AND state <> 'deleted'
 RETURNING id, tenant, project, namespace, class, state, content, created_at, updated_at,
-	temporal_fact_id, ingested_at, valid_from, valid_to, validity_source
+	temporal_fact_id, ingested_at, valid_from, valid_to, validity_source, source_metadata
 `
 	args := []any{record.MemoryID, record.Scope.Tenant, record.Scope.Project, record.Scope.Namespace, record.Content, record.UpdatedAt, validity.TemporalFactID, validity.IngestedAt, validity.ValidFrom, validity.ValidTo, string(validity.ValiditySource)}
 	if hasPath {
@@ -2206,7 +2203,7 @@ RETURNING id, tenant, project, namespace, class, state, content, created_at, upd
 	}
 
 	var canonical memory.CanonicalMemory
-	scanDest := []any{&canonical.ID, &canonical.Scope.Tenant, &canonical.Scope.Project, &canonical.Scope.Namespace, &canonical.Class, &canonical.State, &canonical.Content, &canonical.CreatedAt, &canonical.ModifiedAt, &canonical.TemporalValidity.TemporalFactID, &canonical.TemporalValidity.IngestedAt, &canonical.TemporalValidity.ValidFrom, &canonical.TemporalValidity.ValidTo, &canonical.TemporalValidity.ValiditySource}
+	scanDest := []any{&canonical.ID, &canonical.Scope.Tenant, &canonical.Scope.Project, &canonical.Scope.Namespace, &canonical.Class, &canonical.State, &canonical.Content, &canonical.CreatedAt, &canonical.ModifiedAt, &canonical.TemporalValidity.TemporalFactID, &canonical.TemporalValidity.IngestedAt, &canonical.TemporalValidity.ValidFrom, &canonical.TemporalValidity.ValidTo, &canonical.TemporalValidity.ValiditySource, &canonical.SourceMetadata}
 	// An explicitly requested root path still changes the stored value and the
 	// dynamic RETURNING clause includes memory_path, so scan that column based on
 	// whether a path was supplied, not on the value it normalizes to.
@@ -2306,8 +2303,9 @@ WHERE id = $1
 	AND project = $3
 	AND namespace = $4
 RETURNING id, tenant, project, namespace, class, state, content, created_at, updated_at,
-	temporal_fact_id, ingested_at, valid_from, valid_to, validity_source
+	temporal_fact_id, ingested_at, valid_from, valid_to, validity_source, source_metadata
 `
+	updateTargetQuery = strings.Replace(updateTargetQuery, "SET content", "SET source_metadata = stele_source_join(ARRAY[source_metadata,(SELECT source_metadata FROM canonical_memories WHERE id="+sourceSQLString(record.SourceMemoryID)+" AND tenant="+sourceSQLString(record.Scope.Tenant)+" AND project="+sourceSQLString(record.Scope.Project)+" AND namespace="+sourceSQLString(record.Scope.Namespace)+")]), content", 1)
 	args := []any{record.TargetMemoryID, record.Scope.Tenant, record.Scope.Project, record.Scope.Namespace, record.Content, record.AppliedAt, validity.TemporalFactID, validity.IngestedAt, validity.ValidFrom, validity.ValidTo, string(validity.ValiditySource)}
 	if hasPath {
 		updateTargetQuery = strings.Replace(updateTargetQuery, "validity_source = $11", "validity_source = $11, memory_path = $12", 1)
@@ -2316,7 +2314,7 @@ RETURNING id, tenant, project, namespace, class, state, content, created_at, upd
 	}
 
 	var canonical memory.CanonicalMemory
-	scanDest := []any{&canonical.ID, &canonical.Scope.Tenant, &canonical.Scope.Project, &canonical.Scope.Namespace, &canonical.Class, &canonical.State, &canonical.Content, &canonical.CreatedAt, &canonical.ModifiedAt, &canonical.TemporalValidity.TemporalFactID, &canonical.TemporalValidity.IngestedAt, &canonical.TemporalValidity.ValidFrom, &canonical.TemporalValidity.ValidTo, &canonical.TemporalValidity.ValiditySource}
+	scanDest := []any{&canonical.ID, &canonical.Scope.Tenant, &canonical.Scope.Project, &canonical.Scope.Namespace, &canonical.Class, &canonical.State, &canonical.Content, &canonical.CreatedAt, &canonical.ModifiedAt, &canonical.TemporalValidity.TemporalFactID, &canonical.TemporalValidity.IngestedAt, &canonical.TemporalValidity.ValidFrom, &canonical.TemporalValidity.ValidTo, &canonical.TemporalValidity.ValiditySource, &canonical.SourceMetadata}
 	// Root is a valid explicit move target; it is not equivalent to an omitted
 	// path because the latter preserves the existing canonical path.
 	if hasPath {
@@ -2424,12 +2422,12 @@ WHERE id = $1
 	AND namespace = $4
 	AND state <> 'deleted'
 RETURNING id, tenant, project, namespace, class, state, content, created_at, updated_at,
-	temporal_fact_id, ingested_at, valid_from, valid_to, validity_source
+	temporal_fact_id, ingested_at, valid_from, valid_to, validity_source, source_metadata
 `
 	args := []any{record.MemoryID, record.Scope.Tenant, record.Scope.Project, record.Scope.Namespace, record.TargetClass, record.AppliedAt, existingValidity.TemporalFactID, existingValidity.IngestedAt, existingValidity.ValidFrom, existingValidity.ValidTo, string(existingValidity.ValiditySource)}
 
 	var canonical memory.CanonicalMemory
-	scanDest := []any{&canonical.ID, &canonical.Scope.Tenant, &canonical.Scope.Project, &canonical.Scope.Namespace, &canonical.Class, &canonical.State, &canonical.Content, &canonical.CreatedAt, &canonical.ModifiedAt, &canonical.TemporalValidity.TemporalFactID, &canonical.TemporalValidity.IngestedAt, &canonical.TemporalValidity.ValidFrom, &canonical.TemporalValidity.ValidTo, &canonical.TemporalValidity.ValiditySource}
+	scanDest := []any{&canonical.ID, &canonical.Scope.Tenant, &canonical.Scope.Project, &canonical.Scope.Namespace, &canonical.Class, &canonical.State, &canonical.Content, &canonical.CreatedAt, &canonical.ModifiedAt, &canonical.TemporalValidity.TemporalFactID, &canonical.TemporalValidity.IngestedAt, &canonical.TemporalValidity.ValidFrom, &canonical.TemporalValidity.ValidTo, &canonical.TemporalValidity.ValiditySource, &canonical.SourceMetadata}
 	canonical.MemoryPath = current.MemoryPath
 	if err := tx.QueryRow(ctx, updateQuery, args...).Scan(scanDest...); err != nil {
 		return memory.CanonicalMemory{}, fmt.Errorf("reclassify canonical memory: %w", err)
@@ -4412,6 +4410,10 @@ LIMIT $7
 		args = append(args, pathSelector.Value)
 	}
 
+	if input.DisclosureRequired {
+		query = disclosureSearchQuery(query, "")
+	}
+
 	rows, err := r.db.Query(ctx, query, args...)
 	if err != nil {
 		return nil, fmt.Errorf("search lexical memories: %w", err)
@@ -4444,7 +4446,7 @@ LIMIT $7
 			&hit.Memory.CreatedAt,
 			&hit.Memory.ModifiedAt,
 			&hit.LexicalScore,
-		}); err != nil {
+		}, &hit.Memory.SourceMetadata, &hit.Memory.SourceVersion); err != nil {
 			return nil, fmt.Errorf("scan lexical search hit: %w", err)
 		}
 		hits = append(hits, hit)
@@ -4537,6 +4539,10 @@ LIMIT $7
 		semanticArgs = append(semanticArgs, pathSelector.Value)
 	}
 
+	if input.DisclosureRequired {
+		query = disclosureSearchQuery(query, "cm")
+	}
+
 	rows, err := r.db.Query(
 		ctx,
 		query,
@@ -4573,7 +4579,7 @@ LIMIT $7
 			&hit.Memory.CreatedAt,
 			&hit.Memory.ModifiedAt,
 			&hit.SemanticScore,
-		}); err != nil {
+		}, &hit.Memory.SourceMetadata, &hit.Memory.SourceVersion); err != nil {
 			return nil, fmt.Errorf("scan semantic search hit: %w", err)
 		}
 		hits = append(hits, hit)
@@ -4668,6 +4674,10 @@ LIMIT $11
 		relationArgs = append(relationArgs, pathSelector.Value)
 	}
 
+	if input.DisclosureRequired {
+		query = disclosureSearchQuery(query, "cm")
+	}
+
 	rows, err := r.db.Query(ctx, query, relationArgs...)
 	if err != nil {
 		return nil, fmt.Errorf("search relation memories: %w", err)
@@ -4700,7 +4710,7 @@ LIMIT $11
 			&hit.Memory.CreatedAt,
 			&hit.Memory.ModifiedAt,
 			&hit.RelationScore,
-		}); err != nil {
+		}, &hit.Memory.SourceMetadata, &hit.Memory.SourceVersion); err != nil {
 			return nil, fmt.Errorf("scan relation search hit: %w", err)
 		}
 		hits = append(hits, hit)
@@ -5351,13 +5361,14 @@ VALUES ($1, $2, $3, $4, $5, $6, $7)
 RETURNING id, tenant, project, namespace, event_type, content, source_timestamp, created_at
 `
 		var event memory.RawEvent
-		if err := db.QueryRow(ctx, legacyQuery, input.Scope.Tenant, input.Scope.Project, input.Scope.Namespace, input.EventType, input.Content, metadata, input.SourceTimestamp).Scan(
+		if err := db.QueryRow(ctx, sourceSnapshotInsert(legacyQuery, sourceMetadataLiteral(input.SourceMetadata)), input.Scope.Tenant, input.Scope.Project, input.Scope.Namespace, input.EventType, input.Content, metadata, input.SourceTimestamp).Scan(
 			&event.ID, &event.Scope.Tenant, &event.Scope.Project, &event.Scope.Namespace, &event.EventType, &event.Content, &event.SourceTimestamp, &event.CreatedAt,
 		); err != nil {
 			return memory.RawEvent{}, fmt.Errorf("insert raw event: %w", err)
 		}
 		event.MemoryPath = memory.MemoryPathRoot
 		event.Metadata = input.Metadata
+		event.SourceMetadata = input.SourceMetadata.Effective()
 		return event, nil
 	}
 
@@ -5378,7 +5389,7 @@ RETURNING id, tenant, project, namespace, memory_path, event_type, content, sour
 	var event memory.RawEvent
 	if err := db.QueryRow(
 		ctx,
-		query,
+		sourceSnapshotInsert(query, sourceMetadataLiteral(input.SourceMetadata)),
 		input.Scope.Tenant,
 		input.Scope.Project,
 		input.Scope.Namespace,
@@ -5402,6 +5413,7 @@ RETURNING id, tenant, project, namespace, memory_path, event_type, content, sour
 	}
 
 	event.Metadata = input.Metadata
+	event.SourceMetadata = input.SourceMetadata.Effective()
 	return event, nil
 }
 
@@ -5414,10 +5426,10 @@ VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16)
 RETURNING id, source_raw_event_id, tenant, project, namespace, class, content, confidence, importance, freshness, sensitivity, mutability, retention_class, status, created_at, updated_at
 `
 		var created governance.CandidateMemory
-		err := db.QueryRow(ctx, legacyQuery, candidate.ID, candidate.SourceRawEventID, candidate.Scope.Tenant, candidate.Scope.Project, candidate.Scope.Namespace, candidate.Class, candidate.Content, candidate.Confidence, candidate.Importance, candidate.Freshness, candidate.Sensitivity, candidate.Mutability, candidate.RetentionClass, candidate.Status, candidate.CreatedAt, candidate.UpdatedAt).Scan(
+		err := db.QueryRow(ctx, sourceReturning(legacyQuery), candidate.ID, candidate.SourceRawEventID, candidate.Scope.Tenant, candidate.Scope.Project, candidate.Scope.Namespace, candidate.Class, candidate.Content, candidate.Confidence, candidate.Importance, candidate.Freshness, candidate.Sensitivity, candidate.Mutability, candidate.RetentionClass, candidate.Status, candidate.CreatedAt, candidate.UpdatedAt).Scan(
 			&created.ID, &created.SourceRawEventID, &created.Scope.Tenant, &created.Scope.Project, &created.Scope.Namespace,
 			&created.Class, &created.Content, &created.Confidence, &created.Importance, &created.Freshness, &created.Sensitivity,
-			&created.Mutability, &created.RetentionClass, &created.Status, &created.CreatedAt, &created.UpdatedAt,
+			&created.Mutability, &created.RetentionClass, &created.Status, &created.CreatedAt, &created.UpdatedAt, &created.SourceMetadata,
 		)
 		if err != nil {
 			return governance.CandidateMemory{}, fmt.Errorf("insert candidate memory: %w", err)
@@ -5465,9 +5477,9 @@ RETURNING
 	updated_at
 `
 
-	created, err := scanCandidate(db.QueryRow(
+	created, err := scanCandidate(sourceSnapshotRow{db.QueryRow(
 		ctx,
-		query,
+		sourceReturning(query),
 		candidate.ID,
 		candidate.SourceRawEventID,
 		candidate.Scope.Tenant,
@@ -5485,7 +5497,7 @@ RETURNING
 		candidate.Status,
 		candidate.CreatedAt,
 		candidate.UpdatedAt,
-	))
+	)})
 	if err != nil {
 		return governance.CandidateMemory{}, fmt.Errorf("insert candidate memory: %w", err)
 	}
@@ -5542,7 +5554,40 @@ type candidateScanner interface {
 	Scan(dest ...any) error
 }
 
-func scanWithOptionalMemoryPath(scanner interface{ Scan(...any) error }, path *string, withPath, withoutPath []any) error {
+func scanWithOptionalMemoryPath(scanner interface{ Scan(...any) error }, path *string, withPath, withoutPath []any, source ...any) error {
+	for _, destination := range source {
+		switch value := destination.(type) {
+		case *memory.SourceMetadata:
+			*value = memory.SourceMetadata{}.Effective()
+		case *int64:
+			*value = 0
+		}
+	}
+	if _, ok := scanner.(sourceSnapshotRow); ok {
+		for _, destination := range source {
+			if _, labelled := destination.(*memory.SourceMetadata); labelled {
+				withPath = append(withPath, destination)
+				withoutPath = append(withoutPath, destination)
+			}
+		}
+	}
+	if rows, ok := scanner.(pgx.Rows); ok {
+		for _, column := range rows.FieldDescriptions() {
+			for _, destination := range source {
+				matches := false
+				switch destination.(type) {
+				case *memory.SourceMetadata:
+					matches = column.Name == "source_metadata"
+				case *int64:
+					matches = column.Name == "source_version"
+				}
+				if matches {
+					withPath = append(withPath, destination)
+					withoutPath = append(withoutPath, destination)
+				}
+			}
+		}
+	}
 	if rows, ok := scanner.(pgx.Rows); ok {
 		if len(rows.FieldDescriptions()) == len(withoutPath) {
 			if err := scanner.Scan(withoutPath...); err != nil {
@@ -5593,7 +5638,7 @@ func scanCandidate(scanner candidateScanner) (governance.CandidateMemory, error)
 		&candidate.ID, &candidate.SourceRawEventID, &candidate.Scope.Tenant, &candidate.Scope.Project, &candidate.Scope.Namespace,
 		&candidate.Class, &candidate.Content, &candidate.Confidence, &candidate.Importance, &candidate.Freshness, &candidate.Sensitivity,
 		&candidate.Mutability, &candidate.RetentionClass, &candidate.Status, &candidate.CreatedAt, &candidate.UpdatedAt,
-	}); err != nil {
+	}, &candidate.SourceMetadata); err != nil {
 		return governance.CandidateMemory{}, fmt.Errorf("scan candidate memory: %w", err)
 	}
 

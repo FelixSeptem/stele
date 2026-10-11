@@ -1494,14 +1494,8 @@ func TestNewHTTPHandlerUsesPrincipalAuthorizationForPublicRoutes(t *testing.T) {
 
 	handler.ServeHTTP(rec, req)
 
-	if rec.Code != http.StatusOK {
-		t.Fatalf("status = %d, want %d", rec.Code, http.StatusOK)
-	}
-	if query.gotListInput.Scope != (memory.Scope{Tenant: "tenant-a", Project: "project-a", Namespace: "namespace-a"}) {
-		t.Fatalf("scope = %+v, want authorized header scope", query.gotListInput.Scope)
-	}
-	if query.gotListInput.PathPrefix != "agents/research" {
-		t.Fatalf("path prefix = %q, want delegated selector", query.gotListInput.PathPrefix)
+	if rec.Code != http.StatusForbidden || query.gotListInput.Scope != (memory.Scope{}) {
+		t.Fatalf("public native disclosure must be denied before query: status=%d", rec.Code)
 	}
 }
 
@@ -6668,4 +6662,11 @@ func testHTTPDerivedInsightReplayRun(scope memory.Scope) memory.DerivedInsightRe
 		CreatedAt: requestedAt,
 		UpdatedAt: requestedAt,
 	}
+}
+
+func (s stubPrincipalAuthorizer) AuthorizeScopeDisclosure(context.Context, string, memory.Scope) (auth.DisclosureEntitlements, error) {
+	if !s.granted {
+		return auth.DisclosureEntitlements{}, auth.ErrDisclosureDenied
+	}
+	return auth.DisclosureEntitlements{AllowedProfiles: []string{auth.DisclosureProfileReference, auth.DisclosureProfileContent}, DefaultProfile: auth.DisclosureProfileReference}, nil
 }

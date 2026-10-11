@@ -60,3 +60,13 @@ func (r *PrincipalResolver) AuthorizeScopeAccess(ctx context.Context, principalI
 	}
 	return "", fmt.Errorf("scope access authorization is not configured")
 }
+
+func (r *PrincipalResolver) AuthorizeScopeDisclosure(ctx context.Context, principalID string, scope memory.Scope) (DisclosureEntitlements, error) {
+	if r == nil || principalID == bootstrapPrincipalID {
+		return DisclosureEntitlements{}, fmt.Errorf("scope disclosure authorization is not configured")
+	}
+	if disclosure, ok := r.durable.(ScopeDisclosureAuthorizer); ok {
+		return disclosure.AuthorizeScopeDisclosure(ctx, principalID, scope)
+	}
+	return DisclosureEntitlements{}, fmt.Errorf("scope disclosure authorization is not configured")
+}

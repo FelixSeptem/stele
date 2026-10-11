@@ -32,6 +32,10 @@ func (a *contextContractAssembler) AssembleContext(_ context.Context, in retriev
 }
 
 func contextContractHandler(t *testing.T, a *contextContractAssembler, overrides ...http.Header) func(string) *httptest.ResponseRecorder {
+	return contextContractHandlerWithDependencies(t, a, nil, overrides...)
+}
+
+func contextContractHandlerWithDependencies(t *testing.T, a *contextContractAssembler, configure func(*HTTPDependencies), overrides ...http.Header) func(string) *httptest.ResponseRecorder {
 	t.Helper()
 	now := time.Now().UTC()
 	scope := memory.Scope{Tenant: "tenant-a", Project: "project-a", Namespace: "namespace-a"}
@@ -41,7 +45,11 @@ func contextContractHandler(t *testing.T, a *contextContractAssembler, overrides
 	if err := store.Create(context.Background(), b); err != nil {
 		t.Fatal(err)
 	}
-	h := NewHTTPHandler(HTTPDependencies{ProviderEnabled: true, ProviderSchemaVersions: []string{"provider-v1"}, ProviderAdapter: provider.NewAdapter(provider.AdapterDependencies{Assembler: a}), ProviderBindings: store, PrincipalAuthorizer: providerLifecycleAuthorizer{principals: map[string]auth.Principal{"context-key": p}}})
+	deps := HTTPDependencies{ProviderEnabled: true, ProviderSchemaVersions: []string{"provider-v1"}, ProviderAdapter: provider.NewAdapter(provider.AdapterDependencies{Assembler: a}), ProviderBindings: store, PrincipalAuthorizer: providerLifecycleAuthorizer{principals: map[string]auth.Principal{"context-key": p}}}
+	if configure != nil {
+		configure(&deps)
+	}
+	h := NewHTTPHandler(deps)
 	return func(body string) *httptest.ResponseRecorder {
 		r := httptest.NewRequest(http.MethodPost, "/v1/provider/context", strings.NewReader(body))
 		r.Header.Set("X-API-Key", "context-key")
@@ -96,7 +104,7 @@ func TestProviderContextDeniedBindingDoesNotDispatch(t *testing.T) {
 
 func TestProviderContextNonemptyHTTPResponseConforms(t *testing.T) {
 	now := time.Now().UTC()
-	hit := retrieval.SearchHit{Memory: memory.CanonicalMemory{ID: "memory-context", Scope: memory.Scope{Tenant: "tenant-a", Project: "project-a", Namespace: "namespace-a"}, MemoryPath: "tasks/a", Class: memory.MemoryClassEpisodic, State: memory.MemoryStateActive, Content: "selected context", CreatedAt: now, ModifiedAt: now}, Score: retrieval.ScoreBreakdown{Overall: 0.987654}, Citations: []retrieval.Citation{{MemoryID: "memory-context", RawEventID: "event-context", Operation: "promote"}}}
+	hit := retrieval.SearchHit{Memory: memory.CanonicalMemory{ID: "memory-context", Scope: memory.Scope{Tenant: "tenant-a", Project: "project-a", Namespace: "namespace-a"}, MemoryPath: "tasks/a", Class: memory.MemoryClassEpisodic, State: memory.MemoryStateActive, Content: "selected context", SourceVersion: 1, SourceMetadata: memory.SourceMetadata{Version: memory.SourceMetadataVersion, Trust: memory.SourceTrustUntrusted, Classification: memory.SourceClassificationLow}, CreatedAt: now, ModifiedAt: now}, Score: retrieval.ScoreBreakdown{Overall: 0.987654}, Citations: []retrieval.Citation{{MemoryID: "memory-context", RawEventID: "event-context", Operation: "promote"}}}
 	// The assembler aggregates citations before the item budget is applied.
 	// Its candidate-only evidence must not escape through the public projection.
 	candidateCitations := append(append([]retrieval.Citation{}, hit.Citations...), retrieval.Citation{MemoryID: "omitted-memory", RawEventID: "omitted-event", Operation: "promote"})
@@ -132,7 +140,7 @@ func TestProviderContextCanonicalContract(t *testing.T) {
 		t.Fatalf("status=%d body=%s", w.Code, w.Body.String())
 	}
 	in := a.input
-	if a.calls != 1 || in.Budget != 7 || in.Query != "query" || in.PathPrefix != "projects/demo" || in.SessionID != "session-a" || in.Scope.Tenant != "tenant-a" || in.UserID != "" || !in.IncludeRelations || !in.IncludeExperienceInsights || !in.IncludeGoalContext || !in.IncludeDiagnostics || !in.IncludeFeedbackDiagnostics || !in.FeedbackAwareRanking {
+	if a.calls != 1 || in.Budget != 7 || in.Query != "query" || in.PathPrefix != "projects/demo" || in.SessionID != "session-a" || in.Scope.Tenant != "tenant-a" || in.UserID != "" || !in.IncludeRelations || in.IncludeExperienceInsights || in.IncludeGoalContext || in.IncludeDiagnostics || in.IncludeFeedbackDiagnostics || !in.DisclosureRequired || !in.FeedbackAwareRanking {
 		t.Fatalf("mapped input=%+v calls=%d", in, a.calls)
 	}
 	var value map[string]any

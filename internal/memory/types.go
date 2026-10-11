@@ -69,6 +69,7 @@ func (s Scope) Validate() error {
 }
 
 type RawEvent struct {
+	SourceMetadata  SourceMetadata           `json:"source_metadata"`
 	ID              string                   `json:"id"`
 	Scope           Scope                    `json:"scope"`
 	MemoryPath      string                   `json:"memory_path"`
@@ -81,26 +82,29 @@ type RawEvent struct {
 }
 
 type CanonicalMemory struct {
-	ID         string      `json:"id"`
-	Scope      Scope       `json:"scope"`
-	MemoryPath string      `json:"memory_path"`
-	Class      MemoryClass `json:"class"`
-	State      MemoryState `json:"state"`
-	Content    string      `json:"content"`
-	CreatedAt  time.Time   `json:"created_at"`
-	ModifiedAt time.Time   `json:"modified_at"`
+	SourceMetadata SourceMetadata `json:"source_metadata"`
+	SourceVersion  int64          `json:"-"`
+	ID             string         `json:"id"`
+	Scope          Scope          `json:"scope"`
+	MemoryPath     string         `json:"memory_path"`
+	Class          MemoryClass    `json:"class"`
+	State          MemoryState    `json:"state"`
+	Content        string         `json:"content"`
+	CreatedAt      time.Time      `json:"created_at"`
+	ModifiedAt     time.Time      `json:"modified_at"`
 	TemporalValidity
 }
 
 type MemoryVersion struct {
-	ID         string      `json:"id"`
-	MemoryID   string      `json:"memory_id"`
-	MemoryPath string      `json:"memory_path"`
-	Version    int64       `json:"version"`
-	State      MemoryState `json:"state"`
-	Content    string      `json:"content"`
-	CreatedAt  time.Time   `json:"created_at"`
-	ModifiedBy string      `json:"modified_by"`
+	SourceMetadata SourceMetadata `json:"source_metadata"`
+	ID             string         `json:"id"`
+	MemoryID       string         `json:"memory_id"`
+	MemoryPath     string         `json:"memory_path"`
+	Version        int64          `json:"version"`
+	State          MemoryState    `json:"state"`
+	Content        string         `json:"content"`
+	CreatedAt      time.Time      `json:"created_at"`
+	ModifiedBy     string         `json:"modified_by"`
 	TemporalValidity
 }
 
@@ -241,6 +245,7 @@ type TemporalHistoryMetadata struct {
 }
 
 type IngestEventInput struct {
+	SourceMetadata  SourceMetadata
 	Scope           Scope
 	MemoryPath      string
 	EventType       string
@@ -250,6 +255,16 @@ type IngestEventInput struct {
 }
 
 func (i IngestEventInput) Validate() error {
+	if i.SourceMetadata != (SourceMetadata{}) {
+		if err := i.SourceMetadata.Validate(); err != nil {
+			return err
+		}
+	}
+	for _, key := range []string{"source_metadata", "source_trust", "source_classification", "source_attestation"} {
+		if _, ok := i.Metadata[key]; ok {
+			return fmt.Errorf("reserved source metadata")
+		}
+	}
 	if err := i.Scope.Validate(); err != nil {
 		return err
 	}
@@ -307,14 +322,16 @@ type IdempotentEventIngestor interface {
 
 func EventRequestFingerprint(input IngestEventInput) (string, error) {
 	payload := struct {
+		SourceMetadata  SourceMetadata `json:"source_metadata"`
 		MemoryPath      string         `json:"memory_path"`
 		EventType       string         `json:"event_type"`
 		Content         string         `json:"content"`
 		Metadata        map[string]any `json:"metadata,omitempty"`
 		SourceTimestamp string         `json:"source_timestamp,omitempty"`
 	}{
-		MemoryPath: func() string { p, _ := NormalizeMemoryPath(input.MemoryPath); return p }(),
-		EventType:  strings.TrimSpace(input.EventType), Content: input.Content, Metadata: input.Metadata,
+		SourceMetadata: input.SourceMetadata.Effective(),
+		MemoryPath:     func() string { p, _ := NormalizeMemoryPath(input.MemoryPath); return p }(),
+		EventType:      strings.TrimSpace(input.EventType), Content: input.Content, Metadata: input.Metadata,
 	}
 	if !input.SourceTimestamp.IsZero() {
 		payload.SourceTimestamp = input.SourceTimestamp.UTC().Format(time.RFC3339Nano)

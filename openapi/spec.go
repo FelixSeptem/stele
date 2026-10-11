@@ -4456,8 +4456,12 @@ components:
     ProviderCapabilityDocument:
       type: object
       additionalProperties: false
-      required: [provider_version, schema_version, operations, scope_dimensions, limits, synchronization, schema_digest]
+      required: [provider_version, schema_version, operations, scope_dimensions, limits, synchronization, schema_digest, disclosure_policy_version, source_metadata_version, response_modes, disclosure_profiles]
       properties:
+        disclosure_policy_version: {type: string, enum: [context-disclosure-v1]}
+        source_metadata_version: {type: string, enum: [source-metadata-v1]}
+        response_modes: {type: array, items: {type: string, enum: [reference_only, bounded_content]}}
+        disclosure_profiles: {type: array, items: {type: string, enum: [memory-reference-v1, memory-content-v1]}}
         provider_version: {type: string}
         schema_version: {type: string}
         service_version: {type: string}
@@ -4531,6 +4535,7 @@ components:
       additionalProperties: false
       required: [metadata, event_type, content]
       properties:
+        source_metadata: {$ref: '#/components/schemas/SourceMetadata'}
         metadata: {$ref: '#/components/schemas/ProviderOperationMetadata'}
         event_type: {type: string}
         content: {type: string}
@@ -4681,6 +4686,7 @@ components:
         access_mode: {type: string, enum: [read_only, read_write]}
         created_at: {type: string, format: date-time}
         revoked_at: {type: string, format: date-time}
+        disclosure: {$ref: '#/components/schemas/DisclosureEntitlements'}
     AuditRecord:
       type: object
       required: [id, action, result, created_at]
@@ -4697,6 +4703,8 @@ components:
             namespace: {type: string}
         action: {type: string}
         result: {type: string}
+        actor: {type: string, maxLength: 128}
+        reason: {type: string, maxLength: 512}
         created_at: {type: string, format: date-time}
     PrincipalCreateRequest:
       type: object
@@ -7250,6 +7258,7 @@ components:
         - event_type
         - content
       properties:
+        source_metadata: {$ref: '#/components/schemas/SourceMetadata'}
         event_type:
           type: string
         memory_path:
@@ -9100,5 +9109,6 @@ components:
           items:
             $ref: '#/components/schemas/RankingRolloutPolicy'
 `
-	return strings.Replace(spec+providerContextSchemas, "  /mcp:\n", "  "+mcpPath+":\n", 1)
+	spec = strings.Replace(spec, "components:\n", disclosurePaths+"components:\n", 1)
+	return strings.Replace(spec+providerContextSchemas+disclosureSchemas, "  /mcp:\n", "  "+mcpPath+":\n", 1)
 }

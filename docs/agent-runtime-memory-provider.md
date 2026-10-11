@@ -58,167 +58,109 @@ start a fresh snapshot instead of assuming that skipped events were applied.
 
 ## Provider context JSON contract
 
-`POST /v1/provider/context` uses the dedicated `ProviderContextRequest` and
-`ProviderContextResponse` schemas in the served `/openapi.yaml`. Send the
-credential in `X-API-Key`, the server-issued `X-Stele-Runtime-Binding` and
-`X-Stele-Runtime-Session`, and the exact `X-Stele-Tenant`, `X-Stele-Project`,
-and `X-Stele-Namespace` headers. Scope and session are binding-derived;
-they cannot be overridden in `input`.
+`POST /v1/provider/context` uses the served `ProviderContextRequest` and
+`ProviderContextResponse` OpenAPI schemas. Discover `context-disclosure-v1` and
+`source-metadata-v1` and compare `schema_digest` with `/openapi.yaml` before use.
+Send `X-API-Key`, server-issued `X-Stele-Runtime-Binding` and
+`X-Stele-Runtime-Session`, and exact tenant/project/namespace headers. Scope and
+session are binding-owned. The current exact-scope grant must be explicitly
+provisioned by an administrator; existing grants are unconfigured and denied.
 
 Minimal request (ProviderContextRequest):
 
 ```json
 {
-  "metadata": {
-    "request_id": "context-request-1",
-    "operation_id": "context-operation-1",
-    "schema_version": "provider-v1"
-  },
-  "input": {"query": "current task", "budget": 4}
+  "metadata": {"request_id":"context-request-1","operation_id":"context-operation-1","schema_version":"provider-v1"},
+  "input": {"query":"current task","budget":4}
 }
 ```
+
+The defaults are `projection_intent=conversation`, the grant's configured
+`disclosure_profile`, and `response_mode=reference_only`. The reference profile
+permits only references; the content profile permits references or explicitly
+requested bounded content. Both disclose only active low/medium sources.
 
 Full request (ProviderContextRequest):
 
 ```json
 {
-  "metadata": {
-    "request_id": "context-request-2",
-    "operation_id": "context-operation-2",
-    "schema_version": "provider-v1"
-  },
+  "metadata": {"request_id":"context-request-2","operation_id":"context-operation-2","schema_version":"provider-v1"},
   "input": {
-    "query": "current task",
-    "budget": 8,
-    "path_prefix": "tasks/demo",
-    "include_relations": true,
-    "include_experience_insights": true,
-    "include_goal_context": true,
-    "include_diagnostics": true,
-    "include_feedback_diagnostics": true,
-    "feedback_aware_ranking": true,
-    "feedback_ranking_policy": ""
+    "query":"current task","budget":8,"path_prefix":"tasks/demo",
+    "projection_intent":"task_context","disclosure_profile":"memory-content-v1",
+    "response_mode":"bounded_content","include_relations":true
   }
 }
 ```
 
-`query` must be nonblank and `budget` a positive integer. Boolean options
-default to false. Use either exact `path` or explicit `path_prefix`; shared
-path validation normalizes leading/trailing slashes and rejects conflicting
-selectors. A nonempty `feedback_ranking_policy` is always rejected. Optional
-insights, goals, and diagnostics retain their existing authorization, lifecycle,
-and governed policy gates; setting a flag does not grant access.
+`query` must be nonblank and `budget` a positive item count. Use exact `path` or
+explicit `path_prefix`; conflicting selectors are invalid. Canonical spellings,
+closed objects and typed values are required: aliases, duplicate keys, nulls,
+unknown fields and trailing JSON fail with bounded 400. Unknown or unauthorized
+profiles and known but unauthorized modes return generic 403. Missing authority
+dependencies return 503. A business role or projection intent cannot grant access.
 
-The result is categorized context. Ordinary section items contain `memory`
-and `citations`, preserving selected order, identity, path, class, active state,
-content, timestamps, and temporal metadata. They omit ranking scores.
-`known_failures`, `experience_lessons`, `goal_context`, and `diagnostics` are
-optional and may be omitted when empty. Insights expose only documented
-identity, summary, confidence, lesson, and timestamp fields; diagnostics expose
-section/status/reason and aggregate counts. Raw feedback, insight payloads,
-derivation metadata, planner state, candidate pools, and query text are absent.
+Reference items contain `reference` and `citations`; content items contain
+`memory` and `citations`. Both use kind, ID, version, path, class, availability and
+effective source metadata. Only content mode includes content. High/restricted,
+hidden, foreign and unverifiable sources disclose no identity or path. Optional
+insight, goal, diagnostic and cached derivation sections remain omitted because
+their evidence is not independently authorized by this public contract.
 
 A genuine empty response (ProviderContextResponse):
 
 ```json
 {
-  "metadata": {
-    "request_id": "context-request-1",
-    "operation_id": "context-operation-1",
-    "schema_version": "provider-v1"
-  },
+  "metadata": {"request_id":"context-request-1","operation_id":"context-operation-1","schema_version":"provider-v1"},
   "result": {
-    "profile": [],
-    "recent_session": [],
-    "recent_episodes": [],
-    "relevant_summaries": [],
-    "related_entities": [],
-    "citations": []
+    "response_mode":"reference_only",
+    "disclosure": {
+      "profile":"memory-reference-v1","policy_version":"context-disclosure-v1",
+      "projection_intent":"conversation","source_metadata_version":"source-metadata-v1"
+    },
+    "profile":[],"recent_session":[],"recent_episodes":[],
+    "relevant_summaries":[],"related_entities":[],"citations":[]
   },
-  "citations": []
+  "citations":[]
 }
 ```
 
-Validate the HTTP response against the dedicated response schema before using
-it. Missing `result` or required sections, null/scalar sections, invalid item
-or citation types, and a substituted `references/content` shape are
-`failed-contract`, never an empty success. Preserve inner memory citations
-(`memory_id/raw_event_id/operation`) as selected evidence. The aggregate
-`result.citations` is deduplicated from the returned memory items in categorized
-order; it excludes citations belonging only to candidates omitted by the item
-budget or section selection. Outer Provider
-citations (`source_kind/reference/availability` plus optional version/watermark)
-are a configured bounded summary and may be shorter. A reference grants no
-permission for another read; missing version/watermark values are not invented.
+Validate the mode-discriminated response before use. Missing `result`, missing or
+null required arrays, mixed item modes, unknown fields or substituted shapes are
+`failed-contract`, never empty success. Item and aggregate citations can name only
+returned canonical IDs and versions. Raw-event/provenance evidence is omitted.
+References confer no permission for a subsequent read. No query, stored application
+metadata, hidden counts, ranking scores or arbitrary policy attribution is echoed.
+
+The complete serialized response must fit the configured ceiling; excess returns
+413 with no partial response. PC3 byte/token accounting, PC4 digest/continuity,
+and PC5/PC6 reference/outcome protocols remain pending.
 
 ### Compatibility and maintenance notes
 
-This is a documented `provider-v1` repair, with no database migration or alternate
-legacy route. It deliberately rejects accidental aliases and removes accidental
-raw ranking output. Deploy a consistent repaired revision across API replicas.
-Capabilities now publish `schema_digest=sha256:<hex>` calculated from the same
-served OpenAPI bytes; that digest identifies the API document, not selected
-context or the PostgreSQL migration version.
+This changes public defaults and requires migration 0035 plus explicit grant
+provisioning. Old bindings are checked against current grants on every supported
+request. Provider retrieve/sync and native/MCP data routes deny public credentials
+before lookup. Administrative operations retain existing exact-scope checks.
 
-| Consumer behavior | Repaired behavior | Migration |
-| --- | --- | --- |
-| Documented snake_case options | Accepted and explicitly mapped | Use the request examples above. |
-| Go-name or case aliases, duplicate keys, unknown fields, null/missing required objects | HTTP 400 validation | Use exact canonical property names and typed values. |
-| Caller scope/session/user/role/projection overrides | HTTP 400 validation | Retain binding-owned attribution; business permissions stay in the runtime. |
-| Nonempty `feedback_ranking_policy`, blank query, nonpositive budget, conflicting paths | HTTP 400 validation | Correct the request; do not retry a policy override. |
-| Unsupported schema version | HTTP 400 compatibility before assembly | Use an advertised version. |
-| Foreign binding/session/scope | Authentication or scope denial before assembly | Reinitialize the permitted binding; never widen scope. |
-| Reading ordinary `score` or arbitrary insight/diagnostic fields | Fields omitted | Consume documented content/citations and allowlisted optional fields. |
-| Using aggregate citations to discover unselected candidates | Only returned items contribute aggregate evidence | Read candidate-independent evidence from the selected items; citations do not extend the item budget. |
-| Expecting `references/content` or treating malformed results as empty | Incompatible contract | Validate categorized results and map authorized items without reranking. |
-
-PC2 disclosure profiles, reference-only responses, and source-trust metadata
-remain pending. PC3 remains pending: `budget` counts items and retains the
-existing clamp against `MaxContextBytes`; this does not enforce the byte size
-of the complete serialized response. PC4 Stele-issued context digest and
-continuity remain pending. This repair does not establish PC5 reference or PC6
-turn/outcome contracts. The runtime owns business permissions and final prompt
-construction; Stele owns existing retrieval and selection rules.
-
-### Public live verification
-
-Build a repaired image, then run the owned fresh PostgreSQL/pgvector verifier:
-
-```powershell
-docker build --build-arg STELE_GOPROXY=https://goproxy.cn,direct -t stele-pc1-verify:local .
-pwsh -NoProfile -File scripts/stele-provider-context-verify.ps1 -ReportPath .tmp/provider-context-evidence.json
-```
-
-The script uses official bootstrap, normal `conversation.message` ingestion,
-bounded public governance-completion checks, exact and prefix paths, a genuine
-empty read, scope denial, lifecycle exclusion, event replay, and API/worker
-restart with the original binding. Its retained report contains only bounded
-check names, completion counts, and build/schema/scope/identity/provenance
-hashes. The source revision plus source digest records the verifier's host
-worktree, including uncommitted source changes; the image digest pins the actual
-tested image. Build the image from that worktree before running the verifier.
-The report checks the served OpenAPI against the worktree but does not independently
-prove source-to-image linkage through embedded build metadata. It removes its
-owned stack, volume, and ephemeral credentials.
-Missing dependencies or incomplete verification produce nonpassing evidence.
-Unit tests skip this fixture when no live environment is configured; that skip
-is not readiness evidence. The verification reader's size bound is a fixture
-safety limit, not PC3 runtime response-budget enforcement.
-
-The product verifier can run this same context gate on its owned stack by
-setting `STELE_PRODUCT_VERIFY_PROVIDER_CONTEXT=1`; it writes a separate
-`<ReportPath>.context.json`. An adapter-only conformance result proves no public
-HTTP shape. Context conformance requires HTTP and response-schema evidence plus
-the OpenAPI digest; contract outcomes remain separate from retrieval quality.
+Source metadata on event ingestion defaults to `untrusted/restricted`.
+`attested_data` requires a separate explicitly provisioned entitlement and never
+authorizes instructions, tools, writes or task completion. Label changes under the
+same idempotency key conflict. All stored versions preserve conservative lineage.
+See [disclosure/source guide](context-disclosure-and-source-trust.md) for the
+endpoint matrix, provisioning, upgrade inventory and credential-safe rollback.
 
 ## Snapshot and reconnect synchronization
 
-After the runtime binding handshake, request an initial bounded snapshot through
-the provider boundary:
+The archived synchronization contract below is available only to an explicitly
+authorized administrator runtime. PC2 public credentials receive 403 before
+lookup, including content-profile credentials. A public context denial does not
+authorize switching to this route. After an administrator binding handshake,
+request an initial bounded snapshot through the provider boundary:
 
 ```bash
 curl -sS "$STELE_URL/v1/provider/sync" \
-  -H "X-API-Key: $STELE_RUNTIME_API_KEY" \
+  -H "X-API-Key: $STELE_ADMIN_API_KEY" \
   -H "X-Stele-Runtime-Binding: $STELE_RUNTIME_BINDING" \
   -H "X-Stele-Runtime-Session: $STELE_RUNTIME_SESSION" \
   -H "Content-Type: application/json" \
@@ -270,7 +212,9 @@ recovery, rollback, cleanup, freshness, and consumability categories. A
 missing rollback-policy fixture or other hard gate is recorded as degraded
 evidence and never enables a provider or changes default retrieval.
 
-To roll back, set `STELE_PROVIDER_ENABLED=false` and restart API replicas. The
+To roll back PC2, first revoke or disable constrained public credentials across
+native/MCP surfaces, set `STELE_PROVIDER_ENABLED=false`, and restart API replicas.
+An older binary must never serve those credentials. The
 existing public APIs, PostgreSQL canonical records, append-only history, and
 provider conformance evidence remain intact. Do not down-migrate or delete
 canonical memory as part of provider rollback.

@@ -182,7 +182,7 @@ func TestRepositoryReadsScopeGrantAccessMode(t *testing.T) {
 	defer mock.Close()
 	scope := memory.Scope{Tenant: "tenant-a", Project: "project-a", Namespace: "namespace-a"}
 	now := time.Date(2026, 8, 13, 12, 0, 0, 0, time.UTC)
-	mock.ExpectQuery("FROM access_scope_grants").WithArgs("principal_1", scope.Tenant, scope.Project, scope.Namespace).WillReturnRows(pgxmock.NewRows([]string{"id", "principal_id", "tenant", "project", "namespace", "status", "access_mode", "created_at", "revoked_at"}).AddRow("grant_1", "principal_1", scope.Tenant, scope.Project, scope.Namespace, "active", "read_only", now, nil))
+	mock.ExpectQuery("FROM access_scope_grants").WithArgs("principal_1", scope.Tenant, scope.Project, scope.Namespace).WillReturnRows(pgxmock.NewRows([]string{"id", "principal_id", "tenant", "project", "namespace", "status", "access_mode", "created_at", "revoked_at", "disclosure_profiles", "disclosure_default_profile", "source_attestation"}).AddRow("grant_1", "principal_1", scope.Tenant, scope.Project, scope.Namespace, "active", "read_only", now, nil, []string{}, "", false))
 	grants, err := NewRepository(mock).ListScopeGrants(context.Background(), scope, "principal_1")
 	if err != nil || len(grants) != 1 || grants[0].AccessMode != auth.ScopeGrantAccessReadOnly {
 		t.Fatalf("ListScopeGrants() = %+v, %v", grants, err)
@@ -228,7 +228,7 @@ func TestRepositoryListsAccessAuditWithinExactScope(t *testing.T) {
 
 	scope := memory.Scope{Tenant: "tenant-a", Project: "project-a", Namespace: "namespace-a"}
 	now := time.Date(2026, 8, 16, 12, 0, 0, 0, time.UTC)
-	mock.ExpectQuery("FROM access_audit_records").WithArgs(scope.Tenant, scope.Project, scope.Namespace, "principal_1", 10).WillReturnRows(pgxmock.NewRows([]string{"id", "principal_id", "credential_id", "tenant", "project", "namespace", "action", "result", "created_at"}).AddRow("audit_1", "principal_1", "credential_1", scope.Tenant, scope.Project, scope.Namespace, "credential_rotated", "success", now))
+	mock.ExpectQuery("FROM access_audit_records").WithArgs(scope.Tenant, scope.Project, scope.Namespace, "principal_1", 10).WillReturnRows(pgxmock.NewRows([]string{"id", "principal_id", "credential_id", "tenant", "project", "namespace", "action", "result", "created_at", "actor", "reason"}).AddRow("audit_1", "principal_1", "credential_1", scope.Tenant, scope.Project, scope.Namespace, "credential_rotated", "success", now, "", ""))
 
 	records, err := NewRepository(mock).ListAccessAudit(context.Background(), scope, "principal_1", 10)
 	if err != nil {

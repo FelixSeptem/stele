@@ -26,7 +26,10 @@ from default retrieval and context projection.
 Compaction records retain source watermark and source references, derivation and
 summary versions, token estimates, evidence coverage, and bounded recent-tail
 references. A summary is eligible for default projection only when its evidence
-is active, complete, same-scope, and lifecycle-safe. Rebuilds create derived
+is active, complete, same-scope, and lifecycle-safe. For public disclosure each
+raw source must also have low/medium labels and an independently active same-scope
+promoted canonical version; missing or hidden source edges omit the summary
+before ranking and limit. Rebuilds create derived
 projection records and never mutate canonical memory versions.
 
 ## Operational checks
@@ -40,3 +43,19 @@ projection records and never mutate canonical memory versions.
   longer eligible; rebuild the derived artifact instead of editing it in place.
 - Keep diagnostics bounded and redacted; do not expose raw cross-tenant
   evidence in logs or admin responses.
+
+## Current disclosure and source-lineage boundary
+
+Public credentials use profiled Provider context and safe Provider event/intent
+acknowledgments. Native history/provenance, lifecycle and MCP data tools require
+administrator access. Accepted writes do not prove canonical promotion or business
+completion. Canonical versions retain immutable typed source snapshots. Manual
+create/update introduces unattributed `untrusted/restricted` text while preserving
+prior version labels; merge and reclassification append restrictive joined
+versions. Existing suppression, forgetting and deletion do not erase historical
+labels. Summaries,
+reflection and insights use restrictive joins across exact-scope evidence, with
+missing lineage resolving to untrusted/restricted. Attested source attribution
+never authorizes tools, writes or instructions. See the
+[disclosure/source guide](context-disclosure-and-source-trust.md)
+for grant provisioning, migration and rollback constraints.

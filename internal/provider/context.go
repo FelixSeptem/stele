@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"encoding/json"
 	"fmt"
+	"github.com/FelixSeptem/stele/internal/auth"
 	"io"
 	"time"
 
@@ -17,6 +18,9 @@ type ContextRequest struct {
 	Input    ContextInput      `json:"input"`
 }
 type ContextInput struct {
+	ProjectionIntent           string `json:"projection_intent,omitempty"`
+	DisclosureProfile          string `json:"disclosure_profile,omitempty"`
+	ResponseMode               string `json:"response_mode,omitempty"`
 	Query                      string `json:"query"`
 	Budget                     int    `json:"budget"`
 	Path                       string `json:"path,omitempty"`
@@ -74,6 +78,12 @@ func canonicalObject(data []byte, allowed, required []string) (map[string]json.R
 	return out, nil
 }
 
+// CanonicalObject validates a closed, case-sensitive JSON object without aliases,
+// duplicates, nulls, or trailing values. Shared HTTP boundaries use the same rules.
+func CanonicalObject(data []byte, allowed, required []string) (map[string]json.RawMessage, error) {
+	return canonicalObject(data, allowed, required)
+}
+
 func DecodeContextRequest(data []byte) (ContextRequest, error) {
 	var out ContextRequest
 	obj, err := canonicalObject(data, []string{"metadata", "input"}, []string{"metadata", "input"})
@@ -84,7 +94,7 @@ func DecodeContextRequest(data []byte) (ContextRequest, error) {
 	if err != nil {
 		return out, err
 	}
-	_, err = canonicalObject(obj["input"], []string{"query", "budget", "path", "path_prefix", "include_relations", "include_experience_insights", "include_goal_context", "include_diagnostics", "include_feedback_diagnostics", "feedback_aware_ranking", "feedback_ranking_policy"}, []string{"query", "budget"})
+	_, err = canonicalObject(obj["input"], []string{"query", "budget", "path", "path_prefix", "include_relations", "include_experience_insights", "include_goal_context", "include_diagnostics", "include_feedback_diagnostics", "feedback_aware_ranking", "feedback_ranking_policy", "projection_intent", "disclosure_profile", "response_mode"}, []string{"query", "budget"})
 	if err != nil {
 		return out, err
 	}
@@ -96,6 +106,15 @@ func DecodeContextRequest(data []byte) (ContextRequest, error) {
 
 func (i ContextInput) RetrievalInput(scope memory.Scope) (retrieval.AssembleContextInput, error) {
 	out := retrieval.AssembleContextInput{Scope: scope, Query: i.Query, Budget: i.Budget, IncludeRelations: i.IncludeRelations, IncludeExperienceInsights: i.IncludeExperienceInsights, IncludeGoalContext: i.IncludeGoalContext, IncludeDiagnostics: i.IncludeDiagnostics, IncludeFeedbackDiagnostics: i.IncludeFeedbackDiagnostics, FeedbackAwareRanking: i.FeedbackAwareRanking}
+	if i.ProjectionIntent != "" && i.ProjectionIntent != "conversation" && i.ProjectionIntent != "task_context" && i.ProjectionIntent != "compilation" && i.ProjectionIntent != "handoff" {
+		return out, fmt.Errorf("invalid projection intent")
+	}
+	if i.DisclosureProfile != "" && !boundedToken(i.DisclosureProfile, 64) {
+		return out, fmt.Errorf("invalid disclosure profile")
+	}
+	if i.ResponseMode != "" && i.ResponseMode != auth.ResponseModeReferenceOnly && i.ResponseMode != auth.ResponseModeBoundedContent {
+		return out, fmt.Errorf("invalid response mode")
+	}
 	if i.FeedbackRankingPolicy != "" {
 		return out, fmt.Errorf("feedback ranking policy is unsupported")
 	}

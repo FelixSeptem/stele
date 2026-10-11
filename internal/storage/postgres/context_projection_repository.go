@@ -150,7 +150,7 @@ VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,COALESCE(NULLIF($13::timestamptz,
 ON CONFLICT (tenant, project, namespace, kind, policy_version, renderer_version, source_watermark_hash)
 DO NOTHING`, projectionID, projection.Scope.Tenant, projection.Scope.Project, projection.Scope.Namespace,
 		string(projection.Kind), projection.Version, projection.SchemaVersion, projection.PolicyVersion, projection.RendererVersion,
-		watermark, projection.SourceWatermarkHash(), string(projection.Status), projection.CreatedAt, projection.UpdatedAt, projection.SupersededAt,
+		watermark, projection.SourceWatermarkHash(), "building", projection.CreatedAt, projection.UpdatedAt, projection.SupersededAt,
 		string(projection.FreshnessCategory), string(projection.FreshnessSLO), projection.FreshnessAge.Milliseconds(), projection.FreshnessDuration.Milliseconds(), projection.FreshnessEligible, projection.RebuildCheckpoint, projection.RebuildRequired)
 	if err != nil {
 		return memory.ContextProjection{}, fmt.Errorf("insert context projection: %w", err)
@@ -206,6 +206,11 @@ VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17)`, uuidOrNew(
 		if err != nil {
 			return memory.ContextProjection{}, fmt.Errorf("insert context projection item: %w", err)
 		}
+	}
+	// Finalize only after every immutable item exists. The source snapshot
+	// trigger joins those exact versions in the same transaction.
+	if _, err := tx.Exec(ctx, `UPDATE context_projections SET status=$2 WHERE id=$1`, projectionID, string(projection.Status)); err != nil {
+		return memory.ContextProjection{}, fmt.Errorf("finalize context projection source snapshot: %w", err)
 	}
 	if err := tx.Commit(ctx); err != nil {
 		return memory.ContextProjection{}, fmt.Errorf("commit context projection: %w", err)

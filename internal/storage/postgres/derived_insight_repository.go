@@ -106,7 +106,7 @@ RETURNING
 
 	upserted, err := scanDerivedInsight(tx.QueryRow(
 		ctx,
-		query,
+		strings.Replace(sourceSnapshotInsert(query, insightSourcesExpression(insight.Evidence, insight.Scope)), "DO UPDATE SET", "DO UPDATE SET source_metadata=stele_source_join(ARRAY[derived_insights.source_metadata, EXCLUDED.source_metadata]),", 1),
 		insight.ID,
 		insight.Scope.Tenant,
 		insight.Scope.Project,

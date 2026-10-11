@@ -14,6 +14,7 @@ import (
 )
 
 type SearchInput struct {
+	DisclosureRequired                    bool
 	Scope                                 memory.Scope
 	Query                                 string
 	Path                                  string
@@ -105,6 +106,7 @@ func (i SearchInput) Validate() error {
 }
 
 type AssembleContextInput struct {
+	DisclosureRequired        bool
 	Scope                     memory.Scope
 	Query                     string
 	Path                      string
@@ -776,6 +778,15 @@ func (s *Service) Search(ctx context.Context, input SearchInput) (result SearchR
 	}
 
 	filterChannel := func(pass int, channel FusionChannel, hits []ScoredMemory, includePlanned, includeBaseline bool) error {
+		if input.DisclosureRequired {
+			eligible := make([]ScoredMemory, 0, len(hits))
+			for _, hit := range hits {
+				if hit.Memory.SourceMetadata.Effective().Disclosable() && hit.Memory.SourceVersion > 0 {
+					eligible = append(eligible, hit)
+				}
+			}
+			hits = eligible
+		}
 		if includePlanned {
 			recalledCandidates += len(hits)
 		}
@@ -985,7 +996,7 @@ func (s *Service) Search(ctx context.Context, input SearchInput) (result SearchR
 					// Graph traversal is an optional relation-channel enrichment. It
 					// is gated by an active exact-scope plan; any failure omits only
 					// graph evidence and retains the already-approved relation hits.
-					if (plannerExecution.active() || plannerExecution.shadow() || plannerExecution.stage == memory.RetrievalPlannerRolloutStageDiagnosticsOnly) && plannerExecution.plan.GraphTraversalPolicy != nil && plannerExecution.plan.GraphTraversalLimits.MaxHops > 0 && s.graphTraversal != nil {
+					if !input.DisclosureRequired && (plannerExecution.active() || plannerExecution.shadow() || plannerExecution.stage == memory.RetrievalPlannerRolloutStageDiagnosticsOnly) && plannerExecution.plan.GraphTraversalPolicy != nil && plannerExecution.plan.GraphTraversalLimits.MaxHops > 0 && s.graphTraversal != nil {
 						seedIDs := make([]string, 0, len(hits))
 						for _, hit := range hits {
 							if hit.Memory.Scope.Normalized() == input.Scope.Normalized() && hit.Memory.State == memory.MemoryStateActive && temporalConstraint.Matches(hit.Memory.TemporalValidity, evaluationInstant) {
@@ -1036,7 +1047,7 @@ func (s *Service) Search(ctx context.Context, input SearchInput) (result SearchR
 	// Derived chunks are strictly opt-in. In shadow mode we execute the search
 	// only to produce diagnostics for explicitly requested evaluation callers;
 	// ordinary responses remain byte-for-byte compatible with canonical retrieval.
-	if s.chunks != nil && s.chunkRollout != memory.ChunkRolloutModeDefaultOff && plannerExecution.channelEnabled(FusionChannelChunk) {
+	if !input.DisclosureRequired && s.chunks != nil && s.chunkRollout != memory.ChunkRolloutModeDefaultOff && plannerExecution.channelEnabled(FusionChannelChunk) {
 		allChunkCandidates := make([]ChunkCandidate, 0)
 		var chunkErr error
 		chunkPlannedChannel := !plannerExecution.active() || plannerExecution.declaresChannel(FusionChannelChunk)
@@ -1483,7 +1494,7 @@ func (s *Service) observeQueryAnalysisShadow(ctx context.Context, original Searc
 		if observed >= aggregate {
 			break
 		}
-		if s.chunks != nil && s.chunkRollout != memory.ChunkRolloutModeDefaultOff {
+		if !original.DisclosureRequired && s.chunks != nil && s.chunkRollout != memory.ChunkRolloutModeDefaultOff {
 			chunks, err := s.chunks.SearchChunks(ctx, ChunkSearchInput{Scope: shadowInput.Scope, Query: shadowInput.Query, QueryEmbedding: shadowInput.QueryEmbedding, Classes: shadowInput.Classes, TopK: shadowInput.TopK})
 			if err == nil {
 				hits := make([]ScoredMemory, 0, len(chunks))
@@ -1607,7 +1618,7 @@ func (s *Service) canExecuteRetrievalPlan(input SearchInput, plan RetrievalPlan)
 				return false
 			}
 		case FusionChannelChunk:
-			if s.chunks == nil || s.chunkRollout != memory.ChunkRolloutModeActive {
+			if input.DisclosureRequired || s.chunks == nil || s.chunkRollout != memory.ChunkRolloutModeActive {
 				return false
 			}
 		default:
@@ -1628,7 +1639,7 @@ func (s *Service) canRetainPlannerBaseline(input SearchInput, plan RetrievalPlan
 	if input.IncludeRelations && s.relations != nil {
 		required[FusionChannelRelation] = true
 	}
-	if s.chunks != nil && s.chunkRollout == memory.ChunkRolloutModeActive {
+	if !input.DisclosureRequired && s.chunks != nil && s.chunkRollout == memory.ChunkRolloutModeActive {
 		required[FusionChannelChunk] = true
 	}
 	planned := make(map[FusionChannel]bool, len(plan.Channels))
@@ -1764,6 +1775,10 @@ func (s *Service) executeShadowRetrievalComparison(ctx context.Context, input Se
 		case FusionChannelRelation:
 			hits, callErr = s.relations.SearchRelations(callCtx, callInput)
 		case FusionChannelChunk:
+			if callInput.DisclosureRequired {
+				cancel()
+				continue
+			}
 			chunkHits, err := s.chunks.SearchChunks(callCtx, ChunkSearchInput{Scope: callInput.Scope, Query: callInput.Query, QueryEmbedding: callInput.QueryEmbedding, Classes: callInput.Classes, TopK: limit})
 			callErr = err
 			for _, candidate := range chunkHits {
@@ -2725,6 +2740,7 @@ func (s *Service) AssembleContext(ctx context.Context, input AssembleContextInpu
 		}
 	}
 	result, err := s.Search(ctx, SearchInput{
+		DisclosureRequired:         input.DisclosureRequired,
 		Scope:                      input.Scope,
 		Query:                      input.Query,
 		Path:                       input.Path,
@@ -2828,7 +2844,10 @@ func (s *Service) AssembleContext(ctx context.Context, input AssembleContextInpu
 	calibrationCandidates = append(calibrationCandidates, relations...)
 	calibrationCandidates = append(calibrationCandidates, episodes...)
 	calibrationCandidates = append(calibrationCandidates, others...)
-	calibrated, calibrationDiagnostics := s.applyContextCalibrationRollout(ctx, input, calibrationCandidates, contextPolicy)
+	calibrated := calibrationCandidates
+	if !input.DisclosureRequired {
+		calibrated, calibrationDiagnostics = s.applyContextCalibrationRollout(ctx, input, calibrationCandidates, contextPolicy)
+	}
 	if len(calibrationDiagnostics) > 0 {
 		rank := make(map[string]int, len(calibrated))
 		for index, hit := range calibrated {
@@ -2915,7 +2934,7 @@ func (s *Service) AssembleContext(ctx context.Context, input AssembleContextInpu
 		if input.retrievalPlannerDiagnosticsAuthorized && availableContextItems > includedContextItems {
 			output.plannerDiagnostics = append(output.plannerDiagnostics, ContextDiagnostic{Section: "context_planner", Status: "omitted_by_quota_or_budget", Reason: "planned context quota or caller budget omitted visible items", Omitted: availableContextItems - includedContextItems})
 		}
-		if input.IncludeExperienceInsights && remaining > 0 && s.insights != nil {
+		if !input.DisclosureRequired && input.IncludeExperienceInsights && remaining > 0 && s.insights != nil {
 			if err := s.appendExperienceInsights(ctx, input.Scope, input.IncludeDiagnostics, &output, &remaining); err != nil {
 				return AssembledContext{}, err
 			}
@@ -2962,7 +2981,7 @@ func (s *Service) AssembleContext(ctx context.Context, input AssembleContextInpu
 		remaining -= take
 	}
 
-	if input.IncludeExperienceInsights && remaining > 0 && s.insights != nil {
+	if !input.DisclosureRequired && input.IncludeExperienceInsights && remaining > 0 && s.insights != nil {
 		if err := s.appendExperienceInsights(ctx, input.Scope, input.IncludeDiagnostics, &output, &remaining); err != nil {
 			return AssembledContext{}, err
 		}
@@ -2975,7 +2994,7 @@ func (s *Service) AssembleContext(ctx context.Context, input AssembleContextInpu
 }
 
 func (s *Service) appendGoalContext(ctx context.Context, input AssembleContextInput, output *AssembledContext) {
-	if !input.IncludeGoalContext {
+	if input.DisclosureRequired || !input.IncludeGoalContext {
 		return
 	}
 	if s.goalContext == nil {
@@ -3063,6 +3082,9 @@ func (s *Service) boundChunkContextEvidence(input AssembleContextInput, hits []S
 }
 
 func (s *Service) readProjectionHits(ctx context.Context, input AssembleContextInput) ([]SearchHit, []ContextDiagnostic) {
+	if input.DisclosureRequired {
+		return nil, nil
+	}
 	if (!input.UseProjections && !s.projectionConsumptionEnabled) || s.projections == nil {
 		return nil, nil
 	}

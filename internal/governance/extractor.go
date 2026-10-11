@@ -46,6 +46,7 @@ func (c ExtractedCandidate) Validate() error {
 
 func (c ExtractedCandidate) ToCandidateMemory(id string, event memory.RawEvent, now time.Time) CandidateMemory {
 	return CandidateMemory{
+		SourceMetadata:   memory.JoinSourceMetadata([]memory.SourceMetadata{event.SourceMetadata}, true, memory.SourceClassification(c.Sensitivity)),
 		ID:               id,
 		SourceRawEventID: event.ID,
 		Scope:            event.Scope,

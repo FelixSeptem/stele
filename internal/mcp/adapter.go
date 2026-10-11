@@ -169,6 +169,9 @@ func (a *Adapter) serverForRequest(r *http.Request) *protocolmcp.Server {
 		Name: ToolWhoAmI, Description: "Resolve the authenticated principal and exact access scope.",
 		Annotations: &protocolmcp.ToolAnnotations{ReadOnlyHint: true, IdempotentHint: true, OpenWorldHint: boolPtr(false)},
 	}, func(ctx context.Context, req *protocolmcp.CallToolRequest, input whoAmIInput) (*protocolmcp.CallToolResult, WhoAmIResponse, error) {
+		if state.principal.Role != auth.PrincipalRoleAdmin {
+			return nil, WhoAmIResponse{}, mcpError(ErrorScope, "disclosure_denied")
+		}
 		bindingID := strings.TrimSpace(input.RuntimeBindingID)
 		if bindingID == "" {
 			bindingID = state.bindingID
@@ -617,6 +620,11 @@ func sameIDs(a, b []string) bool {
 }
 
 func (a *Adapter) resolveRequestScope(ctx context.Context, state requestState, requested ScopeInput, bindingID string) (DispatchContext, error) {
+	// Native MCP projections do not implement the profiled Provider DTO. Deny
+	// public credentials before resolving a binding or looking up any content.
+	if state.principal.Role != auth.PrincipalRoleAdmin {
+		return DispatchContext{}, mcpError(ErrorScope, "disclosure_denied")
+	}
 	if requested.Tenant != "" || requested.Project != "" || requested.Namespace != "" {
 		scope := requested.ToScope()
 		return NewScopeResolver(a.authorizer, a.bindings, a.now).Resolve(ctx, state.principal, &scope, bindingID)

@@ -2,7 +2,7 @@
 param(
     [string]$ProjectName = "stele-context-$([guid]::NewGuid().ToString('N').Substring(0, 12))",
     [string]$ComposeFile = "docker-compose.yml",
-    [string]$Image = "stele-pc1-verify:local",
+    [string]$Image = "stele-pc2-verify:local",
     [string]$ReportPath = "",
     [switch]$UseExistingStack,
     [string]$BaseUrl = "",
@@ -16,7 +16,10 @@ Push-Location $repoRoot
 $ownedStarted = $false
 $overridePath = Join-Path ([IO.Path]::GetTempPath()) "stele-context-$ProjectName.yml"
 $ownedCredentials = $null
-$verificationVariables = @("STELE_CONTEXT_VERIFY_URL", "STELE_CONTEXT_VERIFY_STAGE", "STELE_CONTEXT_VERIFY_REPORT", "STELE_CONTEXT_VERIFY_CREDENTIAL_DIR", "STELE_CONTEXT_VERIFY_IMAGE_DIGEST", "STELE_CONTEXT_VERIFY_SOURCE_REVISION", "STELE_CONTEXT_VERIFY_SOURCE_DIGEST")
+$verificationVariables = @("STELE_CONTEXT_VERIFY_URL", "STELE_CONTEXT_VERIFY_STAGE", "STELE_CONTEXT_VERIFY_REPORT", "STELE_CONTEXT_VERIFY_CREDENTIAL_DIR", "STELE_CONTEXT_VERIFY_IMAGE_DIGEST", "STELE_CONTEXT_VERIFY_SOURCE_REVISION", "STELE_CONTEXT_VERIFY_SOURCE_DIGEST", "STELE_CONTEXT_VERIFY_POSTGRES_DSN")
+$changedVariables = $verificationVariables + @("COMPOSE_PROJECT_NAME", "STELE_POSTGRES_IMAGE", "STELE_POSTGRES_PASSWORD", "STELE_AUTH_BOOTSTRAP_ADMIN_KEY", "STELE_AUTH_DEFAULT_TENANT", "STELE_AUTH_DEFAULT_PROJECT", "STELE_AUTH_DEFAULT_NAMESPACE", "STELE_POSTGRES_HOST_PORT", "STELE_HTTP_HOST_PORT")
+$previousVariables = @{}
+foreach ($variable in $changedVariables) { $previousVariables[$variable] = [Environment]::GetEnvironmentVariable($variable, "Process") }
 try {
     if ($ProjectName -notmatch '^[a-z0-9][a-z0-9_-]{2,50}$') { throw "invalid owned context project identifier" }
     if ([string]::IsNullOrWhiteSpace($ReportPath)) { $ReportPath = Join-Path ([IO.Path]::GetTempPath()) "$ProjectName.context-conformance.json" }
@@ -29,6 +32,7 @@ try {
     $composeArgs = @("compose", "-f", $ComposeFile)
     if ($UseExistingStack) {
         if (-not $BaseUrl -or -not $CredentialDirectory) { throw "existing owned stack requires URL and official credentials" }
+        if (-not $env:STELE_CONTEXT_VERIFY_POSTGRES_DSN) { throw "existing stack requires explicit observation DSN" }
         $container = (& docker @composeArgs ps -q api | Out-String).Trim()
         if (-not $container) { throw "owned API container missing" }
         $imageDigest = (& docker inspect --format '{{.Image}}' $container | Out-String).Trim()
@@ -70,16 +74,17 @@ try {
     $vector = (& docker @composeArgs exec -T postgres psql -U stele -d stele -At -c "SELECT extversion FROM pg_extension WHERE extname='vector'" | Out-String).Trim()
     if (-not $vector -or $LASTEXITCODE -ne 0) { throw "owned pgvector dependency missing" }
     if (-not $UseExistingStack) {
-        & pwsh -NoProfile -File (Join-Path $PSScriptRoot "stele-bootstrap-smoke.ps1") -BaseUrl $BaseUrl -BootstrapKey $env:STELE_AUTH_BOOTSTRAP_ADMIN_KEY -Tenant $env:STELE_AUTH_DEFAULT_TENANT -Project $env:STELE_AUTH_DEFAULT_PROJECT -Namespace $env:STELE_AUTH_DEFAULT_NAMESPACE -CredentialOutputDirectory $CredentialDirectory -SkipLifecycle
+        & pwsh -NoProfile -File (Join-Path $PSScriptRoot "stele-bootstrap-smoke.ps1") -BaseUrl $BaseUrl -BootstrapKey $env:STELE_AUTH_BOOTSTRAP_ADMIN_KEY -Tenant $env:STELE_AUTH_DEFAULT_TENANT -Project $env:STELE_AUTH_DEFAULT_PROJECT -Namespace $env:STELE_AUTH_DEFAULT_NAMESPACE -CredentialOutputDirectory $CredentialDirectory -DisclosureProfile memory-content-v1 -SkipLifecycle
         if ($LASTEXITCODE -ne 0) { throw "official context bootstrap failed" }
     }
     $env:STELE_CONTEXT_VERIFY_URL = $BaseUrl
+    if (-not $UseExistingStack) { $env:STELE_CONTEXT_VERIFY_POSTGRES_DSN = "postgres://stele:$($env:STELE_POSTGRES_PASSWORD)@127.0.0.1:$($env:STELE_POSTGRES_HOST_PORT)/stele?sslmode=disable" }
     $env:STELE_CONTEXT_VERIFY_REPORT = $ReportPath
     $env:STELE_CONTEXT_VERIFY_CREDENTIAL_DIR = $CredentialDirectory
     $env:STELE_CONTEXT_VERIFY_IMAGE_DIGEST = $imageDigest
     $env:STELE_CONTEXT_VERIFY_SOURCE_REVISION = (& git rev-parse HEAD | Out-String).Trim()
     $sourceParts = [Collections.Generic.List[string]]::new()
-    $sourceFiles = @(& rg --files -g '*.go' -g '!**/*_test.go' -g 'go.mod' -g 'go.sum' | Sort-Object)
+    $sourceFiles = @(& rg --files -g '*.go' -g '!**/*_test.go' -g 'go.mod' -g 'go.sum' -g 'internal/storage/postgres/migrations/*.sql' -g 'Dockerfile' -g 'docker-compose.yml' | Sort-Object)
     foreach ($sourceFile in $sourceFiles) { $sourceParts.Add("$sourceFile|$((Get-FileHash -LiteralPath $sourceFile -Algorithm SHA256).Hash)") }
     $env:STELE_CONTEXT_VERIFY_SOURCE_DIGEST = ([Convert]::ToHexString([Security.Cryptography.SHA256]::HashData([Text.Encoding]::UTF8.GetBytes(($sourceParts -join "`n"))))).ToLowerInvariant()
     foreach ($stage in @("initial", "restart")) {
@@ -94,6 +99,7 @@ try {
         if (-not (Test-Path -LiteralPath $ReportPath)) { throw "context evidence report missing" }
         $report = Get-Content -Raw -LiteralPath $ReportPath | ConvertFrom-Json
         if ($report.result -ne "passed" -or $report.stage -ne $stage) { throw "context evidence is not passing" }
+        Copy-Item -LiteralPath $ReportPath -Destination "$ReportPath.$stage.json"
     }
     Write-Output "PASS: public context schema, governed paths, isolation, lifecycle, replay, and API/worker restart; bounded report: $ReportPath"
 } catch {
@@ -110,6 +116,6 @@ try {
         if ($resolvedCredentials -ne $expectedCredentials) { throw "owned credential cleanup path mismatch" }
         Remove-Item -LiteralPath $resolvedCredentials -Recurse -Force
     }
-    foreach ($variable in $verificationVariables) { Remove-Item -LiteralPath "Env:$variable" -ErrorAction SilentlyContinue }
+    foreach ($variable in $changedVariables) { [Environment]::SetEnvironmentVariable($variable, $previousVariables[$variable], "Process") }
     Pop-Location
 }

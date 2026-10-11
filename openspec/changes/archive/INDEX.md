@@ -1,6 +1,6 @@
 # Archive Index
 
-Updated: 2026-10-11 06:45:18
+Updated: 2026-10-11 19:09:47
 
 - 001 -> bootstrap-foundation-and-event-ingestion
 - 002 -> governance-pipeline-and-memory-consolidation
@@ -70,3 +70,4 @@ Updated: 2026-10-11 06:45:18
 - 067 -> runtime-capability-and-event-sync-contract
 - 068 -> documentation-and-agent-skill-onboarding
 - 069 -> provider-context-openapi-contract-alignment
+- 070 -> provider-context-disclosure-and-source-trust

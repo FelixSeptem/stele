@@ -10,15 +10,16 @@ reading or writing memory. Treat `tenant`, `project`, and `namespace` as a
 security boundary, not a search filter. Do not invent a broader namespace or
 reuse a binding from another session.
 
-For MCP, call `who_am_i` first and confirm the returned access mode and active
-scope. For provider/OpenAPI clients, complete runtime initialization and retain
-the server-issued binding and session identity.
+For an explicitly authorized administrator MCP workflow, call `who_am_i` first
+and confirm the active scope. Public credentials cannot use MCP data tools.
+Public Provider clients complete runtime initialization and retain the
+server-issued binding and session identity.
 
 ## Choose the smallest read
 
-- Use context assembly when the agent needs bounded working context.
-- Use search for a focused query and citations.
-- Use browse for review or pagination within one exact scope.
+- Public clients use profiled Provider context, defaulting to references.
+- Administrators use native/MCP context assembly for bounded working context.
+- Administrators use search for a focused query and browse for scoped review.
 - Request only the result and context limits needed for the current turn.
 
 Read results are lifecycle-filtered evidence. Suppressed, forgotten, deleted,
@@ -28,7 +29,7 @@ Provider clients must validate the categorized context response before treating
 it as usable or empty. Use canonical snake_case fields and binding-owned scope;
 preserve citations rather than depending on ranking scores. See the
 [Provider contract and migration notes](agent-runtime-memory-provider.md#provider-context-json-contract)
-for item-budget limits and pending disclosure, digest, and continuity work.
+for disclosure provisioning, item-budget limits and pending digest/continuity work.
 
 ## Write through governed paths
 
@@ -43,7 +44,7 @@ intent rather than silently overwriting the old record.
 
 ## Forget safely
 
-For one known memory, use the governed single-memory forget operation with a
+In an authorized administrator workflow, use the governed single-memory forget operation with a
 reason and idempotency key. For semantic or bulk forgetting:
 
 1. Run `memory_forget_preview`.
@@ -87,3 +88,13 @@ snapshot. Do not assume skipped events were applied.
 Detailed configuration and recovery procedures are in
 [self-hosting](self-hosting.md), while the architecture and component roles are
 documented in [architecture](architecture.md) and [components](components.md).
+
+## Context disclosure and source trust
+
+Public runtime credentials require explicit exact-scope disclosure provisioning.
+Provider context defaults to structured references; bounded content requires the
+content profile and explicit mode. Unsupported native/MCP data routes deny public
+credentials before lookup. Source labels persist through governance and history;
+missing lineage is untrusted/restricted. Attested source data grants no instruction,
+tool, write or business-state authority. See the [disclosure/source guide](context-disclosure-and-source-trust.md)
+for endpoint behavior, administration, versioning and upgrade/rollback.

@@ -89,3 +89,13 @@ inspection and lifecycle actions have separate authorization and audit rules.
 
 See [components](components.md), [best practices](best-practices.md),
 [self-hosting](self-hosting.md), and the [provider contract](agent-runtime-memory-provider.md).
+
+## Context disclosure and source trust
+
+Public runtime credentials require explicit exact-scope disclosure provisioning.
+Provider context defaults to structured references; bounded content requires the
+content profile and explicit mode. Unsupported native/MCP data routes deny public
+credentials before lookup. Source labels persist through governance and history;
+missing lineage is untrusted/restricted. Attested source data grants no instruction,
+tool, write or business-state authority. See the [disclosure/source guide](context-disclosure-and-source-trust.md)
+for endpoint behavior, administration, versioning and upgrade/rollback.

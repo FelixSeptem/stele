@@ -6,6 +6,7 @@ param(
     [Parameter(Mandatory = $true)][string]$Project,
     [Parameter(Mandatory = $true)][string]$Namespace,
     [Parameter(Mandatory = $true)][string]$CredentialOutputDirectory,
+    [ValidateSet("memory-reference-v1", "memory-content-v1")][string]$DisclosureProfile = "memory-reference-v1",
     [switch]$SkipLifecycle
 )
 
@@ -59,7 +60,13 @@ $adminHeaders = @{
 Write-Host "Creating least-privilege runtime principal and exact grant..."
 $runtime = Invoke-Json POST "/v1/admin/principals" $adminHeaders @{ role = "public"; label = "bootstrap-smoke-runtime"; actor = "bootstrap-smoke-admin"; reason = "least-privilege runtime principal" }
 if ([string]::IsNullOrWhiteSpace($runtime.credential_secret) -or [string]::IsNullOrWhiteSpace($runtime.principal.id)) { throw "runtime principal response did not contain one-time credential" }
-Invoke-Json POST ("/v1/admin/principals/{0}/grants" -f $runtime.principal.id) $adminHeaders @{ tenant = $Tenant; project = $Project; namespace = $Namespace; actor = "bootstrap-smoke-admin"; reason = "exact runtime scope grant" } | Out-Null
+$grants = Invoke-Json GET ("/v1/admin/principals/{0}/grants" -f $runtime.principal.id) $adminHeaders $null
+$grant = @($grants.grants | Where-Object { $_.status -eq "active" })[0]
+if ($null -eq $grant -or [string]::IsNullOrWhiteSpace($grant.id)) { throw "runtime exact scope grant missing" }
+Invoke-Json PUT ("/v1/admin/principals/{0}/grants/{1}/disclosure" -f $runtime.principal.id, $grant.id) $adminHeaders @{
+    disclosure = @{ allowed_profiles = @($DisclosureProfile); default_profile = $DisclosureProfile; source_attestation = $false }
+    actor = "bootstrap-smoke-admin"; reason = "explicit runtime disclosure profile"
+} | Out-Null
 $runtimeCredentialPath = Join-Path $CredentialOutputDirectory "runtime.credential"
 Set-Content -LiteralPath $runtimeCredentialPath -Value $runtime.credential_secret -NoNewline
 
@@ -84,9 +91,9 @@ if (-not $SkipLifecycle) {
     $ungrantedScopeHeaders["X-Stele-Tenant"] = "ungranted-$([guid]::NewGuid().ToString('N').Substring(0, 12))"
     Assert-HttpStatus GET "/v1/memories?limit=5" $ungrantedScopeHeaders $null 403 "ungranted scope read"
     Invoke-Json GET "/v1/admin/jobs/governance/status" $adminHeaders $null | Out-Null
-    Invoke-Json GET "/v1/memories?limit=5" $runtimeHeaders $null | Out-Null
-    Invoke-Json POST "/v1/memories/search" $runtimeHeaders @{ query = "bootstrap smoke lifecycle fixture"; top_k = 5 } | Out-Null
-    Invoke-Json POST "/v1/context/assemble" $runtimeHeaders @{ query = "bootstrap smoke lifecycle fixture"; budget = 1200; include_diagnostics = $true } | Out-Null
+    Assert-HttpStatus GET "/v1/memories?limit=5" $runtimeHeaders $null 403 "native memory disclosure denial"
+    Assert-HttpStatus POST "/v1/memories/search" $runtimeHeaders @{ query = "bootstrap smoke lifecycle fixture"; top_k = 5 } 403 "native search disclosure denial"
+    Assert-HttpStatus POST "/v1/context/assemble" $runtimeHeaders @{ query = "bootstrap smoke lifecycle fixture"; budget = 1200 } 403 "native context disclosure denial"
     Invoke-Json POST "/v1/admin/scope-proofs" $adminHeaders @{ checks = @("scope_resolution", "ingestion", "governance", "retrieval", "context"); fixture_mode = "smoke"; actor = "bootstrap-smoke-admin"; reason = "same-scope product smoke proof" } | Out-Null
 }
 

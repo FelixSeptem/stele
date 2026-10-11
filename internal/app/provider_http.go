@@ -41,6 +41,10 @@ func registerProviderRoutes(mux *http.ServeMux, deps HTTPDependencies) {
 			writeProviderError(w, http.StatusUnauthorized, "authentication", "unauthorized", "authentication required", false)
 			return
 		}
+		scope, _ := auth.ScopeFromContext(r.Context())
+		if _, ok := currentDisclosure(w, r, deps.PrincipalAuthorizer, principal.ID, scope); !ok {
+			return
+		}
 		b, err := deps.ProviderInitializer.Initialize(r.Context(), principal, req)
 		if err != nil {
 			writeProviderError(w, http.StatusForbidden, "scope", "forbidden", "runtime initialization denied", false)
@@ -48,7 +52,10 @@ func registerProviderRoutes(mux *http.ServeMux, deps HTTPDependencies) {
 		}
 		writeJSON(w, http.StatusCreated, b)
 	}))
-	mux.Handle("POST /v1/provider/runtime", runtimeInit)
+	// Runtime initialization is an exact-scope operation. The scope middleware
+	// must run before disclosure resolution so the current grant is evaluated
+	// against the requested tenant/project/namespace.
+	mux.Handle("POST /v1/provider/runtime", auth.ScopeMiddleware()(runtimeInit))
 	if deps.ProviderSynchronizer != nil {
 		registerProviderSyncRoute(mux, deps)
 	}
@@ -164,13 +171,16 @@ func registerProviderOperationRoutes(mux *http.ServeMux, deps HTTPDependencies) 
 	mux.Handle("POST /v1/provider/events", wrap(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		b, _ := provider.RuntimeBindingFromContext(r.Context())
 		var req struct {
-			Metadata    provider.OperationMetadata `json:"metadata"`
-			EventType   string                     `json:"event_type"`
-			Content     string                     `json:"content"`
-			MemoryPath  string                     `json:"memory_path,omitempty"`
-			MetadataMap map[string]any             `json:"metadata_map"`
+			Metadata       provider.OperationMetadata `json:"metadata"`
+			EventType      string                     `json:"event_type"`
+			Content        string                     `json:"content"`
+			MemoryPath     string                     `json:"memory_path,omitempty"`
+			MetadataMap    map[string]any             `json:"metadata_map"`
+			SourceMetadata memory.SourceMetadata      `json:"source_metadata,omitempty"`
 		}
-		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		data := readBody(r)
+		_, canonicalErr := provider.CanonicalObject(data, []string{"metadata", "event_type", "content", "memory_path", "metadata_map", "source_metadata"}, []string{"metadata", "event_type", "content"})
+		if err := provider.DecodeStrict(data, &req); err != nil || canonicalErr != nil {
 			writeProviderError(w, 400, "validation", "invalid_request", "invalid request", false)
 			return
 		}
@@ -178,7 +188,15 @@ func registerProviderOperationRoutes(mux *http.ServeMux, deps HTTPDependencies) 
 			writeProviderCompatibilityError(w, deps.ProviderSchemaVersions)
 			return
 		}
-		out, err := deps.ProviderAdapter.Ingest(r.Context(), b, req.Metadata, memory.IngestEventInput{EventType: req.EventType, Content: req.Content, MemoryPath: req.MemoryPath, Metadata: req.MetadataMap})
+		e, ok := currentDisclosure(w, r, deps.PrincipalAuthorizer, b.PrincipalID, b.Scope)
+		if !ok {
+			return
+		}
+		if req.SourceMetadata.Trust == memory.SourceTrustAttestedData && !e.SourceAttestation {
+			writeProviderError(w, 403, "scope", "disclosure_denied", "disclosure denied", false)
+			return
+		}
+		out, err := deps.ProviderAdapter.Ingest(r.Context(), b, req.Metadata, memory.IngestEventInput{EventType: req.EventType, Content: req.Content, MemoryPath: req.MemoryPath, Metadata: req.MetadataMap, SourceMetadata: req.SourceMetadata})
 		if err != nil {
 			writeProviderError(w, 400, providerErrorCategory(err), "operation_failed", boundedProviderMessage(err), providerErrorCategory(err) == provider.ErrorCategoryRetryable)
 			return
@@ -199,12 +217,15 @@ func registerProviderOperationRoutes(mux *http.ServeMux, deps HTTPDependencies) 
 			writeProviderCompatibilityError(w, deps.ProviderSchemaVersions)
 			return
 		}
+		if _, ok := currentDisclosure(w, r, deps.PrincipalAuthorizer, b.PrincipalID, b.Scope); !ok {
+			return
+		}
 		out, err := deps.ProviderAdapter.SubmitIntent(r.Context(), b, req.Metadata, req.Intent)
 		if err != nil {
 			writeProviderError(w, 400, providerErrorCategory(err), "operation_failed", boundedProviderMessage(err), providerErrorCategory(err) == provider.ErrorCategoryRetryable)
 			return
 		}
-		writeJSON(w, http.StatusAccepted, map[string]any{"metadata": req.Metadata, "result": out, "citations": provider.ShapeIntentCitation(out)})
+		writeJSON(w, http.StatusAccepted, map[string]any{"metadata": req.Metadata, "result": map[string]any{"intent_id": out.ID, "status": out.Status}})
 	})))
 	mux.Handle("POST /v1/provider/retrieve", wrap(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		b, _ := provider.RuntimeBindingFromContext(r.Context())
@@ -248,12 +269,42 @@ func registerProviderOperationRoutes(mux *http.ServeMux, deps HTTPDependencies) 
 			writeProviderError(w, 400, provider.ErrorCategoryValidation, "invalid_request", "invalid request", false)
 			return
 		}
+		e, ok := currentDisclosure(w, r, deps.PrincipalAuthorizer, b.PrincipalID, b.Scope)
+		if !ok {
+			return
+		}
+		decision, err := e.Resolve(req.Input.DisclosureProfile, req.Input.ResponseMode)
+		if err != nil {
+			writeProviderError(w, 403, "scope", "disclosure_denied", "disclosure denied", false)
+			return
+		}
+		if req.Input.ProjectionIntent != "" {
+			decision.ProjectionIntent = req.Input.ProjectionIntent
+		}
+		input.DisclosureRequired = true
+		input.IncludeExperienceInsights = false
+		input.IncludeGoalContext = false
+		input.IncludeDiagnostics = false
+		input.IncludeFeedbackDiagnostics = false
+		input.UseProjections = false
 		out, meta, err := deps.ProviderAdapter.AssembleContext(r.Context(), b, req.Metadata, input)
 		if err != nil {
 			writeProviderError(w, 400, providerErrorCategory(err), "operation_failed", boundedProviderMessage(err), providerErrorCategory(err) == provider.ErrorCategoryRetryable)
 			return
 		}
-		writeJSON(w, http.StatusOK, provider.ShapeContextResponse(out, meta, req.Input, providerCitationLimit(deps.ProviderLimits)))
+		response := provider.ShapeDisclosedContextResponse(out, meta, decision, providerCitationLimit(deps.ProviderLimits), b.Scope)
+		serialized, err := json.Marshal(response)
+		ceiling := deps.ProviderLimits.MaxContextBytes
+		if ceiling <= 0 {
+			ceiling = provider.Discover(provider.CapabilityInput{}).Limits.MaxContextBytes
+		}
+		if err != nil || len(serialized) > ceiling {
+			writeProviderError(w, 413, "validation", "context_limit_exceeded", "context response exceeds server limit", false)
+			return
+		}
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(200)
+		_, _ = w.Write(serialized)
 	})))
 	mux.Handle("POST /v1/provider/turns", wrap(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		b, _ := provider.RuntimeBindingFromContext(r.Context())
@@ -346,6 +397,9 @@ func registerProviderOperationRoutes(mux *http.ServeMux, deps HTTPDependencies) 
 			writeProviderError(w, http.StatusForbidden, provider.ErrorCategoryScope, "forbidden", "runtime binding denied", false)
 			return
 		}
+		if _, ok := currentDisclosure(w, r, deps.PrincipalAuthorizer, binding.PrincipalID, binding.Scope); !ok {
+			return
+		}
 		writeJSON(w, http.StatusOK, map[string]any{
 			"status":               "ready",
 			"scope":                binding.Scope,
@@ -384,11 +438,7 @@ func boundedProviderMessage(err error) string {
 	if err == nil {
 		return ""
 	}
-	s := strings.TrimSpace(err.Error())
-	if len(s) > 256 {
-		s = s[:256]
-	}
-	return s
+	return "provider operation failed"
 }
 func providerErrorCategory(err error) provider.ErrorCategory {
 	if err == nil {

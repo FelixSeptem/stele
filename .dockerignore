@@ -20,6 +20,8 @@ worktrees/**
 # Go caches created by local test runs
 .gocache*
 .gocache*/**
+.gomodcache*
+.gomodcache*/**
 
 # Local configuration, credentials, and operator evidence
 .env

@@ -114,7 +114,7 @@ pwsh -File scripts/stele-restore-verify.ps1 `
   -TargetDsn $env:STELE_VERIFY_POSTGRES_DSN `
   -Manifest .\backups\stele.dump.manifest.json `
   -BaseUrl http://localhost:8080 `
-  -ApiKey $env:STELE_RUNTIME_API_KEY `
+  -ApiKey $env:STELE_ADMIN_API_KEY `
   -Tenant $env:STELE_AUTH_DEFAULT_TENANT `
   -Project $env:STELE_AUTH_DEFAULT_PROJECT `
   -Namespace $env:STELE_AUTH_DEFAULT_NAMESPACE
@@ -318,8 +318,10 @@ comparison to roll back. Existing reports remain inspectable until expiry.
 Protected requests are authenticated against PostgreSQL-backed principals. Every
 request must include `X-API-Key`, `X-Stele-Tenant`, `X-Stele-Project`, and
 `X-Stele-Namespace`; the exact scope must be granted to the principal. Public
-principals can use public memory and event routes. Admin routes additionally
-require the `admin` role.
+principals require explicit exact-scope disclosure provisioning and use Provider
+context and safe event/intent writes. Native data reads, history, lifecycle and
+MCP tools deny public credentials. Admin routes require the `admin` role. See
+[disclosure/source administration and migration](context-disclosure-and-source-trust.md).
 
 For a first deployment, configure all four bootstrap variables and start the API:
 
@@ -519,10 +521,14 @@ pwsh -File scripts/stele-bootstrap-smoke.ps1 `
   -CredentialOutputDirectory .\.stele-smoke-credentials
 ```
 
-The lifecycle portion is enabled by default and sends an idempotent event retry,
-then exercises scoped memory listing, search, and context assembly with the new
-runtime credential. Use `-SkipLifecycle` only when you are splitting bootstrap
-from a separately orchestrated worker/retrieval verification.
+The script provisions `-DisclosureProfile memory-reference-v1` by default, with
+source attestation disabled. Use `memory-content-v1` only for approved content
+access. The lifecycle portion tests supported public writes and native read
+denials, then uses the administrator credential for governance inspection and
+the scoped ingestion/governance/retrieval/context proof.
+Use `-SkipLifecycle` when a separate public Provider fixture performs governance
+and retrieval verification. Run `scripts/stele-provider-context-verify.ps1` for
+fresh pgvector provisioning, profiled reads, grant edits, replay and restart checks.
 
 For the isolated real-stack product gate, run:
 
@@ -567,7 +573,9 @@ Before ingesting the smoke fixture, create the first durable admin with the
 bootstrap key and then create an exact-scope public/runtime principal. The
 bootstrap secret is only valid for the configured default scope and is rejected
 after a durable admin exists. Store each returned `credential_secret` once and
-use the runtime principal for normal event and retrieval requests.
+provision its disclosure profile for event writes and Provider context. The
+Native inspection steps below require the durable administrator credential.
+Public credentials use the supported Provider context and event/intent paths.
 
 1. Confirm process liveness and readiness:
 
@@ -624,7 +632,7 @@ If governance remains pending, inspect worker logs and `STELE_POSTGRES_DSN`. If 
 ```bash
 curl -X POST http://localhost:8080/v1/memories/search \
   -H 'Content-Type: application/json' \
-  -H 'X-API-Key: <runtime-credential>' \
+  -H 'X-API-Key: <admin-credential>' \
   -H 'X-Stele-Tenant: tenant-a' \
   -H 'X-Stele-Project: project-a' \
   -H 'X-Stele-Namespace: namespace-a' \
@@ -632,7 +640,7 @@ curl -X POST http://localhost:8080/v1/memories/search \
 
 curl -X POST http://localhost:8080/v1/context/assemble \
   -H 'Content-Type: application/json' \
-  -H 'X-API-Key: <runtime-credential>' \
+  -H 'X-API-Key: <admin-credential>' \
   -H 'X-Stele-Tenant: tenant-a' \
   -H 'X-Stele-Project: project-a' \
   -H 'X-Stele-Namespace: namespace-a' \
@@ -684,7 +692,7 @@ If the run stays `pending`, verify scheduler mode is running and inspect `derive
 ```bash
 curl -X POST http://localhost:8080/v1/context/assemble \
   -H 'Content-Type: application/json' \
-  -H 'X-API-Key: <runtime-credential>' \
+  -H 'X-API-Key: <admin-credential>' \
   -H 'X-Stele-Tenant: tenant-a' \
   -H 'X-Stele-Project: project-a' \
   -H 'X-Stele-Namespace: namespace-a' \
@@ -760,7 +768,7 @@ curl -X POST http://localhost:8080/v1/admin/scope-proofs/<proof-run-id>:rerun \
 ```bash
 curl -X POST http://localhost:8080/v1/memory-sessions \
   -H 'Content-Type: application/json' \
-  -H 'X-API-Key: <runtime-credential>' \
+  -H 'X-API-Key: <admin-credential>' \
   -H 'X-Stele-Tenant: tenant-a' \
   -H 'X-Stele-Project: project-a' \
   -H 'X-Stele-Namespace: namespace-a' \
@@ -768,7 +776,7 @@ curl -X POST http://localhost:8080/v1/memory-sessions \
 
 curl -X POST http://localhost:8080/v1/memory-sessions/<session-id>/turns \
   -H 'Content-Type: application/json' \
-  -H 'X-API-Key: <runtime-credential>' \
+  -H 'X-API-Key: <admin-credential>' \
   -H 'X-Stele-Tenant: tenant-a' \
   -H 'X-Stele-Project: project-a' \
   -H 'X-Stele-Namespace: namespace-a' \
@@ -776,7 +784,7 @@ curl -X POST http://localhost:8080/v1/memory-sessions/<session-id>/turns \
 
 curl -X POST http://localhost:8080/v1/memory-sessions/<session-id>/turns/<turn-id>:outcome \
   -H 'Content-Type: application/json' \
-  -H 'X-API-Key: <runtime-credential>' \
+  -H 'X-API-Key: <admin-credential>' \
   -H 'X-Stele-Tenant: tenant-a' \
   -H 'X-Stele-Project: project-a' \
   -H 'X-Stele-Namespace: namespace-a' \
@@ -784,14 +792,14 @@ curl -X POST http://localhost:8080/v1/memory-sessions/<session-id>/turns/<turn-i
 
 curl -X POST http://localhost:8080/v1/memory-sessions/<session-id>:verify \
   -H 'Content-Type: application/json' \
-  -H 'X-API-Key: <runtime-credential>' \
+  -H 'X-API-Key: <admin-credential>' \
   -H 'X-Stele-Tenant: tenant-a' \
   -H 'X-Stele-Project: project-a' \
   -H 'X-Stele-Namespace: namespace-a' \
   -d '{"turn_id":"<turn-id>","expected_recall":["<event-id>"]}'
 
 curl http://localhost:8080/v1/memory-sessions/<session-id>/report \
-  -H 'X-API-Key: <runtime-credential>' \
+  -H 'X-API-Key: <admin-credential>' \
   -H 'X-Stele-Tenant: tenant-a' \
   -H 'X-Stele-Project: project-a' \
   -H 'X-Stele-Namespace: namespace-a'
@@ -950,7 +958,7 @@ Expected:
 ```bash
 curl -X POST http://localhost:8080/v1/events \
   -H 'Content-Type: application/json' \
-  -H 'X-API-Key: <runtime-credential>' \
+  -H 'X-API-Key: <admin-credential>' \
   -H 'X-Stele-Tenant: tenant-a' \
   -H 'X-Stele-Project: project-a' \
   -H 'X-Stele-Namespace: namespace-a' \
@@ -1253,6 +1261,9 @@ Repair plans never rewrite canonical memory content, provenance, or version hist
 
 ### External-agent memory feedback loop
 
+This native session/feedback workflow requires a durable administrator principal
+with the exact scope. Public Provider outcome/feedback projection remains PC6.
+
 Use this loop when Stele is integrated with an external agent runtime and you need to close the product feedback loop from recalled memory to quality remediation. Stele remains the memory service only: it does not invoke models, build prompts, run the external agent, or generate final answers.
 
 1. Create a scoped memory session before the external agent turn:
@@ -1260,7 +1271,7 @@ Use this loop when Stele is integrated with an external agent runtime and you ne
 ```bash
 curl -X POST http://localhost:8080/v1/memory-sessions \
   -H 'Content-Type: application/json' \
-  -H 'X-API-Key: <runtime-credential>' \
+  -H 'X-API-Key: <admin-credential>' \
   -H 'X-Stele-Tenant: tenant-a' \
   -H 'X-Stele-Project: project-a' \
   -H 'X-Stele-Namespace: namespace-a' \
@@ -1272,7 +1283,7 @@ curl -X POST http://localhost:8080/v1/memory-sessions \
 ```bash
 curl -X POST http://localhost:8080/v1/memory-sessions/<session-id>/turns \
   -H 'Content-Type: application/json' \
-  -H 'X-API-Key: <runtime-credential>' \
+  -H 'X-API-Key: <admin-credential>' \
   -H 'X-Stele-Tenant: tenant-a' \
   -H 'X-Stele-Project: project-a' \
   -H 'X-Stele-Namespace: namespace-a' \
@@ -1284,7 +1295,7 @@ curl -X POST http://localhost:8080/v1/memory-sessions/<session-id>/turns \
 ```bash
 curl -X POST http://localhost:8080/v1/memory-sessions/<session-id>/turns/<turn-id>:outcome \
   -H 'Content-Type: application/json' \
-  -H 'X-API-Key: <runtime-credential>' \
+  -H 'X-API-Key: <admin-credential>' \
   -H 'X-Stele-Tenant: tenant-a' \
   -H 'X-Stele-Project: project-a' \
   -H 'X-Stele-Namespace: namespace-a' \
@@ -1296,7 +1307,7 @@ curl -X POST http://localhost:8080/v1/memory-sessions/<session-id>/turns/<turn-i
 ```bash
 curl -X POST http://localhost:8080/v1/memory-sessions/<session-id>:verify \
   -H 'Content-Type: application/json' \
-  -H 'X-API-Key: <runtime-credential>' \
+  -H 'X-API-Key: <admin-credential>' \
   -H 'X-Stele-Tenant: tenant-a' \
   -H 'X-Stele-Project: project-a' \
   -H 'X-Stele-Namespace: namespace-a' \
@@ -1308,7 +1319,7 @@ curl -X POST http://localhost:8080/v1/memory-sessions/<session-id>:verify \
 ```bash
 curl -X POST http://localhost:8080/v1/usefulness-feedback \
   -H 'Content-Type: application/json' \
-  -H 'X-API-Key: <runtime-credential>' \
+  -H 'X-API-Key: <admin-credential>' \
   -H 'X-Stele-Tenant: tenant-a' \
   -H 'X-Stele-Project: project-a' \
   -H 'X-Stele-Namespace: namespace-a' \
@@ -1316,14 +1327,14 @@ curl -X POST http://localhost:8080/v1/usefulness-feedback \
 
 curl -X POST http://localhost:8080/v1/usefulness-feedback \
   -H 'Content-Type: application/json' \
-  -H 'X-API-Key: <runtime-credential>' \
+  -H 'X-API-Key: <admin-credential>' \
   -H 'X-Stele-Tenant: tenant-a' \
   -H 'X-Stele-Project: project-a' \
   -H 'X-Stele-Namespace: namespace-a' \
   -d '{"type":"noisy","source_surface":"context","subjects":[{"kind":"memory","id":"mem_noisy"}],"actor":"agent-a","reason":"retrieved but not useful","idempotency_key":"feedback-noisy-1"}'
 ```
 
-6. Inspect active summaries and feedback history through admin routes. Public callers only see bounded summaries through their own authorized session reports.
+6. Inspect active summaries and feedback history through admin routes. These native session reports require administrator access; public Provider consumers cannot use them as an alternate disclosure path.
 
 ```bash
 curl 'http://localhost:8080/v1/admin/usefulness-feedback?subject_kind=memory&subject_id=mem_noisy&include_superseded=true' \
@@ -1385,7 +1396,7 @@ curl -X POST http://localhost:8080/v1/admin/memory-quality/repair-plans/<repair-
   -d '{"checks":["retrieval","context"],"actor":"operator-a","reason":"verify feedback remediation"}'
 
 curl http://localhost:8080/v1/memory-sessions/<session-id>/report \
-  -H 'X-API-Key: <runtime-credential>' \
+  -H 'X-API-Key: <admin-credential>' \
   -H 'X-Stele-Tenant: tenant-a' \
   -H 'X-Stele-Project: project-a' \
   -H 'X-Stele-Namespace: namespace-a'
@@ -1395,6 +1406,9 @@ The session report exposes bounded feedback summaries, verification attempts, qu
 
 ### External-agent task success loop
 
+This native task-evaluation workflow requires administrator access. Stored task
+evidence does not become authoritative runtime task state.
+
 Use this loop when an external agent integration needs to record task-level success evidence and inspect bounded reports. Stele stores caller-provided verdicts and evidence; it does not run the task or infer success.
 
 1. Record a task evaluation after the external run completes:
@@ -1402,7 +1416,7 @@ Use this loop when an external agent integration needs to record task-level succ
 ```bash
 curl -X POST http://localhost:8080/v1/task-evaluations \
   -H 'Content-Type: application/json' \
-  -H 'X-API-Key: <runtime-credential>' \
+  -H 'X-API-Key: <admin-credential>' \
   -H 'X-Stele-Tenant: tenant-a' \
   -H 'X-Stele-Project: project-a' \
   -H 'X-Stele-Namespace: namespace-a' \
@@ -1413,7 +1427,7 @@ curl -X POST http://localhost:8080/v1/task-evaluations \
 
 ```bash
 curl http://localhost:8080/v1/task-evaluations/<task-evaluation-id>/report \
-  -H 'X-API-Key: <runtime-credential>' \
+  -H 'X-API-Key: <admin-credential>' \
   -H 'X-Stele-Tenant: tenant-a' \
   -H 'X-Stele-Project: project-a' \
   -H 'X-Stele-Namespace: namespace-a'
@@ -1654,7 +1668,7 @@ Context assembly opt-in example:
 ```bash
 curl -X POST http://localhost:8080/v1/context/assemble \
   -H 'Content-Type: application/json' \
-  -H 'X-API-Key: <runtime-credential>' \
+  -H 'X-API-Key: <admin-credential>' \
   -H 'X-Stele-Tenant: tenant-a' \
   -H 'X-Stele-Project: project-a' \
   -H 'X-Stele-Namespace: namespace-a' \
@@ -1737,7 +1751,7 @@ curl -X POST http://localhost:8080/v1/admin/derived-insight-feedback/<feedback-i
 
 ```bash
 curl 'http://localhost:8080/v1/memories?class=profile&limit=10' \
-  -H 'X-API-Key: <runtime-credential>' \
+  -H 'X-API-Key: <admin-credential>' \
   -H 'X-Stele-Tenant: tenant-a' \
   -H 'X-Stele-Project: project-a' \
   -H 'X-Stele-Namespace: namespace-a'
@@ -1747,7 +1761,7 @@ curl 'http://localhost:8080/v1/memories?class=profile&limit=10' \
 
 ```bash
 curl http://localhost:8080/v1/memories/<memory-id>/history \
-  -H 'X-API-Key: <runtime-credential>' \
+  -H 'X-API-Key: <admin-credential>' \
   -H 'X-Stele-Tenant: tenant-a' \
   -H 'X-Stele-Project: project-a' \
   -H 'X-Stele-Namespace: namespace-a'
@@ -1757,7 +1771,7 @@ curl http://localhost:8080/v1/memories/<memory-id>/history \
 
 ```bash
 curl http://localhost:8080/v1/memories/<memory-id>/provenance \
-  -H 'X-API-Key: <runtime-credential>' \
+  -H 'X-API-Key: <admin-credential>' \
   -H 'X-Stele-Tenant: tenant-a' \
   -H 'X-Stele-Project: project-a' \
   -H 'X-Stele-Namespace: namespace-a'
@@ -2049,7 +2063,7 @@ curl -X POST http://localhost:8080/v1/admin/workflows/templates \
 ```bash
 curl -X POST http://localhost:8080/v1/workflows/runs \
   -H 'Content-Type: application/json' \
-  -H 'X-API-Key: <runtime-credential>' \
+  -H 'X-API-Key: <admin-credential>' \
   -H 'X-Stele-Tenant: tenant-a' \
   -H 'X-Stele-Project: project-a' \
   -H 'X-Stele-Namespace: namespace-a' \
@@ -2061,7 +2075,7 @@ curl -X POST http://localhost:8080/v1/workflows/runs \
 ```bash
 curl -X POST http://localhost:8080/v1/workflows/runs/<workflow-run-id>/steps \
   -H 'Content-Type: application/json' \
-  -H 'X-API-Key: <runtime-credential>' \
+  -H 'X-API-Key: <admin-credential>' \
   -H 'X-Stele-Tenant: tenant-a' \
   -H 'X-Stele-Project: project-a' \
   -H 'X-Stele-Namespace: namespace-a' \
@@ -2072,7 +2086,7 @@ curl -X POST http://localhost:8080/v1/workflows/runs/<workflow-run-id>/steps \
 
 ```bash
 curl http://localhost:8080/v1/workflows/runs/<workflow-run-id>/next-actions \
-  -H 'X-API-Key: <runtime-credential>' \
+  -H 'X-API-Key: <admin-credential>' \
   -H 'X-Stele-Tenant: tenant-a' \
   -H 'X-Stele-Project: project-a' \
   -H 'X-Stele-Namespace: namespace-a'
@@ -2447,7 +2461,10 @@ STELE_MCP_MAX_RESULTS=50
 STELE_MCP_MAX_IDS=100
 ```
 
-Use the same `X-API-Key` principal credential as the OpenAPI routes. A tool may
+MCP data tools require a durable administrator credential; public runtime
+credentials are denied, including on `who_am_i`. Public agents use the Provider
+workflow in [the integration guide](agent-runtime-memory-provider.md) and cannot
+fall back to MCP or native reads after refusal. An administrator tool may
 select an exact `tenant`/`project`/`namespace` grant in its bounded arguments;
 otherwise it must provide the server-owned runtime binding header
 `X-Stele-Runtime-Binding`. Explicit scope always wins, and neither path can
@@ -2467,6 +2484,12 @@ Semantic bulk forgetting is always preview → caller-reviewed fixed IDs → app
 apply never reruns an unconstrained semantic query.
 
 ### Governed memory intents
+
+For public credentials the supported write is `/v1/provider/intents`, returning
+only a bounded intent ID/status acknowledgment. Native intent reads and history
+require administrator access. Neither source attestation nor an accepted intent
+confers instruction, tool, compilation or business-state authority.
+
 
 `POST /v1/memory-intents` is the OpenAPI-first write boundary for `remember`,
 `update`, `forget`, `contradiction`, and `feedback`. Every request is bound to

@@ -74,7 +74,7 @@ not be conflated:
 - **Candidate expansion**: PC1–PC6 below capture the remaining provider context
   and runtime integration contract gaps. PC1,
   `provider-context-openapi-contract-alignment`, is implemented and archived as
-  change 069 with fresh live evidence. PC2–PC6 remain roadmap candidates. MCP, scoped memory paths, agent
+  change 069 with fresh live evidence. PC2 is implemented, verified, and archived as change 070; PC3–PC6 remain roadmap candidates. MCP, scoped memory paths, agent
   self-model conventions, runtime sync, and agent-skill onboarding already have
   archived implementations; follow-up must identify a specific gap rather than
   re-plan those capabilities.
@@ -102,7 +102,7 @@ change an archived baseline.
 | RQ4 context efficiency and feedback calibration | Archived change 043, 23/23 tasks | Implemented and archived with owned PostgreSQL + pgvector shadow evidence; calibration remains disabled by default and shadow-only unless a fresh compatible exact-scope summary and separately governed activation are present. |
 | Runtime capability and event sync | Archived change 067 | Implemented OpenAPI pull synchronization with transport-neutral extension points; future WebSocket/SSE transports remain optional. |
 | Documentation and agent-skill onboarding | Archived change 068 | Implemented baseline; update existing documentation and skill guidance when a new public contract ships. |
-| PC1–PC6 provider context and runtime integration | Archived change 069 for PC1; PC2–PC6 remain roadmap candidates | PC1 implementation and fresh PostgreSQL/pgvector restart evidence are complete and archived. PC2–PC6 await individual proposal drafting. |
+| PC1–PC6 provider context and runtime integration | Archived changes 069 and 070 for PC1 and PC2; PC3–PC6 remain roadmap candidates | PC1 implementation and fresh PostgreSQL/pgvector restart evidence are complete and archived. PC2 implementation and fresh disclosure/governance/restart evidence are complete and archived as 070; PC3–PC6 await individual proposal drafting. |
 
 ### Global priority order
 
@@ -116,7 +116,7 @@ change an archived baseline.
 | P5 | Benchmark expansion and retrieval release evidence | Archived changes 025, 026, 035, and 039 | Implemented baseline; owned real-stack evidence remains a prerequisite for activation. |
 | P6 | Durable multi-scope maintenance and observability | Archived change 037 | Implemented baseline; retain regression, freshness, and SLO evidence. |
 | P7 | Agent runtime memory-provider contract | Archived change 038 | Implemented baseline; integration remains optional to the retrieval path. |
-| P8 | Optional adapters and governed experience insights | Governed insight baseline in changes 013/014; changes 044–069 are archived; PC1 has fresh live evidence; PC2–PC6 are roadmap candidates | Reuse the archived provider, retrieval, governance, sync, MCP, and skill contracts; close public context and runtime evidence gaps without a second memory system. |
+| P8 | Optional adapters and governed experience insights | Governed insight baseline in changes 013/014; changes 044–070 are archived; PC1 and PC2 have fresh live evidence; PC3–PC6 are roadmap candidates | Reuse the archived provider, retrieval, governance, sync, MCP, and skill contracts; close public context and runtime evidence gaps without a second memory system. |
 
 ### Critical path to provider readiness
 
@@ -1395,8 +1395,8 @@ semantics are complete and archived as change 067,
 `runtime-capability-and-event-sync-contract`; WebSocket/SSE remain future
 adapters over the same transport-neutral semantics. Documentation and agent-skill
 onboarding are complete and archived as change 068. PC1 below is implemented and
-archived as change 069; PC2–PC6 are pending provider context and runtime integration
-candidates.
+archived as change 069; PC2 is implemented, verified, and archived as change 070,
+and PC3–PC6 are pending provider context and runtime integration candidates.
 
 Follow-up candidates for a future P8 proposal:
 
@@ -1441,7 +1441,8 @@ Exit signal:
 12. Stage 10 optional adapters and governed experience insights (P8), with
     P8.1–P8.8 and changes 054–068 archived
 13. PC1–PC6 provider context and runtime integration; PC1 is archived as 069,
-    and the next candidate is `provider-context-disclosure-and-source-trust`
+    PC2 `provider-context-disclosure-and-source-trust` is archived as 070;
+    PC3 is the next candidate.
 
 Reasoning:
 
@@ -1684,18 +1685,21 @@ scoped P8.1 MCP adapter):
    representation, attestation, and rollback requirements, revoking activation
    eligibility fail-closed while retaining evidence history.
 
-All eight reference follow-up tracks above are archived baselines. The pending
-proposal queue is PC2–PC6 below; an archived track is reopened only for an
-identified contract or regression gap.
+All eight reference follow-up tracks above and PC2 (change 070) are archived
+baselines; the remaining proposal queue is PC3–PC6 below. An
+archived track is reopened only for an identified contract or regression gap.
 
-## Pending Provider Context And Runtime Integration Proposals (2026-10-10)
+## Pending Provider Context And Runtime Integration Proposals (2026-10-11)
 
 These six directions capture the Stele/Danny boundary review. PC1 is now
 [archived change 069](../../openspec/changes/archive/069-provider-context-openapi-contract-alignment/proposal.md).
 Implementation and fresh public PostgreSQL/pgvector restart verification are complete, and its delta requirements are synchronized into the main specifications.
-PC2–PC6 remain **pending proposal drafting and implementation** and are not
-active or approved OpenSpec changes. Each requires its own planning and
-implementation cycle. Existing
+PC2 is [implemented and archived as change 070](../../openspec/changes/archive/070-provider-context-disclosure-and-source-trust/proposal.md)
+with durable disclosure/source labels, fresh public PostgreSQL/pgvector governance
+and API/worker restart evidence, and focused repository derivation/upgrade tests.
+Its delta requirements are synchronized into the main specifications; see the [verification record](../../openspec/changes/archive/070-provider-context-disclosure-and-source-trust/verification.md). PC3–PC6
+remain **pending proposal drafting and implementation** and are not active or
+approved OpenSpec changes. Each requires its own planning and implementation cycle. Existing
 retrieval, governance, memory history, session, feedback, sync, MCP, and skill
 capabilities remain the baseline, not new implementations in these candidates.
 
@@ -1732,7 +1736,7 @@ capabilities remain the baseline, not new implementations in these candidates.
 | ID | Proposal seed | Status | Dependencies | Main deliverable |
 | --- | --- | --- | --- | --- |
 | PC1 | `provider-context-openapi-contract-alignment` | Implemented and archived (069) | Archived provider and context baseline | Explicit public DTOs, typed result, documented JSON conformance. |
-| PC2 | `provider-context-disclosure-and-source-trust` | Pending | PC1 | Authorized disclosure profiles, reference-only mode, source trust metadata. |
+| PC2 | [`provider-context-disclosure-and-source-trust`](../../openspec/changes/archive/070-provider-context-disclosure-and-source-trust/proposal.md) | Implemented, verified, and archived (070) | PC1 | Authorized disclosure profiles, reference-only mode, durable source trust metadata, and alternate-route disclosure enforcement. |
 | PC3 | `provider-context-budget-and-selection-diagnostics` | Pending | PC1 and PC2 | Explicit budget units, final-response limits, safe selection accounting. |
 | PC4 | `provider-context-digest-and-continuity` | Pending | PC1–PC3 and archived sync/version/provenance contracts | Stele-issued versioned digest and authorization-safe continuity semantics. |
 | PC5 | `provider-durable-context-reference-contract` | Pending | PC1, PC2, and archived ingestion/governance/history/path contracts; PC4 when exposing projection digests | Durable reference write/read and observable governance completion. |
@@ -1774,6 +1778,13 @@ options reach the intended service inputs; unsupported fields fail predictably;
 nonempty, empty, mismatched, and out-of-scope cases have explicit outcomes.
 
 ### PC2: Context Disclosure And Source Trust
+
+Status: [archived change 070](../../openspec/changes/archive/070-provider-context-disclosure-and-source-trust/proposal.md),
+implemented and verified. Fresh public governance/restart evidence and focused
+PostgreSQL derivation/upgrade coverage are recorded in [verification](../../openspec/changes/archive/070-provider-context-disclosure-and-source-trust/verification.md). See its [design](../../openspec/changes/archive/070-provider-context-disclosure-and-source-trust/design.md)
+and [tasks](../../openspec/changes/archive/070-provider-context-disclosure-and-source-trust/tasks.md)
+for profile provisioning, reference defaults, conservative source metadata,
+alternate-route denial, migration, and required documentation updates.
 
 Goal: let a runtime express authorized disclosure constraints without transferring
 its business role or tool authorization engine into Stele.
@@ -1949,14 +1960,14 @@ Recommended execution order for the current product baseline and next frontier:
 20. Runtime capability and event sync contract (archived change 067)
 21. Documentation and agent-skill onboarding (archived change 068)
 22. PC1: Provider context OpenAPI contract alignment (implemented, live verified, and archived as 069)
-23. PC2: Context disclosure and source trust (pending)
+23. PC2: Context disclosure and source trust (implemented, verified, and archived as 070)
 24. PC3: Context budget and selection diagnostics (pending)
 25. PC4: Context digest and continuity (pending)
 26. PC5: Durable context reference contract (pending)
 27. PC6: Turn outcome and feedback projection contract (pending)
 
 The original Phase 1–5 order remains the build order for a fresh repository;
-the P0–P8, RQ1–RQ4, and PC1 sequences are archived baselines. PC2–PC6 are the next
+the P0–P8, RQ1–RQ4, and PC1 sequences are archived baselines. PC2 is archived as 070; PC3–PC6 are the next
 provider integration execution order, subject to individual proposal review.
 
 Reasoning:
@@ -2074,8 +2085,18 @@ future WebSocket/SSE extension space; change 068,
 `documentation-and-agent-skill-onboarding`, completes the documentation and
 agent-skill baseline. None of these archived tracks is a pending proposal.
 
-The current bounded post-v1 candidate is
-`provider-context-disclosure-and-source-trust` (PC2), pending its own proposal.
+PC2 was the current bounded post-v1 candidate and is now implemented,
+verified, and archived as change 070. The next bounded post-v1 candidate is
+`provider-context-budget-and-selection-diagnostics` (PC3), pending its own
+proposal for explicit budget units, final-response limits, and safe selection
+accounting.
+
+[`provider-context-disclosure-and-source-trust` (PC2)](../../openspec/changes/archive/070-provider-context-disclosure-and-source-trust/proposal.md),
+is implemented, verified, and archived as change 070. Its grant-intersected disclosure,
+reference-only default, conservative trust/classification lineage, alternate-route
+enforcement, and migration/documentation gates passed. See the [verification
+record](../../openspec/changes/archive/070-provider-context-disclosure-and-source-trust/verification.md) and
+[bounded initial/restart evidence](../evidence/provider-context-disclosure-live.json).
 PC1 `provider-context-openapi-contract-alignment` is implemented as
 [archived change 069](../../openspec/changes/archive/069-provider-context-openapi-contract-alignment/proposal.md).
 Its canonical DTOs, typed/redacted responses, strict public
@@ -2084,7 +2105,7 @@ The [bounded live report](../../testdata/providercontext/pc1-live.evidence.json)
 records the repaired image, baseline source revision plus source digest, OpenAPI
 digest, two completed governed events, and stable identity/provenance hashes.
 It contains no credential, scope value, memory identifier, or content.
-PC1 completion does not imply PC2–PC6 completion. Use the queue above for each
+PC1/PC2 completion does not imply PC3–PC6 completion. Use the queue above for each
 remaining proposal's scope, dependency order, deliverables, and acceptance
-criteria; full response-byte enforcement and context selection digests remain
-pending PC3 and PC4 work.
+criteria; caller budget units, selection accounting, and context selection
+digests remain pending PC3 and PC4 work.

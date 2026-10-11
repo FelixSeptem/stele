@@ -66,7 +66,17 @@ exact-scope runtime principal before calling protected memory APIs.
 Follow the complete bootstrap, migration, embedding, backup, restore, and smoke
 instructions in [Self-hosting](docs/self-hosting.md).
 
-## MCP: from startup to first memory call
+## Agent access: Provider runtime and administrator MCP
+
+Public agent credentials use the [Provider contract](docs/agent-runtime-memory-provider.md).
+Provision an explicit exact-scope disclosure profile, discover capabilities,
+initialize a runtime binding, then request `/v1/provider/context`. The default
+`reference_only` mode returns structured references. `bounded_content` requires
+the `memory-content-v1` profile and an explicit mode request. Public credentials
+cannot use native retrieval or MCP tools, including `who_am_i`.
+
+Read the [disclosure and source trust guide](docs/context-disclosure-and-source-trust.md)
+for profile administration, source labels, endpoint denials and migration.
 
 MCP is optional and disabled by default. Enable it in `.env.local` after the
 base stack is healthy:
@@ -76,8 +86,9 @@ STELE_MCP_ENABLED=true
 STELE_MCP_PATH=/mcp
 ```
 
-Restart the API runtime, configure your MCP client to call `/mcp` with an
-exact-scope principal credential, and start every agent memory task with:
+For administrator-operated memory workflows, restart the API runtime and
+configure your MCP client to call `/mcp` with a durable administrator credential
+and an explicitly authorized exact scope. Start the operator workflow with:
 
 ```text
 who_am_i -> memory_context or memory_search -> answer with citations
@@ -95,10 +106,13 @@ handling are in the [MCP integration guide](docs/integrations/mcp-agent-skill.md
 The portable, repository-provided Agent Skill is
 [skills/stele-memory/SKILL.md](skills/stele-memory/SKILL.md). Copy it into your
 agent host's skill directory or include it as repository context. It teaches
-safe scope initialization, read selection, governed remember, preview/apply
-forgetting, citations, retries, and disabled-MCP recovery.
+Provider provisioning and mode validation, conservative source treatment,
+administrator MCP workflows, citations and bounded error handling.
 
 ## MCP tool matrix
+
+These tools require administrator access under the current disclosure contract.
+The public runtime uses Provider operations instead.
 
 | Tool | Use | Safety class |
 | --- | --- | --- |
@@ -153,3 +167,13 @@ boundary, update all of these in the same OpenSpec change:
 Before review, run the documentation check, MCP tests, and strict OpenSpec
 validation described in the integration guide. Use `openspec propose`,
 `openspec apply`, and `openspec validate --all --strict` for planned work.
+
+## Context disclosure and source trust
+
+Public runtime credentials require explicit exact-scope disclosure provisioning.
+Provider context defaults to structured references; bounded content requires the
+content profile and explicit mode. Unsupported native/MCP data routes deny public
+credentials before lookup. Source labels persist through governance and history;
+missing lineage is untrusted/restricted. Attested source data grants no instruction,
+tool, write or business-state authority. See the [disclosure/source guide](docs/context-disclosure-and-source-trust.md)
+for endpoint behavior, administration, versioning and upgrade/rollback.

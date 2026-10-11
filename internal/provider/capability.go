@@ -4,6 +4,8 @@ import (
 	"bytes"
 	"encoding/json"
 	"fmt"
+	"github.com/FelixSeptem/stele/internal/auth"
+	"github.com/FelixSeptem/stele/internal/memory"
 	"io"
 	"strings"
 )
@@ -200,18 +202,25 @@ func (l ProviderLimits) Validate() error {
 }
 
 type CapabilityDocument struct {
-	ProviderVersion string                      `json:"provider_version"`
-	SchemaVersion   string                      `json:"schema_version"`
-	ServiceVersion  string                      `json:"service_version,omitempty"`
-	BuildID         string                      `json:"build_id,omitempty"`
-	Operations      []string                    `json:"operations"`
-	ScopeDimensions []string                    `json:"scope_dimensions"`
-	Limits          ProviderLimits              `json:"limits"`
-	Synchronization SynchronizationCapabilities `json:"synchronization"`
-	SchemaDigest    string                      `json:"schema_digest"`
+	DisclosurePolicyVersion string                      `json:"disclosure_policy_version"`
+	SourceMetadataVersion   string                      `json:"source_metadata_version"`
+	ResponseModes           []string                    `json:"response_modes"`
+	DisclosureProfiles      []string                    `json:"disclosure_profiles"`
+	ProviderVersion         string                      `json:"provider_version"`
+	SchemaVersion           string                      `json:"schema_version"`
+	ServiceVersion          string                      `json:"service_version,omitempty"`
+	BuildID                 string                      `json:"build_id,omitempty"`
+	Operations              []string                    `json:"operations"`
+	ScopeDimensions         []string                    `json:"scope_dimensions"`
+	Limits                  ProviderLimits              `json:"limits"`
+	Synchronization         SynchronizationCapabilities `json:"synchronization"`
+	SchemaDigest            string                      `json:"schema_digest"`
 }
 
 func (d CapabilityDocument) Validate() error {
+	if d.DisclosurePolicyVersion != auth.DisclosurePolicyVersion || d.SourceMetadataVersion != memory.SourceMetadataVersion || len(d.ResponseModes) != 2 || d.ResponseModes[0] != auth.ResponseModeReferenceOnly || d.ResponseModes[1] != auth.ResponseModeBoundedContent || len(d.DisclosureProfiles) != 2 || d.DisclosureProfiles[0] != auth.DisclosureProfileReference || d.DisclosureProfiles[1] != auth.DisclosureProfileContent {
+		return fmt.Errorf("unsupported context disclosure capabilities")
+	}
 	if !boundedToken(d.ProviderVersion, MaxProviderVersionBytes) || !boundedToken(d.SchemaVersion, MaxSchemaVersionBytes) || !boundedToken(d.SchemaDigest, MaxSchemaDigestBytes) || (d.ServiceVersion != "" && !boundedToken(d.ServiceVersion, MaxProviderVersionBytes)) || (d.BuildID != "" && !boundedToken(d.BuildID, MaxProviderVersionBytes)) {
 		return fmt.Errorf("provider capability version fields are invalid")
 	}
@@ -240,7 +249,7 @@ func (d CapabilityDocument) Validate() error {
 type CapabilityInput struct{ ProviderVersion, SchemaVersion, ServiceVersion, BuildID, SchemaDigest string }
 
 func Discover(in CapabilityInput) CapabilityDocument {
-	d := CapabilityDocument{ProviderVersion: in.ProviderVersion, SchemaVersion: in.SchemaVersion, ServiceVersion: in.ServiceVersion, BuildID: in.BuildID, SchemaDigest: in.SchemaDigest,
+	d := CapabilityDocument{DisclosurePolicyVersion: auth.DisclosurePolicyVersion, SourceMetadataVersion: memory.SourceMetadataVersion, ResponseModes: []string{auth.ResponseModeReferenceOnly, auth.ResponseModeBoundedContent}, DisclosureProfiles: []string{auth.DisclosureProfileReference, auth.DisclosureProfileContent}, ProviderVersion: in.ProviderVersion, SchemaVersion: in.SchemaVersion, ServiceVersion: in.ServiceVersion, BuildID: in.BuildID, SchemaDigest: in.SchemaDigest,
 		Operations: []string{"ingest", "intent", "retrieve", "context", "forget", "status", "sync"}, ScopeDimensions: []string{"tenant", "project", "namespace", "agent", "session", "conversation", "provider_instance"},
 		Synchronization: SynchronizationCapabilities{Enabled: true, ContractVersion: "sync-v1", Transports: []string{"openapi_pull"}, EventKinds: []string{"raw_event", "canonical_memory", "lifecycle", "sync_complete"}, MaxBatchEvents: 100, MaxSnapshotBytes: 1 << 20, MaxCursorBytes: MaxSyncCursorBytes, RetentionWindowHours: 24 * 30},
 		Limits:          ProviderLimits{MaxEventBytes: 1 << 20, MaxIntentBytes: 1 << 20, MaxRetrievalResults: 100, MaxContextBytes: 1 << 20, MaxCitations: 100, MaxMetadataBytes: 64 << 10}}

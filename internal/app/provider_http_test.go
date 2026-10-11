@@ -42,7 +42,7 @@ func TestProviderErrorCategoryMapsBoundedContractErrors(t *testing.T) {
 func TestProviderSynchronizationRouteSupportsInitialAndResume(t *testing.T) {
 	now := time.Now().UTC()
 	scope := memory.Scope{Tenant: "tenant-a", Project: "project-a", Namespace: "namespace-a"}
-	principal := auth.Principal{ID: "public-1", Role: auth.PrincipalRolePublic, Status: auth.PrincipalStatusActive, Label: "public", CreatedAt: now}
+	principal := auth.Principal{ID: "public-1", Role: auth.PrincipalRoleAdmin, Status: auth.PrincipalStatusActive, Label: "public", CreatedAt: now}
 	authorizer := providerLifecycleAuthorizer{principals: map[string]auth.Principal{"public-key": principal}}
 	bindings := provider.NewMemoryBindingStore()
 	binding := provider.RuntimeBinding{BindingID: "rb_sync", PrincipalID: principal.ID, Scope: scope, AgentID: "agent-a", SessionID: "session-a", ProviderInstanceID: "pi-sync", CreatedAt: now.Add(-time.Minute), ExpiresAt: now.Add(time.Hour)}
@@ -91,7 +91,7 @@ func TestProviderSynchronizationRouteSupportsInitialAndResume(t *testing.T) {
 func TestProviderSynchronizationRouteReturnsBoundedResyncAndRejectsMutation(t *testing.T) {
 	now := time.Now().UTC()
 	scope := memory.Scope{Tenant: "tenant-r", Project: "project-r", Namespace: "namespace-r"}
-	principal := auth.Principal{ID: "public-r", Role: auth.PrincipalRolePublic, Status: auth.PrincipalStatusActive, Label: "public", CreatedAt: now}
+	principal := auth.Principal{ID: "public-r", Role: auth.PrincipalRoleAdmin, Status: auth.PrincipalStatusActive, Label: "public", CreatedAt: now}
 	authorizer := providerLifecycleAuthorizer{principals: map[string]auth.Principal{"public-key-r": principal}}
 	bindings := provider.NewMemoryBindingStore()
 	binding := provider.RuntimeBinding{BindingID: "rb-resync", PrincipalID: principal.ID, Scope: scope, AgentID: "agent-r", SessionID: "session-r", ProviderInstanceID: "pi-r", CreatedAt: now.Add(-time.Minute), ExpiresAt: now.Add(time.Hour)}
@@ -151,10 +151,37 @@ func TestProviderRoutesDisabledByDefault(t *testing.T) {
 	}
 }
 
+func TestProviderRuntimeInitializationUsesExactScopeForDisclosure(t *testing.T) {
+	now := time.Now().UTC()
+	scope := memory.Scope{Tenant: "tenant-runtime", Project: "project-runtime", Namespace: "namespace-runtime"}
+	principal := auth.Principal{ID: "public-runtime", Role: auth.PrincipalRolePublic, Status: auth.PrincipalStatusActive, Label: "runtime", CreatedAt: now}
+	authorizer := providerLifecycleAuthorizer{principals: map[string]auth.Principal{"runtime-key": principal}}
+	bindings := provider.NewMemoryBindingStore()
+	initializer := provider.NewRuntimeInitializer(provider.RuntimeInitializerOptions{Authorizer: authorizer, Bindings: bindings, BindingTTL: time.Hour, Now: func() time.Time { return now }})
+	h := NewHTTPHandler(HTTPDependencies{ProviderEnabled: true, ProviderSchemaVersions: []string{"provider-v1"}, ProviderInitializer: initializer, ProviderBindings: bindings, PrincipalAuthorizer: authorizer})
+	req := httptest.NewRequest(http.MethodPost, "/v1/provider/runtime", strings.NewReader(`{"scope":{"tenant":"tenant-runtime","project":"project-runtime","namespace":"namespace-runtime"},"agent_id":"agent","session_id":"session"}`))
+	req.Header.Set("X-API-Key", "runtime-key")
+	req.Header.Set(auth.HeaderTenant, scope.Tenant)
+	req.Header.Set(auth.HeaderProject, scope.Project)
+	req.Header.Set(auth.HeaderNamespace, scope.Namespace)
+	resp := httptest.NewRecorder()
+	h.ServeHTTP(resp, req)
+	if resp.Code != http.StatusCreated {
+		t.Fatalf("runtime initialization status=%d body=%s, want 201", resp.Code, resp.Body.String())
+	}
+	var binding provider.RuntimeBinding
+	if err := json.Unmarshal(resp.Body.Bytes(), &binding); err != nil {
+		t.Fatal(err)
+	}
+	if binding.Scope != scope {
+		t.Fatalf("binding scope=%+v, want %+v", binding.Scope, scope)
+	}
+}
+
 func TestProviderRetrieveAcceptsOpenAPITopKField(t *testing.T) {
 	now := time.Now().UTC()
 	scope := memory.Scope{Tenant: "tenant-retrieve", Project: "project-retrieve", Namespace: "namespace-retrieve"}
-	principal := auth.Principal{ID: "public-retrieve", Role: auth.PrincipalRolePublic, Status: auth.PrincipalStatusActive, Label: "public", CreatedAt: now}
+	principal := auth.Principal{ID: "public-retrieve", Role: auth.PrincipalRoleAdmin, Status: auth.PrincipalStatusActive, Label: "public", CreatedAt: now}
 	authorizer := providerLifecycleAuthorizer{principals: map[string]auth.Principal{"retrieve-key": principal}}
 	bindings := provider.NewMemoryBindingStore()
 	binding := provider.RuntimeBinding{BindingID: "rb-retrieve", PrincipalID: principal.ID, Scope: scope, AgentID: "agent-a", SessionID: "session-a", ProviderInstanceID: "pi-retrieve", CreatedAt: now, ExpiresAt: now.Add(time.Hour)}
@@ -422,4 +449,8 @@ func TestOpenAPIDocumentsProviderLifecycleAndStatusRoutes(t *testing.T) {
 			t.Fatalf("OpenAPI missing %s", route)
 		}
 	}
+}
+
+func (providerLifecycleAuthorizer) AuthorizeScopeDisclosure(context.Context, string, memory.Scope) (auth.DisclosureEntitlements, error) {
+	return auth.DisclosureEntitlements{AllowedProfiles: []string{auth.DisclosureProfileReference, auth.DisclosureProfileContent}, DefaultProfile: auth.DisclosureProfileReference}, nil
 }

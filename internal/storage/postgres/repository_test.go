@@ -406,7 +406,7 @@ func TestRepositoryCreateCandidateWritesCandidateAndProvenanceInOneTransaction(t
 			"id", "source_raw_event_id", "tenant", "project", "namespace", "class", "content",
 			"confidence", "importance", "freshness", "sensitivity", "mutability", "retention_class",
 			"status", "created_at", "updated_at",
-		}).AddRow(
+			"source_metadata"}).AddRow(
 			candidate.ID,
 			candidate.SourceRawEventID,
 			candidate.Scope.Tenant,
@@ -423,7 +423,7 @@ func TestRepositoryCreateCandidateWritesCandidateAndProvenanceInOneTransaction(t
 			candidate.Status,
 			candidate.CreatedAt,
 			candidate.UpdatedAt,
-		))
+			memory.SourceMetadata{}.Effective()))
 	mock.ExpectExec("INSERT INTO provenance_links").
 		WithArgs(
 			provenance.ID,
@@ -1930,7 +1930,7 @@ func TestRepositoryPromoteCandidateCreatesCanonicalMemoryVersionAndProvenance(t 
 		WillReturnRows(pgxmock.NewRows([]string{
 			"id", "tenant", "project", "namespace", "memory_path", "class", "state", "content", "created_at", "updated_at",
 			"temporal_fact_id", "ingested_at", "valid_from", "valid_to", "validity_source",
-		}).AddRow(
+			"source_metadata"}).AddRow(
 			input.MemoryID,
 			input.Candidate.Scope.Tenant,
 			input.Candidate.Scope.Project,
@@ -1946,7 +1946,7 @@ func TestRepositoryPromoteCandidateCreatesCanonicalMemoryVersionAndProvenance(t 
 			legacy.ValidFrom,
 			legacy.ValidTo,
 			string(legacy.ValiditySource),
-		))
+			memory.SourceMetadata{}.Effective()))
 	mock.ExpectQuery("INSERT INTO memory_versions").
 		WithArgs(
 			input.VersionID,
@@ -1966,7 +1966,7 @@ func TestRepositoryPromoteCandidateCreatesCanonicalMemoryVersionAndProvenance(t 
 		WillReturnRows(pgxmock.NewRows([]string{
 			"id", "memory_id", "memory_path", "version", "state", "content", "created_at", "modified_by",
 			"temporal_fact_id", "ingested_at", "valid_from", "valid_to", "validity_source",
-		}).AddRow(
+			"source_metadata"}).AddRow(
 			input.VersionID,
 			input.MemoryID,
 			input.Candidate.MemoryPath,
@@ -1980,7 +1980,7 @@ func TestRepositoryPromoteCandidateCreatesCanonicalMemoryVersionAndProvenance(t 
 			legacy.ValidFrom,
 			legacy.ValidTo,
 			string(legacy.ValiditySource),
-		))
+			memory.SourceMetadata{}.Effective()))
 	mock.ExpectExec("INSERT INTO provenance_links").
 		WithArgs(
 			pgxmock.AnyArg(),
@@ -2077,7 +2077,7 @@ func TestRepositoryPromoteCandidateSupersedeUpdatesCanonicalAndAppendsVersion(t 
 		WillReturnRows(pgxmock.NewRows([]string{
 			"id", "tenant", "project", "namespace", "memory_path", "class", "state", "content", "created_at", "updated_at",
 			"temporal_fact_id", "ingested_at", "valid_from", "valid_to", "validity_source",
-		}).AddRow(
+			"source_metadata"}).AddRow(
 			input.MemoryID,
 			input.Candidate.Scope.Tenant,
 			input.Candidate.Scope.Project,
@@ -2093,7 +2093,7 @@ func TestRepositoryPromoteCandidateSupersedeUpdatesCanonicalAndAppendsVersion(t 
 			legacy.ValidFrom,
 			legacy.ValidTo,
 			string(legacy.ValiditySource),
-		))
+			memory.SourceMetadata{}.Effective()))
 	mock.ExpectQuery("INSERT INTO memory_versions").
 		WithArgs(
 			input.VersionID,
@@ -2113,7 +2113,7 @@ func TestRepositoryPromoteCandidateSupersedeUpdatesCanonicalAndAppendsVersion(t 
 		WillReturnRows(pgxmock.NewRows([]string{
 			"id", "memory_id", "memory_path", "version", "state", "content", "created_at", "modified_by",
 			"temporal_fact_id", "ingested_at", "valid_from", "valid_to", "validity_source",
-		}).AddRow(
+			"source_metadata"}).AddRow(
 			input.VersionID,
 			input.MemoryID,
 			memory.MemoryPathRoot,
@@ -2127,7 +2127,7 @@ func TestRepositoryPromoteCandidateSupersedeUpdatesCanonicalAndAppendsVersion(t 
 			legacy.ValidFrom,
 			legacy.ValidTo,
 			string(legacy.ValiditySource),
-		))
+			memory.SourceMetadata{}.Effective()))
 	mock.ExpectExec("INSERT INTO provenance_links").
 		WithArgs(
 			pgxmock.AnyArg(),
@@ -2229,7 +2229,7 @@ func TestRepositoryPromoteCandidateRelationUpsertsProjection(t *testing.T) {
 		WillReturnRows(pgxmock.NewRows([]string{
 			"id", "tenant", "project", "namespace", "memory_path", "class", "state", "content", "created_at", "updated_at",
 			"temporal_fact_id", "ingested_at", "valid_from", "valid_to", "validity_source",
-		}).AddRow(
+			"source_metadata"}).AddRow(
 			input.MemoryID,
 			input.Candidate.Scope.Tenant,
 			input.Candidate.Scope.Project,
@@ -2245,7 +2245,7 @@ func TestRepositoryPromoteCandidateRelationUpsertsProjection(t *testing.T) {
 			unset.ValidFrom,
 			unset.ValidTo,
 			string(unset.ValiditySource),
-		))
+			memory.SourceMetadata{}.Effective()))
 	mock.ExpectQuery("INSERT INTO memory_versions").
 		WithArgs(
 			input.VersionID,
@@ -2265,7 +2265,7 @@ func TestRepositoryPromoteCandidateRelationUpsertsProjection(t *testing.T) {
 		WillReturnRows(pgxmock.NewRows([]string{
 			"id", "memory_id", "memory_path", "version", "state", "content", "created_at", "modified_by",
 			"temporal_fact_id", "ingested_at", "valid_from", "valid_to", "validity_source",
-		}).AddRow(
+			"source_metadata"}).AddRow(
 			input.VersionID,
 			input.MemoryID,
 			memory.MemoryPathRoot,
@@ -2279,7 +2279,7 @@ func TestRepositoryPromoteCandidateRelationUpsertsProjection(t *testing.T) {
 			unset.ValidFrom,
 			unset.ValidTo,
 			string(unset.ValiditySource),
-		))
+			memory.SourceMetadata{}.Effective()))
 	// A relation is a derived artifact, so its own validity snapshot stays unset:
 	// the projection carries the source version it was rendered from, and leaves
 	// the temporal columns NULL rather than inventing a fact-valid window.
@@ -2371,7 +2371,7 @@ func TestRepositoryCreateSummaryMemoryWritesCanonicalVersionAndEvidenceProvenanc
 			input.CreatedAt,
 		).
 		WillReturnRows(pgxmock.NewRows([]string{
-			"id", "tenant", "project", "namespace", "memory_path", "class", "state", "content", "created_at", "updated_at",
+			"id", "tenant", "project", "namespace", "memory_path", "class", "state", "content", "created_at", "updated_at", "source_metadata",
 		}).AddRow(
 			input.MemoryID,
 			input.Scope.Tenant,
@@ -2383,6 +2383,7 @@ func TestRepositoryCreateSummaryMemoryWritesCanonicalVersionAndEvidenceProvenanc
 			input.Content,
 			input.CreatedAt,
 			input.CreatedAt,
+			memory.SourceMetadata{}.Effective(),
 		))
 	mock.ExpectQuery("INSERT INTO memory_versions").
 		WithArgs(
@@ -2396,7 +2397,7 @@ func TestRepositoryCreateSummaryMemoryWritesCanonicalVersionAndEvidenceProvenanc
 			"summary_compactor",
 		).
 		WillReturnRows(pgxmock.NewRows([]string{
-			"id", "memory_id", "memory_path", "version", "state", "content", "created_at", "modified_by",
+			"id", "memory_id", "memory_path", "version", "state", "content", "created_at", "modified_by", "source_metadata",
 		}).AddRow(
 			input.VersionID,
 			input.MemoryID,
@@ -2406,6 +2407,7 @@ func TestRepositoryCreateSummaryMemoryWritesCanonicalVersionAndEvidenceProvenanc
 			input.Content,
 			input.CreatedAt,
 			"summary_compactor",
+			memory.SourceMetadata{}.Effective(),
 		))
 	mock.ExpectExec("INSERT INTO provenance_links").
 		WithArgs(
@@ -2872,7 +2874,7 @@ func TestRepositoryCreateMemoryWritesCanonicalVersionAndProvenance(t *testing.T)
 		WillReturnRows(pgxmock.NewRows([]string{
 			"id", "tenant", "project", "namespace", "class", "state", "content", "created_at", "updated_at",
 			"temporal_fact_id", "ingested_at", "valid_from", "valid_to", "validity_source",
-		}).AddRow(
+			"source_metadata"}).AddRow(
 			record.MemoryID,
 			record.Scope.Tenant,
 			record.Scope.Project,
@@ -2887,6 +2889,7 @@ func TestRepositoryCreateMemoryWritesCanonicalVersionAndProvenance(t *testing.T)
 			legacy.ValidFrom,
 			legacy.ValidTo,
 			string(legacy.ValiditySource),
+			memory.SourceMetadata{}.Effective(),
 		))
 	mock.ExpectQuery("INSERT INTO memory_versions").
 		WithArgs(
@@ -3021,7 +3024,7 @@ func TestRepositoryUpdateMemoryQueuesEmbeddingRebuildAndClearsStaleSemanticProje
 		WillReturnRows(pgxmock.NewRows([]string{
 			"id", "tenant", "project", "namespace", "class", "state", "content", "created_at", "updated_at",
 			"temporal_fact_id", "ingested_at", "valid_from", "valid_to", "validity_source",
-		}).AddRow(
+			"source_metadata"}).AddRow(
 			record.MemoryID,
 			record.Scope.Tenant,
 			record.Scope.Project,
@@ -3036,6 +3039,7 @@ func TestRepositoryUpdateMemoryQueuesEmbeddingRebuildAndClearsStaleSemanticProje
 			transitionLegacy.ValidFrom,
 			transitionLegacy.ValidTo,
 			string(transitionLegacy.ValiditySource),
+			memory.SourceMetadata{}.Effective(),
 		))
 	mock.ExpectQuery("INSERT INTO memory_versions").
 		WithArgs(
@@ -3195,10 +3199,11 @@ func TestRepositoryMergeMemorySuppressesSourceAndWritesTargetVersion(t *testing.
 		WillReturnRows(pgxmock.NewRows([]string{
 			"id", "tenant", "project", "namespace", "class", "state", "content", "created_at", "updated_at",
 			"temporal_fact_id", "ingested_at", "valid_from", "valid_to", "validity_source",
-		}).AddRow(
+			"source_metadata"}).AddRow(
 			record.TargetMemoryID, record.Scope.Tenant, record.Scope.Project, record.Scope.Namespace,
 			memory.MemoryClassProfile, memory.MemoryStateActive, record.Content, record.AppliedAt.Add(-2*time.Hour), record.AppliedAt,
 			targetLegacy.TemporalFactID, targetLegacy.IngestedAt, targetLegacy.ValidFrom, targetLegacy.ValidTo, string(targetLegacy.ValiditySource),
+			memory.SourceMetadata{}.Effective(),
 		))
 	mock.ExpectQuery("INSERT INTO memory_versions").
 		WithArgs(
@@ -3334,10 +3339,11 @@ func TestRepositoryReclassifyMemoryUpdatesClassAndWritesProvenance(t *testing.T)
 		WillReturnRows(pgxmock.NewRows([]string{
 			"id", "tenant", "project", "namespace", "class", "state", "content", "created_at", "updated_at",
 			"temporal_fact_id", "ingested_at", "valid_from", "valid_to", "validity_source",
-		}).AddRow(
+			"source_metadata"}).AddRow(
 			record.MemoryID, record.Scope.Tenant, record.Scope.Project, record.Scope.Namespace,
 			record.TargetClass, memory.MemoryStateActive, "Respond concisely.", record.AppliedAt.Add(-2*time.Hour), record.AppliedAt,
 			reclassified.TemporalFactID, reclassified.IngestedAt, reclassified.ValidFrom, reclassified.ValidTo, string(reclassified.ValiditySource),
+			memory.SourceMetadata{}.Effective(),
 		))
 	mock.ExpectQuery("INSERT INTO memory_versions").
 		WithArgs(

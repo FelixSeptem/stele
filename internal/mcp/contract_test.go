@@ -81,7 +81,7 @@ func TestMCPForgetDelegatesToPrivilegedLifecycleAndReplaysDuplicate(t *testing.T
 
 func TestMCPSearchDelegatesExactScopeAndTemporalSelectorWithRedactedShape(t *testing.T) {
 	ctx := context.Background()
-	principal := auth.Principal{ID: "reader-1", Role: auth.PrincipalRolePublic, Status: auth.PrincipalStatusActive}
+	principal := auth.Principal{ID: "reader-1", Role: auth.PrincipalRoleAdmin, Status: auth.PrincipalStatusActive}
 	scope := memory.Scope{Tenant: "tenant", Project: "project", Namespace: "namespace"}
 	searcher := &contractSearcher{result: retrieval.SearchResult{Hits: []retrieval.SearchHit{{
 		Memory:    memory.CanonicalMemory{ID: "memory-1", Class: memory.MemoryClassEpisodic, State: memory.MemoryStateActive, Content: "approved content"},
@@ -119,7 +119,7 @@ func TestMCPSearchDelegatesExactScopeAndTemporalSelectorWithRedactedShape(t *tes
 
 func TestMCPSearchUsesConfiguredDefaultLimitWhenOmitted(t *testing.T) {
 	ctx := context.Background()
-	principal := auth.Principal{ID: "reader-1", Role: auth.PrincipalRolePublic, Status: auth.PrincipalStatusActive}
+	principal := auth.Principal{ID: "reader-1", Role: auth.PrincipalRoleAdmin, Status: auth.PrincipalStatusActive}
 	scope := memory.Scope{Tenant: "tenant", Project: "project", Namespace: "namespace"}
 	hits := make([]retrieval.SearchHit, 0, 4)
 	for i := 1; i <= 4; i++ {
@@ -155,7 +155,7 @@ func TestMCPSearchUsesConfiguredDefaultLimitWhenOmitted(t *testing.T) {
 
 func TestMCPContextDelegatesExactBudgetAndKeepsProfileSectionsSeparate(t *testing.T) {
 	ctx := context.Background()
-	principal := auth.Principal{ID: "reader-1", Role: auth.PrincipalRolePublic, Status: auth.PrincipalStatusActive}
+	principal := auth.Principal{ID: "reader-1", Role: auth.PrincipalRoleAdmin, Status: auth.PrincipalStatusActive}
 	scope := memory.Scope{Tenant: "tenant", Project: "project", Namespace: "namespace"}
 	assembler := &contractAssembler{result: retrieval.AssembledContext{
 		Profile:        []retrieval.SearchHit{{Memory: memory.CanonicalMemory{ID: "profile-1", Class: memory.MemoryClassProfile, State: memory.MemoryStateActive, Content: "preferred language"}, Score: retrieval.ScoreBreakdown{Overall: .91}}},
@@ -197,7 +197,7 @@ func TestMCPContextDelegatesExactBudgetAndKeepsProfileSectionsSeparate(t *testin
 
 func TestMCPBrowseUsesDefaultLimitAfterOffset(t *testing.T) {
 	ctx := context.Background()
-	principal := auth.Principal{ID: "reader-1", Role: auth.PrincipalRolePublic, Status: auth.PrincipalStatusActive}
+	principal := auth.Principal{ID: "reader-1", Role: auth.PrincipalRoleAdmin, Status: auth.PrincipalStatusActive}
 	scope := memory.Scope{Tenant: "tenant", Project: "project", Namespace: "namespace"}
 	query := &contractMemoryQuery{page: memory.MemoryPage{Items: []memory.MemoryResource{
 		{ID: "memory-1", Class: memory.MemoryClassEpisodic, State: memory.MemoryStateActive, Content: "first"},
@@ -323,7 +323,7 @@ func TestMCPForgetPreviewUsesDefaultResultLimitAndBoundsManifest(t *testing.T) {
 func TestMCPRememberUsesRequestRuntimeBindingForActiveScope(t *testing.T) {
 	ctx := context.Background()
 	now := time.Now().UTC()
-	principal := auth.Principal{ID: "writer-1", Role: auth.PrincipalRolePublic, Status: auth.PrincipalStatusActive}
+	principal := auth.Principal{ID: "writer-1", Role: auth.PrincipalRoleAdmin, Status: auth.PrincipalStatusActive}
 	scope := memory.Scope{Tenant: "tenant", Project: "project", Namespace: "namespace"}
 	bindings := provider.NewMemoryBindingStore()
 	if err := bindings.Create(ctx, provider.RuntimeBinding{BindingID: "binding-1", PrincipalID: principal.ID, Scope: scope, AgentID: "agent", SessionID: "session", ProviderInstanceID: "instance", CreatedAt: now.Add(-time.Minute), ExpiresAt: now.Add(time.Hour)}); err != nil {
@@ -345,7 +345,7 @@ func TestMCPRememberUsesRequestRuntimeBindingForActiveScope(t *testing.T) {
 
 func TestMCPRememberUsesGovernedIntentBoundaryAndMapsConflict(t *testing.T) {
 	ctx := context.Background()
-	principal := auth.Principal{ID: "writer-1", Role: auth.PrincipalRolePublic, Status: auth.PrincipalStatusActive}
+	principal := auth.Principal{ID: "writer-1", Role: auth.PrincipalRoleAdmin, Status: auth.PrincipalStatusActive}
 	scope := memory.Scope{Tenant: "tenant", Project: "project", Namespace: "namespace"}
 	authorizer := scopeAuthorizerStub{grants: map[string]bool{principal.ID + "/tenant/project/namespace": true}}
 	intent := &contractIntentService{record: memory.MemoryIntentRecord{ID: "intent-1", Status: memory.MemoryIntentStatusAccepted}}
@@ -372,7 +372,7 @@ func TestMCPRememberUsesGovernedIntentBoundaryAndMapsConflict(t *testing.T) {
 
 func TestMCPRememberReplayKeepsOriginalMutationMetadata(t *testing.T) {
 	ctx := context.Background()
-	principal := auth.Principal{ID: "writer-replay-1", Role: auth.PrincipalRolePublic, Status: auth.PrincipalStatusActive}
+	principal := auth.Principal{ID: "writer-replay-1", Role: auth.PrincipalRoleAdmin, Status: auth.PrincipalStatusActive}
 	scope := memory.Scope{Tenant: "tenant", Project: "project", Namespace: "namespace"}
 	intent := &sequencedContractIntentService{records: []memory.MemoryIntentRecord{
 		{ID: "intent-replay-1", Status: memory.MemoryIntentStatusAccepted},

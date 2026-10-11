@@ -9,14 +9,16 @@ import (
 	"testing"
 	"time"
 
+	"github.com/FelixSeptem/stele/internal/auth"
 	"github.com/FelixSeptem/stele/internal/memory"
 	"github.com/FelixSeptem/stele/internal/provider"
 	"github.com/FelixSeptem/stele/internal/retrieval"
 )
 
-func contextContractFixture() (memory.Scope, provider.ContextResponse) {
+func contextContractFixture() (memory.Scope, provider.DisclosedContextResponse) {
 	scope := memory.Scope{Tenant: "t", Project: "p", Namespace: "n"}
-	return scope, provider.ShapeContextResponse(retrieval.AssembledContext{}, provider.OperationMetadata{RequestID: "r", OperationID: "o", SchemaVersion: "provider-v1"}, provider.ContextInput{}, 8)
+	decision, _ := (auth.DisclosureEntitlements{AllowedProfiles: []string{auth.DisclosureProfileReference}, DefaultProfile: auth.DisclosureProfileReference}).Resolve("", "")
+	return scope, provider.ShapeDisclosedContextResponse(retrieval.AssembledContext{}, provider.OperationMetadata{RequestID: "r", OperationID: "o", SchemaVersion: "provider-v1"}, decision, 8)
 }
 
 func TestContextConsumerRejectsMalformedEmptySubstitutes(t *testing.T) {
@@ -52,21 +54,25 @@ func TestContextConsumerRejectsMalformedEmptySubstitutes(t *testing.T) {
 	}
 	now := time.Now().UTC()
 	hit := retrieval.SearchHit{Memory: memory.CanonicalMemory{ID: "m", Scope: scope, MemoryPath: "tasks/one", Class: memory.MemoryClassEpisodic, State: memory.MemoryStateActive, CreatedAt: now, ModifiedAt: now}}
-	nonempty := provider.ShapeContextResponse(retrieval.AssembledContext{RecentEpisodes: []retrieval.SearchHit{hit}}, empty.Metadata, provider.ContextInput{}, 8)
+	hit.Memory.SourceMetadata = memory.SourceMetadata{Version: memory.SourceMetadataVersion, Trust: memory.SourceTrustUntrusted, Classification: memory.SourceClassificationLow}
+	hit.Memory.SourceVersion = 1
+	nonempty := provider.ShapeDisclosedContextResponse(retrieval.AssembledContext{RecentEpisodes: []retrieval.SearchHit{hit}}, empty.Metadata, empty.Result.Disclosure, 8, scope)
 	data, _ = json.Marshal(nonempty)
 	if _, err = contract.Validate(data, scope, "provider-v1"); err != nil {
 		t.Fatal(err)
 	}
-	foreign := scope
-	foreign.Tenant = "other"
-	if _, err = contract.Validate(data, foreign, "provider-v1"); err == nil {
-		t.Fatal("foreign scope accepted")
-	}
-	nonempty.Result.RecentEpisodes[0].Memory.State = memory.MemoryStateSuppressed
+	nonempty.Result.RecentEpisodes[0].Reference.SourceMetadata.Classification = memory.SourceClassificationHigh
 	data, _ = json.Marshal(nonempty)
 	if _, err = contract.Validate(data, scope, "provider-v1"); err == nil {
-		t.Fatal("hidden memory accepted")
+		t.Fatal("high identity accepted")
 	}
+	nonempty.Result.RecentEpisodes[0].Reference.SourceMetadata.Classification = memory.SourceClassificationLow
+	nonempty.Citations[0].Reference = "foreign-hidden-marker"
+	data, _ = json.Marshal(nonempty)
+	if _, err = contract.Validate(data, scope, "provider-v1"); err == nil {
+		t.Fatal("unselected evidence accepted")
+	}
+
 }
 
 func TestContextPublicHTTPExecutorRequiresSchemaEvidence(t *testing.T) {

@@ -64,6 +64,7 @@ func (s CandidateStatus) Validate() error {
 }
 
 type CandidateMemory struct {
+	SourceMetadata   memory.SourceMetadata
 	ID               string
 	SourceRawEventID string
 	Scope            memory.Scope

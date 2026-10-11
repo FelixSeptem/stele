@@ -26,15 +26,14 @@ func rejectTestScope() memory.Scope {
 
 // canonicalReadRow builds the 14-column canonical row used by the pre-write
 // read on every mutation path.
-func canonicalReadRow(memoryID string, scope memory.Scope, class memory.MemoryClass, content string, createdAt, updatedAt time.Time, validity memory.TemporalValidity) *pgxmock.Rows {
-	return pgxmock.NewRows([]string{
-		"id", "tenant", "project", "namespace", "class", "state", "content", "created_at", "updated_at",
-		"temporal_fact_id", "ingested_at", "valid_from", "valid_to", "validity_source",
-	}).AddRow(
-		memoryID, scope.Tenant, scope.Project, scope.Namespace,
-		class, memory.MemoryStateActive, content, createdAt, updatedAt,
-		validity.TemporalFactID, validity.IngestedAt, validity.ValidFrom, validity.ValidTo, string(validity.ValiditySource),
-	)
+func canonicalReadRow(memoryID string, scope memory.Scope, class memory.MemoryClass, content string, createdAt, updatedAt time.Time, validity memory.TemporalValidity, labelled ...bool) *pgxmock.Rows {
+	columns := []string{"id", "tenant", "project", "namespace", "class", "state", "content", "created_at", "updated_at", "temporal_fact_id", "ingested_at", "valid_from", "valid_to", "validity_source"}
+	values := []any{memoryID, scope.Tenant, scope.Project, scope.Namespace, class, memory.MemoryStateActive, content, createdAt, updatedAt, validity.TemporalFactID, validity.IngestedAt, validity.ValidFrom, validity.ValidTo, string(validity.ValiditySource)}
+	if len(labelled) > 0 && labelled[0] {
+		columns = append(columns, "source_metadata")
+		values = append(values, memory.SourceMetadata{}.Effective())
+	}
+	return pgxmock.NewRows(columns).AddRow(values...)
 }
 
 // TestRepositoryUpdateMemoryRejectsPartiallyPopulatedTemporalSnapshot proves a
@@ -155,7 +154,7 @@ func TestRepositoryUpdateMemoryPreservesExistingIdentityAcrossContentEdit(t *tes
 		).
 		WillReturnRows(canonicalReadRow(
 			record.MemoryID, scope, memory.MemoryClassProfile, record.Content,
-			now.Add(-2*time.Hour), record.UpdatedAt, existing,
+			now.Add(-2*time.Hour), record.UpdatedAt, existing, true,
 		))
 	mock.ExpectQuery("INSERT INTO memory_versions").
 		WithArgs(

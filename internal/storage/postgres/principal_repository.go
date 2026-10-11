@@ -416,7 +416,8 @@ func (r *Repository) ListScopeGrants(ctx context.Context, scope memory.Scope, pr
 		return nil, err
 	}
 	const query = `
-SELECT id, principal_id, tenant, project, namespace, status, access_mode, created_at, revoked_at
+SELECT id, principal_id, tenant, project, namespace, status, access_mode, created_at, revoked_at,
+    allowed_disclosure_profiles, default_disclosure_profile, source_attestation
 FROM access_scope_grants
 WHERE principal_id = $1 AND tenant = $2 AND project = $3 AND namespace = $4
 ORDER BY created_at DESC, id DESC
@@ -516,7 +517,7 @@ func (r *Repository) ListAccessAudit(ctx context.Context, scope memory.Scope, pr
 	}
 
 	const query = `
-SELECT id, principal_id, credential_id, tenant, project, namespace, action, result, created_at
+SELECT id, principal_id, credential_id, tenant, project, namespace, action, result, created_at, actor, reason
 FROM access_audit_records
 WHERE tenant = $1 AND project = $2 AND namespace = $3
   AND ($4 = '' OR principal_id = $4)
@@ -563,7 +564,7 @@ SELECT EXISTS(
 func scanAccessAudit(row interface{ Scan(dest ...any) error }) (auth.AuditRecord, error) {
 	var record auth.AuditRecord
 	var principalID, credentialID, tenant, project, namespace sql.NullString
-	if err := row.Scan(&record.ID, &principalID, &credentialID, &tenant, &project, &namespace, &record.Action, &record.Result, &record.CreatedAt); err != nil {
+	if err := row.Scan(&record.ID, &principalID, &credentialID, &tenant, &project, &namespace, &record.Action, &record.Result, &record.CreatedAt, &record.Actor, &record.Reason); err != nil {
 		return auth.AuditRecord{}, fmt.Errorf("scan access audit: %w", err)
 	}
 	record.PrincipalID = principalID.String
@@ -586,12 +587,16 @@ func scanAccessPrincipal(row interface{ Scan(dest ...any) error }) (auth.Princip
 
 func scanAccessScopeGrant(row interface{ Scan(dest ...any) error }) (auth.ScopeGrant, error) {
 	var grant auth.ScopeGrant
+	var disclosure auth.DisclosureEntitlements
 	var revokedAt sql.NullTime
-	if err := row.Scan(&grant.ID, &grant.PrincipalID, &grant.Scope.Tenant, &grant.Scope.Project, &grant.Scope.Namespace, &grant.Status, &grant.AccessMode, &grant.CreatedAt, &revokedAt); err != nil {
+	if err := row.Scan(&grant.ID, &grant.PrincipalID, &grant.Scope.Tenant, &grant.Scope.Project, &grant.Scope.Namespace, &grant.Status, &grant.AccessMode, &grant.CreatedAt, &revokedAt, &disclosure.AllowedProfiles, &disclosure.DefaultProfile, &disclosure.SourceAttestation); err != nil {
 		return auth.ScopeGrant{}, fmt.Errorf("scan scope grant: %w", err)
 	}
 	if revokedAt.Valid {
 		grant.RevokedAt = revokedAt.Time
+	}
+	if disclosure.Validate() == nil {
+		grant.Disclosure = &disclosure
 	}
 	return grant, nil
 }

@@ -362,3 +362,16 @@ Before moving between phases, verify:
 ## Immediate Next Step
 
 If implementation resumes next, start with Phase 1 Task 1.1 and 1.2 together, then complete the rest of Phase 1 before wiring any new HTTP routes.
+
+## Current disclosure and source-lineage boundary
+
+Public credentials use profiled Provider context and safe Provider event/intent
+acknowledgments. Native history/provenance, lifecycle and MCP data tools require
+administrator access. Accepted writes do not prove canonical promotion or business
+completion. Canonical versions retain immutable typed source snapshots;
+suppression, forgetting and deletion do not erase historical labels. Summaries,
+reflection and insights use restrictive joins across exact-scope evidence, with
+missing lineage resolving to untrusted/restricted. Attested source attribution
+never authorizes tools, writes or instructions. See the
+[disclosure/source guide](../context-disclosure-and-source-trust.md)
+for grant provisioning, migration and rollback constraints.

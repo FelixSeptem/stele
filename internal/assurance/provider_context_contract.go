@@ -44,12 +44,12 @@ func NewProviderContextContract(spec []byte) (*ProviderContextContract, error) {
 	return &ProviderContextContract{schema: media.Schema.Value, Digest: hex.EncodeToString(sum[:])}, nil
 }
 
-func (c *ProviderContextContract) Validate(data []byte, scope memory.Scope, schemaVersion string) (provider.ContextResponse, error) {
-	var response provider.ContextResponse
-	fail := func() (provider.ContextResponse, error) {
-		return provider.ContextResponse{}, fmt.Errorf("provider context failed-contract")
+func (c *ProviderContextContract) Validate(data []byte, scope memory.Scope, schemaVersion string) (provider.DisclosedContextResponse, error) {
+	var response provider.DisclosedContextResponse
+	fail := func() (provider.DisclosedContextResponse, error) {
+		return provider.DisclosedContextResponse{}, fmt.Errorf("provider context failed-contract")
 	}
-	if c == nil || c.schema == nil {
+	if c == nil || c.schema == nil || scope.Validate() != nil {
 		return fail()
 	}
 	var value any
@@ -65,16 +65,29 @@ func (c *ProviderContextContract) Validate(data []byte, scope memory.Scope, sche
 	if err := response.Metadata.NormalizeValidate(); err != nil || response.Metadata.SchemaVersion != schemaVersion {
 		return fail()
 	}
-	for _, section := range [][]provider.ContextItem{response.Result.Profile, response.Result.RecentSession, response.Result.RecentEpisodes, response.Result.RelevantSummaries, response.Result.RelatedEntities} {
+	authorized := make(map[provider.Citation]bool)
+	for _, section := range [][]provider.DisclosedContextItem{response.Result.Profile, response.Result.RecentSession, response.Result.RecentEpisodes, response.Result.RelevantSummaries, response.Result.RelatedEntities} {
 		for _, item := range section {
-			if item.Memory.Scope.Normalized() != scope.Normalized() || item.Memory.State != memory.MemoryStateActive {
+			ref := item.Reference
+			if item.Memory != nil {
+				ref = &item.Memory.ContextReference
+			}
+			if ref == nil || !ref.SourceMetadata.Disclosable() || ref.Availability != "available" {
 				return fail()
+			}
+			for _, citation := range item.Citations {
+				if citation.SourceKind != "canonical_memory" || citation.Reference != ref.MemoryID || citation.Version != ref.Version || citation.Availability != "available" {
+					return fail()
+				}
+				authorized[citation] = true
 			}
 		}
 	}
-	for _, section := range [][]provider.ContextInsightItem{response.Result.KnownFailures, response.Result.ExperienceLessons} {
-		for _, item := range section {
-			if item.Insight.Scope.Normalized() != scope.Normalized() || item.Insight.State != memory.DerivedInsightStateActive {
+	// Scope is authenticated by the HTTP binding. The closed public DTO omits
+	// scope echoes; evidence may only name an item actually returned by that binding.
+	for _, citations := range [][]provider.Citation{response.Citations, response.Result.Citations} {
+		for _, citation := range citations {
+			if !authorized[citation] {
 				return fail()
 			}
 		}

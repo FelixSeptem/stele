@@ -175,7 +175,7 @@ func (s *Service) IngestIdempotent(ctx context.Context, input IngestEventInput, 
 			return IdempotentEventIngestResult{}, setErr(fmt.Errorf("%w: %s", ErrAdmissionRejected, admissionRejectionCategory(admission)))
 		}
 	}
-	result, err := store.IngestEventIdempotent(ctx, claim, input, ProvenanceRecord{ID: uuid.NewString(), Scope: input.Scope, Operation: "ingest_event", CreatedAt: observedAt}, admission)
+	result, err := store.IngestEventIdempotent(ctx, claim, input, ProvenanceRecord{ID: uuid.NewString(), Scope: input.Scope, Actor: principalID, Operation: "ingest_event", CreatedAt: observedAt}, admission)
 	if err != nil {
 		return IdempotentEventIngestResult{}, setErr(err)
 	}
