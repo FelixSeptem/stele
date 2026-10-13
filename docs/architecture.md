@@ -126,3 +126,15 @@ credentials before lookup. Source labels persist through governance and history;
 missing lineage is untrusted/restricted. Attested source data grants no instruction,
 tool, write or business-state authority. See the [disclosure/source guide](context-disclosure-and-source-trust.md)
 for endpoint behavior, administration, versioning and upgrade/rollback.
+
+Provider context assembly remains Stele-owned: it applies current exact-scope
+authority, source/lifecycle eligibility, retrieval ranking, deterministic
+whole-item packing, citations and disclosure before emitting one complete body.
+Each successful body carries a canonical projection digest and a continuity
+result. A continuity receipt is a bounded PostgreSQL metadata record keyed by
+the full runtime identity and an originating-read fingerprint; it stores no
+query, selected memory IDs, content, citations or body. A later comparison is
+always a newly assembled authorized body, never a historical snapshot or cache
+response. Agent applications retain business authorization, tool use, write
+policy, task state and compilation commit authority; digest equality does not
+transfer any of those responsibilities.

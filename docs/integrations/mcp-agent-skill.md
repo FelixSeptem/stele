@@ -223,6 +223,20 @@ defaults. Strict consumers require schema migration and explicit negotiation;
 disable dependent access before rollback, retain durable data/PC2 enforcement,
 and do not count archived PC1/PC2 evidence as fresh PC3 readiness.
 
+Provider context PC4 additionally requires mandatory `context_digest` and
+`continuity` fields on every success. Discover `context-digest-v1`,
+`context-canonical-v1`, `context-selection-v1` and
+`context-continuity-v1`; capture the complete body and independently verify its
+canonical digest. Omit continuity for the normal fresh request, use
+`{"mode":"issue"}` only to obtain a short-lived opaque metadata-only
+comparison reference, and use the same binding/session/equivalent allocation
+with `{"mode":"compare","reference":"ctxc_<32 lowercase hex>"}` for a
+fresh complete body marked `unchanged` or `changed`. Provider comparison is not
+an MCP tool, HTTP cache validator, body replay or watermark. Do not log the
+reference/digest or implement a local memory, ranking or context-packing
+fallback. A 409 continuity refusal or retryable 503 means no context is safe to
+consume until the Provider request is corrected or retried.
+
 ## Reference patterns
 
 The roadmap records research on Stash, Letta Code, and Supermemory as design

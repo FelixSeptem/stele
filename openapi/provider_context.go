@@ -6,6 +6,7 @@ const providerContextSchemas = `    ProviderContextInput:
       required: [query, budget]
       description: Exact snake_case fields only. Scope and session come from the authenticated runtime binding. Path selectors are mutually exclusive and use shared memory-path normalization. Budget counts returned item placements. Optional limits allocate UTF-8 content bytes, exact complete JSON body bytes and unique canonical citation identities independently; omitted fields use server ceilings. Explicit nulls, duplicates, aliases, fractional or overflowing integers, unknown/token fields and trailing JSON are invalid. Bytes are never token estimates. Optional public insight, goal and diagnostic sections remain unsupported.
       properties:
+        continuity: {$ref: '#/components/schemas/ProviderContextContinuityInput'}
         projection_intent: {type: string, enum: [conversation, task_context, compilation, handoff], default: conversation}
         disclosure_profile: {type: string, maxLength: 64, pattern: '^[A-Za-z0-9_.:-]+$'}
         response_mode: {type: string, enum: [reference_only, bounded_content], default: reference_only}
@@ -23,8 +24,85 @@ const providerContextSchemas = `    ProviderContextInput:
         feedback_ranking_policy: {type: string, enum: [''], description: Rejection-only compatibility field; every nonempty value is rejected.}
       examples:
         - {query: 'current task', budget: 4}
+        - {query: 'current task', budget: 4, continuity: {mode: issue}}
+        - {query: 'current task', budget: 4, continuity: {mode: compare, reference: ctxc_0123456789abcdef0123456789abcdef}}
         - {query: 'current task', budget: 4, budget_limits: {max_content_bytes: 0, max_response_bytes: 8192, max_citations: 4}}
         - {query: 'current task', budget: 8, path_prefix: 'tasks/demo', include_relations: true, include_experience_insights: true, include_goal_context: true, include_diagnostics: true, include_feedback_diagnostics: true, feedback_aware_ranking: true, feedback_ranking_policy: ''}
+    ProviderContextDigest:
+      type: object
+      additionalProperties: false
+      required: [contract_version, algorithm, canonicalization_version, selection_policy_version, selection_policy_fingerprint, value]
+      description: Domain-separated SHA-256 of the final authorized semantic projection. Scope comes from the authenticated binding. This digest is neither a credential, a snapshot nor a business-state receipt. See the canonical byte vectors and escaping rules in the Provider integration guide.
+      properties:
+        contract_version: {type: string, enum: [context-digest-v1]}
+        algorithm: {type: string, enum: [sha-256]}
+        canonicalization_version: {type: string, enum: [context-canonical-v1]}
+        selection_policy_version: {type: string, enum: [context-selection-v1]}
+        selection_policy_fingerprint: {type: string, pattern: '^[0-9a-f]{64}$'}
+        value: {type: string, pattern: '^[0-9a-f]{64}$'}
+    ProviderContextContinuityInput:
+      description: Optional durable metadata-only continuity. Nulls, duplicate keys, aliases, unknown fields and invalid Unicode are rejected before assembly. Tokens are opaque references, never credentials.
+      oneOf:
+        - type: object
+          additionalProperties: false
+          required: [mode]
+          properties:
+            mode: {type: string, enum: [issue]}
+        - type: object
+          additionalProperties: false
+          required: [mode, reference]
+          properties:
+            mode: {type: string, enum: [compare]}
+            reference: {type: string, pattern: '^ctxc_[0-9a-f]{32}$', minLength: 37, maxLength: 37}
+    ProviderContextContinuityResult:
+      description: Every success is a complete fresh read. Comparison never returns historical bodies, 304, exact snapshot replay or a context watermark. Expiry is UTC RFC3339 seconds. No receipt write occurs when continuity is omitted.
+      oneOf:
+        - type: object
+          additionalProperties: false
+          required: [contract_version, read_semantics, outcome]
+          properties:
+            contract_version: {type: string, enum: [context-continuity-v1]}
+            read_semantics: {type: string, enum: [fresh]}
+            outcome: {type: string, enum: [not_requested]}
+        - type: object
+          additionalProperties: false
+          required: [contract_version, read_semantics, outcome, reference, expires_at]
+          properties:
+            contract_version: {type: string, enum: [context-continuity-v1]}
+            read_semantics: {type: string, enum: [fresh]}
+            outcome: {type: string, enum: [issued]}
+            reference: {type: string, pattern: '^ctxc_[0-9a-f]{32}$', minLength: 37, maxLength: 37}
+            expires_at: {type: string, format: date-time, pattern: '^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}Z$', minLength: 20, maxLength: 20}
+        - type: object
+          additionalProperties: false
+          required: [contract_version, read_semantics, outcome, reference, expires_at]
+          properties:
+            contract_version: {type: string, enum: [context-continuity-v1]}
+            read_semantics: {type: string, enum: [fresh_compare]}
+            outcome: {type: string, enum: [unchanged, changed]}
+            reference: {type: string, pattern: '^ctxc_[0-9a-f]{32}$', minLength: 37, maxLength: 37}
+            expires_at: {type: string, format: date-time, pattern: '^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}Z$', minLength: 20, maxLength: 20}
+    ProviderContextDigestCapabilities:
+      type: object
+      additionalProperties: false
+      required: [contract_version, algorithm, canonicalization_version, selection_policy_version]
+      properties:
+        contract_version: {type: string, enum: [context-digest-v1]}
+        algorithm: {type: string, enum: [sha-256]}
+        canonicalization_version: {type: string, enum: [context-canonical-v1]}
+        selection_policy_version: {type: string, enum: [context-selection-v1]}
+    ProviderContextContinuityCapabilities:
+      type: object
+      additionalProperties: false
+      required: [enabled, contract_version, fresh_compare, max_reference_bytes, ttl_seconds, exact_snapshot_replay, context_watermark]
+      properties:
+        enabled: {type: boolean}
+        contract_version: {type: string, enum: [context-continuity-v1]}
+        fresh_compare: {type: boolean}
+        max_reference_bytes: {type: integer, enum: [37]}
+        ttl_seconds: {type: integer, minimum: 60, maximum: 604800, default: 86400}
+        exact_snapshot_replay: {type: boolean, enum: [false]}
+        context_watermark: {type: boolean, enum: [false]}
     ProviderContextBudgetLimits:
       type: object
       additionalProperties: false
@@ -114,9 +192,11 @@ const providerContextSchemas = `    ProviderContextInput:
       examples:
         - metadata: {request_id: req-reference, operation_id: providerAssembleContext, schema_version: provider-v1}
           result:
+            context_digest: {contract_version: context-digest-v1, algorithm: sha-256, canonicalization_version: context-canonical-v1, selection_policy_version: context-selection-v1, selection_policy_fingerprint: "55dcb1869c32b2b972fa0f628fa5a948457403cf9da803267a4297574c4dfac2", value: "e150aeaab65c4c28303cd9b5f215770e3a374f8127fb1f11b5613aafe5e36a78"}
+            continuity: {contract_version: context-continuity-v1, read_semantics: fresh, outcome: not_requested}
             response_mode: reference_only
             disclosure: {profile: memory-reference-v1, policy_version: context-disclosure-v1, projection_intent: conversation, source_metadata_version: source-metadata-v1}
-            budget_accounting: {contract_version: context-budget-v1, packing_policy_version: context-packing-v1, requested: {max_items: 1, max_content_bytes: null, max_response_bytes: null, max_citations: null}, effective: {max_items: 1, max_content_bytes: 1048576, max_response_bytes: 1048576, max_citations: 100}, usage: {items: 0, content_bytes: 0, response_bytes: 924, citations: 0}, selection: {outcome: empty, omission_reasons: [], unsupported_sections: []}}
+            budget_accounting: {contract_version: context-budget-v1, packing_policy_version: context-packing-v1, requested: {max_items: 1, max_content_bytes: null, max_response_bytes: null, max_citations: null}, effective: {max_items: 1, max_content_bytes: 1048576, max_response_bytes: 1048576, max_citations: 100}, usage: {items: 0, content_bytes: 0, response_bytes: 1387, citations: 0}, selection: {outcome: empty, omission_reasons: [], unsupported_sections: []}}
             profile: []
             recent_session: []
             recent_episodes: []
@@ -126,9 +206,11 @@ const providerContextSchemas = `    ProviderContextInput:
           citations: []
         - metadata: {request_id: req-content, operation_id: providerAssembleContext, schema_version: provider-v1}
           result:
+            context_digest: {contract_version: context-digest-v1, algorithm: sha-256, canonicalization_version: context-canonical-v1, selection_policy_version: context-selection-v1, selection_policy_fingerprint: "55dcb1869c32b2b972fa0f628fa5a948457403cf9da803267a4297574c4dfac2", value: "e150aeaab65c4c28303cd9b5f215770e3a374f8127fb1f11b5613aafe5e36a78"}
+            continuity: {contract_version: context-continuity-v1, read_semantics: fresh, outcome: not_requested}
             response_mode: bounded_content
             disclosure: {profile: memory-content-v1, policy_version: context-disclosure-v1, projection_intent: conversation, source_metadata_version: source-metadata-v1}
-            budget_accounting: {contract_version: context-budget-v1, packing_policy_version: context-packing-v1, requested: {max_items: 1, max_content_bytes: 0, max_response_bytes: 65536, max_citations: 1}, effective: {max_items: 1, max_content_bytes: 0, max_response_bytes: 65536, max_citations: 1}, usage: {items: 0, content_bytes: 0, response_bytes: 906, citations: 0}, selection: {outcome: empty, omission_reasons: [], unsupported_sections: []}}
+            budget_accounting: {contract_version: context-budget-v1, packing_policy_version: context-packing-v1, requested: {max_items: 1, max_content_bytes: 0, max_response_bytes: 65536, max_citations: 1}, effective: {max_items: 1, max_content_bytes: 0, max_response_bytes: 65536, max_citations: 1}, usage: {items: 0, content_bytes: 0, response_bytes: 1369, citations: 0}, selection: {outcome: empty, omission_reasons: [], unsupported_sections: []}}
             profile: []
             recent_session: []
             recent_episodes: []
@@ -198,8 +280,10 @@ const providerContextSchemas = `    ProviderContextInput:
     ProviderReferenceContextResult:
       type: object
       additionalProperties: false
-      required: [response_mode, disclosure, budget_accounting, profile, recent_session, recent_episodes, relevant_summaries, related_entities, citations]
+      required: [context_digest, continuity, response_mode, disclosure, budget_accounting, profile, recent_session, recent_episodes, relevant_summaries, related_entities, citations]
       properties:
+        context_digest: {$ref: '#/components/schemas/ProviderContextDigest'}
+        continuity: {$ref: '#/components/schemas/ProviderContextContinuityResult'}
         response_mode: {type: string, enum: [reference_only]}
         disclosure: {$ref: '#/components/schemas/ContextDisclosureDecision'}
         budget_accounting: {$ref: '#/components/schemas/ProviderContextBudgetAccounting'}
@@ -219,8 +303,10 @@ const providerContextSchemas = `    ProviderContextInput:
     ProviderContentContextResult:
       type: object
       additionalProperties: false
-      required: [response_mode, disclosure, budget_accounting, profile, recent_session, recent_episodes, relevant_summaries, related_entities, citations]
+      required: [context_digest, continuity, response_mode, disclosure, budget_accounting, profile, recent_session, recent_episodes, relevant_summaries, related_entities, citations]
       properties:
+        context_digest: {$ref: '#/components/schemas/ProviderContextDigest'}
+        continuity: {$ref: '#/components/schemas/ProviderContextContinuityResult'}
         response_mode: {type: string, enum: [bounded_content]}
         disclosure: {$ref: '#/components/schemas/ContextDisclosureDecision'}
         budget_accounting: {$ref: '#/components/schemas/ProviderContextBudgetAccounting'}

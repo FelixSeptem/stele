@@ -1,8 +1,8 @@
 ARG STELE_GO_IMAGE=golang:1.25-bookworm
 ARG STELE_RUNTIME_IMAGE=debian:bookworm-slim
-ARG STELE_GOPROXY=https://proxy.golang.org,direct
+ARG STELE_GOPROXY=https://goproxy.cn,direct
 FROM ${STELE_GO_IMAGE} AS build
-ARG STELE_GOPROXY=https://proxy.golang.org,direct
+ARG STELE_GOPROXY=https://goproxy.cn,direct
 
 WORKDIR /src
 

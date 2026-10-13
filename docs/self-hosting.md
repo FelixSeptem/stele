@@ -259,6 +259,45 @@ source/grant enforcement and durable data. PC3 adds no database migration. Missi
 capability is incompatibility, not permission to strip budgets or use another
 route, local packing or byte-to-token estimation.
 
+#### Provider context continuity configuration
+
+PC4 adds migration `0036_provider_context_continuity`, which creates a
+metadata-only PostgreSQL receipt table and its lookup/expiry/capacity indexes.
+Apply the migration before enabling PC4-aware Provider consumers. The migration
+is additive: a mixed replica fleet is safe only while older replicas do not
+advertise the PC4 capability. During rollback, first disable consumers that
+require digest/continuity and then deploy the older binary; do not down-migrate,
+delete receipts, canonical memory, history or grants. An old binary simply does
+not serve the newer capability.
+
+Keep these settings identical on API and scheduler replicas:
+
+| Environment variable | Default | Valid bound / meaning |
+| --- | ---: | --- |
+| `STELE_PROVIDER_CONTEXT_CONTINUITY_TTL_SECONDS` | `86400` | `60..604800`; authoritative receipt lifetime in seconds |
+| `STELE_PROVIDER_CONTEXT_CONTINUITY_MAX_RECEIPTS_PER_BINDING` | `128` | `1..4096`; retained rows per complete runtime binding |
+| `STELE_PROVIDER_CONTEXT_CONTINUITY_MAX_RECEIPTS` | `100000` | `1..1000000`; retained rows across the service |
+| `STELE_PROVIDER_CONTEXT_CONTINUITY_CLEANUP_BATCH` | `500` | `1..5000`; expired-only rows processed by one cleanup run |
+
+Startup rejects values outside these bounds and rejects a per-binding capacity
+above the global capacity. PostgreSQL supplies issue and expiry time, uses a
+transactional cross-process lock for deduplication/capacity, and may reuse an
+unexpired compatible receipt without extending its expiry. Retained expired rows
+still count against capacity until the bounded scheduler cleanup removes them;
+live references are never cleanup candidates. An omitted continuity input causes
+no receipt read/write. Do not place opaque references, projection digest values,
+queries, returned memory IDs, citations or bodies in application logs, metrics,
+incident evidence or backup annotations.
+
+The scheduler job is `provider_context_continuity_cleanup`. Monitor its bounded
+success/failure telemetry with ordinary scheduler health, but do not derive
+tenant, binding, path, query or source information from it. For a rollout proof,
+run the owned public Provider verifier against fresh PostgreSQL/pgvector,
+bootstrap an exact-scope credential, issue and compare both reference and content
+projections, restart API/worker, then test source lifecycle/authority changes,
+expiry and infeasible allocation. SQL receipt inspection is supplementary; it
+must show metadata-only persistence and never replace public-route evidence.
+
 ### Reasoning provider boundary
 
 Optional model-assisted reasoning is disabled by default and is never required

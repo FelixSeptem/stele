@@ -1,0 +1,2 @@
+DROP TABLE provider_context_receipts;
+DROP TABLE provider_context_receipt_capacity;

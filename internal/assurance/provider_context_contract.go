@@ -50,7 +50,7 @@ func (c *ProviderContextContract) Validate(data []byte, scope memory.Scope, sche
 	fail := func() (provider.DisclosedContextResponse, error) {
 		return provider.DisclosedContextResponse{}, fmt.Errorf("provider context failed-contract")
 	}
-	if c == nil || c.schema == nil || scope.Validate() != nil {
+	if c == nil || c.schema == nil || scope.Validate() != nil || !provider.ValidJSONUnicode(data) || !uniqueJSON(data) {
 		return fail()
 	}
 	var value any
@@ -64,6 +64,14 @@ func (c *ProviderContextContract) Validate(data []byte, scope memory.Scope, sche
 		return fail()
 	}
 	if err := response.Metadata.NormalizeValidate(); err != nil || response.Metadata.SchemaVersion != schemaVersion {
+		return fail()
+	}
+	digest := response.Result.ContextDigest
+	if digest.ContractVersion != provider.ContextDigestVersion || digest.Algorithm != "sha-256" || digest.CanonicalizationVersion != provider.ContextCanonicalVersion || digest.SelectionPolicyVersion != provider.ContextSelectionVersion || !provider.ValidContextHash(digest.Value) || !provider.ValidContextHash(digest.SelectionPolicyFingerprint) || !validContinuityResult(response.Result.Continuity) || !reflect.DeepEqual(response.Citations, response.Result.Citations) {
+		return fail()
+	}
+	expected, err := consumerContextDigest(scope, response)
+	if err != nil || digest.Value != expected {
 		return fail()
 	}
 	accounting := response.Result.BudgetAccounting
@@ -163,6 +171,25 @@ func (c *ProviderContextContract) ValidateForRequest(data []byte, scope memory.S
 	}
 	fail := func() (provider.DisclosedContextResponse, error) {
 		return provider.DisclosedContextResponse{}, fmt.Errorf("provider context failed-contract")
+	}
+	continuity := r.Result.Continuity
+	if input.Continuity == nil {
+		if continuity.Outcome != "not_requested" {
+			return fail()
+		}
+	} else {
+		switch input.Continuity.Mode {
+		case "issue":
+			if input.Continuity.Reference != "" || continuity.Outcome != "issued" {
+				return fail()
+			}
+		case "compare":
+			if !provider.ValidContextReference(input.Continuity.Reference) || continuity.ReadSemantics != "fresh_compare" {
+				return fail()
+			}
+		default:
+			return fail()
+		}
 	}
 	if input.ValidateBudget() != nil {
 		return fail()

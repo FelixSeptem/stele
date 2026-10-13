@@ -97,7 +97,22 @@ discover the extension explicitly; disable affected access before rolling back
 to a service that lacks it. The [Provider guide](docs/agent-runtime-memory-provider.md)
 covers units, ordering, errors and migration, and [self-hosting](docs/self-hosting.md)
 covers independent configuration. Historical PC1/PC2 evidence does not prove PC3
-readiness or completion of pending digest/reference/outcome work.
+readiness or PC4 digest/continuity readiness.
+
+Provider context also returns a mandatory versioned SHA-256 digest of the final
+authorized projection and a continuity result. Omit continuity for a fresh
+read; request `{"mode":"issue"}` to receive an expiring opaque metadata-only
+comparison reference; send `{"mode":"compare","reference":"ctxc_<32 lowercase hex>"}`
+for a later full fresh body marked `unchanged` or `changed`. This is not HTTP
+cache validation: Stele never returns 304, a historical body, a snapshot replay
+or a watermark. Receipts persist only identity/fingerprint/digest/timestamps,
+never queries, content, citations or response bodies. Consumers verify
+`context-digest-v1`, `context-canonical-v1`, `context-selection-v1` and
+`context-continuity-v1`, recompute the digest from the exact captured body, and
+stop on 409 continuity refusals or retryable 503 rather than locally ranking,
+packing or reconstructing context. [Provider contract details and byte vectors](docs/agent-runtime-memory-provider.md#projection-digest-and-fresh-continuity)
+and [self-hosting settings](docs/self-hosting.md#provider-context-continuity-configuration)
+describe rollout, bounds and rollback.
 
 Read the [disclosure and source trust guide](docs/context-disclosure-and-source-trust.md)
 for profile administration, source labels, endpoint denials and migration.

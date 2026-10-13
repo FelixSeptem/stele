@@ -24,27 +24,32 @@ import (
 )
 
 type contextLiveReport struct {
-	Result                string           `json:"result"`
-	Stage                 string           `json:"stage"`
-	SchemaVersion         string           `json:"schema_version"`
-	OpenAPIDigest         string           `json:"openapi_digest"`
-	ImageDigest           string           `json:"image_digest"`
-	SourceRevision        string           `json:"source_revision"`
-	SourceDigest          string           `json:"source_digest"`
-	ScopeHash             string           `json:"scope_hash"`
-	IdentityHash          string           `json:"identity_hash"`
-	CitationHash          string           `json:"citation_hash"`
-	GovernanceCompleted   int              `json:"governance_completed"`
-	DisclosureVersion     string           `json:"disclosure_policy_version"`
-	SourceMetadataVersion string           `json:"source_metadata_version"`
-	DurableLabelsVerified bool             `json:"durable_labels_verified"`
-	Checks                []string         `json:"checks"`
-	BudgetContractVersion string           `json:"budget_contract_version,omitempty"`
-	BudgetPackingVersion  string           `json:"budget_packing_version,omitempty"`
-	BudgetOutcomes        []string         `json:"budget_outcomes,omitempty"`
-	BudgetUsage           []map[string]int `json:"budget_usage,omitempty"`
-	BudgetIdentityHash    string           `json:"budget_identity_hash,omitempty"`
-	BudgetCitationHash    string           `json:"budget_citation_hash,omitempty"`
+	Result                   string           `json:"result"`
+	Stage                    string           `json:"stage"`
+	SchemaVersion            string           `json:"schema_version"`
+	OpenAPIDigest            string           `json:"openapi_digest"`
+	ImageDigest              string           `json:"image_digest"`
+	SourceRevision           string           `json:"source_revision"`
+	SourceDigest             string           `json:"source_digest"`
+	ScopeHash                string           `json:"scope_hash"`
+	IdentityHash             string           `json:"identity_hash"`
+	CitationHash             string           `json:"citation_hash"`
+	GovernanceCompleted      int              `json:"governance_completed"`
+	DisclosureVersion        string           `json:"disclosure_policy_version"`
+	SourceMetadataVersion    string           `json:"source_metadata_version"`
+	DurableLabelsVerified    bool             `json:"durable_labels_verified"`
+	Checks                   []string         `json:"checks"`
+	BudgetContractVersion    string           `json:"budget_contract_version,omitempty"`
+	BudgetPackingVersion     string           `json:"budget_packing_version,omitempty"`
+	BudgetOutcomes           []string         `json:"budget_outcomes,omitempty"`
+	BudgetUsage              []map[string]int `json:"budget_usage,omitempty"`
+	BudgetIdentityHash       string           `json:"budget_identity_hash,omitempty"`
+	BudgetCitationHash       string           `json:"budget_citation_hash,omitempty"`
+	ContextDigestVersion     string           `json:"context_digest_version,omitempty"`
+	ContextContinuityVersion string           `json:"context_continuity_version,omitempty"`
+	ContextDigestHash        string           `json:"context_digest_hash,omitempty"`
+	ContinuityOutcomes       []string         `json:"continuity_outcomes,omitempty"`
+	ContinuityChecked        bool             `json:"continuity_checked,omitempty"`
 }
 
 type liveBudgetUsage struct {
@@ -356,6 +361,59 @@ func TestProviderContextFreshPostgresLive(t *testing.T) {
 	read := func(path, prefix string) provider.DisclosedContextResponse {
 		return readMode(path, prefix, auth.ResponseModeBoundedContent)
 	}
+	var report contextLiveReport
+	continuityCheckpoint := filepath.Join(dir, "pc4-continuity.json")
+	readContinuity := func() provider.DisclosedContextResponse {
+		body := provider.ContextRequest{Metadata: metadata("pc4-continuity"), Input: provider.ContextInput{Query: "context fixture", Budget: 20, Path: budgetLiveFixturePath(), ResponseMode: auth.ResponseModeBoundedContent, Continuity: &provider.ContextContinuityInput{Mode: "issue"}}}
+		data, code := call("POST", "/v1/provider/context", runtimeKey, body, &binding, false)
+		if code != 200 {
+			t.Fatal("continuity issue failed")
+		}
+		issued, err := contract.ValidateForRequest(data, scope, "provider-v1", body.Input, &caps.Limits)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if issued.Result.Continuity.Outcome != "issued" || !provider.ValidContextReference(issued.Result.Continuity.Reference) {
+			t.Fatal("continuity issue contract invalid")
+		}
+		ref := issued.Result.Continuity.Reference
+		if stage == "initial" {
+			raw, _ := json.Marshal(struct {
+				Reference string `json:"reference"`
+			}{ref})
+			if err := os.WriteFile(continuityCheckpoint, raw, 0600); err != nil {
+				t.Fatal("continuity checkpoint unavailable")
+			}
+		} else {
+			raw, err := os.ReadFile(continuityCheckpoint)
+			if err != nil {
+				t.Fatal("continuity checkpoint missing")
+			}
+			var saved struct {
+				Reference string `json:"reference"`
+			}
+			if json.Unmarshal(raw, &saved) != nil || !provider.ValidContextReference(saved.Reference) {
+				t.Fatal("continuity checkpoint invalid")
+			}
+			ref = saved.Reference
+		}
+		body.Input.Continuity = &provider.ContextContinuityInput{Mode: "compare", Reference: ref}
+		data, code = call("POST", "/v1/provider/context", runtimeKey, body, &binding, false)
+		if code != 200 {
+			t.Fatal("continuity compare failed")
+		}
+		comp, err := contract.ValidateForRequest(data, scope, "provider-v1", body.Input, &caps.Limits)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if comp.Result.Continuity.ReadSemantics != "fresh_compare" || comp.Result.Continuity.Outcome != "unchanged" || comp.Result.ContextDigest.Value != issued.Result.ContextDigest.Value {
+			t.Fatal("continuity compare was not stable")
+		}
+		report.ContinuityOutcomes = append(report.ContinuityOutcomes, "issued", "unchanged")
+		report.ContinuityChecked = true
+		report.ContextDigestHash = contextLiveHash([]string{issued.Result.ContextDigest.Value})
+		return comp
+	}
 	flatten := func(r provider.DisclosedContextResponse) []provider.DisclosedContextItem {
 		out := []provider.DisclosedContextItem{}
 		for _, items := range [][]provider.DisclosedContextItem{r.Result.Profile, r.Result.RecentSession, r.Result.RecentEpisodes, r.Result.RelevantSummaries, r.Result.RelatedEntities} {
@@ -364,7 +422,7 @@ func TestProviderContextFreshPostgresLive(t *testing.T) {
 		return out
 	}
 	visiblePath, hiddenPath := "pc1/context/visible", "pc1/context/hidden"
-	report := contextLiveReport{Result: "failed", Stage: stage, SchemaVersion: "provider-v1", DisclosureVersion: auth.DisclosurePolicyVersion, SourceMetadataVersion: memory.SourceMetadataVersion, OpenAPIDigest: contract.Digest, ImageDigest: os.Getenv("STELE_CONTEXT_VERIFY_IMAGE_DIGEST"), SourceRevision: os.Getenv("STELE_CONTEXT_VERIFY_SOURCE_REVISION"), SourceDigest: os.Getenv("STELE_CONTEXT_VERIFY_SOURCE_DIGEST"), ScopeHash: contextLiveHash(scope)}
+	report = contextLiveReport{Result: "failed", Stage: stage, SchemaVersion: "provider-v1", DisclosureVersion: auth.DisclosurePolicyVersion, SourceMetadataVersion: memory.SourceMetadataVersion, OpenAPIDigest: contract.Digest, ImageDigest: os.Getenv("STELE_CONTEXT_VERIFY_IMAGE_DIGEST"), SourceRevision: os.Getenv("STELE_CONTEXT_VERIFY_SOURCE_REVISION"), SourceDigest: os.Getenv("STELE_CONTEXT_VERIFY_SOURCE_DIGEST"), ScopeHash: contextLiveHash(scope), ContextDigestVersion: provider.ContextDigestVersion, ContextContinuityVersion: provider.ContextContinuityVersion}
 	report.BudgetContractVersion, report.BudgetPackingVersion = budgetCaps.ContractVersion, budgetCaps.PackingVersion
 	if !strings.HasPrefix(report.ImageDigest, "sha256:") || len(report.SourceRevision) != 40 || !validContextDigest(report.SourceDigest) {
 		t.Fatal("pinned build provenance missing")
@@ -372,10 +430,23 @@ func TestProviderContextFreshPostgresLive(t *testing.T) {
 	var previous contextLiveReport
 	if stage == "restart" {
 		data, err := os.ReadFile(reportPath)
-		if err != nil || json.Unmarshal(data, &previous) != nil || previous.Result != "passed" || previous.Stage != "initial" || previous.OpenAPIDigest != report.OpenAPIDigest || previous.ImageDigest != report.ImageDigest || previous.SourceDigest != report.SourceDigest || previous.ScopeHash != report.ScopeHash || previous.BudgetContractVersion != report.BudgetContractVersion || previous.BudgetPackingVersion != report.BudgetPackingVersion || len(previous.BudgetUsage) == 0 || len(previous.BudgetOutcomes) == 0 {
+		if err != nil || json.Unmarshal(data, &previous) != nil || previous.Result != "passed" || previous.Stage != "initial" || previous.OpenAPIDigest != report.OpenAPIDigest || previous.ImageDigest != report.ImageDigest || previous.SourceDigest != report.SourceDigest || previous.ScopeHash != report.ScopeHash || previous.BudgetContractVersion != report.BudgetContractVersion || previous.BudgetPackingVersion != report.BudgetPackingVersion || previous.ContextDigestVersion != provider.ContextDigestVersion || previous.ContextContinuityVersion != provider.ContextContinuityVersion || len(previous.BudgetUsage) == 0 || len(previous.BudgetOutcomes) == 0 || !previous.ContinuityChecked {
 			t.Fatal("initial live evidence missing or incompatible")
 		}
 		report.GovernanceCompleted = previous.GovernanceCompleted
+		// The initial stage explicitly leaves this exact primary grant at content
+		// capability. Observe the owned PostgreSQL authority before any restart
+		// stage requests, so an unexpected default profile cannot be mistaken for
+		// a retrieval or response-mode issue.
+		grantDB, err := pgx.Connect(context.Background(), os.Getenv("STELE_CONTEXT_VERIFY_POSTGRES_DSN"))
+		if err != nil {
+			t.Fatal("restart authority observation unavailable")
+		}
+		defer grantDB.Close(context.Background())
+		var defaultProfile string
+		if err := grantDB.QueryRow(context.Background(), `SELECT default_disclosure_profile FROM access_scope_grants WHERE principal_id=$1 AND tenant=$2 AND project=$3 AND namespace=$4 AND status='active' ORDER BY created_at DESC, id DESC LIMIT 1`, binding.PrincipalID, scope.Tenant, scope.Project, scope.Namespace).Scan(&defaultProfile); err != nil || defaultProfile != auth.DisclosureProfileContent {
+			t.Fatal("restart durable primary disclosure state changed")
+		}
 	}
 	defer func() {
 		if t.Failed() {
@@ -474,7 +545,7 @@ func TestProviderContextFreshPostgresLive(t *testing.T) {
 			}
 		}
 		if result.Result.ResponseMode != mode || a.Selection.Outcome != outcome {
-			t.Fatalf("budget fixture %s mode or selection mismatch", label)
+			t.Fatalf("budget fixture %s mode=%s profile=%s outcome=%s usage=%d/%d reasons=%s, want mode=%s outcome=%s", label, result.Result.ResponseMode, result.Result.Disclosure.Profile, a.Selection.Outcome, usage.Items, usage.Citations, strings.Join(a.Selection.Reasons, ","), mode, outcome)
 		}
 		if outcome == "empty" && len(a.Selection.Reasons) != 0 {
 			t.Fatal("ineligible evidence contributed budget reasons")
@@ -502,6 +573,7 @@ func TestProviderContextFreshPostgresLive(t *testing.T) {
 		report.BudgetUsage = append(report.BudgetUsage, map[string]int{"items": usage.Items, "content_bytes": usage.ContentBytes, "response_bytes": usage.ResponseBytes, "citations": usage.Citations})
 		return result, usage
 	}
+	readContinuity()
 	checkBudgetMode := func(mode string) {
 		label := "content"
 		if mode == auth.ResponseModeReferenceOnly {
@@ -795,6 +867,63 @@ AND r.source_metadata->>'trust'='untrusted' AND r.source_metadata->>'classificat
 	if code != 403 {
 		t.Fatal("replay ignored current attestation entitlement")
 	}
+	// Each stage leaves the primary runtime grant at content capability. Assert
+	// that final public state now, so a restart-stage mismatch is attributable to
+	// durable authority state rather than the fixture's own mutation sequence.
+	finalContent := readMode(budgetPath, "", auth.ResponseModeBoundedContent)
+	if finalContent.Result.Disclosure.Profile != auth.DisclosureProfileContent || len(flatten(finalContent)) == 0 {
+		t.Fatal("final content disclosure state unavailable")
+	}
+	// PC4 comparison must reassemble current evidence rather than replaying the
+	// issued body. Run this after every budget, disclosure, and restart read so
+	// the destructive lifecycle fixture cannot invalidate later assertions.
+	if stage == "restart" {
+		input := provider.ContextInput{Query: "context fixture", Budget: 20, Path: budgetPath, ResponseMode: auth.ResponseModeBoundedContent, Continuity: &provider.ContextContinuityInput{Mode: "issue"}}
+		data, code := call("POST", "/v1/provider/context", runtimeKey, provider.ContextRequest{Metadata: metadata("pc4-current-source-issue"), Input: input}, &binding, false)
+		issued, err := contract.ValidateForRequest(data, scope, "provider-v1", input, &caps.Limits)
+		if code != 200 || err != nil || len(flatten(issued)) == 0 {
+			t.Fatal("current-source issue fixture unavailable")
+		}
+		for _, item := range flatten(issued) {
+			_, code = call("POST", "/v1/admin/memories/"+item.Memory.MemoryID+":suppress", adminKey, map[string]string{"reason": "owned PC4 current-source fixture"}, nil, false)
+			if code != 200 {
+				t.Fatal("current-source suppression failed")
+			}
+		}
+		input.Continuity = &provider.ContextContinuityInput{Mode: "compare", Reference: issued.Result.Continuity.Reference}
+		data, code = call("POST", "/v1/provider/context", runtimeKey, provider.ContextRequest{Metadata: metadata("pc4-current-source-compare"), Input: input}, &binding, false)
+		changed, err := contract.ValidateForRequest(data, scope, "provider-v1", input, &caps.Limits)
+		if code != 200 || err != nil || changed.Result.Continuity.ReadSemantics != "fresh_compare" || changed.Result.Continuity.Outcome != "changed" || len(flatten(changed)) != 0 || bytes.Contains(data, []byte(budgetContent)) {
+			t.Fatal("changed comparison retained historical source content")
+		}
+		report.ContinuityOutcomes = append(report.ContinuityOutcomes, "changed")
+
+		// Expiry and removal are changed only through the owned PostgreSQL fixture;
+		// public requests prove the two distinct bounded outcomes without logging a
+		// reference or database state in the report.
+		input.Continuity = &provider.ContextContinuityInput{Mode: "issue"}
+		data, code = call("POST", "/v1/provider/context", runtimeKey, provider.ContextRequest{Metadata: metadata("pc4-expiry-issue"), Input: input}, &binding, false)
+		expiring, err := contract.ValidateForRequest(data, scope, "provider-v1", input, &caps.Limits)
+		if code != 200 || err != nil {
+			t.Fatal("expiry issue fixture unavailable")
+		}
+		if _, err = db.Exec(ctx, `UPDATE provider_context_receipts SET issued_at=clock_timestamp()-interval '2 minutes', expires_at=clock_timestamp()-interval '1 minute' WHERE reference=$1`, expiring.Result.Continuity.Reference); err != nil {
+			t.Fatal("owned expiry mutation unavailable")
+		}
+		input.Continuity = &provider.ContextContinuityInput{Mode: "compare", Reference: expiring.Result.Continuity.Reference}
+		data, code = call("POST", "/v1/provider/context", runtimeKey, provider.ContextRequest{Metadata: metadata("pc4-expiry-compare"), Input: input}, &binding, false)
+		if code != http.StatusConflict || !bytes.Contains(data, []byte(`"code":"continuity_reference_expired"`)) || bytes.Contains(data, []byte(budgetContent)) {
+			t.Fatal("expired reference was not safely refused")
+		}
+		if _, err = db.Exec(ctx, `DELETE FROM provider_context_receipts WHERE reference=$1`, expiring.Result.Continuity.Reference); err != nil {
+			t.Fatal("owned expired cleanup unavailable")
+		}
+		data, code = call("POST", "/v1/provider/context", runtimeKey, provider.ContextRequest{Metadata: metadata("pc4-unavailable-compare"), Input: input}, &binding, false)
+		if code != http.StatusConflict || !bytes.Contains(data, []byte(`"code":"continuity_reference_unavailable"`)) || bytes.Contains(data, []byte(budgetContent)) {
+			t.Fatal("cleaned reference was not safely unavailable")
+		}
+		report.ContinuityOutcomes = append(report.ContinuityOutcomes, "expired", "unavailable")
+	}
 	// A separate principal is revoked permanently. Retain its checkpoint only in
 	// the owned secret directory so restart proves the old binding remains denied.
 	checkpointPath := filepath.Join(dir, "pc2-revoked.json")
@@ -851,7 +980,10 @@ AND r.source_metadata->>'trust'='untrusted' AND r.source_metadata->>'classificat
 	report.Checks = append(report.Checks, "durable_source_labels", "label_replay_conflict", "reference_only_schema", "old_binding_downgrade", "alternate_route_denials", "attestation_authorization", "attestation_replay_reauthorization", "revoked_binding_denied", "unconfigured_profile_denied", "forgotten_deleted_excluded", "high_restricted_excluded")
 	report.Checks = append(report.Checks, "budget_discovery", "budget_actual_body_bytes", "budget_utf8_content_bytes", "budget_unique_citations", "budget_zero_content", "budget_zero_citations", "budget_omitted_limits", "budget_server_intersection", "budget_minimum_response_413", "budget_unsupported_sections", "budget_safe_empty_no_reasons")
 	if stage == "restart" {
-		if previous.IdentityHash != report.IdentityHash || previous.CitationHash != report.CitationHash || previous.BudgetIdentityHash != report.BudgetIdentityHash || previous.BudgetCitationHash != report.BudgetCitationHash {
+		report.Checks = append(report.Checks, "continuity_current_source_changed", "continuity_expired_refused", "continuity_cleaned_reference_unavailable")
+	}
+	if stage == "restart" {
+		if previous.IdentityHash != report.IdentityHash || previous.CitationHash != report.CitationHash || previous.BudgetIdentityHash != report.BudgetIdentityHash || previous.BudgetCitationHash != report.BudgetCitationHash || previous.ContextDigestHash != report.ContextDigestHash {
 			t.Fatal("restart changed context identities or provenance")
 		}
 		report.Checks = append(report.Checks, "api_worker_restart_identity")
