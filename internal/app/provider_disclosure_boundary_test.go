@@ -8,6 +8,7 @@ import (
 	"net/http/httptest"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/FelixSeptem/stele/internal/auth"
 	"github.com/FelixSeptem/stele/internal/memory"
@@ -124,5 +125,22 @@ func TestProviderContextOldBindingReadsCurrentAuthorityAndFailsClosed(t *testing
 				t.Fatalf("current authority did not fail closed: %d %s", w.Code, w.Body.String())
 			}
 		})
+	}
+}
+
+func TestProviderContextContentProfileMayRequestReferenceOnlyProjection(t *testing.T) {
+	now := time.Now().UTC()
+	a := &contextContractAssembler{result: retrieval.AssembledContext{RecentEpisodes: []retrieval.SearchHit{{Memory: memory.CanonicalMemory{
+		ID: "content-profile-reference-projection", Scope: memory.Scope{Tenant: "tenant-a", Project: "project-a", Namespace: "namespace-a"}, MemoryPath: "tasks/reference", Class: memory.MemoryClassEpisodic, State: memory.MemoryStateActive,
+		Content: "bounded source marker", SourceVersion: 1, SourceMetadata: memory.SourceMetadata{Version: memory.SourceMetadataVersion, Trust: memory.SourceTrustUntrusted, Classification: memory.SourceClassificationLow}, CreatedAt: now, ModifiedAt: now,
+	}}}}}
+	authority := &mutableContextDisclosureAuthorizer{entitlements: auth.DisclosureEntitlements{AllowedProfiles: []string{auth.DisclosureProfileContent}, DefaultProfile: auth.DisclosureProfileContent}}
+	request := contextContractHandlerWithDependencies(t, a, func(deps *HTTPDependencies) {
+		authority.providerLifecycleAuthorizer = deps.PrincipalAuthorizer.(providerLifecycleAuthorizer)
+		deps.PrincipalAuthorizer = authority
+	})
+	w := request(`{` + contextMetadata + `,"input":{"query":"q","budget":1,"disclosure_profile":"memory-content-v1","response_mode":"reference_only"}}`)
+	if w.Code != http.StatusOK || strings.Contains(w.Body.String(), "bounded source marker") || !strings.Contains(w.Body.String(), `"profile":"memory-content-v1"`) || !strings.Contains(w.Body.String(), "content-profile-reference-projection") {
+		t.Fatalf("content entitlement did not produce a reference-only projection: status=%d body=%s", w.Code, w.Body.String())
 	}
 }

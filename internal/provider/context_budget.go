@@ -83,6 +83,8 @@ func (l ProviderLimits) Resolved() ProviderLimits {
 }
 
 type ContextAdmission struct {
+	continuity    ContextContinuityResult
+	fingerprint   string
 	scope         memory.Scope
 	decision      auth.DisclosureDecision
 	metadata      OperationMetadata
@@ -120,6 +122,17 @@ func NewContextAdmission(input ContextInput, limits ProviderLimits, scope memory
 		if s.yes {
 			a.accounting.Selection.UnsupportedSections = append(a.accounting.Selection.UnsupportedSections, s.name)
 		}
+	}
+	a.fingerprint = SelectionPolicyFingerprint([]byte(DefaultContextPolicyManifest))
+	a.continuity = ContextContinuityResult{ContractVersion: ContextContinuityVersion, ReadSemantics: "fresh", Outcome: "not_requested"}
+	if input.Continuity != nil {
+		a.continuity.Outcome = "issued"
+		if input.Continuity.Mode == "compare" {
+			a.continuity.ReadSemantics = "fresh_compare"
+			a.continuity.Outcome = "unchanged"
+		}
+		a.continuity.Reference = "ctxc_00000000000000000000000000000000"
+		a.continuity.ExpiresAt = "2000-01-01T00:00:00Z"
 	}
 	// Preflight the largest bounded empty accounting envelope before retrieval.
 	response := a.response(a.selected)
@@ -223,6 +236,8 @@ func (a *ContextAdmission) NoteContextItemLimit(hit retrieval.SearchHit) {
 func (a *ContextAdmission) response(out retrieval.AssembledContext) DisclosedContextResponse {
 	r := ShapeDisclosedContextResponse(out, a.metadata, a.decision, 1000, a.scope)
 	r.Result.BudgetAccounting = a.accounting
+	r.Result.Continuity = a.continuity
+	r.Result.ContextDigest = ContextDigest{ContextDigestVersion, "sha-256", ContextCanonicalVersion, ContextSelectionVersion, a.fingerprint, a.fingerprint}
 	return r
 }
 func contextUsage(r DisclosedContextResponse) ContextBudgetUsage {
@@ -263,12 +278,18 @@ func (a *ContextAdmission) Finalize(out retrieval.AssembledContext, meta Operati
 	} else if a.eligible {
 		a.accounting.Selection.Outcome = "budget_exhausted"
 	}
+	a.accounting.Selection.OmissionReasons = []string{}
 	for _, reason := range []string{"item_limit", "content_bytes", "citations", "response_bytes"} {
 		if a.reasons[reason] {
 			a.accounting.Selection.OmissionReasons = append(a.accounting.Selection.OmissionReasons, reason)
 		}
 	}
 	r.Result.BudgetAccounting = a.accounting
+	digest, err := ComputeContextDigest(a.scope, r, a.fingerprint)
+	if err != nil {
+		return nil, err
+	}
+	r.Result.ContextDigest = digest
 	for n := 0; n < 8; n++ {
 		b, err := json.Marshal(r)
 		if err != nil {
@@ -285,3 +306,15 @@ func (a *ContextAdmission) Finalize(out retrieval.AssembledContext, meta Operati
 	}
 	return nil, fmt.Errorf("context accounting did not converge")
 }
+
+func (a *ContextAdmission) PreflightResponse() DisclosedContextResponse {
+	return a.response(a.selected)
+}
+func (a *ContextAdmission) SetPolicyFingerprint(s string) error {
+	if !ValidContextHash(s) {
+		return fmt.Errorf("invalid policy identity")
+	}
+	a.fingerprint = s
+	return nil
+}
+func (a *ContextAdmission) SetContinuity(r ContextContinuityResult) { a.continuity = r }

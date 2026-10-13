@@ -44,6 +44,8 @@ go.work.sum
 # Local Go build cache directories created by repeated isolated builds
 .gocache/
 .gocache-*/
+.gomodcache/
+.gomodcache-*/
 
 # Local owned PostgreSQL/pgvector shadow-evaluation artifacts
 .evaluation-artifacts/

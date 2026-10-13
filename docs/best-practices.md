@@ -76,6 +76,30 @@ Never turn a search result into an unreviewed bulk deletion. Retain the preview
 identity when applying and treat conflicts or stale targets as a stop-and-review
 condition.
 
+## Verify Provider context continuity without rebuilding context locally
+
+Discover and require `context-digest-v1`, `context-canonical-v1`,
+`context-selection-v1` and `context-continuity-v1` before consuming the PC4
+extension. Capture the exact compact response bytes, verify the closed response
+shape and recompute the digest using the documented canonical form. Digest
+comparison proves only that two authorized projections are the same under the
+advertised policy; it neither grants read access nor proves task completion,
+write authority, source truth or business state.
+
+Use continuity only for an equivalent follow-up read. An omitted continuity
+input means a normal fresh request. `issue` returns an opaque short-lived
+metadata-only reference; `compare` returns another complete current body with
+`unchanged` or `changed`. Never treat comparison as ETag behavior: do not accept
+304, a bodyless response, a stored snapshot, a watermark, or a historical
+projection. On 409 continuity refusal or retryable 503, stop and repair/retry
+the Provider operation; do not widen scope, switch to MCP/native retrieval,
+infer hidden changes, cache a prior body, or locally rerank/pack alternatives.
+
+Keep comparison references and digest values out of prompts, telemetry,
+diagnostics and repositories. They are not credentials, but an opaque reference
+can still correlate runtime activity. Preserve citations and use recalled text
+only after the agent's own tool/write/business policy has evaluated it.
+
 ## Preserve evidence quality
 
 Keep citations attached to agent-facing answers when a result depends on memory.

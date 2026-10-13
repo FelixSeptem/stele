@@ -2,7 +2,7 @@
 param(
     [string]$ProjectName = "stele-context-$([guid]::NewGuid().ToString('N').Substring(0, 12))",
     [string]$ComposeFile = "docker-compose.yml",
-    [string]$Image = "stele-pc2-verify:local",
+    [string]$Image = "stele-pc4-verify:local",
     [string]$ReportPath = "",
     [switch]$UseExistingStack,
     [string]$BaseUrl = "",
@@ -16,6 +16,7 @@ Push-Location $repoRoot
 $ownedStarted = $false
 $overridePath = Join-Path ([IO.Path]::GetTempPath()) "stele-context-$ProjectName.yml"
 $ownedCredentials = $null
+$phase = "preflight"
 $verificationVariables = @("STELE_CONTEXT_VERIFY_URL", "STELE_CONTEXT_VERIFY_STAGE", "STELE_CONTEXT_VERIFY_REPORT", "STELE_CONTEXT_VERIFY_CREDENTIAL_DIR", "STELE_CONTEXT_VERIFY_IMAGE_DIGEST", "STELE_CONTEXT_VERIFY_SOURCE_REVISION", "STELE_CONTEXT_VERIFY_SOURCE_DIGEST", "STELE_CONTEXT_VERIFY_POSTGRES_DSN")
 $changedVariables = $verificationVariables + @("COMPOSE_PROJECT_NAME", "STELE_POSTGRES_IMAGE", "STELE_POSTGRES_PASSWORD", "STELE_AUTH_BOOTSTRAP_ADMIN_KEY", "STELE_AUTH_DEFAULT_TENANT", "STELE_AUTH_DEFAULT_PROJECT", "STELE_AUTH_DEFAULT_NAMESPACE", "STELE_POSTGRES_HOST_PORT", "STELE_HTTP_HOST_PORT")
 $previousVariables = @{}
@@ -26,6 +27,7 @@ try {
     $ReportPath = [IO.Path]::GetFullPath($ReportPath)
     $reportParent = Split-Path -Parent $ReportPath
     if ($reportParent) { New-Item -ItemType Directory -Force -Path $reportParent | Out-Null }
+    $phase = "docker_dependency"
     & docker info *> $null
     if ($LASTEXITCODE -ne 0) { throw "Docker dependency unavailable" }
     $env:COMPOSE_PROJECT_NAME = $ProjectName
@@ -60,7 +62,11 @@ try {
     @("services:", "  api:", "    image: $imageDigest", "    environment:", "      STELE_PROVIDER_ENABLED: `"true`"", "      STELE_PROVIDER_SCHEMA_VERSIONS: `"provider-v1`"", "  worker:", "    image: $imageDigest", "  scheduler:", "    image: $imageDigest") | Set-Content -LiteralPath $overridePath -Encoding UTF8
     $composeArgs += @("-f", $overridePath)
     $ownedStarted = -not $UseExistingStack
-    & docker @composeArgs up -d --no-build *> $null
+    $phase = "stack_start"
+    # Compose startup output contains only orchestrator status; retaining it
+    # makes a missing image/config diagnosable without exposing HTTP payloads,
+    # credentials, continuity references, or database contents.
+    & docker @composeArgs up -d --no-build
     if ($LASTEXITCODE -ne 0) { throw "owned context stack failed to start" }
     function Wait-ContextReady {
         $deadline = [DateTime]::UtcNow.AddSeconds(45)
@@ -70,10 +76,13 @@ try {
         } while ([DateTime]::UtcNow -lt $deadline)
         throw "owned context API readiness unavailable"
     }
+    $phase = "api_readiness"
     Wait-ContextReady
+    $phase = "pgvector_dependency"
     $vector = (& docker @composeArgs exec -T postgres psql -U stele -d stele -At -c "SELECT extversion FROM pg_extension WHERE extname='vector'" | Out-String).Trim()
     if (-not $vector -or $LASTEXITCODE -ne 0) { throw "owned pgvector dependency missing" }
     if (-not $UseExistingStack) {
+        $phase = "official_bootstrap"
         & pwsh -NoProfile -File (Join-Path $PSScriptRoot "stele-bootstrap-smoke.ps1") -BaseUrl $BaseUrl -BootstrapKey $env:STELE_AUTH_BOOTSTRAP_ADMIN_KEY -Tenant $env:STELE_AUTH_DEFAULT_TENANT -Project $env:STELE_AUTH_DEFAULT_PROJECT -Namespace $env:STELE_AUTH_DEFAULT_NAMESPACE -CredentialOutputDirectory $CredentialDirectory -DisclosureProfile memory-content-v1 -SkipLifecycle
         if ($LASTEXITCODE -ne 0) { throw "official context bootstrap failed" }
     }
@@ -94,18 +103,19 @@ try {
             Wait-ContextReady
         }
         $env:STELE_CONTEXT_VERIFY_STAGE = $stage
+        $phase = "public_$stage"
         & go test ./internal/assurance -run '^TestProviderContextFreshPostgresLive$' -count=1 -timeout 3m
         if ($LASTEXITCODE -ne 0) { throw "public context $stage verification failed" }
         if (-not (Test-Path -LiteralPath $ReportPath)) { throw "context evidence report missing" }
         $report = Get-Content -Raw -LiteralPath $ReportPath | ConvertFrom-Json
-        if ($report.result -ne "passed" -or $report.stage -ne $stage) { throw "context evidence is not passing" }
+        if ($report.result -ne "passed" -or $report.stage -ne $stage -or $report.context_digest_version -ne "context-digest-v1" -or $report.context_continuity_version -ne "context-continuity-v1" -or -not $report.continuity_checked) { throw "context evidence is not PC4-ready" }
         Copy-Item -LiteralPath $ReportPath -Destination "$ReportPath.$stage.json"
     }
     Write-Output "PASS: public context schema, governed paths, isolation, lifecycle, replay, and API/worker restart; bounded report: $ReportPath"
 } catch {
     # Do not retain exception text, credentials, raw HTTP bodies, or scope values.
     if (-not $ReportPath) { $ReportPath = Join-Path ([IO.Path]::GetTempPath()) "$ProjectName.context-conformance.json" }
-    @{ result = "failed"; category = "context_verification_incomplete"; consumable = $false } | ConvertTo-Json | Set-Content -LiteralPath $ReportPath -Encoding UTF8
+    @{ result = "failed"; category = "context_verification_incomplete"; phase = $phase; consumable = $false } | ConvertTo-Json | Set-Content -LiteralPath $ReportPath -Encoding UTF8
     throw "Provider context verification failed; bounded evidence: $ReportPath"
 } finally {
     if ($ownedStarted) { & docker @composeArgs down --volumes --remove-orphans *> $null }

@@ -22,6 +22,11 @@ func registerProviderRoutes(mux *http.ServeMux, deps HTTPDependencies) {
 		if err := doc.Validate(); err != nil {
 			doc = provider.Discover(provider.CapabilityInput{ProviderVersion: "provider-v1", SchemaVersion: "schema-v1"})
 		}
+		doc.ContextContinuity.Enabled = deps.ProviderContextReceipts != nil && deps.ProviderContextContinuity.Validate() == nil && deps.ProviderContextPolicy != nil
+		doc.ContextContinuity.FreshCompare = doc.ContextContinuity.Enabled
+		if deps.ProviderContextContinuity.Validate() == nil {
+			doc.ContextContinuity.TTLSeconds = deps.ProviderContextContinuity.TTLSeconds
+		}
 		doc.SchemaDigest = fmt.Sprintf("sha256:%x", sha256.Sum256([]byte(openapi.SpecYAMLWithMCPPath(deps.MCP.Path))))
 		writeJSON(w, http.StatusOK, doc)
 	})
@@ -285,6 +290,10 @@ func registerProviderOperationRoutes(mux *http.ServeMux, deps HTTPDependencies) 
 			writeProviderError(w, 413, "validation", "context_limit_exceeded", "context response exceeds allocation", false)
 			return
 		}
+		fingerprint, previous, ok := prepareContextContinuity(w, r, deps, b, req, admission)
+		if !ok {
+			return
+		}
 		input.Budget = min(input.Budget, deps.ProviderLimits.Resolved().MaxContextItems)
 		input.FinalAdmission = admission
 		input.DisclosureRequired = true
@@ -305,12 +314,23 @@ func registerProviderOperationRoutes(mux *http.ServeMux, deps HTTPDependencies) 
 			}
 			return
 		}
+		if deps.ProviderContextPolicy != nil {
+			manifest, err := deps.ProviderContextPolicy(r.Context(), b)
+			if err != nil || provider.SelectionPolicyFingerprint(manifest) != admission.PreflightResponse().Result.ContextDigest.SelectionPolicyFingerprint {
+				contextContinuityFailure(w, err)
+				return
+			}
+		}
 		serialized, err := admission.Finalize(out, meta)
 		if err != nil {
 			writeProviderError(w, 413, "validation", "context_limit_exceeded", "context response exceeds allocation", false)
 			return
 		}
 
+		serialized, ok = persistContextContinuity(w, r, deps, b, req, admission, fingerprint, previous, serialized, func() ([]byte, error) { return admission.Finalize(out, meta) })
+		if !ok {
+			return
+		}
 		w.Header().Set("Content-Type", "application/json")
 		w.WriteHeader(200)
 		_, _ = w.Write(serialized)

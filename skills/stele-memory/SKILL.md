@@ -53,6 +53,18 @@ task completion. Choose the access path from the configured principal role.
    different request allocations, wrong versions/counts or over-limit bodies are
    failed contracts. Selected means items returned; empty means no disclosable
    candidate; budget_exhausted means eligible candidates existed but no item fit.
+   Require `result.context_digest` and `result.continuity` as well. Discover
+   `context-digest-v1`, `context-canonical-v1`, `context-selection-v1`, and
+   `context-continuity-v1`; independently recompute the digest over the exact
+   captured response. Omit continuity for the normal fresh read. Use
+   `continuity={"mode":"issue"}` only to obtain a short-lived opaque,
+   metadata-only comparison reference; use `compare` only with the same binding,
+   session and equivalent request. A compare response must still be a complete
+   fresh body with `fresh_compare` and `unchanged` or `changed`, never 304,
+   bodyless cache validation, a snapshot replay or a watermark. Keep the
+   reference/digest out of prompts, source control and telemetry. A 409
+   continuity error or retryable 503 is non-consumable; do not locally recreate,
+   rerank, pack, cache or substitute context.
 5. Preserve authorized citations. Do not infer hidden records, widen scope or
    dereference through a denied endpoint. Stele selects and ranks memory; do not
    add local ranking, canonicalization, eligibility rules or a second fact store.

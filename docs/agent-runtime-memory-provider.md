@@ -64,6 +64,11 @@ start a fresh snapshot instead of assuming that skipped events were applied.
 `context_packing_policy_version=context-packing-v1` and
 `token_budget_supported=false`; compare `schema_digest` with `/openapi.yaml`
 before use. The base `provider-v1` alone does not establish budget compatibility.
+The capability document also advertises `context_digest`
+(`context-digest-v1`, SHA-256, `context-canonical-v1`, and
+`context-selection-v1`) and `context_continuity` (`context-continuity-v1`). A
+client that relies on either extension must require those exact versions rather
+than treating a missing capability as compatible older behavior.
 Send `X-API-Key`, server-issued `X-Stele-Runtime-Binding` and
 `X-Stele-Runtime-Session`, and exact tenant/project/namespace headers. Scope and
 session are binding-owned. The current exact-scope grant must be explicitly
@@ -82,6 +87,69 @@ The defaults are `projection_intent=conversation`, the grant's configured
 `disclosure_profile`, and `response_mode=reference_only`. The reference profile
 permits only references; the content profile permits references or explicitly
 requested bounded content. Both disclose only active low/medium sources.
+
+### Projection digest and fresh continuity
+
+Every successful context response has a closed `result.context_digest` and
+`result.continuity` object, including an empty projection. The digest is a
+domain-separated SHA-256 over the canonical authorized projection: exact scope,
+mode, projection intent, disclosure policy, effective budget, active
+selection-policy fingerprint, section order, returned source versions/path/
+metadata, and citations. It is not a credential, cache validator, snapshot,
+watermark, business-state receipt, or permission to dereference a memory outside
+the normal Provider contract.
+
+Omit `continuity` for an ordinary fresh read. That returns
+`{"read_semantics":"fresh","outcome":"not_requested"}` and performs no
+receipt I/O. To retain a short-lived metadata-only comparison point, request an
+issue:
+
+```json
+{
+  "metadata": {"request_id":"context-request-issue","operation_id":"context-operation-issue","schema_version":"provider-v1"},
+  "input": {"query":"current task","budget":4,"continuity":{"mode":"issue"}}
+}
+```
+
+The response is still a complete fresh context body and has
+`{"read_semantics":"fresh","outcome":"issued","reference":"ctxc_<32 lowercase hex>","expires_at":"<UTC RFC3339 seconds>"}`.
+Keep the opaque reference out of logs, prompts, diagnostics and source control;
+it is not a credential, but it is correlation-sensitive runtime metadata.
+
+To compare a later equivalent read, use the same runtime binding, session,
+scope, query, selector, response mode, profile, intent, effective allocation
+and relevant context options:
+
+```json
+{
+  "metadata": {"request_id":"context-request-compare","operation_id":"context-operation-compare","schema_version":"provider-v1"},
+  "input": {
+    "query":"current task", "budget":4,
+    "continuity":{"mode":"compare","reference":"ctxc_0123456789abcdef0123456789abcdef"}
+  }
+}
+```
+
+Comparison returns a complete current body with `read_semantics=fresh_compare`
+and `outcome=unchanged` or `changed`; it never returns 304, a historical body,
+an exact snapshot replay, a watermark, or an explanation/count for changed
+hidden evidence. A foreign, unknown or expired reference returns a bounded 409
+continuity refusal; a changed originating request returns 409
+`continuity_request_changed`; an incompatible stored contract returns 409
+`continuity_incompatible`. Current grant and disclosure checks happen before
+receipt lookup. Storage/capacity dependency failures are bounded retryable 503
+`provider_unavailable`. A client must consume neither partial output nor a
+locally reconstructed result on any of these failures.
+
+Receipts contain only binding identity, request fingerprint, digest identity,
+issue/expiry timestamps and opaque reference. PostgreSQL supplies the time and
+enforces TTL/capacity; query text, context content, selected IDs, citations and
+serialized response bodies are never persisted in the receipt. The definitive
+canonical-byte fixtures (empty/nonempty reference and bounded-content cases,
+including Unicode escaping) live in
+[`internal/provider/testdata/context-digest-v1`](../internal/provider/testdata/context-digest-v1/).
+Independent consumers must recompute and verify them; they must not calculate a
+second retrieval ranking, eligibility, lifecycle or packing policy.
 
 Full request (ProviderContextRequest):
 
@@ -127,6 +195,13 @@ A genuine empty response (ProviderContextResponse):
 {
   "metadata": {"request_id":"context-request-1","operation_id":"context-operation-1","schema_version":"provider-v1"},
   "result": {
+    "context_digest": {
+      "contract_version":"context-digest-v1","algorithm":"sha-256",
+      "canonicalization_version":"context-canonical-v1","selection_policy_version":"context-selection-v1",
+      "selection_policy_fingerprint":"55dcb1869c32b2b972fa0f628fa5a948457403cf9da803267a4297574c4dfac2",
+      "value":"e150aeaab65c4c28303cd9b5f215770e3a374f8127fb1f11b5613aafe5e36a78"
+    },
+    "continuity": {"contract_version":"context-continuity-v1","read_semantics":"fresh","outcome":"not_requested"},
     "response_mode":"reference_only",
     "disclosure": {
       "profile":"memory-reference-v1","policy_version":"context-disclosure-v1",
@@ -136,7 +211,7 @@ A genuine empty response (ProviderContextResponse):
       "contract_version":"context-budget-v1","packing_policy_version":"context-packing-v1",
       "requested":{"max_items":4,"max_content_bytes":null,"max_response_bytes":null,"max_citations":null},
       "effective":{"max_items":4,"max_content_bytes":1048576,"max_response_bytes":1048576,"max_citations":100},
-      "usage":{"items":0,"content_bytes":0,"response_bytes":924,"citations":0},
+      "usage":{"items":0,"content_bytes":0,"response_bytes":1387,"citations":0},
       "selection":{"outcome":"empty","omission_reasons":[],"unsupported_sections":[]}
     },
     "profile":[],"recent_session":[],"recent_episodes":[],
@@ -207,8 +282,9 @@ versus explicit zero, and require unsupported-section labels to match its sectio
 flags. A self-consistent response for a different allocation is a contract failure. Missing
 accounting, overflow, incompatible versions, impossible usage or over-limit bodies
 are `failed-contract`, never empty results. Source data still grants no business,
-tool, write or compiler authority. Tokenizers/token budgets remain unsupported;
-PC4 digest/continuity and PC5/PC6 reference/outcome protocols remain pending.
+tool, write or compiler authority. Tokenizers/token budgets remain unsupported.
+Context digest and continuity are available under the versioned PC4 contract
+above. PC5/PC6 reference/outcome protocols remain separate and unavailable here.
 
 ### Compatibility and maintenance notes
 
@@ -223,7 +299,7 @@ disable access for consumers requiring the extension while retaining PC2 grants,
 source enforcement and durable data. Consumers must fail compatibility rather
 than stripping limits, broadening disclosure, switching routes or packing locally.
 
-This changes public defaults and requires migration 0035 plus explicit grant
+This changes public defaults and requires migrations 0035 and 0036 plus explicit grant
 provisioning. Old bindings are checked against current grants on every supported
 request. Provider retrieve/sync and native/MCP data routes deny public credentials
 before lookup. Administrative operations retain existing exact-scope checks.

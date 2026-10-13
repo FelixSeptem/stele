@@ -90,6 +90,9 @@ type HTTPDependencies struct {
 	ProviderAdapter           *provider.Adapter
 	ProviderSynchronizer      *provider.Synchronizer
 	ProviderSchemaVersions    []string
+	ProviderContextReceipts   provider.ContextReceiptStore
+	ProviderContextContinuity provider.ContextContinuityConfig
+	ProviderContextPolicy     func(context.Context, provider.RuntimeBinding) ([]byte, error)
 	ProviderLimits            provider.ProviderLimits
 	ReasoningCapabilities     reasoning.Capability
 }

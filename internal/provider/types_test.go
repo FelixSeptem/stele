@@ -8,6 +8,8 @@ import (
 
 func TestCapabilityDocumentRoundTripAndBounds(t *testing.T) {
 	doc := CapabilityDocument{ProviderVersion: "provider-v1", SchemaVersion: "schema-v1", Operations: []string{"ingest", "retrieve"}, ScopeDimensions: []string{"tenant", "project", "namespace", "agent", "session", "conversation", "provider_instance"}, Limits: ProviderLimits{MaxEventBytes: 1024, MaxIntentBytes: 2048, MaxRetrievalResults: 10, MaxContextBytes: 4096, MaxCitations: 8, MaxMetadataBytes: 512}, SchemaDigest: "sha256:abc"}
+	doc.ContextDigest = Discover(CapabilityInput{}).ContextDigest
+	doc.ContextContinuity = Discover(CapabilityInput{}).ContextContinuity
 	doc.DisclosurePolicyVersion = "context-disclosure-v1"
 	doc.ContextBudgetVersion = ContextBudgetVersion
 	doc.ContextPackingPolicyVersion = ContextPackingPolicyVersion

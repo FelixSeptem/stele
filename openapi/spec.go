@@ -255,6 +255,11 @@ paths:
             application/json:
               schema: {$ref: '#/components/schemas/ProviderErrorResponse'}
               example: {error: {category: scope, code: disclosure_denied, message: disclosure denied, retryable: false}}
+        '409':
+          description: Scoped continuity reference unavailable or expired, originating read changed, or stored contract incompatible. No historical body is returned.
+          content:
+            application/json:
+              schema: {$ref: '#/components/schemas/ProviderErrorResponse'}
         '413':
           description: Mandatory empty envelope cannot fit effective response limit, or finalized body/accounting fails limit defense. No result or partial projection is emitted.
           content:
@@ -4479,8 +4484,10 @@ components:
     ProviderCapabilityDocument:
       type: object
       additionalProperties: false
-      required: [provider_version, schema_version, operations, scope_dimensions, limits, synchronization, schema_digest, disclosure_policy_version, source_metadata_version, response_modes, disclosure_profiles, context_budget_version, context_packing_policy_version, token_budget_supported]
+      required: [context_digest, context_continuity, provider_version, schema_version, operations, scope_dimensions, limits, synchronization, schema_digest, disclosure_policy_version, source_metadata_version, response_modes, disclosure_profiles, context_budget_version, context_packing_policy_version, token_budget_supported]
       properties:
+        context_digest: {$ref: '#/components/schemas/ProviderContextDigestCapabilities'}
+        context_continuity: {$ref: '#/components/schemas/ProviderContextContinuityCapabilities'}
         context_budget_version: {type: string, enum: [context-budget-v1]}
         context_packing_policy_version: {type: string, enum: [context-packing-v1], description: Fixed deterministic admission and conservative accounting-reserve policy identity; not a context digest or privileged ranking-plan identity.}
         token_budget_supported: {type: boolean, enum: [false], description: Byte allocations are not model token budgets; token/tokenizer request fields are rejected.}

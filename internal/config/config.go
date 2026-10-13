@@ -98,10 +98,11 @@ type GraphTraversalConfig struct {
 }
 
 type ProviderConfig struct {
-	Enabled         bool
-	SchemaVersions  []string
-	Limits          provider.ProviderLimits
-	BindingLifetime time.Duration
+	ContextContinuity provider.ContextContinuityConfig
+	Enabled           bool
+	SchemaVersions    []string
+	Limits            provider.ProviderLimits
+	BindingLifetime   time.Duration
 }
 
 // ReasoningConfig describes the optional provider-independent reasoning
@@ -743,7 +744,21 @@ func loadProviderConfig() (ProviderConfig, error) {
 	if lifetime < time.Minute || lifetime > 24*time.Hour {
 		return ProviderConfig{}, fmt.Errorf("provider binding lifetime must be between 1m and 24h")
 	}
-	return ProviderConfig{Enabled: loadBoolEnv("STELE_PROVIDER_ENABLED"), SchemaVersions: versions, Limits: limits, BindingLifetime: lifetime}, nil
+	continuity := provider.DefaultContextContinuityConfig()
+	for _, item := range []struct {
+		name   string
+		target *int
+	}{{"TTL_SECONDS", &continuity.TTLSeconds}, {"MAX_RECEIPTS_PER_BINDING", &continuity.MaxReceiptsPerBinding}, {"MAX_RECEIPTS", &continuity.MaxReceipts}, {"CLEANUP_BATCH", &continuity.CleanupBatch}} {
+		value, err := loadIntWithDefault("STELE_PROVIDER_CONTEXT_CONTINUITY_"+item.name, *item.target)
+		if err != nil {
+			return ProviderConfig{}, err
+		}
+		*item.target = value
+	}
+	if err := continuity.Validate(); err != nil {
+		return ProviderConfig{}, err
+	}
+	return ProviderConfig{Enabled: loadBoolEnv("STELE_PROVIDER_ENABLED"), SchemaVersions: versions, Limits: limits, BindingLifetime: lifetime, ContextContinuity: continuity}, nil
 }
 
 func loadReasoningConfig() (ReasoningConfig, error) {

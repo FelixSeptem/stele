@@ -111,3 +111,17 @@ credentials before lookup. Source labels persist through governance and history;
 missing lineage is untrusted/restricted. Attested source data grants no instruction,
 tool, write or business-state authority. See the [disclosure/source guide](context-disclosure-and-source-trust.md)
 for endpoint behavior, administration, versioning and upgrade/rollback.
+
+### Provider context digest and continuity
+
+The Provider HTTP component finalizes `context-digest-v1` only after disclosure,
+selection and exact body accounting have completed. Its digest canonicalizer is
+versioned and domain-separated; the independent assurance component recomputes
+it without reusing retrieval, ranking or packing code. The PostgreSQL receipt
+component added by migration `0036_provider_context_continuity` stores only the
+opaque reference, full binding identity, normalized request fingerprint, digest
+identity and authoritative issue/expiry times. The scheduler performs bounded
+expired-only receipt cleanup. It does not delete active receipts and retained
+expired rows remain subject to capacity until cleanup. No component stores a
+context response as an implementation of comparison: compare reads current
+authorized data and returns a full fresh body.

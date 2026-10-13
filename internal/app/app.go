@@ -689,6 +689,11 @@ func buildAPIRuntime(ctx context.Context, cfg config.Config, deps apiRuntimeDepe
 	httpDeps.ProviderEnabled = cfg.Provider.Enabled
 	httpDeps.ProviderSchemaVersions = cfg.Provider.SchemaVersions
 	httpDeps.ProviderLimits = cfg.Provider.Limits
+	httpDeps.ProviderContextContinuity = cfg.Provider.ContextContinuity
+	httpDeps.ProviderContextReceipts = repo
+	httpDeps.ProviderContextPolicy = func(ctx context.Context, b provider.RuntimeBinding) ([]byte, error) {
+		return retrievalService.ContextSelectionManifest(ctx, b.Scope, b.SessionID)
+	}
 	httpDeps.ReasoningCapabilities = buildReasoningCapability(cfg.Reasoning, deps.reasoningProvider)
 	httpDeps.MemorySession = memory.NewMemorySessionService(memory.MemorySessionServiceOptions{
 		Store:                repo,
@@ -713,6 +718,9 @@ func buildAPIRuntime(ctx context.Context, cfg config.Config, deps apiRuntimeDepe
 		if cfg.Provider.Enabled {
 			httpDeps.ProviderCapabilities = provider.Discover(provider.CapabilityInput{ProviderVersion: "provider-v1", SchemaVersion: cfg.Provider.SchemaVersions[0], ServiceVersion: BuildVersion, BuildID: BuildID})
 			httpDeps.ProviderCapabilities.Limits = cfg.Provider.Limits
+			httpDeps.ProviderCapabilities.ContextContinuity.Enabled = true
+			httpDeps.ProviderCapabilities.ContextContinuity.FreshCompare = true
+			httpDeps.ProviderCapabilities.ContextContinuity.TTLSeconds = cfg.Provider.ContextContinuity.TTLSeconds
 		}
 		httpDeps.ProviderBindings = repo
 		if cfg.Provider.Enabled {
@@ -1390,6 +1398,9 @@ func buildSchedulerRuntime(ctx context.Context, cfg config.Config, deps schedule
 		},
 		Interval:     schedulerInterval,
 		ErrorBackoff: cfg.Jobs.SchedulerErrorBackoff,
+	}
+	if cfg.Provider.Enabled {
+		scheduler.Jobs = append(scheduler.Jobs, jobs.ContextContinuityCleanupJob{Store: repo, Limit: cfg.Provider.ContextContinuity.CleanupBatch})
 	}
 	if cfg.Jobs.WorkflowMaintenanceEnabled {
 		scheduler.Jobs = append(scheduler.Jobs,
