@@ -1905,6 +1905,7 @@ func TestRepositoryPromoteCandidateCreatesCanonicalMemoryVersionAndProvenance(t 
 	}
 
 	mock.ExpectBegin()
+	expectCandidatePromotionLock(mock, input, nil)
 	mock.ExpectQuery("SELECT COALESCE\\(MAX\\(version\\), 0\\) FROM memory_versions").
 		WithArgs(input.MemoryID).
 		WillReturnRows(pgxmock.NewRows([]string{"coalesce"}).AddRow(int64(0)))
@@ -1997,6 +1998,7 @@ func TestRepositoryPromoteCandidateCreatesCanonicalMemoryVersionAndProvenance(t 
 			input.CreatedAt,
 		).
 		WillReturnResult(pgxmock.NewResult("INSERT", 1))
+	expectCandidatePromotionStatus(mock, input)
 	mock.ExpectCommit()
 
 	repo := NewRepository(mock)
@@ -2058,6 +2060,7 @@ func TestRepositoryPromoteCandidateSupersedeUpdatesCanonicalAndAppendsVersion(t 
 	}
 
 	mock.ExpectBegin()
+	expectCandidatePromotionLock(mock, input, nil)
 	mock.ExpectQuery("SELECT COALESCE\\(MAX\\(version\\), 0\\) FROM memory_versions").
 		WithArgs(input.MemoryID).
 		WillReturnRows(pgxmock.NewRows([]string{"coalesce"}).AddRow(int64(1)))
@@ -2144,6 +2147,7 @@ func TestRepositoryPromoteCandidateSupersedeUpdatesCanonicalAndAppendsVersion(t 
 			input.CreatedAt,
 		).
 		WillReturnResult(pgxmock.NewResult("INSERT", 1))
+	expectCandidatePromotionStatus(mock, input)
 	mock.ExpectCommit()
 
 	repo := NewRepository(mock)
@@ -2204,6 +2208,7 @@ func TestRepositoryPromoteCandidateRelationUpsertsProjection(t *testing.T) {
 	}
 
 	mock.ExpectBegin()
+	expectCandidatePromotionLock(mock, input, nil)
 	mock.ExpectQuery("SELECT COALESCE\\(MAX\\(version\\), 0\\) FROM memory_versions").
 		WithArgs(input.MemoryID).
 		WillReturnRows(pgxmock.NewRows([]string{"coalesce"}).AddRow(int64(0)))
@@ -2317,6 +2322,7 @@ func TestRepositoryPromoteCandidateRelationUpsertsProjection(t *testing.T) {
 			input.CreatedAt,
 		).
 		WillReturnResult(pgxmock.NewResult("INSERT", 1))
+	expectCandidatePromotionStatus(mock, input)
 	mock.ExpectCommit()
 
 	repo := NewRepository(mock)

@@ -83,6 +83,10 @@ service boundary.
 
 ## Provider adapter and synchronization
 
+The additive PC5 durable-reference capability exposes exact task/run/handoff/
+compilation reference status and lookup over existing governed memory lineage.
+It is negotiated independently from context and does not own business state.
+
 The provider adapter composes existing event, intent, retrieval, context,
 lifecycle, and status services. The synchronization contract adds bounded
 initial snapshots, ordered replay, cursor acknowledgment, and explicit

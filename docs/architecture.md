@@ -119,6 +119,10 @@ See the [Provider guide](agent-runtime-memory-provider.md) and
 [configuration guidance](self-hosting.md#provider-context-allocation-configuration)
 for validation, units, errors, and rollout evidence.
 
+PC5 durable references are a negotiated additive Provider capability. They reuse
+the event, candidate, canonical version, and provenance lifecycle; they do not
+introduce task or compilation business state.
+
 Public runtime credentials require explicit exact-scope disclosure provisioning.
 Provider context defaults to structured references; bounded content requires the
 content profile and explicit mode. Unsupported native/MCP data routes deny public

@@ -413,6 +413,21 @@ ORDER BY created_at ASC
 	if err := rows.Err(); err != nil {
 		return nil, fmt.Errorf("iterate claimed raw events: %w", err)
 	}
+	rows.Close()
+	// Reference extraction needs the durable selector and contract marker, which
+	// are intentionally absent from the general worker claim projection.
+	for i := range claims {
+		if memory.IsReferenceEventType(claims[i].Event.EventType) {
+			var metadata []byte
+			e := claims[i].Event
+			if err := r.db.QueryRow(ctx, `SELECT metadata FROM raw_events WHERE id=$1 AND tenant=$2 AND project=$3 AND namespace=$4`, e.ID, e.Scope.Tenant, e.Scope.Project, e.Scope.Namespace).Scan(&metadata); err != nil {
+				return nil, fmt.Errorf("read reference attribution: %w", err)
+			}
+			if err := json.Unmarshal(metadata, &claims[i].Event.Metadata); err != nil {
+				return nil, fmt.Errorf("read reference attribution: %w", err)
+			}
+		}
+	}
 
 	return claims, nil
 }
@@ -1590,12 +1605,35 @@ LIMIT 1
 }
 
 func (r *Repository) PromoteCandidate(ctx context.Context, input governance.CanonicalPromotion) (memory.CanonicalMemory, memory.MemoryVersion, error) {
-	input.Candidate.MemoryPath, _ = memory.NormalizeMemoryPath(input.Candidate.MemoryPath)
+	path, pathErr := memory.NormalizeMemoryPath(input.Candidate.MemoryPath)
+	if pathErr != nil {
+		return memory.CanonicalMemory{}, memory.MemoryVersion{}, pathErr
+	}
+	input.Candidate.MemoryPath = path
 	tx, err := r.tx.BeginTx(ctx, pgx.TxOptions{})
 	if err != nil {
 		return memory.CanonicalMemory{}, memory.MemoryVersion{}, fmt.Errorf("begin canonical promotion transaction: %w", err)
 	}
 	defer tx.Rollback(ctx)
+	existingMemoryID, repairPending, err := lockCandidatePromotion(ctx, tx, input)
+	if err != nil {
+		return memory.CanonicalMemory{}, memory.MemoryVersion{}, err
+	}
+	if existingMemoryID != "" {
+		canonical, version, readErr := readCommittedCandidatePromotion(ctx, tx, input, existingMemoryID)
+		if readErr != nil {
+			return memory.CanonicalMemory{}, memory.MemoryVersion{}, readErr
+		}
+		if repairPending {
+			if err := markCandidatePromoted(ctx, tx, input); err != nil {
+				return memory.CanonicalMemory{}, memory.MemoryVersion{}, err
+			}
+		}
+		if err := tx.Commit(ctx); err != nil {
+			return memory.CanonicalMemory{}, memory.MemoryVersion{}, fmt.Errorf("commit promotion recovery: %w", err)
+		}
+		return canonical, version, nil
+	}
 
 	versionNumber, err := nextMemoryVersion(ctx, tx, input.MemoryID)
 	if err != nil {
@@ -1694,6 +1732,9 @@ RETURNING id, tenant, project, namespace, memory_path, class, state, content, cr
 			return memory.CanonicalMemory{}, memory.MemoryVersion{}, err
 		}
 
+		if err := markCandidatePromoted(ctx, tx, input); err != nil {
+			return memory.CanonicalMemory{}, memory.MemoryVersion{}, err
+		}
 		if err := tx.Commit(ctx); err != nil {
 			return memory.CanonicalMemory{}, memory.MemoryVersion{}, fmt.Errorf("commit canonical promotion transaction: %w", err)
 		}
@@ -1779,6 +1820,9 @@ RETURNING id, tenant, project, namespace, memory_path, class, state, content, cr
 		return memory.CanonicalMemory{}, memory.MemoryVersion{}, err
 	}
 
+	if err := markCandidatePromoted(ctx, tx, input); err != nil {
+		return memory.CanonicalMemory{}, memory.MemoryVersion{}, err
+	}
 	if err := tx.Commit(ctx); err != nil {
 		return memory.CanonicalMemory{}, memory.MemoryVersion{}, fmt.Errorf("commit canonical promotion transaction: %w", err)
 	}
@@ -1887,6 +1931,11 @@ func summaryProvenanceID(versionID string, index int) string {
 }
 
 func (r *Repository) CreateSummaryMemory(ctx context.Context, input governance.SummaryMemoryRecord) (memory.CanonicalMemory, memory.MemoryVersion, error) {
+	path, err := memory.NormalizeMemoryPath(input.MemoryPath)
+	if err != nil {
+		return memory.CanonicalMemory{}, memory.MemoryVersion{}, err
+	}
+	input.MemoryPath = path
 	if err := input.Validate(); err != nil {
 		return memory.CanonicalMemory{}, memory.MemoryVersion{}, err
 	}
@@ -1923,7 +1972,7 @@ RETURNING id, tenant, project, namespace, memory_path, class, state, content, cr
 		input.Scope.Tenant,
 		input.Scope.Project,
 		input.Scope.Namespace,
-		memory.MemoryPathRoot,
+		input.MemoryPath,
 		memory.MemoryClassSummary,
 		memory.MemoryStateActive,
 		policy.RetentionClassDurable,
@@ -1966,7 +2015,7 @@ RETURNING id, memory_id, memory_path, version, state, content, created_at, modif
 		sourceReturning(versionQuery),
 		input.VersionID,
 		input.MemoryID,
-		memory.MemoryPathRoot,
+		input.MemoryPath,
 		int64(1),
 		memory.MemoryStateActive,
 		input.Content,

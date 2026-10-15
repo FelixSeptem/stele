@@ -40,6 +40,15 @@ func (RuleBasedConsolidator) Decide(ctx context.Context, candidate CandidateMemo
 			Reason: "confidence_below_threshold",
 		}, nil
 	}
+	// Canonical state is path-scoped. A sibling path must never be treated as
+	// the latest value for this candidate.
+	if found {
+		candidatePath, _ := memory.NormalizeMemoryPath(candidate.MemoryPath)
+		latestPath, _ := memory.NormalizeMemoryPath(latest.MemoryPath)
+		if candidatePath != latestPath {
+			found = false
+		}
+	}
 
 	if !found {
 		return ConsolidationDecision{
@@ -80,6 +89,10 @@ type CanonicalPromotion struct {
 type CanonicalRepository interface {
 	GetLatestCanonicalByScopeAndClass(ctx context.Context, scope memory.Scope, class memory.MemoryClass) (memory.CanonicalMemory, bool, error)
 	PromoteCandidate(ctx context.Context, input CanonicalPromotion) (memory.CanonicalMemory, memory.MemoryVersion, error)
+}
+
+type CanonicalPathRepository interface {
+	GetLatestCanonicalByScopePathAndClass(ctx context.Context, scope memory.Scope, path string, class memory.MemoryClass) (memory.CanonicalMemory, bool, error)
 }
 
 type ConsolidationProcessor struct {
@@ -125,7 +138,21 @@ func (p ConsolidationProcessor) ProcessByRawEvent(ctx context.Context, rawEventI
 	}
 
 	for _, candidate := range candidates {
-		latest, found, err := p.Canonicals.GetLatestCanonicalByScopeAndClass(ctx, candidate.Scope, candidate.Class)
+		if candidate.Status != CandidateStatusPending {
+			continue
+		}
+		path, err := memory.NormalizeMemoryPath(candidate.MemoryPath)
+		if err != nil {
+			return err
+		}
+		candidate.MemoryPath = path
+		var latest memory.CanonicalMemory
+		var found bool
+		if paths, ok := p.Canonicals.(CanonicalPathRepository); ok {
+			latest, found, err = paths.GetLatestCanonicalByScopePathAndClass(ctx, candidate.Scope, path, candidate.Class)
+		} else {
+			latest, found, err = p.Canonicals.GetLatestCanonicalByScopeAndClass(ctx, candidate.Scope, candidate.Class)
+		}
 		if err != nil {
 			return err
 		}

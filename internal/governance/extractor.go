@@ -92,6 +92,10 @@ func (RuleBasedExtractor) Extract(ctx context.Context, event memory.RawEvent) ([
 	case "conversation.message":
 		return []ExtractedCandidate{candidate}, nil
 	default:
+		if memory.IsReferenceEventType(event.EventType) && event.Metadata["reference_contract_version"] == memory.DurableReferenceVersion && event.Metadata["reference_id"] != nil {
+			candidate.RetentionClass = policy.RetentionClassDurable
+			return []ExtractedCandidate{candidate}, nil
+		}
 		return nil, nil
 	}
 }
@@ -141,11 +145,33 @@ func (p ExtractionProcessor) ProcessClaimedRawEvent(ctx context.Context, claim C
 	if err != nil {
 		return err
 	}
+	// Candidate creation commits independently of raw-event completion. Reuse
+	// already committed extraction results after an interrupted worker attempt.
+	existing, err := p.Candidates.ListCandidatesByRawEvent(ctx, claim.Event.ID)
+	if err != nil {
+		return err
+	}
+	used := make([]bool, len(existing))
+	path, err := memory.NormalizeMemoryPath(claim.Event.MemoryPath)
+	if err != nil {
+		return err
+	}
 
 	processedAt := now().UTC()
 	for _, item := range extracted {
 		if err := item.Validate(); err != nil {
 			return err
+		}
+		matched := false
+		for i, candidate := range existing {
+			candidatePath, pathErr := memory.NormalizeMemoryPath(candidate.MemoryPath)
+			if !used[i] && pathErr == nil && candidate.Scope == claim.Event.Scope && candidate.SourceRawEventID == claim.Event.ID && candidatePath == path && candidate.Class == item.Class && candidate.Content == strings.TrimSpace(item.Content) {
+				used[i], matched = true, true
+				break
+			}
+		}
+		if matched {
+			continue
 		}
 
 		candidate := item.ToCandidateMemory(newCandidateID(), claim.Event, processedAt)

@@ -7,6 +7,16 @@ exact-scope disclosure profile. All MCP data tools, including `who_am_i`, deny
 public credentials under PC2. MCP is available for explicitly authorized
 administrator workflows. See [disclosure and source trust](../context-disclosure-and-source-trust.md).
 
+MCP does not gain task or compilation state from PC5. Public runtimes negotiate
+`durable-reference-v1` directly through the Provider contract; administrator
+MCP tools remain subject to existing exact-scope grants.
+Reference writes use at most 4096 UTF-8 value bytes and 4096 normalized metadata
+JSON bytes. The complete completed response must fit 16384 encoded JSON bytes
+after reserving the largest legal scope, metadata, and lineage; escaping-heavy
+values may be rejected with HTTP 400 before admission below the UTF-8 ceiling.
+Use the [reference maintenance guide](../provider-durable-references.md) for
+status, exact-path, disclosure, replay, and rollout semantics.
+
 ## Enable the adapter
 
 Set these values in `.env.local` for an API runtime:

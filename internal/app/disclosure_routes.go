@@ -14,6 +14,7 @@ func disclosureRouteGate(next http.Handler) http.Handler {
 		p, ok := auth.PrincipalFromContext(r.Context())
 		if ok && p.Role != auth.PrincipalRoleAdmin {
 			allowed := r.Method == "POST" && (r.URL.Path == "/v1/provider/runtime" || r.URL.Path == "/v1/provider/context" || r.URL.Path == "/v1/provider/events" || r.URL.Path == "/v1/provider/intents" || r.URL.Path == "/v1/events")
+			allowed = allowed || (r.Method == "POST" && (r.URL.Path == "/v1/provider/references" || r.URL.Path == "/v1/provider/references/status" || r.URL.Path == "/v1/provider/references/lookup"))
 			allowed = allowed || (r.Method == "GET" && (r.URL.Path == "/v1/provider/status" || r.URL.Path == "/v1/provider/capabilities" || r.URL.Path == "/v1/reasoning/capabilities"))
 			if !allowed {
 				writeProviderError(w, 403, "scope", "disclosure_denied", "disclosure denied", false)

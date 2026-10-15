@@ -2,8 +2,9 @@
 param(
     [string]$ProjectName = "stele-context-$([guid]::NewGuid().ToString('N').Substring(0, 12))",
     [string]$ComposeFile = "docker-compose.yml",
-    [string]$Image = "stele-pc4-verify:local",
+    [string]$Image = "stele-pc5-verify:local",
     [string]$ReportPath = "",
+    [string]$ReferenceReportPath = "",
     [switch]$UseExistingStack,
     [string]$BaseUrl = "",
     [string]$CredentialDirectory = ""
@@ -17,16 +18,20 @@ $ownedStarted = $false
 $overridePath = Join-Path ([IO.Path]::GetTempPath()) "stele-context-$ProjectName.yml"
 $ownedCredentials = $null
 $phase = "preflight"
-$verificationVariables = @("STELE_CONTEXT_VERIFY_URL", "STELE_CONTEXT_VERIFY_STAGE", "STELE_CONTEXT_VERIFY_REPORT", "STELE_CONTEXT_VERIFY_CREDENTIAL_DIR", "STELE_CONTEXT_VERIFY_IMAGE_DIGEST", "STELE_CONTEXT_VERIFY_SOURCE_REVISION", "STELE_CONTEXT_VERIFY_SOURCE_DIGEST", "STELE_CONTEXT_VERIFY_POSTGRES_DSN")
+$verificationVariables = @("STELE_CONTEXT_VERIFY_URL", "STELE_CONTEXT_VERIFY_STAGE", "STELE_CONTEXT_VERIFY_REPORT", "STELE_REFERENCE_VERIFY_REPORT", "STELE_CONTEXT_VERIFY_CREDENTIAL_DIR", "STELE_CONTEXT_VERIFY_IMAGE_DIGEST", "STELE_CONTEXT_VERIFY_SOURCE_REVISION", "STELE_CONTEXT_VERIFY_SOURCE_DIGEST", "STELE_CONTEXT_VERIFY_POSTGRES_DSN")
 $changedVariables = $verificationVariables + @("COMPOSE_PROJECT_NAME", "STELE_POSTGRES_IMAGE", "STELE_POSTGRES_PASSWORD", "STELE_AUTH_BOOTSTRAP_ADMIN_KEY", "STELE_AUTH_DEFAULT_TENANT", "STELE_AUTH_DEFAULT_PROJECT", "STELE_AUTH_DEFAULT_NAMESPACE", "STELE_POSTGRES_HOST_PORT", "STELE_HTTP_HOST_PORT")
 $previousVariables = @{}
 foreach ($variable in $changedVariables) { $previousVariables[$variable] = [Environment]::GetEnvironmentVariable($variable, "Process") }
 try {
     if ($ProjectName -notmatch '^[a-z0-9][a-z0-9_-]{2,50}$') { throw "invalid owned context project identifier" }
     if ([string]::IsNullOrWhiteSpace($ReportPath)) { $ReportPath = Join-Path ([IO.Path]::GetTempPath()) "$ProjectName.context-conformance.json" }
+    if ([string]::IsNullOrWhiteSpace($ReferenceReportPath)) { $ReferenceReportPath = "$ReportPath.reference.json" }
     $ReportPath = [IO.Path]::GetFullPath($ReportPath)
+    $ReferenceReportPath = [IO.Path]::GetFullPath($ReferenceReportPath)
     $reportParent = Split-Path -Parent $ReportPath
     if ($reportParent) { New-Item -ItemType Directory -Force -Path $reportParent | Out-Null }
+    $referenceReportParent = Split-Path -Parent $ReferenceReportPath
+    if ($referenceReportParent) { New-Item -ItemType Directory -Force -Path $referenceReportParent | Out-Null }
     $phase = "docker_dependency"
     & docker info *> $null
     if ($LASTEXITCODE -ne 0) { throw "Docker dependency unavailable" }
@@ -89,6 +94,7 @@ try {
     $env:STELE_CONTEXT_VERIFY_URL = $BaseUrl
     if (-not $UseExistingStack) { $env:STELE_CONTEXT_VERIFY_POSTGRES_DSN = "postgres://stele:$($env:STELE_POSTGRES_PASSWORD)@127.0.0.1:$($env:STELE_POSTGRES_HOST_PORT)/stele?sslmode=disable" }
     $env:STELE_CONTEXT_VERIFY_REPORT = $ReportPath
+    $env:STELE_REFERENCE_VERIFY_REPORT = [IO.Path]::GetFullPath($ReferenceReportPath)
     $env:STELE_CONTEXT_VERIFY_CREDENTIAL_DIR = $CredentialDirectory
     $env:STELE_CONTEXT_VERIFY_IMAGE_DIGEST = $imageDigest
     $env:STELE_CONTEXT_VERIFY_SOURCE_REVISION = (& git rev-parse HEAD | Out-String).Trim()
@@ -110,12 +116,20 @@ try {
         $report = Get-Content -Raw -LiteralPath $ReportPath | ConvertFrom-Json
         if ($report.result -ne "passed" -or $report.stage -ne $stage -or $report.context_digest_version -ne "context-digest-v1" -or $report.context_continuity_version -ne "context-continuity-v1" -or -not $report.continuity_checked) { throw "context evidence is not PC4-ready" }
         Copy-Item -LiteralPath $ReportPath -Destination "$ReportPath.$stage.json"
+        & go test ./internal/assurance -run '^TestProviderReferenceFreshPostgresLive$' -count=1 -timeout 3m
+        if ($LASTEXITCODE -ne 0) { throw "public durable reference $stage verification failed" }
+        if (-not (Test-Path -LiteralPath $ReferenceReportPath)) { throw "durable reference evidence report missing" }
+        $referenceReport = Get-Content -Raw -LiteralPath $ReferenceReportPath | ConvertFrom-Json
+        if ($referenceReport.schema_version -ne "provider-v1" -or $referenceReport.fixture_version -ne "provider-durable-reference-live-v1" -or $referenceReport.migration_version -lt 1 -or -not $referenceReport.migration_integrity_verified -or $referenceReport.migration_manifest_digest -notmatch '^[a-f0-9]{64}$') { throw "durable reference schema, migration or fixture provenance missing" }
+        if ($referenceReport.result -ne "passed" -or $referenceReport.contract_version -ne "durable-reference-v1" -or $referenceReport.stage -ne $stage -or $referenceReport.governance_completed -ne 4 -or -not $referenceReport.durable_lineage_checked -or ($stage -eq "restart" -and (-not $referenceReport.restart_checked -or -not $referenceReport.lifecycle_checked -or -not $referenceReport.selector_replacement_checked -or -not $referenceReport.history_retention_checked))) { throw "durable reference evidence is not PC5-ready" }
+        Copy-Item -LiteralPath $ReferenceReportPath -Destination "$ReferenceReportPath.$stage.json"
     }
-    Write-Output "PASS: public context schema, governed paths, isolation, lifecycle, replay, and API/worker restart; bounded report: $ReportPath"
+    Write-Output "PASS: public context and durable reference schema, governed paths, isolation, lifecycle, replay, and API/worker restart; bounded reports: $ReportPath and $ReferenceReportPath"
 } catch {
     # Do not retain exception text, credentials, raw HTTP bodies, or scope values.
     if (-not $ReportPath) { $ReportPath = Join-Path ([IO.Path]::GetTempPath()) "$ProjectName.context-conformance.json" }
     @{ result = "failed"; category = "context_verification_incomplete"; phase = $phase; consumable = $false } | ConvertTo-Json | Set-Content -LiteralPath $ReportPath -Encoding UTF8
+    if ($ReferenceReportPath) { @{ result = "failed"; category = "reference_verification_incomplete"; phase = $phase; consumable = $false } | ConvertTo-Json | Set-Content -LiteralPath $ReferenceReportPath -Encoding UTF8 }
     throw "Provider context verification failed; bounded evidence: $ReportPath"
 } finally {
     if ($ownedStarted) { & docker @composeArgs down --volumes --remove-orphans *> $null }

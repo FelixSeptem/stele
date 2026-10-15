@@ -726,8 +726,10 @@ func buildAPIRuntime(ctx context.Context, cfg config.Config, deps apiRuntimeDepe
 		if cfg.Provider.Enabled {
 			httpDeps.ProviderInitializer = provider.NewRuntimeInitializer(provider.RuntimeInitializerOptions{Authorizer: httpDeps.PrincipalAuthorizer, Bindings: repo, BindingTTL: cfg.Provider.BindingLifetime, Now: time.Now})
 		}
+		httpDeps.ProviderReferences = repo
 		httpDeps.ProviderAdapter = provider.NewAdapter(provider.AdapterDependencies{
-			Ingestor: ingestor, IdempotentIngestor: ingestor, Intent: intentService,
+			ReferenceStore: repo,
+			Ingestor:       ingestor, IdempotentIngestor: ingestor, Intent: intentService,
 			Searcher: retrievalService, Assembler: retrievalService, Lifecycle: lifecycleService,
 			Session: httpDeps.MemorySession,
 			Limits:  cfg.Provider.Limits,

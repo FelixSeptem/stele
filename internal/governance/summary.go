@@ -18,6 +18,7 @@ type SummaryMemoryRecord struct {
 	MemoryID            string
 	VersionID           string
 	Scope               memory.Scope
+	MemoryPath          string
 	Class               memory.MemoryClass
 	Content             string
 	EvidenceRawEventIDs []string
@@ -25,6 +26,13 @@ type SummaryMemoryRecord struct {
 }
 
 func (r SummaryMemoryRecord) Validate() error {
+	path, err := memory.NormalizeMemoryPath(r.MemoryPath)
+	if err != nil {
+		return fmt.Errorf("summary memory path: %w", err)
+	}
+	if path != r.MemoryPath {
+		return fmt.Errorf("summary memory path must be normalized")
+	}
 	switch {
 	case strings.TrimSpace(r.MemoryID) == "":
 		return fmt.Errorf("summary memory id is required")
@@ -65,10 +73,21 @@ func (DeterministicSummarizer) Summarize(ctx context.Context, cluster SummaryClu
 	if len(cluster.Candidates) == 0 {
 		return SummaryMemoryRecord{}, fmt.Errorf("summary cluster is empty")
 	}
+	path, err := memory.NormalizeMemoryPath(cluster.Candidates[0].MemoryPath)
+	if err != nil {
+		return SummaryMemoryRecord{}, fmt.Errorf("summary candidate path: %w", err)
+	}
 
 	parts := make([]string, 0, len(cluster.Candidates))
 	evidence := make([]string, 0, len(cluster.Candidates))
 	for _, candidate := range cluster.Candidates {
+		if candidate.Scope != cluster.Scope {
+			return SummaryMemoryRecord{}, fmt.Errorf("summary candidate scope does not match cluster scope")
+		}
+		candidatePath, pathErr := memory.NormalizeMemoryPath(candidate.MemoryPath)
+		if pathErr != nil || candidatePath != path {
+			return SummaryMemoryRecord{}, fmt.Errorf("summary candidates must share one normalized memory path")
+		}
 		parts = append(parts, strings.TrimSpace(candidate.Content))
 		evidence = append(evidence, candidate.SourceRawEventID)
 	}
@@ -76,6 +95,7 @@ func (DeterministicSummarizer) Summarize(ctx context.Context, cluster SummaryClu
 	return SummaryMemoryRecord{
 		Class:               memory.MemoryClassSummary,
 		Scope:               cluster.Scope,
+		MemoryPath:          path,
 		Content:             "Summary: " + strings.Join(parts, " "),
 		EvidenceRawEventIDs: evidence,
 	}, nil
@@ -132,32 +152,40 @@ func (p SummaryProcessor) CompactScope(ctx context.Context, scope memory.Scope, 
 		return err
 	}
 
-	if len(candidates) < minSize {
-		return nil
-	}
-
-	record, err := p.Summarizer.Summarize(ctx, SummaryCluster{
-		Scope:      scope,
-		Candidates: candidates,
-	})
-	if err != nil {
-		return err
-	}
-
 	now := time.Now
 	if p.Now != nil {
 		now = p.Now
 	}
 
-	record.MemoryID = p.NewMemoryID()
-	record.VersionID = p.NewVersionID()
-	record.Scope = scope
-	record.Class = memory.MemoryClassSummary
-	record.CreatedAt = now().UTC()
-	if err := record.Validate(); err != nil {
-		return err
+	clusters := make(map[string][]CandidateMemory)
+	order := make([]string, 0)
+	for _, candidate := range candidates {
+		path, pathErr := memory.NormalizeMemoryPath(candidate.MemoryPath)
+		if pathErr != nil {
+			return fmt.Errorf("candidate memory path: %w", pathErr)
+		}
+		if _, ok := clusters[path]; !ok {
+			order = append(order, path)
+		}
+		clusters[path] = append(clusters[path], candidate)
 	}
-
-	_, _, err = p.Repository.CreateSummaryMemory(ctx, record)
-	return err
+	for _, path := range order {
+		cluster := clusters[path]
+		if len(cluster) < minSize {
+			continue
+		}
+		record, err := p.Summarizer.Summarize(ctx, SummaryCluster{Scope: scope, Candidates: cluster})
+		if err != nil {
+			return err
+		}
+		record.MemoryID, record.VersionID = p.NewMemoryID(), p.NewVersionID()
+		record.Scope, record.MemoryPath, record.Class, record.CreatedAt = scope, path, memory.MemoryClassSummary, now().UTC()
+		if err := record.Validate(); err != nil {
+			return err
+		}
+		if _, _, err = p.Repository.CreateSummaryMemory(ctx, record); err != nil {
+			return err
+		}
+	}
+	return nil
 }

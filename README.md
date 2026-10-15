@@ -75,6 +75,9 @@ initialize a runtime binding, then request `/v1/provider/context`. The default
 the `memory-content-v1` profile and an explicit mode request. Public credentials
 cannot use native retrieval or MCP tools, including `who_am_i`.
 
+Durable task/run/handoff/compilation references use the separately negotiated
+PC5 contract described in the [Provider reference section](docs/agent-runtime-memory-provider.md#durable-reference-contract-pc5).
+
 Discover `context_budget_version=context-budget-v1`,
 `context_packing_policy_version=context-packing-v1`, and
 `token_budget_supported=false` alongside the disclosure/source versions. Required
