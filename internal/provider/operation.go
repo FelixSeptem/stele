@@ -124,6 +124,7 @@ type AdapterDependencies struct {
 	LifecycleStore     LifecycleIdempotencyStore
 	Session            SessionAdapter
 	Limits             ProviderLimits
+	ReferenceStore     ReferenceStore
 }
 
 type MemoryIntentSubmitter interface {

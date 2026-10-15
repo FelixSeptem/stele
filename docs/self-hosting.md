@@ -2,6 +2,14 @@
 
 ## Overview
 
+PC5 reference support reuses existing scope/path indexes and capability
+discovery; it needs no migration. Mixed API/worker versions fail closed on the
+durable-reference version; rollback disables the capability while retaining
+durable events and provenance.
+
+See the [reference maintenance guide](provider-durable-references.md) for PC5
+compatibility, rollback, and fresh PostgreSQL/restart verification.
+
 `Stele` runs as three process modes against one PostgreSQL instance:
 
 - `api`: public ingest, memory read, retrieval, context assembly, and admin inspection or lifecycle routes

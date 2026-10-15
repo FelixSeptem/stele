@@ -35,6 +35,59 @@ the binding, expiry, principal, and exact grant before repository access.
 Changing scope headers or an identity returns a generic denial and never
 discloses whether foreign records exist.
 
+## Durable reference contract (PC5)
+
+When a runtime needs a durable task, run, handoff, or compilation reference,
+discover the `durable_references` capability and require
+`contract_version=durable-reference-v1` before sending a request. The contract
+is additive to `provider-v1`; a strict client fails closed when the capability
+or version is absent and never substitutes ranked search. The supported event
+types are `provider.reference.task`, `provider.reference.run`,
+`provider.reference.handoff`, and `provider.reference.compilation`.
+
+Use `POST /v1/provider/references` with the standard metadata envelope and
+`reference_id` (UTF-8, at most 128 bytes), normalized `memory_path` (at most
+512 bytes), one supported `event_type`, and a value at most 4096 UTF-8 bytes.
+Normalized operation metadata must encode to at most 4096 JSON bytes. The
+value must also fit the complete 16384-byte completed response, including JSON
+escaping and a reserve for the largest legal scope, metadata, and lineage.
+Escaping-heavy values can therefore return HTTP 400 before admission even
+below the UTF-8 ceiling; plain ASCII values may use the full 4096-byte limit.
+The response is HTTP 202 and reports `accepted` or `pending`; an event ID and
+`replayed` flag identify idempotent admission. Acceptance is not governance
+completion. Poll `POST /v1/provider/references/status` with the event ID, or
+resolve an exact `reference_id` and path with
+`POST /v1/provider/references/lookup`. A `completed` response contains the
+event, candidate, memory, version, and provenance UUIDs. `retry_after_ms` is
+bounded to 30000; retryable failures use only `retryable` or `dependency`
+categories.
+
+`reference_only` omits the value. `bounded_content` requires the current
+content disclosure grant. Omitted source metadata defaults to
+`untrusted/restricted`; an
+`attested_data` source is accepted only with a current exact-scope attestation
+grant. Status completion requires raw-event processing, candidate promotion,
+an active current canonical version, and promotion provenance. Missing,
+foreign, hidden, suppressed, forgotten, or deleted references return
+`unavailable` without identity or value leakage. Exact lookup chooses the most
+recent source for the requested ID and path, then checks its current visibility
+and lifecycle; it never resurrects an older version when that source is hidden.
+
+The capability advertises `max_response_bytes=16384` and `poll_after_ms=1000`.
+Reference routes require all bound scope dimensions to use ASCII letters,
+digits, `_`, `.`, `:`, or `-` and at most 128 bytes each; conversation may be
+empty. An incompatible binding receives HTTP 400 `validation` with code
+`invalid_reference_scope` before write/read dispatch. Existing non-reference
+runtime identity limits are unchanged.
+Reference writes do not own task state, scheduling, compilation commits,
+artifact publication, or webhook delivery. PC5 reuses existing scope/path
+indexes and needs no migration or new dependency. Mixed-version rollout keeps PC1–PC4 routes
+unchanged; disable the capability to roll back while retaining accepted events,
+provenance, and lifecycle history.
+
+The [reference maintenance guide](provider-durable-references.md) records the
+reuse baseline, requirement-to-test matrix, rollout and evidence requirements.
+
 ## Operation metadata and citations
 
 Provider operations use bounded `request_id`, `operation_id`,
@@ -43,6 +96,13 @@ durable retries return the original result. Reusing a key for a different
 normalized payload returns `conflict`; duplicate or stale sequence values never
 replay side effects. Ingest, intents, retrieval, context, and lifecycle requests
 delegate to the existing governed service contracts.
+
+For durable references, `event_seq` is echoed compatibility attribution rather
+than an ordering or replay gate. Durable idempotency keys preserve equivalent
+retry identities after later writes and restart; distinct keys may share a
+sequence value. Reference writes do not advance the ordinary ingestion sequence
+tracker. Exact lookup chooses the latest durable source by descending
+`created_at`, then `id`.
 
 Visible results may include bounded citations with source kind, stable
 reference, version or projection watermark, and availability. Ordinary
@@ -284,7 +344,8 @@ accounting, overflow, incompatible versions, impossible usage or over-limit bodi
 are `failed-contract`, never empty results. Source data still grants no business,
 tool, write or compiler authority. Tokenizers/token budgets remain unsupported.
 Context digest and continuity are available under the versioned PC4 contract
-above. PC5/PC6 reference/outcome protocols remain separate and unavailable here.
+above. PC5 uses the separate durable reference routes described earlier; PC6
+outcome/feedback semantics remain a separate future contract.
 
 ### Compatibility and maintenance notes
 

@@ -88,6 +88,7 @@ type HTTPDependencies struct {
 	ProviderInitializer       *provider.RuntimeInitializer
 	ProviderBindings          provider.RuntimeBindingStore
 	ProviderAdapter           *provider.Adapter
+	ProviderReferences        provider.ReferenceStore
 	ProviderSynchronizer      *provider.Synchronizer
 	ProviderSchemaVersions    []string
 	ProviderContextReceipts   provider.ContextReceiptStore

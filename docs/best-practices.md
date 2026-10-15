@@ -3,6 +3,11 @@
 These practices apply to operators, integrations, and agents using the public
 OpenAPI or MCP boundaries.
 
+For durable references, poll bounded status until governance is complete and
+then use exact ID/path lookup. Validate scope, UUID lineage, limits, lifecycle,
+and disclosure on every response. Never treat HTTP acceptance as canonical
+promotion or fall back to ranked search when PC5 is unavailable.
+
 ## Establish scope before memory work
 
 Use an authenticated principal and resolve the exact runtime binding before

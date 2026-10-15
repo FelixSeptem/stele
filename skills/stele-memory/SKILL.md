@@ -82,6 +82,20 @@ task completion. Choose the access path from the configured principal role.
    authority. An accepted/replayed acknowledgment is not proof of canonical
    promotion, retrieval completion or a completed business task.
 
+   For durable task/run/handoff/compilation references, first require the
+   `durable_references` capability at `durable-reference-v1`; fail closed when
+   absent. Use the write, status, and exact lookup routes documented in the
+   [Provider guide](../../docs/agent-runtime-memory-provider.md#durable-reference-contract-pc5).
+   Validate UUID lineage, exact scope, normalized path, and bounded UTF-8
+   limits. Values use at most 4096 UTF-8 bytes; normalized operation metadata
+   uses at most 4096 encoded JSON bytes. The complete completed response must
+   fit 16384 encoded JSON bytes after reserving the largest legal scope,
+   metadata, and lineage. Escaping-heavy values may return validation HTTP 400
+   before admission below the UTF-8 ceiling; do not retry an altered value under
+   an already accepted idempotency key. `reference_only` never includes a value; content requires the
+   current grant. Treat unavailable as indistinguishable for missing, foreign,
+   hidden, or removed references.
+
 Public credentials are denied on Provider retrieve/sync/forget, native data
 reads/lifecycle and all MCP data tools, including `who_am_i`. Stop on that denial;
 do not switch transport, credentials, scope or write path to bypass it.

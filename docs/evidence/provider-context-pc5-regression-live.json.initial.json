@@ -1,0 +1,236 @@
+{
+  "result": "passed",
+  "stage": "initial",
+  "schema_version": "provider-v1",
+  "openapi_digest": "4f1f13a60b212e6a157e500d4da9a7c55048929364b9f12d6c6ff6cc4def8068",
+  "image_digest": "sha256:bb55ed10d6eda7d41fbf7835bfa67e5f9a26c4ddface3956acc0b3ad008f289b",
+  "source_revision": "009c40dca0c96ab2b6f46f5d409b018b592b891f",
+  "source_digest": "323b1125c5932ffb84947af97c438efe19e7f9b69ea36e42e84479c9d6f61a46",
+  "scope_hash": "05d0b53d66b58d7f32c62a9ea8d6ec4fb02c50e924292375a1253ecb97c46b83",
+  "identity_hash": "66d852845e329e46c43fb95851819e36947fee2e6a661bc619d3a2fb9b51bb1b",
+  "citation_hash": "3fcc3935a36636e77c92066e91e5f4fde09cc744c3b7b1b48884770f970ffe3b",
+  "governance_completed": 7,
+  "disclosure_policy_version": "context-disclosure-v1",
+  "source_metadata_version": "source-metadata-v1",
+  "durable_labels_verified": true,
+  "checks": [
+    "public_http_schema",
+    "capability_digest",
+    "governance_completed",
+    "event_replay",
+    "nonroot_exact_path",
+    "explicit_prefix",
+    "genuine_empty",
+    "foreign_scope_denied",
+    "lifecycle_excluded",
+    "citations_present",
+    "durable_source_labels",
+    "label_replay_conflict",
+    "reference_only_schema",
+    "old_binding_downgrade",
+    "alternate_route_denials",
+    "attestation_authorization",
+    "attestation_replay_reauthorization",
+    "revoked_binding_denied",
+    "unconfigured_profile_denied",
+    "forgotten_deleted_excluded",
+    "high_restricted_excluded",
+    "budget_discovery",
+    "budget_actual_body_bytes",
+    "budget_utf8_content_bytes",
+    "budget_unique_citations",
+    "budget_zero_content",
+    "budget_zero_citations",
+    "budget_omitted_limits",
+    "budget_server_intersection",
+    "budget_minimum_response_413",
+    "budget_unsupported_sections",
+    "budget_safe_empty_no_reasons"
+  ],
+  "budget_contract_version": "context-budget-v1",
+  "budget_packing_version": "context-packing-v1",
+  "budget_outcomes": [
+    "content-omitted:selected",
+    "content-empty-limits:selected",
+    "content-oversized:selected",
+    "content-zero-content:budget_exhausted",
+    "content-zero-citations:budget_exhausted",
+    "content-unsupported:selected",
+    "content-safe-empty-0:empty",
+    "content-safe-empty-1:empty",
+    "content-safe-empty-2:empty",
+    "content-safe-empty-3:empty",
+    "content-safe-empty-4:empty",
+    "content-safe-empty-5:empty",
+    "content-minimum-response:413",
+    "reference-omitted:selected",
+    "reference-empty-limits:selected",
+    "reference-oversized:selected",
+    "reference-zero-content:selected",
+    "reference-zero-citations:budget_exhausted",
+    "reference-unsupported:selected",
+    "reference-safe-empty-0:empty",
+    "reference-safe-empty-1:empty",
+    "reference-safe-empty-2:empty",
+    "reference-safe-empty-3:empty",
+    "reference-safe-empty-4:empty",
+    "reference-safe-empty-5:empty",
+    "reference-minimum-response:413"
+  ],
+  "budget_usage": [
+    {
+      "citations": 1,
+      "content_bytes": 118,
+      "items": 1,
+      "response_bytes": 2354
+    },
+    {
+      "citations": 1,
+      "content_bytes": 118,
+      "items": 1,
+      "response_bytes": 2364
+    },
+    {
+      "citations": 1,
+      "content_bytes": 118,
+      "items": 1,
+      "response_bytes": 2385
+    },
+    {
+      "citations": 0,
+      "content_bytes": 0,
+      "items": 0,
+      "response_bytes": 1439
+    },
+    {
+      "citations": 0,
+      "content_bytes": 0,
+      "items": 0,
+      "response_bytes": 1443
+    },
+    {
+      "citations": 1,
+      "content_bytes": 118,
+      "items": 1,
+      "response_bytes": 2435
+    },
+    {
+      "citations": 0,
+      "content_bytes": 0,
+      "items": 0,
+      "response_bytes": 1408
+    },
+    {
+      "citations": 0,
+      "content_bytes": 0,
+      "items": 0,
+      "response_bytes": 1408
+    },
+    {
+      "citations": 0,
+      "content_bytes": 0,
+      "items": 0,
+      "response_bytes": 1408
+    },
+    {
+      "citations": 0,
+      "content_bytes": 0,
+      "items": 0,
+      "response_bytes": 1408
+    },
+    {
+      "citations": 0,
+      "content_bytes": 0,
+      "items": 0,
+      "response_bytes": 1408
+    },
+    {
+      "citations": 0,
+      "content_bytes": 0,
+      "items": 0,
+      "response_bytes": 1408
+    },
+    {
+      "citations": 1,
+      "content_bytes": 0,
+      "items": 1,
+      "response_bytes": 2225
+    },
+    {
+      "citations": 1,
+      "content_bytes": 0,
+      "items": 1,
+      "response_bytes": 2235
+    },
+    {
+      "citations": 1,
+      "content_bytes": 0,
+      "items": 1,
+      "response_bytes": 2256
+    },
+    {
+      "citations": 1,
+      "content_bytes": 0,
+      "items": 1,
+      "response_bytes": 2226
+    },
+    {
+      "citations": 0,
+      "content_bytes": 0,
+      "items": 0,
+      "response_bytes": 1448
+    },
+    {
+      "citations": 1,
+      "content_bytes": 0,
+      "items": 1,
+      "response_bytes": 2306
+    },
+    {
+      "citations": 0,
+      "content_bytes": 0,
+      "items": 0,
+      "response_bytes": 1413
+    },
+    {
+      "citations": 0,
+      "content_bytes": 0,
+      "items": 0,
+      "response_bytes": 1413
+    },
+    {
+      "citations": 0,
+      "content_bytes": 0,
+      "items": 0,
+      "response_bytes": 1413
+    },
+    {
+      "citations": 0,
+      "content_bytes": 0,
+      "items": 0,
+      "response_bytes": 1413
+    },
+    {
+      "citations": 0,
+      "content_bytes": 0,
+      "items": 0,
+      "response_bytes": 1413
+    },
+    {
+      "citations": 0,
+      "content_bytes": 0,
+      "items": 0,
+      "response_bytes": 1413
+    }
+  ],
+  "budget_identity_hash": "7b37da15483c90693f04ae9b41e101ab54459f99f8b1307681526b5266eae8a7",
+  "budget_citation_hash": "88206afaa643ed05cf1d729810dea56832a5913047ebd0aad71c822211fe7102",
+  "context_digest_version": "context-digest-v1",
+  "context_continuity_version": "context-continuity-v1",
+  "context_digest_hash": "e34be83b83ccf6dd2edf85851b05ff45d4257ffe34520f7eb01762fbbdefa15f",
+  "continuity_outcomes": [
+    "issued",
+    "unchanged"
+  ],
+  "continuity_checked": true
+}

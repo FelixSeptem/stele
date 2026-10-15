@@ -1,6 +1,6 @@
 # Archive Index
 
-Updated: 2026-10-11 22:37:01
+Updated: 2026-10-15 21:57:49
 
 - 001 -> bootstrap-foundation-and-event-ingestion
 - 002 -> governance-pipeline-and-memory-consolidation
@@ -46,6 +46,7 @@ Updated: 2026-10-11 22:37:01
 - 042 -> bounded-graph-distance-retrieval
 - 043 -> context-efficiency-feedback-calibration
 - 044 -> openapi-backed-mcp-scope-and-profile-context
+- 045 -> provider-context-digest-and-continuity
 - 046 -> scoped-memory-path-conventions
 - 047 -> scoped-agent-self-model-conventions
 - 048 -> reasoning-provider-boundary
@@ -72,3 +73,4 @@ Updated: 2026-10-11 22:37:01
 - 069 -> provider-context-openapi-contract-alignment
 - 070 -> provider-context-disclosure-and-source-trust
 - 071 -> provider-context-budget-and-selection-diagnostics
+- 072 -> provider-durable-context-reference-contract
