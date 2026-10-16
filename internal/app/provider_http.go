@@ -25,6 +25,7 @@ func registerProviderRoutes(mux *http.ServeMux, deps HTTPDependencies) {
 		doc.ContextContinuity.Enabled = deps.ProviderContextReceipts != nil && deps.ProviderContextContinuity.Validate() == nil && deps.ProviderContextPolicy != nil
 		doc.ContextContinuity.FreshCompare = doc.ContextContinuity.Enabled
 		doc.DurableReferences = provider.DurableReferenceCapability(deps.ProviderReferences != nil && deps.ProviderAdapter != nil)
+		doc.Projections = provider.ProjectionCapability(deps.ProviderProjections != nil)
 		if deps.ProviderContextContinuity.Validate() == nil {
 			doc.ContextContinuity.TTLSeconds = deps.ProviderContextContinuity.TTLSeconds
 		}
@@ -64,6 +65,7 @@ func registerProviderRoutes(mux *http.ServeMux, deps HTTPDependencies) {
 	if deps.ProviderSynchronizer != nil {
 		registerProviderSyncRoute(mux, deps)
 	}
+	registerProviderProjectionRoutes(mux, deps)
 	if deps.ProviderAdapter != nil {
 		registerProviderOperationRoutes(mux, deps)
 		registerProviderReferenceRoutes(mux, deps)

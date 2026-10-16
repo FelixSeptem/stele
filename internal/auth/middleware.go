@@ -105,29 +105,38 @@ func PrincipalMiddleware(authorizer PrincipalAuthorizer, requiredRole PrincipalR
 // PrincipalMiddleware and emits only bounded operation/status categories.
 // The observer is optional so existing callers and tests remain compatible.
 func PrincipalMiddlewareWithObserver(authorizer PrincipalAuthorizer, requiredRole PrincipalRole, observer telemetry.Observer) func(http.Handler) http.Handler {
+	return PrincipalMiddlewareWithErrorWriter(authorizer, requiredRole, observer, http.Error)
+}
+
+// PrincipalMiddlewareWithErrorWriter preserves the principal gates and telemetry
+// while allowing a versioned API to supply its own bounded error envelope.
+func PrincipalMiddlewareWithErrorWriter(authorizer PrincipalAuthorizer, requiredRole PrincipalRole, observer telemetry.Observer, writeError func(http.ResponseWriter, string, int)) func(http.Handler) http.Handler {
+	if writeError == nil {
+		writeError = http.Error
+	}
 	return func(next http.Handler) http.Handler {
 		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 			if authorizer == nil {
 				recordAccess(observer, r, "not_configured")
-				http.Error(w, "principal authorization is not configured", http.StatusServiceUnavailable)
+				writeError(w, "principal authorization is not configured", http.StatusServiceUnavailable)
 				return
 			}
 			principal, _, err := authorizer.Authenticate(r.Context(), strings.TrimSpace(r.Header.Get(HeaderAPIKey)))
 			if err != nil || principal.Status != PrincipalStatusActive || (requiredRole == PrincipalRoleAdmin && principal.Role != PrincipalRoleAdmin) {
 				recordAccess(observer, r, "denied")
-				http.Error(w, "unauthorized", http.StatusForbidden)
+				writeError(w, "unauthorized", http.StatusForbidden)
 				return
 			}
 			scope := memory.Scope{Tenant: r.Header.Get(HeaderTenant), Project: r.Header.Get(HeaderProject), Namespace: r.Header.Get(HeaderNamespace)}.Normalized()
 			if err := scope.Validate(); err != nil {
 				recordAccess(observer, r, "invalid_scope")
-				http.Error(w, err.Error(), http.StatusBadRequest)
+				writeError(w, err.Error(), http.StatusBadRequest)
 				return
 			}
 			granted, err := authorizer.AuthorizeScope(r.Context(), principal.ID, scope)
 			if err != nil || !granted {
 				recordAccess(observer, r, "scope_denied")
-				http.Error(w, "forbidden", http.StatusForbidden)
+				writeError(w, "forbidden", http.StatusForbidden)
 				return
 			}
 			recordAccess(observer, r, "allowed")

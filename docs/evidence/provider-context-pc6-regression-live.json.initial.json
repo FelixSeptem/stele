@@ -1,0 +1,236 @@
+{
+  "result": "passed",
+  "stage": "initial",
+  "schema_version": "provider-v1",
+  "openapi_digest": "3502452eeee43a7364ae7e7f57516c1e636a59f3c2d118d10a0788e8691fda7e",
+  "image_digest": "sha256:0d49d2f6476c9c71fd61e14fd5e7f3c79d7497355d0c907604f490d9a4099d14",
+  "source_revision": "13c516fee461701ebc4b3a95efe09b1c8c6d7237",
+  "source_digest": "4b0377059d29b471b847d676a62e0a71aafdac9d90f16b48527aaa5203387d9e",
+  "scope_hash": "78529cda61e6c8f4eaf3622ecf5c2f51fd95e43d0ffa6e3d0b7e8811b25a1945",
+  "identity_hash": "7e61c9e1073c2898712534393f840faab46e21c89dcf5b0f61159d9f8bf5e30e",
+  "citation_hash": "1fd6f26308e3c8483623cf7a6b4fc4430ded6ad2972ff1f829cade28ad41d037",
+  "governance_completed": 7,
+  "disclosure_policy_version": "context-disclosure-v1",
+  "source_metadata_version": "source-metadata-v1",
+  "durable_labels_verified": true,
+  "checks": [
+    "public_http_schema",
+    "capability_digest",
+    "governance_completed",
+    "event_replay",
+    "nonroot_exact_path",
+    "explicit_prefix",
+    "genuine_empty",
+    "foreign_scope_denied",
+    "lifecycle_excluded",
+    "citations_present",
+    "durable_source_labels",
+    "label_replay_conflict",
+    "reference_only_schema",
+    "old_binding_downgrade",
+    "alternate_route_denials",
+    "attestation_authorization",
+    "attestation_replay_reauthorization",
+    "revoked_binding_denied",
+    "unconfigured_profile_denied",
+    "forgotten_deleted_excluded",
+    "high_restricted_excluded",
+    "budget_discovery",
+    "budget_actual_body_bytes",
+    "budget_utf8_content_bytes",
+    "budget_unique_citations",
+    "budget_zero_content",
+    "budget_zero_citations",
+    "budget_omitted_limits",
+    "budget_server_intersection",
+    "budget_minimum_response_413",
+    "budget_unsupported_sections",
+    "budget_safe_empty_no_reasons"
+  ],
+  "budget_contract_version": "context-budget-v1",
+  "budget_packing_version": "context-packing-v1",
+  "budget_outcomes": [
+    "content-omitted:selected",
+    "content-empty-limits:selected",
+    "content-oversized:selected",
+    "content-zero-content:budget_exhausted",
+    "content-zero-citations:budget_exhausted",
+    "content-unsupported:selected",
+    "content-safe-empty-0:empty",
+    "content-safe-empty-1:empty",
+    "content-safe-empty-2:empty",
+    "content-safe-empty-3:empty",
+    "content-safe-empty-4:empty",
+    "content-safe-empty-5:empty",
+    "content-minimum-response:413",
+    "reference-omitted:selected",
+    "reference-empty-limits:selected",
+    "reference-oversized:selected",
+    "reference-zero-content:selected",
+    "reference-zero-citations:budget_exhausted",
+    "reference-unsupported:selected",
+    "reference-safe-empty-0:empty",
+    "reference-safe-empty-1:empty",
+    "reference-safe-empty-2:empty",
+    "reference-safe-empty-3:empty",
+    "reference-safe-empty-4:empty",
+    "reference-safe-empty-5:empty",
+    "reference-minimum-response:413"
+  ],
+  "budget_usage": [
+    {
+      "citations": 1,
+      "content_bytes": 118,
+      "items": 1,
+      "response_bytes": 2354
+    },
+    {
+      "citations": 1,
+      "content_bytes": 118,
+      "items": 1,
+      "response_bytes": 2364
+    },
+    {
+      "citations": 1,
+      "content_bytes": 118,
+      "items": 1,
+      "response_bytes": 2385
+    },
+    {
+      "citations": 0,
+      "content_bytes": 0,
+      "items": 0,
+      "response_bytes": 1439
+    },
+    {
+      "citations": 0,
+      "content_bytes": 0,
+      "items": 0,
+      "response_bytes": 1443
+    },
+    {
+      "citations": 1,
+      "content_bytes": 118,
+      "items": 1,
+      "response_bytes": 2435
+    },
+    {
+      "citations": 0,
+      "content_bytes": 0,
+      "items": 0,
+      "response_bytes": 1408
+    },
+    {
+      "citations": 0,
+      "content_bytes": 0,
+      "items": 0,
+      "response_bytes": 1408
+    },
+    {
+      "citations": 0,
+      "content_bytes": 0,
+      "items": 0,
+      "response_bytes": 1408
+    },
+    {
+      "citations": 0,
+      "content_bytes": 0,
+      "items": 0,
+      "response_bytes": 1408
+    },
+    {
+      "citations": 0,
+      "content_bytes": 0,
+      "items": 0,
+      "response_bytes": 1408
+    },
+    {
+      "citations": 0,
+      "content_bytes": 0,
+      "items": 0,
+      "response_bytes": 1408
+    },
+    {
+      "citations": 1,
+      "content_bytes": 0,
+      "items": 1,
+      "response_bytes": 2225
+    },
+    {
+      "citations": 1,
+      "content_bytes": 0,
+      "items": 1,
+      "response_bytes": 2235
+    },
+    {
+      "citations": 1,
+      "content_bytes": 0,
+      "items": 1,
+      "response_bytes": 2256
+    },
+    {
+      "citations": 1,
+      "content_bytes": 0,
+      "items": 1,
+      "response_bytes": 2226
+    },
+    {
+      "citations": 0,
+      "content_bytes": 0,
+      "items": 0,
+      "response_bytes": 1448
+    },
+    {
+      "citations": 1,
+      "content_bytes": 0,
+      "items": 1,
+      "response_bytes": 2306
+    },
+    {
+      "citations": 0,
+      "content_bytes": 0,
+      "items": 0,
+      "response_bytes": 1413
+    },
+    {
+      "citations": 0,
+      "content_bytes": 0,
+      "items": 0,
+      "response_bytes": 1413
+    },
+    {
+      "citations": 0,
+      "content_bytes": 0,
+      "items": 0,
+      "response_bytes": 1413
+    },
+    {
+      "citations": 0,
+      "content_bytes": 0,
+      "items": 0,
+      "response_bytes": 1413
+    },
+    {
+      "citations": 0,
+      "content_bytes": 0,
+      "items": 0,
+      "response_bytes": 1413
+    },
+    {
+      "citations": 0,
+      "content_bytes": 0,
+      "items": 0,
+      "response_bytes": 1413
+    }
+  ],
+  "budget_identity_hash": "caecd5b8f90ddc9eea6f6fd7b30c15c9f1cd02c4cb72caec57242302c6de15f4",
+  "budget_citation_hash": "315314d85b7a9c8317eed08aba96128b125dd08bb2c09d48d769888c3d564dc7",
+  "context_digest_version": "context-digest-v1",
+  "context_continuity_version": "context-continuity-v1",
+  "context_digest_hash": "32b294df19c1528a710b748c9b12e26a667883cbe65af1eccfe55a96dc11725a",
+  "continuity_outcomes": [
+    "issued",
+    "unchanged"
+  ],
+  "continuity_checked": true
+}

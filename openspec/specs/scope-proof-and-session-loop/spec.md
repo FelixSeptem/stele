@@ -199,3 +199,15 @@ The service SHALL recommend existing session and proof surfaces when workflow ev
 #### Scenario: Workflow lacks proof verification
 - **WHEN** a workflow run requires recent scope proof evidence and no valid proof exists
 - **THEN** next actions include a bounded recommendation to create or inspect a scope proof through the existing admin proof routes
+
+### Requirement: Session outcome projection preserves revision and correction evidence
+
+The service SHALL allow scoped session/turn outcome evidence to be projected
+through the dedicated Provider contract with bounded effect identity and source
+revision while preserving existing session history. A correction MUST retain the
+prior session/outcome evidence and SHALL NOT change external execution semantics.
+
+#### Scenario: Corrected outcome follows an earlier session turn
+- **WHEN** a later source revision corrects an outcome associated with a scoped turn
+- **THEN** the session evidence exposes an auditable correction relationship and
+  retains the earlier outcome without marking an external task or lease changed

@@ -89,6 +89,7 @@ type HTTPDependencies struct {
 	ProviderBindings          provider.RuntimeBindingStore
 	ProviderAdapter           *provider.Adapter
 	ProviderReferences        provider.ReferenceStore
+	ProviderProjections       provider.ProjectionStore
 	ProviderSynchronizer      *provider.Synchronizer
 	ProviderSchemaVersions    []string
 	ProviderContextReceipts   provider.ContextReceiptStore
@@ -1769,6 +1770,10 @@ func principalProtectedRoutes(next http.Handler, authorizer auth.PrincipalAuthor
 		requiredRole := auth.PrincipalRolePublic
 		if strings.HasPrefix(r.URL.Path, "/v1/admin/") {
 			requiredRole = auth.PrincipalRoleAdmin
+		}
+		if r.Method == http.MethodPost && (r.URL.Path == "/v1/provider/projections" || r.URL.Path == "/v1/provider/projections/history") {
+			auth.PrincipalMiddlewareWithErrorWriter(authorizer, requiredRole, observer, writeProjectionAccessError)(disclosureRouteGate(next)).ServeHTTP(w, r)
+			return
 		}
 		auth.PrincipalMiddlewareWithObserver(authorizer, requiredRole, observer)(disclosureRouteGate(next)).ServeHTTP(w, r)
 	})

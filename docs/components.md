@@ -87,6 +87,13 @@ The additive PC5 durable-reference capability exposes exact task/run/handoff/
 compilation reference status and lookup over existing governed memory lineage.
 It is negotiated independently from context and does not own business state.
 
+PC6 adds dedicated closed projection/history handlers and DTOs, transactional
+append-only repositories, migration 0037 and a scoped scheduler feedback job.
+`internal/assurance` independently validates the served projection schemas and
+semantics. Admission, current PC5 eligibility and later feedback influence are
+separate; [maintenance details](provider-evidence-projections.md) cover their
+versioning, bounds and recovery.
+
 The provider adapter composes existing event, intent, retrieval, context,
 lifecycle, and status services. The synchronization contract adds bounded
 initial snapshots, ordered replay, cursor acknowledgment, and explicit

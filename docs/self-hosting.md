@@ -10,6 +10,14 @@ durable events and provenance.
 See the [reference maintenance guide](provider-durable-references.md) for PC5
 compatibility, rollback, and fresh PostgreSQL/restart verification.
 
+PC6 requires additive migration 0037 before enabling compatible replicas.
+Set `STELE_PROVIDER_ENABLED=true` for the scheduler to reconcile eligible
+projection feedback asynchronously, as well as for API replicas to serve the
+capability. Retain append-only projection and feedback history on rollback;
+destructive down migration is unsupported. Follow the
+[projection maintenance guide](provider-evidence-projections.md) for bootstrap,
+negotiation, errors, pending semantics and public restart evidence.
+
 `Stele` runs as three process modes against one PostgreSQL instance:
 
 - `api`: public ingest, memory read, retrieval, context assembly, and admin inspection or lifecycle routes
@@ -1365,7 +1373,9 @@ Repair plans never rewrite canonical memory content, provenance, or version hist
 ### External-agent memory feedback loop
 
 This native session/feedback workflow requires a durable administrator principal
-with the exact scope. Public Provider outcome/feedback projection remains PC6.
+with the exact scope. Public runtimes use the separately negotiated
+[PC6 projection operations](provider-evidence-projections.md); native session
+and feedback administration do not grant public credentials wider access.
 
 Use this loop when Stele is integrated with an external agent runtime and you need to close the product feedback loop from recalled memory to quality remediation. Stele remains the memory service only: it does not invoke models, build prompts, run the external agent, or generate final answers.
 

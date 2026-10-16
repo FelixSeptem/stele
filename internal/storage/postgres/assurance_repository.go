@@ -660,7 +660,7 @@ WHERE tenant = $1 AND project = $2 AND namespace = $3
 	case assurance.ExpectedEvidenceUsefulnessFeedback:
 		const query = `
 SELECT COUNT(*)::bigint, MAX(uf.created_at), bool_or(ufs.subject_id IS NULL AND ufs.opaque_token IS NOT NULL), false, false
-FROM usefulness_feedback uf
+FROM eligible_usefulness_feedback uf
 LEFT JOIN usefulness_feedback_subjects ufs
 	ON ufs.feedback_id = uf.id
 	AND ufs.tenant = uf.tenant

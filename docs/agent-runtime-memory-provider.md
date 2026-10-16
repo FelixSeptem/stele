@@ -88,6 +88,32 @@ provenance, and lifecycle history.
 The [reference maintenance guide](provider-durable-references.md) records the
 reuse baseline, requirement-to-test matrix, rollout and evidence requirements.
 
+## Evidence projection contract (PC6)
+
+Negotiate `projections` at `turn-outcome-feedback-projection-v1` independently
+from `provider-v1`, context and durable references. Dedicated
+`POST /v1/provider/projections` (202) and
+`POST /v1/provider/projections/history` (200) use closed metadata/input envelopes,
+the full current runtime binding and exact-scope disclosure. Admission requires
+read-write authority; history allows read-only reference disclosure. Requests
+are bounded to 32768 JSON bytes, responses to 65536 bytes, references/provenance
+to eight each and history to eight records.
+
+One logical effect has append-only source revisions and stable idempotent
+delivery. Greater revisions correct prior evidence; conflicting key reuse and
+stale revisions fail closed. Records label `runtime_reported_evidence` and
+separate admission reference snapshots from current reauthorized attribution.
+Only a completed eligible PC5 reference can feed the asynchronous versioned
+feedback mapper; writes return `none|pending`, never ranking/insight activation.
+PC4 receipt verification requires the same binding and matching digest.
+
+The [projection maintenance guide](provider-evidence-projections.md) supplies
+the full request/response shapes, error categories, correction/history example,
+grant/lifecycle behavior, scheduler enablement, migration 0037, rollback and
+fresh-stack evidence requirements. Generic turns/outcomes remain supported;
+strict PC6 consumers never use them as a fallback. Danny task, lease, commit,
+publication and delivery state stay with the runtime.
+
 ## Operation metadata and citations
 
 Provider operations use bounded `request_id`, `operation_id`,
@@ -345,7 +371,7 @@ are `failed-contract`, never empty results. Source data still grants no business
 tool, write or compiler authority. Tokenizers/token budgets remain unsupported.
 Context digest and continuity are available under the versioned PC4 contract
 above. PC5 uses the separate durable reference routes described earlier; PC6
-outcome/feedback semantics remain a separate future contract.
+outcome/feedback evidence uses the separately negotiated projection contract.
 
 ### Compatibility and maintenance notes
 

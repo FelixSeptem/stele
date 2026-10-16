@@ -123,6 +123,14 @@ PC5 durable references are a negotiated additive Provider capability. They reuse
 the event, candidate, canonical version, and provenance lifecycle; they do not
 introduce task or compilation business state.
 
+PC6 records runtime-reported evidence in immutable projection identities and
+source revisions (migration 0037). The exact-binding admission path only writes
+evidence; a bounded asynchronous scheduler job maps eligible current PC5 lineage
+to the existing usefulness log under `projection-feedback-v1`. Active feedback
+queries recheck current authorization/lifecycle through a PostgreSQL view.
+Corrections retain audit history and require existing ranking/insight gates.
+See [projection maintenance](provider-evidence-projections.md).
+
 Public runtime credentials require explicit exact-scope disclosure provisioning.
 Provider context defaults to structured references; bounded content requires the
 content profile and explicit mode. Unsupported native/MCP data routes deny public

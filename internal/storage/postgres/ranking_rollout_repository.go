@@ -1239,7 +1239,7 @@ SELECT ufs.subject_kind,
 	COUNT(*) FILTER (WHERE uf.feedback_type = 'useful')::int,
 	COUNT(*) FILTER (WHERE uf.feedback_type IN ('irrelevant', 'noisy', 'stale', 'missing_expected'))::int,
 	COUNT(*) FILTER (WHERE uf.feedback_type IN ('unsafe_or_hidden', 'needs_review'))::int
-FROM usefulness_feedback uf
+FROM eligible_usefulness_feedback uf
 JOIN usefulness_feedback_subjects ufs
 	ON ufs.feedback_id = uf.id
 	AND ufs.tenant = uf.tenant
