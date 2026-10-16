@@ -165,7 +165,7 @@ func TestRepositoryVerifiesWorkflowEvidenceWithoutLeakingForeignScope(t *testing
 
 	scope := memory.Scope{Tenant: "tenant-a", Project: "project-a", Namespace: "namespace-a"}
 	foreign := memory.Scope{Tenant: "tenant-b", Project: "project-a", Namespace: "namespace-a"}
-	mock.ExpectQuery("FROM usefulness_feedback f").WithArgs("feedback_foreign").WillReturnRows(
+	mock.ExpectQuery("FROM eligible_usefulness_feedback f").WithArgs("feedback_foreign").WillReturnRows(
 		pgxmock.NewRows([]string{"tenant", "project", "namespace", "hidden", "has_subject", "has_sufficient_evidence", "contradictory"}).
 			AddRow(foreign.Tenant, foreign.Project, foreign.Namespace, false, true, true, false),
 	)

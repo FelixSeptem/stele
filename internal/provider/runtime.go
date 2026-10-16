@@ -273,20 +273,29 @@ func ValidateRuntimeOperation(ctx context.Context, store RuntimeBindingStore, au
 // and exact scope before invoking any provider operation. All failures use a
 // generic forbidden response to avoid existence disclosure.
 func RuntimeBindingMiddleware(store RuntimeBindingStore, authorizer auth.PrincipalAuthorizer) func(http.Handler) http.Handler {
+	return RuntimeBindingMiddlewareWithDenialWriter(store, authorizer, func(w http.ResponseWriter) { http.Error(w, "forbidden", http.StatusForbidden) })
+}
+
+// RuntimeBindingMiddlewareWithDenialWriter applies the identical binding checks
+// with a contract-specific denial envelope that never discloses existence.
+func RuntimeBindingMiddlewareWithDenialWriter(store RuntimeBindingStore, authorizer auth.PrincipalAuthorizer, deny func(http.ResponseWriter)) func(http.Handler) http.Handler {
+	if deny == nil {
+		deny = func(w http.ResponseWriter) { http.Error(w, "forbidden", http.StatusForbidden) }
+	}
 	return func(next http.Handler) http.Handler {
 		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 			if store == nil || authorizer == nil {
-				http.Error(w, "forbidden", http.StatusForbidden)
+				deny(w)
 				return
 			}
 			id := strings.TrimSpace(r.Header.Get(HeaderRuntimeBinding))
 			if id == "" || len(id) > maxRuntimeBindingLength {
-				http.Error(w, "forbidden", http.StatusForbidden)
+				deny(w)
 				return
 			}
 			binding, err := store.Lookup(r.Context(), id)
 			if err != nil || binding.Validate(time.Now().UTC()) != nil {
-				http.Error(w, "forbidden", http.StatusForbidden)
+				deny(w)
 				return
 			}
 			principal, ok := auth.PrincipalFromContext(r.Context())
@@ -294,36 +303,36 @@ func RuntimeBindingMiddleware(store RuntimeBindingStore, authorizer auth.Princip
 				var credential auth.Credential
 				principal, credential, err = authorizer.Authenticate(r.Context(), strings.TrimSpace(r.Header.Get(auth.HeaderAPIKey)))
 				if err != nil || !auth.PrincipalCredentialActive(principal, credential, time.Now().UTC()) {
-					http.Error(w, "forbidden", http.StatusForbidden)
+					deny(w)
 					return
 				}
 			}
 			if principal.ID != binding.PrincipalID || principal.Status != auth.PrincipalStatusActive {
-				http.Error(w, "forbidden", http.StatusForbidden)
+				deny(w)
 				return
 			}
 			if session := strings.TrimSpace(r.Header.Get(HeaderRuntimeSession)); session == "" || session != binding.SessionID {
-				http.Error(w, "forbidden", http.StatusForbidden)
+				deny(w)
 				return
 			}
 			if agent := strings.TrimSpace(r.Header.Get(HeaderRuntimeAgent)); agent != "" && agent != binding.AgentID {
-				http.Error(w, "forbidden", http.StatusForbidden)
+				deny(w)
 				return
 			}
 			if conversation := strings.TrimSpace(r.Header.Get(HeaderRuntimeConversation)); conversation != "" && conversation != binding.ConversationID {
-				http.Error(w, "forbidden", http.StatusForbidden)
+				deny(w)
 				return
 			}
 			requested := memory.Scope{Tenant: r.Header.Get(auth.HeaderTenant), Project: r.Header.Get(auth.HeaderProject), Namespace: r.Header.Get(auth.HeaderNamespace)}
 			if requested.Tenant != "" || requested.Project != "" || requested.Namespace != "" {
 				if requested.Normalized() != binding.Scope.Normalized() {
-					http.Error(w, "forbidden", http.StatusForbidden)
+					deny(w)
 					return
 				}
 			}
 			granted, err := authorizer.AuthorizeScope(r.Context(), binding.PrincipalID, binding.Scope)
 			if err != nil || !granted {
-				http.Error(w, "forbidden", http.StatusForbidden)
+				deny(w)
 				return
 			}
 			ctx := context.WithValue(r.Context(), runtimeBindingContextKey{}, binding)

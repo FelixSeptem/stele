@@ -727,6 +727,7 @@ func buildAPIRuntime(ctx context.Context, cfg config.Config, deps apiRuntimeDepe
 			httpDeps.ProviderInitializer = provider.NewRuntimeInitializer(provider.RuntimeInitializerOptions{Authorizer: httpDeps.PrincipalAuthorizer, Bindings: repo, BindingTTL: cfg.Provider.BindingLifetime, Now: time.Now})
 		}
 		httpDeps.ProviderReferences = repo
+		httpDeps.ProviderProjections = repo
 		httpDeps.ProviderAdapter = provider.NewAdapter(provider.AdapterDependencies{
 			ReferenceStore: repo,
 			Ingestor:       ingestor, IdempotentIngestor: ingestor, Intent: intentService,
@@ -1403,6 +1404,12 @@ func buildSchedulerRuntime(ctx context.Context, cfg config.Config, deps schedule
 	}
 	if cfg.Provider.Enabled {
 		scheduler.Jobs = append(scheduler.Jobs, jobs.ContextContinuityCleanupJob{Store: repo, Limit: cfg.Provider.ContextContinuity.CleanupBatch})
+		scheduler.Jobs = append(scheduler.Jobs, jobs.ScopeDispatchJob{
+			NameValue: "provider_projection_feedback_dispatch", ScopeSource: jobs.ProjectionFeedbackScopeSource{Store: repo}, ScopeBatchLimit: cfg.Jobs.MaintenanceScopeBatchLimit, FallbackScope: scope,
+			Dispatch: func(scope memory.Scope) jobs.MaintenanceJob {
+				return jobs.ProjectionFeedbackJob{Scope: scope, Store: repo, Limit: 100}
+			},
+		})
 	}
 	if cfg.Jobs.WorkflowMaintenanceEnabled {
 		scheduler.Jobs = append(scheduler.Jobs,

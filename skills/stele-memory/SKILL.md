@@ -96,6 +96,18 @@ task completion. Choose the access path from the configured principal role.
    current grant. Treat unavailable as indistinguishable for missing, foreign,
    hidden, or removed references.
 
+   For reported turn/outcome/feedback evidence, separately require
+   `projections` at `turn-outcome-feedback-projection-v1`. Use the dedicated
+   projection/history routes in [projection maintenance](../../docs/provider-evidence-projections.md).
+   Preserve effect identity and an idempotency key per source revision;
+   corrections append a greater revision with a new key. Validate closed
+   schemas, exact binding, 32768-byte requests, 65536-byte responses and
+   eight-reference/history bounds. `runtime_reported_evidence` and
+   `feedback_state=pending` confer no task completion, lease, commit,
+   publication, delivery, content-access or ranking/insight authority.
+   Recheck current references; missing/foreign/hidden attribution is unavailable
+   without identities. Never substitute generic turn/outcome input for PC6.
+
 Public credentials are denied on Provider retrieve/sync/forget, native data
 reads/lifecycle and all MCP data tools, including `who_am_i`. Stop on that denial;
 do not switch transport, credentials, scope or write path to bypass it.

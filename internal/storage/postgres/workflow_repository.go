@@ -133,7 +133,7 @@ SELECT f.tenant, f.project, f.namespace,
        f.superseded_at IS NOT NULL,
        EXISTS (SELECT 1 FROM usefulness_feedback_subjects s WHERE s.feedback_id = f.id AND s.tenant = f.tenant AND s.project = f.project AND s.namespace = f.namespace),
        true, false
-FROM usefulness_feedback f WHERE f.id = $1 LIMIT 1`, nil
+FROM eligible_usefulness_feedback f WHERE f.id = $1 LIMIT 1`, nil
 	case workflow.EvidenceKindTaskEvaluation:
 		return `
 SELECT e.tenant, e.project, e.namespace,

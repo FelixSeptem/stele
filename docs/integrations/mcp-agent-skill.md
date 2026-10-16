@@ -17,6 +17,14 @@ values may be rejected with HTTP 400 before admission below the UTF-8 ceiling.
 Use the [reference maintenance guide](../provider-durable-references.md) for
 status, exact-path, disclosure, replay, and rollout semantics.
 
+PC6 runtime evidence uses dedicated Provider projection/history operations,
+not MCP administrator feedback tools. Require the separately advertised
+`turn-outcome-feedback-projection-v1` capability, stable effect/revision keys
+and current full binding. Pending attribution cannot authorize content or
+feedback influence; no projection completes Danny tasks or activates insights.
+See [projection maintenance](../provider-evidence-projections.md) for migration
+0037, request/response/error shapes and rollback.
+
 ## Enable the adapter
 
 Set these values in `.env.local` for an API runtime:

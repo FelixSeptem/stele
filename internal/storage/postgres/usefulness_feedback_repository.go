@@ -180,10 +180,10 @@ func (r *Repository) ListUsefulnessFeedback(ctx context.Context, input memory.Li
 	if input.Subject.Kind != "" {
 		return r.listUsefulnessFeedbackForSubjectWithFilters(ctx, input.Scope, input.Subject, input.Type, input.IncludeSuperseded, limit)
 	}
-	const query = `
+	query := fmt.Sprintf(`
 SELECT id, tenant, project, namespace, feedback_type, source_surface, task_evaluation_id, actor, reason,
 	idempotency_key, metadata, superseded_at, superseded_by_actor, superseded_by_reason, created_at
-FROM usefulness_feedback uf
+FROM %s uf
 WHERE uf.tenant = $1
 	AND uf.project = $2
 	AND uf.namespace = $3
@@ -191,7 +191,7 @@ WHERE uf.tenant = $1
 	AND ($5::boolean OR uf.superseded_at IS NULL)
 ORDER BY uf.created_at DESC, uf.id DESC
 LIMIT $6
-`
+`, usefulnessFeedbackListSource(input.IncludeSuperseded))
 	rows, err := r.db.Query(
 		ctx,
 		query,
@@ -232,10 +232,10 @@ func (r *Repository) SummarizeUsefulnessFeedback(ctx context.Context, input memo
 
 func (r *Repository) listUsefulnessFeedbackForSubjectWithFilters(ctx context.Context, scope memory.Scope, subject memory.UsefulnessFeedbackSubject, feedbackType memory.UsefulnessFeedbackType, includeSuperseded bool, limit int) ([]memory.UsefulnessFeedback, error) {
 	subjectID, expectedKind, expectedID, opaqueToken := usefulnessFeedbackSubjectStorage(subject)
-	const query = `
+	query := fmt.Sprintf(`
 SELECT uf.id, uf.tenant, uf.project, uf.namespace, uf.feedback_type, uf.source_surface, uf.task_evaluation_id, uf.actor, uf.reason,
 	uf.idempotency_key, uf.metadata, uf.superseded_at, uf.superseded_by_actor, uf.superseded_by_reason, uf.created_at
-FROM usefulness_feedback uf
+FROM %s uf
 JOIN usefulness_feedback_subjects ufs
 	ON ufs.feedback_id = uf.id
 	AND ufs.tenant = uf.tenant
@@ -253,7 +253,7 @@ WHERE uf.tenant = $1
 	AND ($10::boolean OR uf.superseded_at IS NULL)
 ORDER BY uf.created_at DESC, uf.id DESC
 LIMIT $11
-`
+`, usefulnessFeedbackListSource(includeSuperseded))
 	rows, err := r.db.Query(
 		ctx,
 		query,
@@ -286,12 +286,21 @@ LIMIT $11
 	return records, nil
 }
 
+// Explicit audit lists retain source history independently of current provider
+// eligibility. Only these fixed identifiers may be inserted into list SQL.
+func usefulnessFeedbackListSource(includeSuperseded bool) string {
+	if includeSuperseded {
+		return "usefulness_feedback"
+	}
+	return "eligible_usefulness_feedback"
+}
+
 func (r *Repository) listUsefulnessFeedbackForSubject(ctx context.Context, scope memory.Scope, subject memory.UsefulnessFeedbackSubject) ([]memory.UsefulnessFeedback, error) {
 	subjectID, expectedKind, expectedID, opaqueToken := usefulnessFeedbackSubjectStorage(subject)
 	const query = `
 SELECT uf.id, uf.tenant, uf.project, uf.namespace, uf.feedback_type, uf.source_surface, uf.task_evaluation_id, uf.actor, uf.reason,
 	uf.idempotency_key, uf.metadata, uf.superseded_at, uf.superseded_by_actor, uf.superseded_by_reason, uf.created_at
-FROM usefulness_feedback uf
+FROM eligible_usefulness_feedback uf
 JOIN usefulness_feedback_subjects ufs
 	ON ufs.feedback_id = uf.id
 	AND ufs.tenant = uf.tenant
@@ -433,6 +442,7 @@ ORDER BY feedback_id ASC, subject_kind ASC, subject_id ASC
 
 func scanUsefulnessFeedback(scanner provenanceScanner) (memory.UsefulnessFeedback, error) {
 	var feedback memory.UsefulnessFeedback
+	var taskEvaluationID sql.NullString
 	var idempotencyKey sql.NullString
 	var metadata []byte
 	var supersededAt sql.NullTime
@@ -445,7 +455,7 @@ func scanUsefulnessFeedback(scanner provenanceScanner) (memory.UsefulnessFeedbac
 		&feedback.Scope.Namespace,
 		&feedback.Type,
 		&feedback.SourceSurface,
-		&feedback.TaskEvaluationID,
+		&taskEvaluationID,
 		&feedback.Actor,
 		&feedback.Reason,
 		&idempotencyKey,
@@ -460,7 +470,7 @@ func scanUsefulnessFeedback(scanner provenanceScanner) (memory.UsefulnessFeedbac
 	if idempotencyKey.Valid {
 		feedback.IdempotencyKey = idempotencyKey.String
 	}
-	feedback.TaskEvaluationID = strings.TrimSpace(feedback.TaskEvaluationID)
+	feedback.TaskEvaluationID = strings.TrimSpace(taskEvaluationID.String)
 	feedback.Metadata = map[string]any{}
 	if len(metadata) > 0 {
 		if err := json.Unmarshal(metadata, &feedback.Metadata); err != nil {

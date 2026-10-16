@@ -667,7 +667,7 @@ func TestRepositoryInspectsConformanceEvidenceByScope(t *testing.T) {
 	mock.ExpectQuery("FROM memory_session_verifications").
 		WithArgs(scope.Tenant, scope.Project, scope.Namespace).
 		WillReturnRows(conformanceEvidenceRows().AddRow(int64(1), now, false, false, false))
-	mock.ExpectQuery("FROM usefulness_feedback uf").
+	mock.ExpectQuery("FROM eligible_usefulness_feedback uf").
 		WithArgs(scope.Tenant, scope.Project, scope.Namespace).
 		WillReturnRows(conformanceEvidenceRows().AddRow(int64(1), now, false, false, false))
 	mock.ExpectQuery("FROM task_evaluations te").

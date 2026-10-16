@@ -51,7 +51,7 @@ func TestRepositoryCreatesSupersedesAndSummarizesUsefulnessFeedback(t *testing.T
 		WithArgs(scope.Tenant, scope.Project, scope.Namespace, feedback.ID, "operator-a", "incorrect signal", now.Add(time.Minute)).
 		WillReturnResult(pgxmock.NewResult("INSERT", 1))
 	mock.ExpectCommit()
-	mock.ExpectQuery("SELECT[\\s\\S]*FROM usefulness_feedback uf").
+	mock.ExpectQuery("SELECT[\\s\\S]*FROM eligible_usefulness_feedback uf").
 		WithArgs(scope.Tenant, scope.Project, scope.Namespace, memory.UsefulnessFeedbackSubjectMemory, "mem_1", "", "", "").
 		WillReturnRows(usefulnessFeedbackRows().
 			AddRow("feedback_1", scope.Tenant, scope.Project, scope.Namespace, memory.UsefulnessFeedbackTypeNoisy, memory.UsefulnessFeedbackSourceSession, "task_eval_1", "agent-a", "too broad", "idem-1", []byte(`{}`), now.Add(time.Minute), "operator-a", "incorrect signal", now).
@@ -114,7 +114,7 @@ func TestRepositoryReadsAndListsUsefulnessFeedbackWithSubjects(t *testing.T) {
 	mock.ExpectQuery("SELECT[\\s\\S]*FROM usefulness_feedback_subjects").
 		WithArgs([]string{"feedback_1"}, scope.Tenant, scope.Project, scope.Namespace).
 		WillReturnRows(usefulnessFeedbackSubjectRows().AddRow("feedback_1", scope.Tenant, scope.Project, scope.Namespace, memory.UsefulnessFeedbackSubjectExpectedRecall, nil, memory.ExpectedRecallTargetEvent, "evt_1", nil))
-	mock.ExpectQuery("SELECT[\\s\\S]*FROM usefulness_feedback uf").
+	mock.ExpectQuery("SELECT[\\s\\S]*FROM eligible_usefulness_feedback uf").
 		WithArgs(scope.Tenant, scope.Project, scope.Namespace, string(memory.UsefulnessFeedbackTypeMissingExpected), false, 25).
 		WillReturnRows(usefulnessFeedbackRows().AddRow("feedback_1", scope.Tenant, scope.Project, scope.Namespace, memory.UsefulnessFeedbackTypeMissingExpected, memory.UsefulnessFeedbackSourceVerification, "", "agent-a", "expected event missing", "idem-1", []byte(`{}`), nil, nil, nil, now))
 	mock.ExpectQuery("SELECT[\\s\\S]*FROM usefulness_feedback_subjects").
@@ -232,6 +232,19 @@ func TestRepositorySupersedeUsefulnessFeedbackWritesAuditRecord(t *testing.T) {
 
 	if err := mock.ExpectationsWereMet(); err != nil {
 		t.Fatalf("ExpectationsWereMet() error = %v", err)
+	}
+}
+
+func TestProjectionFeedbackNullTaskEvaluationScansAsAbsent(t *testing.T) {
+	mock, err := pgxmock.NewPool()
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer mock.Close()
+	mock.ExpectQuery("fixture").WillReturnRows(usefulnessFeedbackRows().AddRow("f", "t", "p", "n", "useful", "session", nil, "policy", "helped", nil, []byte(`{}`), nil, nil, nil, time.Now()))
+	got, err := scanUsefulnessFeedback(mock.QueryRow(context.Background(), "fixture"))
+	if err != nil || got.TaskEvaluationID != "" {
+		t.Fatalf("nullable task evaluation: %+v %v", got, err)
 	}
 }
 

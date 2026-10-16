@@ -8,6 +8,13 @@ then use exact ID/path lookup. Validate scope, UUID lineage, limits, lifecycle,
 and disclosure on every response. Never treat HTTP acceptance as canonical
 promotion or fall back to ranked search when PC5 is unavailable.
 
+For runtime outcome/feedback evidence, negotiate PC6 and preserve a stable
+effect ID plus idempotency key per source revision. Append corrections with a
+greater revision and new key; never equate admission or `feedback_state=pending`
+with task completion, canonical promotion or ranking/insight activation.
+Reauthorize current reference states on inspection. See
+[projection maintenance](provider-evidence-projections.md) for bounds and errors.
+
 ## Establish scope before memory work
 
 Use an authenticated principal and resolve the exact runtime binding before

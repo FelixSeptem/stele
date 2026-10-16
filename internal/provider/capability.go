@@ -219,6 +219,7 @@ type ContextContinuityCapabilities struct {
 	ContextWatermark    bool   `json:"context_watermark"`
 }
 type CapabilityDocument struct {
+	Projections                 ProjectionCapabilities        `json:"projections"`
 	DurableReferences           DurableReferenceCapabilities  `json:"durable_references"`
 	ContextDigest               ContextDigestCapabilities     `json:"context_digest"`
 	ContextContinuity           ContextContinuityCapabilities `json:"context_continuity"`
@@ -286,6 +287,7 @@ func Discover(in CapabilityInput) CapabilityDocument {
 		d.ProviderVersion = "unknown"
 	}
 	d.DurableReferences = DurableReferenceCapability(false)
+	d.Projections = ProjectionCapability(false)
 	if strings.TrimSpace(d.SchemaVersion) == "" {
 		d.SchemaVersion = "schema-v1"
 	}

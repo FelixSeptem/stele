@@ -78,6 +78,12 @@ cannot use native retrieval or MCP tools, including `who_am_i`.
 Durable task/run/handoff/compilation references use the separately negotiated
 PC5 contract described in the [Provider reference section](docs/agent-runtime-memory-provider.md#durable-reference-contract-pc5).
 
+Runtime turn/outcome/feedback evidence uses the separate PC6 capability,
+`turn-outcome-feedback-projection-v1`, with append-only corrections and bounded
+history. Admission does not complete tasks or activate ranking/insights. See
+[projection maintenance](docs/provider-evidence-projections.md) for migration
+0037, request/response bounds, asynchronous feedback and rollback.
+
 Discover `context_budget_version=context-budget-v1`,
 `context_packing_policy_version=context-packing-v1`, and
 `token_budget_supported=false` alongside the disclosure/source versions. Required
