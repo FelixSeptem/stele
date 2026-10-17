@@ -1,6 +1,6 @@
 # Archive Index
 
-Updated: 2026-10-16 12:36:44
+Updated: 2026-10-17 15:19:29
 
 - 001 -> bootstrap-foundation-and-event-ingestion
 - 002 -> governance-pipeline-and-memory-consolidation
@@ -75,3 +75,4 @@ Updated: 2026-10-16 12:36:44
 - 071 -> provider-context-budget-and-selection-diagnostics
 - 072 -> provider-durable-context-reference-contract
 - 073 -> provider-turn-outcome-and-feedback-projection-contract
+- 074 -> governed-memory-repository-interoperability

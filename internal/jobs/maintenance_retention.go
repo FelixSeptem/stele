@@ -39,6 +39,50 @@ type DerivedArtifactRetentionStore interface {
 	DeleteConformanceEvidenceBefore(context.Context, memory.Scope, time.Time, int) (int, error)
 }
 
+// MemoryRepositoryPreviewRetentionStore removes only expired, unaccepted
+// preview evidence. Accepted import plans remain durable so worker recovery,
+// audit, and idempotency never depend on a preview payload being retained.
+type MemoryRepositoryPreviewRetentionStore interface {
+	PruneExpiredMemoryRepositoryPreviews(context.Context, time.Time, int) (int, error)
+}
+
+// MemoryRepositoryPreviewRetentionJob applies preview payload retention as a
+// bounded maintenance operation. It does not delete accepted imports, child
+// intents, candidates, canonical memories, or tombstones.
+type MemoryRepositoryPreviewRetentionJob struct {
+	Store           MemoryRepositoryPreviewRetentionStore
+	Now             func() time.Time
+	RetentionWindow time.Duration
+	Limit           int
+}
+
+func (j MemoryRepositoryPreviewRetentionJob) Name() string {
+	return "memory_repository_preview_retention"
+}
+
+func (j MemoryRepositoryPreviewRetentionJob) Run(ctx context.Context) (int, error) {
+	if j.Store == nil {
+		return 0, fmt.Errorf("memory repository preview retention store is required")
+	}
+	now := time.Now().UTC()
+	if j.Now != nil {
+		now = j.Now().UTC()
+	}
+	window := j.RetentionWindow
+	if window <= 0 {
+		window = 24 * time.Hour
+	}
+	limit := j.Limit
+	if limit <= 0 || limit > 1000 {
+		limit = 100
+	}
+	deleted, err := j.Store.PruneExpiredMemoryRepositoryPreviews(ctx, now.Add(-window), limit)
+	if err != nil {
+		return deleted, err
+	}
+	return deleted, nil
+}
+
 type DerivedArtifactRetentionJob struct {
 	Scope           memory.Scope
 	Store           DerivedArtifactRetentionStore

@@ -39,6 +39,19 @@ func TestDerivedWorkInputValidateRejectsUnsupportedAndUnboundedReferences(t *tes
 	}
 }
 
+func TestDerivedWorkInputAcceptsMemoryRepositoryImport(t *testing.T) {
+	input := DerivedWorkInput{
+		Scope:       memory.Scope{Tenant: "tenant-a", Project: "project-a", Namespace: "namespace-a"},
+		Kind:        WorkKindMemoryRepositoryImport,
+		Watermark:   "plan-digest",
+		Idempotency: "import-1",
+		Reference:   "import-1",
+	}
+	if err := input.Validate(); err != nil {
+		t.Fatalf("memory repository import work rejected: %v", err)
+	}
+}
+
 func TestDerivedWorkIdentityIsDeterministicAndScoped(t *testing.T) {
 	scope := memory.Scope{Tenant: "tenant-a", Project: "project-a", Namespace: "namespace-a"}
 	first, err := NewDerivedWorkIdentity(DerivedWorkInput{Scope: scope, Kind: WorkKindReflection, Watermark: "wm-1", Idempotency: "trigger-1", Reference: "run-1"})

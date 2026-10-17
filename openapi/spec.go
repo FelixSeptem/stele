@@ -9166,6 +9166,7 @@ components:
             $ref: '#/components/schemas/RankingRolloutPolicy'
 `
 	spec = strings.Replace(spec, "components:\n", disclosurePaths+"components:\n", 1)
+	spec = strings.Replace(spec, "  /v1/memory-intents:\n", memoryRepositoryPaths+"  /v1/memory-intents:\n", 1)
 	spec = strings.Replace(spec, "  /v1/provider/context:\n", providerReferencePaths+providerProjectionPaths()+"  /v1/provider/context:\n", 1)
-	return strings.Replace(spec+providerContextSchemas+providerReferenceSchemas+providerProjectionSchemas+disclosureSchemas, "  /mcp:\n", "  "+mcpPath+":\n", 1)
+	return strings.Replace(spec+memoryRepositorySchemas+providerContextSchemas+providerReferenceSchemas+providerProjectionSchemas+disclosureSchemas, "  /mcp:\n", "  "+mcpPath+":\n", 1)
 }

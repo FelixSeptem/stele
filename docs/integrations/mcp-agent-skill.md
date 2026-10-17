@@ -273,3 +273,10 @@ The portable agent instructions are in
 file into the agent host's skill directory or include it as repository context.
 Keep the skill and this guide aligned with `internal/mcp/schema.go` whenever MCP
 tools or annotations change.
+
+## HTTP-only repository snapshots
+
+Memory repository import adds no MCP tool in v1. When enabled, it is strictly
+the reviewed HTTP snapshot protocol described in the
+[repository import guide](memory-repository-import.md); do not substitute Git,
+filesystem, URL, archive, or local-memory behavior.

@@ -27,17 +27,18 @@ const (
 type WorkKind string
 
 const (
-	WorkKindReflection         WorkKind = "reflection"
-	WorkKindCompaction         WorkKind = "compaction"
-	WorkKindProjectionRebuild  WorkKind = "projection_rebuild"
-	WorkKindInsightMaintenance WorkKind = "insight_maintenance"
-	WorkKindFreshnessRetention WorkKind = "freshness_retention"
-	WorkKindMemoryIntent       WorkKind = "memory_intent"
+	WorkKindReflection             WorkKind = "reflection"
+	WorkKindCompaction             WorkKind = "compaction"
+	WorkKindProjectionRebuild      WorkKind = "projection_rebuild"
+	WorkKindInsightMaintenance     WorkKind = "insight_maintenance"
+	WorkKindFreshnessRetention     WorkKind = "freshness_retention"
+	WorkKindMemoryIntent           WorkKind = "memory_intent"
+	WorkKindMemoryRepositoryImport WorkKind = "memory_repository_import"
 )
 
 func (k WorkKind) Valid() bool {
 	switch k {
-	case WorkKindReflection, WorkKindCompaction, WorkKindProjectionRebuild, WorkKindInsightMaintenance, WorkKindFreshnessRetention, WorkKindMemoryIntent:
+	case WorkKindReflection, WorkKindCompaction, WorkKindProjectionRebuild, WorkKindInsightMaintenance, WorkKindFreshnessRetention, WorkKindMemoryIntent, WorkKindMemoryRepositoryImport:
 		return true
 	default:
 		return false

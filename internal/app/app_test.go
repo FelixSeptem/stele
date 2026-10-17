@@ -768,8 +768,8 @@ func TestBuildSchedulerRuntimeAssemblesMaintenanceScheduler(t *testing.T) {
 		t.Fatalf("runtime scheduler type = %T, want jobs.MaintenanceScheduler", runtime.scheduler)
 	}
 
-	if len(scheduler.Jobs) != 12 {
-		t.Fatalf("len(scheduler.Jobs) = %d, want 12", len(scheduler.Jobs))
+	if len(scheduler.Jobs) != 13 {
+		t.Fatalf("len(scheduler.Jobs) = %d, want 13", len(scheduler.Jobs))
 	}
 }
 
@@ -924,8 +924,8 @@ func TestBuildSchedulerRuntimeAssemblesScopeDispatchJobs(t *testing.T) {
 		t.Fatalf("runtime scheduler type = %T, want jobs.MaintenanceScheduler", runtime.scheduler)
 	}
 
-	if len(scheduler.Jobs) != 12 {
-		t.Fatalf("len(scheduler.Jobs) = %d, want 12", len(scheduler.Jobs))
+	if len(scheduler.Jobs) != 13 {
+		t.Fatalf("len(scheduler.Jobs) = %d, want 13", len(scheduler.Jobs))
 	}
 
 	dispatchA, ok := scheduler.Jobs[0].(jobs.ScopeDispatchJob)
@@ -1058,6 +1058,13 @@ func TestBuildSchedulerRuntimeAssemblesScopeDispatchJobs(t *testing.T) {
 	}
 	if _, ok := scheduler.Jobs[11].(jobs.SchedulerRunHistoryRetentionJob); !ok {
 		t.Fatalf("scheduler.Jobs[11] type = %T, want scheduler run history retention", scheduler.Jobs[11])
+	}
+	previewRetention, ok := scheduler.Jobs[12].(jobs.MemoryRepositoryPreviewRetentionJob)
+	if !ok {
+		t.Fatalf("scheduler.Jobs[12] type = %T, want memory repository preview retention", scheduler.Jobs[12])
+	}
+	if previewRetention.RetentionWindow != 24*time.Hour || previewRetention.Limit != 100 {
+		t.Fatalf("preview retention window/limit = %v/%d, want 24h/100", previewRetention.RetentionWindow, previewRetention.Limit)
 	}
 }
 

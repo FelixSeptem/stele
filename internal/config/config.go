@@ -53,6 +53,7 @@ type Config struct {
 	ContextCalibration                  ContextCalibrationConfig
 	MCP                                 MCPConfig
 	MemoryIntent                        MemoryIntentConfig
+	MemoryRepositoryImport              MemoryRepositoryImportConfig
 	DerivedWork                         workqueue.QueueConfig
 }
 
@@ -73,6 +74,13 @@ type MCPConfig struct {
 type MemoryIntentConfig struct {
 	Enabled       bool
 	PolicyVersion string
+}
+
+// MemoryRepositoryImportConfig gates new external snapshot admission. It is
+// deliberately default-off; disabling it never deletes accepted imports or
+// canonical memory, and workers may continue draining accepted work.
+type MemoryRepositoryImportConfig struct {
+	Enabled bool
 }
 
 type ContextCalibrationConfig struct {
@@ -578,6 +586,7 @@ func LoadFromEnv() (Config, error) {
 		Migrations:                          MigrationConfig{Policy: migrationPolicy},
 		ContextProjectionConsumptionEnabled: contextProjectionConsumptionEnabled,
 		MemoryIntent:                        MemoryIntentConfig{Enabled: loadBoolEnvWithDefault("STELE_MEMORY_INTENT_POLICY_ENABLED", true), PolicyVersion: intentPolicyVersion},
+		MemoryRepositoryImport:              MemoryRepositoryImportConfig{Enabled: loadBoolEnv("STELE_MEMORY_REPOSITORY_IMPORT_ENABLED")},
 		QueryAnalysis:                       queryAnalysis,
 		GraphTraversal:                      graphTraversal,
 		ContextCalibration:                  contextCalibration,

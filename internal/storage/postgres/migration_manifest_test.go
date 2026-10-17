@@ -14,8 +14,8 @@ func TestMigrationManifestIsDeterministicAndChecksummed(t *testing.T) {
 	if err != nil {
 		t.Fatalf("MigrationManifest() second call error = %v", err)
 	}
-	if len(first) != 37 {
-		t.Fatalf("manifest length = %d, want 37: %+v", len(first), first)
+	if len(first) != 39 {
+		t.Fatalf("manifest length = %d, want 39: %+v", len(first), first)
 	}
 	if first[0] != second[0] {
 		t.Fatalf("manifest is not deterministic: first=%+v second=%+v", first[0], second[0])
@@ -88,6 +88,12 @@ func TestMigrationManifestIsDeterministicAndChecksummed(t *testing.T) {
 	}
 	if first[27].Version != 28 || first[27].Name != "0028_governed_memory_intent_transitions.up.sql" {
 		t.Fatalf("manifest entry = %+v, want version 28 governed intent transitions", first[27])
+	}
+	if first[37].Version != 38 || first[37].Name != "0038_memory_repository_imports.up.sql" {
+		t.Fatalf("manifest entry = %+v, want version 38 memory repository imports", first[37])
+	}
+	if first[38].Version != 39 || first[38].Name != "0039_memory_repository_import_work_kind.up.sql" {
+		t.Fatalf("manifest entry = %+v, want version 39 memory repository import work kind", first[38])
 	}
 	if first[22].Version != 23 || first[22].Name != "0023_scheduler_run_history.up.sql" {
 		t.Fatalf("manifest entry = %+v, want version 23 scheduler run history", first[22])
