@@ -2,6 +2,7 @@ package app
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"net/http"
@@ -236,11 +237,12 @@ func (r memoryIntentGovernanceRouter) ProcessRememberOrUpdate(ctx context.Contex
 	if r.now != nil {
 		now = r.now().UTC()
 	}
-	event, err := r.repo.WriteRawEvent(ctx, memory.IngestEventInput{Scope: record.Scope, MemoryPath: record.MemoryPath, EventType: "conversation.message", Content: record.Content, Metadata: map[string]any{"intent_id": record.ID, "intent_type": string(record.Type)}, SourceTimestamp: now})
+	source, class := memoryRepositoryIntentAttributes(record.Provenance)
+	event, err := r.repo.WriteRawEvent(ctx, memory.IngestEventInput{Scope: record.Scope, MemoryPath: record.MemoryPath, EventType: "conversation.message", Content: record.Content, Metadata: map[string]any{"intent_id": record.ID, "intent_type": string(record.Type)}, SourceMetadata: source, SourceTimestamp: now})
 	if err != nil {
 		return memory.MemoryIntentOutcome{}, err
 	}
-	candidate := governance.CandidateMemory{ID: uuid.NewString(), SourceRawEventID: event.ID, Scope: record.Scope, MemoryPath: record.MemoryPath, Class: memory.MemoryClassEpisodic, Content: record.Content, Confidence: 1, Importance: 0.5, Freshness: 1, Sensitivity: governance.SensitivityLow, Mutability: governance.MutabilityMutable, RetentionClass: policy.RetentionClassDurable, Status: governance.CandidateStatusPending, CreatedAt: now, UpdatedAt: now}
+	candidate := memoryRepositoryCandidate(uuid.NewString(), event.ID, record.Scope, record.MemoryPath, class, record.Content, source, now)
 	created, err := r.repo.CreateCandidate(ctx, candidate, memory.ProvenanceRecord{ID: uuid.NewString(), Scope: record.Scope, RawEventID: event.ID, CandidateMemoryID: candidate.ID, Actor: record.Actor, Operation: "memory_intent_candidate", CreatedAt: now, SourceContext: map[string]any{"intent_id": record.ID}})
 	if err != nil {
 		return memory.MemoryIntentOutcome{}, err
@@ -259,6 +261,53 @@ func (r memoryIntentGovernanceRouter) ProcessRememberOrUpdate(ctx context.Contex
 		return memory.MemoryIntentOutcome{}, err
 	}
 	return memory.MemoryIntentOutcome{Status: memory.MemoryIntentStatusActive, DiagnosticCategory: memory.MemoryIntentDiagnosticAccepted, OutcomeReference: memoryID, CandidateReference: created.ID}, nil
+}
+
+// memoryRepositoryCandidate preserves the effective source label from a
+// reviewed repository plan through candidate and canonical promotion. The
+// label remains data governed by existing derivation rules; it does not grant
+// authority to imported Markdown.
+func memoryRepositoryCandidate(id, rawEventID string, scope memory.Scope, memoryPath string, class memory.MemoryClass, content string, source memory.SourceMetadata, now time.Time) governance.CandidateMemory {
+	return governance.CandidateMemory{
+		ID: id, SourceRawEventID: rawEventID, Scope: scope, MemoryPath: memoryPath, Class: class, Content: content,
+		SourceMetadata: source.Effective(),
+		Confidence:     1, Importance: 0.5, Freshness: 1, Sensitivity: governance.SensitivityLow,
+		Mutability: governance.MutabilityMutable, RetentionClass: policy.RetentionClassDurable,
+		Status: governance.CandidateStatusPending, CreatedAt: now, UpdatedAt: now,
+	}
+}
+
+// memoryRepositoryIntentAttributes accepts only strongly typed, already
+// persisted repository-plan attributes. Any missing or malformed attribute is
+// deliberately downgraded to the existing untrusted/restricted default.
+func memoryRepositoryIntentAttributes(provenance map[string]any) (memory.SourceMetadata, memory.MemoryClass) {
+	source := (memory.SourceMetadata{}).Effective()
+	class := memory.MemoryClassEpisodic
+	if provenance == nil || strings.TrimSpace(stringFromAny(provenance["memory_repository_id"])) == "" {
+		return source, class
+	}
+	if metadata, ok := provenance["source_metadata"].(memory.SourceMetadata); ok && metadata.Validate() == nil {
+		source = metadata
+	} else if encoded, err := json.Marshal(provenance["source_metadata"]); err == nil {
+		var persisted memory.SourceMetadata
+		if json.Unmarshal(encoded, &persisted) == nil && persisted.Validate() == nil {
+			source = persisted
+		}
+	}
+	if value, ok := provenance["memory_class"].(string); ok {
+		candidate := memory.MemoryClass(strings.TrimSpace(value))
+		if candidate.Valid() {
+			class = candidate
+		}
+	}
+	return source, class
+}
+
+func stringFromAny(value any) string {
+	if value, ok := value.(string); ok {
+		return value
+	}
+	return ""
 }
 
 func (r memoryIntentGovernanceRouter) ProcessForget(ctx context.Context, record memory.MemoryIntentRecord) (memory.MemoryIntentOutcome, error) {
@@ -710,6 +759,14 @@ func buildAPIRuntime(ctx context.Context, cfg config.Config, deps apiRuntimeDepe
 	}
 	intentService := memory.MemoryIntentService{Processor: repo, Policy: intentPolicy, Now: time.Now}
 	httpDeps.MemoryIntent = intentService
+	// Admission is intentionally opt-in. Disabling it removes only new
+	// registration/preview/submission admission; accepted durable work remains
+	// governed by the existing worker path.
+	httpDeps.MemoryRepository = memory.MemoryRepositoryService{
+		Enabled: cfg.MemoryRepositoryImport.Enabled,
+		Store:   repo,
+		Now:     time.Now,
+	}
 	// Keep the public submission service separate from the exact-scope read
 	// boundary. The repository implements both read interfaces and enforces the
 	// tenant/project/namespace predicates for detail and history inspection.
@@ -1071,6 +1128,13 @@ func buildWorkerRuntime(ctx context.Context, cfg config.Config, deps workerRunti
 		Observer:      deps.observer,
 	}
 	intentKind := workqueue.WorkKindMemoryIntent
+	intentService := memory.MemoryIntentService{
+		Processor: repo,
+		Policy: memory.StaticMemoryIntentPolicy{
+			Scope: scope, PolicyVersion: cfg.MemoryIntent.PolicyVersion, Enabled: cfg.MemoryIntent.Enabled,
+		},
+		Now: now, NewID: newID,
+	}
 	intentWorker := jobs.DerivedWorkWorker{
 		Store: repo,
 		Executor: jobs.MemoryIntentWorkExecutor{
@@ -1084,10 +1148,23 @@ func buildWorkerRuntime(ctx context.Context, cfg config.Config, deps workerRunti
 		LeaseDuration: governanceWorkerLeaseDuration, RetryBackoff: cfg.Jobs.GovernanceRetryBackoff,
 		Now: now, Kind: &intentKind,
 	}
+	repositoryImportKind := workqueue.WorkKindMemoryRepositoryImport
+	repositoryImportWorker := jobs.DerivedWorkWorker{
+		Store: repo,
+		Executor: jobs.MemoryRepositoryImportWorkExecutor{Dispatcher: memory.MemoryRepositoryImportDispatcher{
+			Store: repo, Intents: intentService, Now: now,
+		}},
+		Scope: scope, WorkerID: "stele-memory-repository-import-worker", BatchSize: 16,
+		LeaseDuration: governanceWorkerLeaseDuration, RetryBackoff: cfg.Jobs.GovernanceRetryBackoff,
+		Now: now, Kind: &repositoryImportKind,
+	}
 	workers := []jobs.LoopWorker{worker}
 	if err := scope.Validate(); err == nil {
 		workers = append(workers, repairWorker)
 		workers = append(workers, proofWorker, sessionVerificationWorker, alertDeliveryWorker)
+		// Admission may be disabled after a deployment, but accepted plans must
+		// still drain through current governed intent policy.
+		workers = append(workers, repositoryImportWorker)
 		if cfg.MemoryIntent.Enabled {
 			workers = append(workers, intentWorker)
 		}
@@ -1397,6 +1474,12 @@ func buildSchedulerRuntime(ctx context.Context, cfg config.Config, deps schedule
 				RetentionWindow: cfg.Jobs.JobExecutionRetention,
 				Limit:           100,
 				Observer:        deps.observer,
+			},
+			jobs.MemoryRepositoryPreviewRetentionJob{
+				Store:           repo,
+				Now:             now,
+				RetentionWindow: 24 * time.Hour,
+				Limit:           100,
 			},
 		},
 		Interval:     schedulerInterval,

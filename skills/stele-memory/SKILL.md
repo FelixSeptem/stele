@@ -177,3 +177,14 @@ does not prove allocation readiness or pending digest/reference/outcome contract
 - [Architecture](../../docs/architecture.md)
 - [Best practices](../../docs/best-practices.md)
 - [Self-hosting](../../docs/self-hosting.md)
+- [HTTP-only memory repository snapshot import](../../docs/integrations/memory-repository-import.md)
+
+## Optional repository snapshot import
+
+Use this only through documented HTTP preview and submit resources after
+operator enablement. Supply a bounded snapshot directly; never ask Stele to
+clone, fetch, read a local path, unpack an archive, or execute source text.
+Review diagnostics and explicitly map each selected fact to a class and memory
+path before acknowledging plan and warning digests. Submission is governed
+asynchronous `remember` dispatch, not canonical overwrite: missing files never
+imply forget/delete and manifest placement never injects context.

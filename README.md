@@ -180,6 +180,7 @@ The public runtime uses Provider operations instead.
 | Understand system boundaries and data flow | [Architecture](docs/architecture.md) |
 | Locate package responsibilities and extension points | [Key components](docs/components.md) |
 | Integrate an agent through MCP | [MCP integration and Agent Skill](docs/integrations/mcp-agent-skill.md) |
+| Import a reviewed Markdown snapshot over HTTP | [Memory repository import](docs/integrations/memory-repository-import.md) |
 | Operate memory safely | [Best practices](docs/best-practices.md) |
 | Deploy, migrate, back up, and verify | [Self-hosting](docs/self-hosting.md) |
 | Integrate a runtime provider | [Agent runtime provider](docs/agent-runtime-memory-provider.md) |

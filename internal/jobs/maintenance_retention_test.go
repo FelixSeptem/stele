@@ -26,6 +26,37 @@ type derivedRetentionStub struct {
 	limit                   int
 }
 
+type memoryRepositoryPreviewRetentionStub struct {
+	before  time.Time
+	limit   int
+	deleted int
+}
+
+func (s *memoryRepositoryPreviewRetentionStub) PruneExpiredMemoryRepositoryPreviews(_ context.Context, before time.Time, limit int) (int, error) {
+	s.before = before
+	s.limit = limit
+	return s.deleted, nil
+}
+
+func TestMemoryRepositoryPreviewRetentionJobPrunesOnlyExpiredUnacceptedPreviewPayloads(t *testing.T) {
+	now := time.Date(2026, 10, 16, 12, 0, 0, 0, time.UTC)
+	store := &memoryRepositoryPreviewRetentionStub{deleted: 2}
+	job := MemoryRepositoryPreviewRetentionJob{
+		Store:           store,
+		Now:             func() time.Time { return now },
+		RetentionWindow: 24 * time.Hour,
+		Limit:           17,
+	}
+
+	deleted, err := job.Run(context.Background())
+	if err != nil || deleted != 2 {
+		t.Fatalf("Run() = %d, %v", deleted, err)
+	}
+	if !store.before.Equal(now.Add(-24*time.Hour)) || store.limit != 17 {
+		t.Fatalf("prune input = before %v, limit %d", store.before, store.limit)
+	}
+}
+
 func (s *derivedRetentionStub) DeleteContextProjectionEvidenceBefore(_ context.Context, _ memory.Scope, cutoff time.Time, limit int) (int, error) {
 	s.projection++
 	s.cutoff = cutoff

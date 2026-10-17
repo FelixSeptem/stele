@@ -50,6 +50,7 @@ type HTTPDependencies struct {
 	EventIngestor             memory.EventIngestor
 	MemoryIntent              MemoryIntentAPI
 	MemoryIntentRead          MemoryIntentReader
+	MemoryRepository          MemoryRepositoryAPI
 	ReflectionReviewAdmin     ReflectionReviewAPI
 	ReflectionRunRead         ReflectionRunReader
 	CompactionEvidenceRead    CompactionEvidenceReader
@@ -196,6 +197,14 @@ type MemoryIntentReader interface {
 
 type MemoryIntentHistoryReader interface {
 	ReadMemoryIntentHistory(context.Context, memory.Scope, string) (memory.MemoryIntentHistory, error)
+}
+
+type MemoryRepositoryAPI interface {
+	Register(context.Context, memory.Scope, string, string) (memory.MemoryRepositoryRecord, error)
+	Preview(context.Context, memory.MemoryRepositoryPreviewRequest) (memory.MemoryRepositoryPreview, error)
+	Submit(context.Context, memory.MemoryRepositoryImportRequest) (memory.MemoryRepositoryImportRecord, bool, error)
+	ReadImport(context.Context, memory.Scope, string, string) (memory.MemoryRepositoryImportRecord, error)
+	Manifest(context.Context, memory.Scope, string) (memory.MemoryRepositoryManifest, error)
 }
 
 type ReflectionReviewAPI interface {
@@ -1164,6 +1173,19 @@ func NewHTTPHandler(deps HTTPDependencies) http.Handler {
 	)
 	mux.Handle("POST /v1/memory-intents", protectedMemoryIntent)
 
+	protectedMemoryRepositories := auth.APIKeyMiddleware(deps.APIKeys)(
+		auth.ScopeMiddleware()(
+			http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				handleMemoryRepositories(w, r, deps.MemoryRepository, deps.PrincipalAuthorizer)
+			}),
+		),
+	)
+	mux.Handle("POST /v1/memory-repositories", protectedMemoryRepositories)
+	mux.Handle("POST /v1/memory-repositories/{repository_id}/previews", protectedMemoryRepositories)
+	mux.Handle("POST /v1/memory-repositories/{repository_id}/imports", protectedMemoryRepositories)
+	mux.Handle("GET /v1/memory-repositories/{repository_id}/imports/{import_id}", protectedMemoryRepositories)
+	mux.Handle("GET /v1/memory-repositories/{repository_id}/manifest", protectedMemoryRepositories)
+
 	adminMemoryIntentDetail := auth.APIKeyMiddleware(deps.AdminAPIKeys)(
 		auth.ScopeMiddleware()(
 			http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -1825,6 +1847,155 @@ func requestIDFromHeader(value string) string {
 func requestIDFromContext(ctx context.Context) string {
 	value, _ := ctx.Value(requestIDContextKey{}).(string)
 	return value
+}
+
+type memoryRepositoryRegistrationRequest struct {
+	Name      string `json:"name"`
+	SourceURL string `json:"source_url"`
+}
+
+type memoryRepositoryPreviewHTTPRequest struct {
+	Actor              string                             `json:"actor"`
+	Reason             string                             `json:"reason"`
+	ExpectedGeneration int64                              `json:"expected_generation"`
+	Snapshot           memory.MemoryRepositorySnapshot    `json:"snapshot"`
+	Selections         []memoryRepositorySelectionRequest `json:"selections"`
+	SourceMetadata     memory.SourceMetadata              `json:"source_metadata"`
+}
+
+type memoryRepositorySelectionRequest struct {
+	Path       string             `json:"path"`
+	EntryKey   string             `json:"entry_key"`
+	Class      memory.MemoryClass `json:"memory_class"`
+	MemoryPath string             `json:"memory_path"`
+}
+
+type memoryRepositoryImportHTTPRequest struct {
+	PreviewID          string `json:"preview_id"`
+	PlanDigest         string `json:"plan_digest"`
+	WarningDigest      string `json:"warning_digest"`
+	ExpectedGeneration int64  `json:"expected_generation"`
+}
+
+func handleMemoryRepositories(w http.ResponseWriter, r *http.Request, service MemoryRepositoryAPI, authorizers ...auth.PrincipalAuthorizer) {
+	if service == nil {
+		http.Error(w, "memory repository import is disabled", http.StatusNotFound)
+		return
+	}
+	scope, ok := auth.ScopeFromContext(r.Context())
+	if !ok {
+		http.Error(w, "scope context is missing", http.StatusInternalServerError)
+		return
+	}
+	var entitlements auth.DisclosureEntitlements
+	if principal, principalAuthorized := auth.PrincipalFromContext(r.Context()); principalAuthorized {
+		if len(authorizers) == 0 || authorizers[0] == nil {
+			writeProviderError(w, 503, "dependency", "disclosure_unavailable", "disclosure authority unavailable", true)
+			return
+		}
+		var allowed bool
+		entitlements, allowed = currentDisclosure(w, r, authorizers[0], principal.ID, scope)
+		if !allowed {
+			return
+		}
+	}
+	if r.Method == http.MethodGet {
+		repositoryID := r.PathValue("repository_id")
+		if strings.HasSuffix(r.URL.Path, "/manifest") {
+			manifest, err := service.Manifest(r.Context(), scope, repositoryID)
+			if err != nil {
+				writeMemoryRepositoryError(w, err)
+				return
+			}
+			items := make([]map[string]any, 0, len(manifest.Items))
+			for _, item := range manifest.Items {
+				items = append(items, map[string]any{"memory_id": item.MemoryID, "version": item.Version, "source_path": item.SourcePath})
+			}
+			writeJSON(w, http.StatusOK, map[string]any{"repository_id": manifest.RepositoryID, "generation": manifest.Generation, "processing_status": manifest.ProcessingStatus, "items": items})
+			return
+		}
+		result, err := service.ReadImport(r.Context(), scope, repositoryID, r.PathValue("import_id"))
+		if err != nil {
+			writeMemoryRepositoryError(w, err)
+			return
+		}
+		entries := make([]map[string]any, 0, len(result.Entries))
+		for _, entry := range result.Entries {
+			item := map[string]any{"entry_key": entry.EntryKey, "status": entry.DispatchStatus}
+			if entry.IntentID != "" {
+				item["intent_id"] = entry.IntentID
+			}
+			entries = append(entries, item)
+		}
+		writeJSON(w, http.StatusOK, map[string]any{"import_id": result.ID, "repository_id": result.RepositoryID, "generation": result.Generation, "status": result.Status, "entries": entries})
+		return
+	}
+	decoder := json.NewDecoder(io.LimitReader(r.Body, memory.MemoryRepositoryMaxRequestBytes+1))
+	decoder.DisallowUnknownFields()
+	switch {
+	case r.URL.Path == "/v1/memory-repositories":
+		var request memoryRepositoryRegistrationRequest
+		if err := decoder.Decode(&request); err != nil {
+			http.Error(w, "invalid request", http.StatusBadRequest)
+			return
+		}
+		record, err := service.Register(r.Context(), scope, request.Name, request.SourceURL)
+		if err != nil {
+			writeMemoryRepositoryError(w, err)
+			return
+		}
+		writeJSON(w, http.StatusCreated, map[string]any{"repository_id": record.ID, "generation": record.Generation})
+	case strings.HasSuffix(r.URL.Path, "/previews"):
+		var request memoryRepositoryPreviewHTTPRequest
+		if err := decoder.Decode(&request); err != nil {
+			http.Error(w, "invalid request", http.StatusBadRequest)
+			return
+		}
+		if request.SourceMetadata.Trust == memory.SourceTrustAttestedData && !entitlements.SourceAttestation {
+			writeProviderError(w, http.StatusForbidden, "scope", "disclosure_denied", "disclosure denied", false)
+			return
+		}
+		selections := make([]memory.MemoryRepositorySelection, 0, len(request.Selections))
+		for _, selection := range request.Selections {
+			selections = append(selections, memory.MemoryRepositorySelection{Path: selection.Path, EntryKey: selection.EntryKey, Class: selection.Class, MemoryPath: selection.MemoryPath})
+		}
+		preview, err := service.Preview(r.Context(), memory.MemoryRepositoryPreviewRequest{RepositoryID: r.PathValue("repository_id"), Scope: scope, Actor: request.Actor, Reason: request.Reason, ExpectedGeneration: request.ExpectedGeneration, Snapshot: request.Snapshot, Selections: selections, SourceMetadata: request.SourceMetadata})
+		if err != nil {
+			writeMemoryRepositoryError(w, err)
+			return
+		}
+		writeJSON(w, http.StatusCreated, map[string]any{"preview_id": preview.ID, "repository_id": preview.RepositoryID, "generation": preview.Generation, "plan_digest": preview.PlanDigest, "warning_digest": preview.WarningDigest, "expires_at": preview.ExpiresAt, "parser_version": preview.ParserVersion, "effective_limits": map[string]int{"max_files": memory.MemoryRepositoryMaxFiles, "max_file_bytes": memory.MemoryRepositoryMaxFileBytes, "max_content_bytes": memory.MemoryRepositoryMaxContentBytes, "max_entries": memory.MemoryRepositoryMaxEntries, "max_entry_bytes": memory.MemoryRepositoryMaxEntryBytes, "max_path_bytes": memory.MemoryRepositoryMaxPathBytes, "max_revision_bytes": memory.MemoryRepositoryMaxRevisionBytes}})
+	case strings.HasSuffix(r.URL.Path, "/imports"):
+		var request memoryRepositoryImportHTTPRequest
+		if err := decoder.Decode(&request); err != nil {
+			http.Error(w, "invalid request", http.StatusBadRequest)
+			return
+		}
+		idempotencyKey := strings.TrimSpace(r.Header.Get("Idempotency-Key"))
+		if err := auth.ValidateIdempotencyKey(idempotencyKey); err != nil {
+			http.Error(w, "invalid idempotency key", http.StatusBadRequest)
+			return
+		}
+		result, replayed, err := service.Submit(r.Context(), memory.MemoryRepositoryImportRequest{RepositoryID: r.PathValue("repository_id"), PreviewID: request.PreviewID, Scope: scope, PlanDigest: request.PlanDigest, WarningDigest: request.WarningDigest, ExpectedGeneration: request.ExpectedGeneration, IdempotencyKey: idempotencyKey})
+		if err != nil {
+			writeMemoryRepositoryError(w, err)
+			return
+		}
+		writeJSON(w, http.StatusAccepted, map[string]any{"import_id": result.ID, "repository_id": result.RepositoryID, "generation": result.Generation, "status": result.Status, "replayed": replayed})
+	default:
+		http.NotFound(w, r)
+	}
+}
+
+func writeMemoryRepositoryError(w http.ResponseWriter, err error) {
+	switch {
+	case errors.Is(err, memory.ErrMemoryRepositoryFeatureDisabled):
+		http.Error(w, "memory repository import is disabled", http.StatusNotFound)
+	case errors.Is(err, memory.ErrMemoryRepositoryStaleGeneration), errors.Is(err, memory.ErrMemoryRepositoryRevisionConflict), errors.Is(err, memory.ErrMemoryRepositoryIdempotencyConflict):
+		http.Error(w, "memory repository conflict", http.StatusConflict)
+	default:
+		http.Error(w, "invalid memory repository request", http.StatusUnprocessableEntity)
+	}
 }
 
 func newFeedbackID() string {

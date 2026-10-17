@@ -20,6 +20,14 @@ type DerivedWorkExecutor interface {
 	ExecuteDerivedWork(context.Context, workqueue.DerivedWorkItem) (int64, string, error)
 }
 
+// DerivedWorkExhaustionHandler is an optional, kind-specific terminal hook.
+// It runs after the common queue state has been made terminal so executors
+// with their own durable child records can settle those records without
+// introducing a second retry loop.
+type DerivedWorkExhaustionHandler interface {
+	HandleDerivedWorkExhaustion(context.Context, workqueue.DerivedWorkItem) error
+}
+
 // DerivedWorkWorker owns the common claim and lease-safe terminal path. Kind
 // specific executors only return a bounded checkpoint offset and evidence
 // reference; they cannot mutate canonical memory through this interface.
@@ -71,6 +79,13 @@ func (w DerivedWorkWorker) RunOnce(ctx context.Context) (int, error) {
 			}
 			if err := w.Store.RetryDerivedWork(ctx, workqueue.RetryInput{Scope: item.Scope, WorkID: item.ID, WorkerID: w.WorkerID, FailureCategory: "execution_failed", RetryAt: retryAt, FailedAt: now}); err != nil {
 				return processed, err
+			}
+			if item.AttemptCount >= item.MaxAttempts {
+				if handler, ok := w.Executor.(DerivedWorkExhaustionHandler); ok {
+					if err := handler.HandleDerivedWorkExhaustion(ctx, item); err != nil {
+						return processed, err
+					}
+				}
 			}
 			continue
 		}
