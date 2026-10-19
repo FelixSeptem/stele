@@ -65,6 +65,13 @@ task completion. Choose the access path from the configured principal role.
    reference/digest out of prompts, source control and telemetry. A 409
    continuity error or retryable 503 is non-consumable; do not locally recreate,
    rerank, pack, cache or substitute context.
+   If session/turn proof is required, additionally require
+   `context_turn_binding.contract_version=context-turn-binding-v1`, create the
+   Provider turn first, and send its optional `turn_id`. Verify the echoed ID,
+   `context-turn-digest-v1`/`context-turn-canonical-v1`, and the same-binding
+   scope/session authorization. Foreign or legacy-unbound IDs are generic
+   denials; the ID cannot widen retrieval, change disclosure, act as a role or
+   token budget, or replay a historical snapshot.
 5. Preserve authorized citations. Do not infer hidden records, widen scope or
    dereference through a denied endpoint. Stele selects and ranks memory; do not
    add local ranking, canonicalization, eligibility rules or a second fact store.

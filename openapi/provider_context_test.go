@@ -28,7 +28,14 @@ func TestProviderContextSchemasAndExamples(t *testing.T) {
 			t.Fatal(err)
 		}
 	}
-	for _, body := range []string{`{"query":" ","budget":1}`, `{"query":"q","budget":0}`, `{"query":"q","budget":null}`, `{"query":"q","budget":1,"PathPrefix":"a"}`, `{"query":"q","budget":1,"feedback_ranking_policy":"scope"}`, `{"query":"q","budget":1,"include_relations":null}`} {
+	for _, body := range []string{`{"query":"q","budget":1,"turn_id":"turn_1"}`, `{"query":"q","budget":1,"turn_id":"a.b:c-d"}`} {
+		var value any
+		_ = json.Unmarshal([]byte(body), &value)
+		if err = input.VisitJSON(value); err != nil {
+			t.Fatalf("turn-bound input: %v", err)
+		}
+	}
+	for _, body := range []string{`{"query":" ","budget":1}`, `{"query":"q","budget":0}`, `{"query":"q","budget":null}`, `{"query":"q","budget":1,"PathPrefix":"a"}`, `{"query":"q","budget":1,"feedback_ranking_policy":"scope"}`, `{"query":"q","budget":1,"include_relations":null}`, `{"query":"q","budget":1,"turn_id":""}`, `{"query":"q","budget":1,"turn_id":"wrong/path"}`} {
 		var value any
 		_ = json.Unmarshal([]byte(body), &value)
 		if err = input.VisitJSON(value); err == nil {
@@ -37,5 +44,14 @@ func TestProviderContextSchemasAndExamples(t *testing.T) {
 	}
 	if got := doc.Paths.Value("/v1/provider/context").Post.Responses.Value("200").Value.Content.Get("application/json").Schema.Ref; got != "#/components/schemas/ProviderContextResponse" {
 		t.Fatalf("response ref=%s", got)
+	}
+	referenceResult := doc.Components.Schemas["ProviderReferenceContextResult"].Value
+	contentResult := doc.Components.Schemas["ProviderContentContextResult"].Value
+	if referenceResult.Properties["turn_id"] == nil || contentResult.Properties["turn_id"] == nil {
+		t.Fatal("turn-bound response identity is absent")
+	}
+	capabilities := doc.Components.Schemas["ProviderCapabilityDocument"].Value
+	if capabilities.Properties["context_turn_binding"] == nil {
+		t.Fatal("turn-binding capability is absent")
 	}
 }

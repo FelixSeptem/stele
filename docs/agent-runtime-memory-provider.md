@@ -478,3 +478,32 @@ advertised contract, retention window, and source projection are available.
 Related workflow commands are `openspec validate --all`,
 `go test ./internal/provider ./internal/app ./internal/assurance ./openapi`, and
 the repository quality gate.
+
+## Optional turn-bound context reads (STL-1)
+
+Strict consumers may require the `context-turn-binding-v1` capability from
+`GET /v1/provider/capabilities`, create a Provider turn, and send its optional
+`turn_id` in the following context request:
+
+```json
+{"metadata":{"request_id":"ctx-1","operation_id":"ctx-1","schema_version":"provider-v1"},"input":{"query":"current task","budget":4,"turn_id":"turn_abc"}}
+```
+
+The ID is a nonempty ASCII token matching `^[A-Za-z0-9_.:-]+$` and at most 128
+bytes. Stele verifies the immutable turn association against the complete
+server-issued runtime binding, session, and exact tenant/project/namespace
+scope before disclosure, continuity, or retrieval. Missing, foreign,
+unassociated, wrong-session, and wrong-binding turns share one non-disclosing
+denial. The field is attribution only: it cannot widen retrieval, select a
+memory path, override disclosure, represent a business role, estimate tokens,
+or replay a historical snapshot.
+
+Turn-bound responses use `context-turn-digest-v1` and
+`context-turn-canonical-v1`; the verified ID is included in their digest and
+request fingerprint and echoed in `result.turn_id`. Turnless requests retain
+the v1 digest bytes and receipts. Comparing a receipt across turns, or between
+turn-bound and turnless requests, returns `continuity_request_changed`. PC6
+receipt attribution is verified only when its `turn_id` matches. Migration
+0040 adds immutable ownership and bounded attribution metadata; legacy turns
+are never silently claimed, and audit records contain no query, content,
+selected IDs, citations, hidden candidates, or ranking data.

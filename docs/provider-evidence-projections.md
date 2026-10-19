@@ -104,6 +104,11 @@ also redact formerly visible admission identity when its current reference
 is unavailable. A bare context digest is `reported`; only an unexpired PC4
 receipt belonging to the full binding with a matching digest is
 `verified_receipt`. Neither status confers task completion or content access.
+When that receipt is turn-bound (`result.turn_id` was present on the Provider
+context read), the projection must supply exactly the same `turn_id`; an
+omitted or different value is unavailable rather than a verified receipt.
+This check adds correlation only. It does not grant a role, widen retrieval,
+or expose a context snapshot, hidden candidate, or ranking detail.
 
 ## Asynchronous feedback policy
 

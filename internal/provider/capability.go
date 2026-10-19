@@ -218,32 +218,42 @@ type ContextContinuityCapabilities struct {
 	ExactSnapshotReplay bool   `json:"exact_snapshot_replay"`
 	ContextWatermark    bool   `json:"context_watermark"`
 }
+type ContextTurnBindingCapabilities struct {
+	Enabled                 bool   `json:"enabled"`
+	ContractVersion         string `json:"contract_version"`
+	DigestContractVersion   string `json:"digest_contract_version"`
+	CanonicalizationVersion string `json:"canonicalization_version"`
+}
 type CapabilityDocument struct {
-	Projections                 ProjectionCapabilities        `json:"projections"`
-	DurableReferences           DurableReferenceCapabilities  `json:"durable_references"`
-	ContextDigest               ContextDigestCapabilities     `json:"context_digest"`
-	ContextContinuity           ContextContinuityCapabilities `json:"context_continuity"`
-	ContextBudgetVersion        string                        `json:"context_budget_version"`
-	ContextPackingPolicyVersion string                        `json:"context_packing_policy_version"`
-	TokenBudgetSupported        bool                          `json:"token_budget_supported"`
-	DisclosurePolicyVersion     string                        `json:"disclosure_policy_version"`
-	SourceMetadataVersion       string                        `json:"source_metadata_version"`
-	ResponseModes               []string                      `json:"response_modes"`
-	DisclosureProfiles          []string                      `json:"disclosure_profiles"`
-	ProviderVersion             string                        `json:"provider_version"`
-	SchemaVersion               string                        `json:"schema_version"`
-	ServiceVersion              string                        `json:"service_version,omitempty"`
-	BuildID                     string                        `json:"build_id,omitempty"`
-	Operations                  []string                      `json:"operations"`
-	ScopeDimensions             []string                      `json:"scope_dimensions"`
-	Limits                      ProviderLimits                `json:"limits"`
-	Synchronization             SynchronizationCapabilities   `json:"synchronization"`
-	SchemaDigest                string                        `json:"schema_digest"`
+	Projections                 ProjectionCapabilities         `json:"projections"`
+	DurableReferences           DurableReferenceCapabilities   `json:"durable_references"`
+	ContextDigest               ContextDigestCapabilities      `json:"context_digest"`
+	ContextContinuity           ContextContinuityCapabilities  `json:"context_continuity"`
+	ContextTurnBinding          ContextTurnBindingCapabilities `json:"context_turn_binding"`
+	ContextBudgetVersion        string                         `json:"context_budget_version"`
+	ContextPackingPolicyVersion string                         `json:"context_packing_policy_version"`
+	TokenBudgetSupported        bool                           `json:"token_budget_supported"`
+	DisclosurePolicyVersion     string                         `json:"disclosure_policy_version"`
+	SourceMetadataVersion       string                         `json:"source_metadata_version"`
+	ResponseModes               []string                       `json:"response_modes"`
+	DisclosureProfiles          []string                       `json:"disclosure_profiles"`
+	ProviderVersion             string                         `json:"provider_version"`
+	SchemaVersion               string                         `json:"schema_version"`
+	ServiceVersion              string                         `json:"service_version,omitempty"`
+	BuildID                     string                         `json:"build_id,omitempty"`
+	Operations                  []string                       `json:"operations"`
+	ScopeDimensions             []string                       `json:"scope_dimensions"`
+	Limits                      ProviderLimits                 `json:"limits"`
+	Synchronization             SynchronizationCapabilities    `json:"synchronization"`
+	SchemaDigest                string                         `json:"schema_digest"`
 }
 
 func (d CapabilityDocument) Validate() error {
 	if d.ContextDigest != (ContextDigestCapabilities{ContextDigestVersion, "sha-256", ContextCanonicalVersion, ContextSelectionVersion}) || d.ContextContinuity.ContractVersion != ContextContinuityVersion || d.ContextContinuity.MaxReferenceBytes != 37 || d.ContextContinuity.TTLSeconds < 60 || d.ContextContinuity.TTLSeconds > 604800 || d.ContextContinuity.ExactSnapshotReplay || d.ContextContinuity.ContextWatermark || d.ContextContinuity.Enabled != d.ContextContinuity.FreshCompare {
 		return fmt.Errorf("unsupported context identity capabilities")
+	}
+	if d.ContextTurnBinding.ContractVersion != "" && (d.ContextTurnBinding.ContractVersion != "context-turn-binding-v1" || d.ContextTurnBinding.DigestContractVersion != ContextTurnDigestVersion || d.ContextTurnBinding.CanonicalizationVersion != ContextTurnCanonicalVersion) {
+		return fmt.Errorf("unsupported context turn-binding capabilities")
 	}
 	if d.ContextBudgetVersion != ContextBudgetVersion || d.ContextPackingPolicyVersion != ContextPackingPolicyVersion || d.TokenBudgetSupported {
 		return fmt.Errorf("unsupported context budget capabilities")
@@ -279,7 +289,7 @@ func (d CapabilityDocument) Validate() error {
 type CapabilityInput struct{ ProviderVersion, SchemaVersion, ServiceVersion, BuildID, SchemaDigest string }
 
 func Discover(in CapabilityInput) CapabilityDocument {
-	d := CapabilityDocument{ContextDigest: ContextDigestCapabilities{ContextDigestVersion, "sha-256", ContextCanonicalVersion, ContextSelectionVersion}, ContextContinuity: ContextContinuityCapabilities{ContractVersion: ContextContinuityVersion, MaxReferenceBytes: 37, TTLSeconds: 86400}, ContextBudgetVersion: ContextBudgetVersion, ContextPackingPolicyVersion: ContextPackingPolicyVersion, DisclosurePolicyVersion: auth.DisclosurePolicyVersion, SourceMetadataVersion: memory.SourceMetadataVersion, ResponseModes: []string{auth.ResponseModeReferenceOnly, auth.ResponseModeBoundedContent}, DisclosureProfiles: []string{auth.DisclosureProfileReference, auth.DisclosureProfileContent}, ProviderVersion: in.ProviderVersion, SchemaVersion: in.SchemaVersion, ServiceVersion: in.ServiceVersion, BuildID: in.BuildID, SchemaDigest: in.SchemaDigest,
+	d := CapabilityDocument{ContextDigest: ContextDigestCapabilities{ContextDigestVersion, "sha-256", ContextCanonicalVersion, ContextSelectionVersion}, ContextContinuity: ContextContinuityCapabilities{ContractVersion: ContextContinuityVersion, MaxReferenceBytes: 37, TTLSeconds: 86400}, ContextTurnBinding: ContextTurnBindingCapabilities{ContractVersion: "context-turn-binding-v1", DigestContractVersion: ContextTurnDigestVersion, CanonicalizationVersion: ContextTurnCanonicalVersion}, ContextBudgetVersion: ContextBudgetVersion, ContextPackingPolicyVersion: ContextPackingPolicyVersion, DisclosurePolicyVersion: auth.DisclosurePolicyVersion, SourceMetadataVersion: memory.SourceMetadataVersion, ResponseModes: []string{auth.ResponseModeReferenceOnly, auth.ResponseModeBoundedContent}, DisclosureProfiles: []string{auth.DisclosureProfileReference, auth.DisclosureProfileContent}, ProviderVersion: in.ProviderVersion, SchemaVersion: in.SchemaVersion, ServiceVersion: in.ServiceVersion, BuildID: in.BuildID, SchemaDigest: in.SchemaDigest,
 		Operations: []string{"ingest", "intent", "retrieve", "context", "forget", "status", "sync"}, ScopeDimensions: []string{"tenant", "project", "namespace", "agent", "session", "conversation", "provider_instance"},
 		Synchronization: SynchronizationCapabilities{Enabled: true, ContractVersion: "sync-v1", Transports: []string{"openapi_pull"}, EventKinds: []string{"raw_event", "canonical_memory", "lifecycle", "sync_complete"}, MaxBatchEvents: 100, MaxSnapshotBytes: 1 << 20, MaxCursorBytes: MaxSyncCursorBytes, RetentionWindowHours: 24 * 30},
 		Limits:          ProviderLimits{MaxContextItems: 100, MaxContextContentBytes: 1 << 20, MaxEventBytes: 1 << 20, MaxIntentBytes: 1 << 20, MaxRetrievalResults: 100, MaxContextBytes: 1 << 20, MaxCitations: 100, MaxMetadataBytes: 64 << 10}}

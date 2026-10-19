@@ -16,6 +16,8 @@ import (
 
 const ContextDigestVersion = "context-digest-v1"
 const ContextCanonicalVersion = "context-canonical-v1"
+const ContextTurnDigestVersion = "context-turn-digest-v1"
+const ContextTurnCanonicalVersion = "context-turn-canonical-v1"
 const ContextSelectionVersion = "context-selection-v1"
 const ContextContinuityVersion = "context-continuity-v1"
 
@@ -230,7 +232,20 @@ func ComputeContextDigest(scope memory.Scope, r DisclosedContextResponse, finger
 	if err != nil {
 		return ContextDigest{}, err
 	}
-	return ContextDigest{ContextDigestVersion, "sha-256", ContextCanonicalVersion, ContextSelectionVersion, fingerprint, hashContext("stele-context-digest-v1\n", b)}, nil
+	if r.Result.TurnID == "" {
+		return ContextDigest{ContextDigestVersion, "sha-256", ContextCanonicalVersion, ContextSelectionVersion, fingerprint, hashContext("stele-context-digest-v1\n", b)}, nil
+	}
+	if !boundedToken(r.Result.TurnID, 128) {
+		return ContextDigest{}, fmt.Errorf("invalid context turn")
+	}
+	turnBytes, err := json.Marshal(struct {
+		TurnID     string          `json:"turn_id"`
+		Projection json.RawMessage `json:"projection"`
+	}{r.Result.TurnID, b})
+	if err != nil || !ValidJSONUnicode(turnBytes) {
+		return ContextDigest{}, fmt.Errorf("invalid turn canonical context")
+	}
+	return ContextDigest{ContextTurnDigestVersion, "sha-256", ContextTurnCanonicalVersion, ContextSelectionVersion, fingerprint, hashContext("stele-context-turn-digest-v1\n", turnBytes)}, nil
 }
 
 func SelectionPolicyFingerprint(manifest []byte) string {
@@ -267,10 +282,11 @@ func ContextReadFingerprint(b RuntimeBinding, input ContextInput, r DisclosedCon
 		Intent          string                 `json:"projection_intent"`
 		Budget          ContextBudgetEffective `json:"budget"`
 		Options         [6]bool                `json:"options"`
+		TurnID          string                 `json:"turn_id,omitempty"`
 	}{"context-read-v1", identity, input.Query, struct {
 		Kind  memory.MemoryPathSelectorKind `json:"kind"`
 		Value string                        `json:"value"`
-	}{selector.Kind, selector.Value}, r.Result.ResponseMode, r.Result.Disclosure.Profile, r.Result.Disclosure.ProjectionIntent, r.Result.BudgetAccounting.Effective, [6]bool{input.IncludeRelations, input.IncludeExperienceInsights, input.IncludeGoalContext, input.IncludeDiagnostics, input.IncludeFeedbackDiagnostics, input.FeedbackAwareRanking}}
+	}{selector.Kind, selector.Value}, r.Result.ResponseMode, r.Result.Disclosure.Profile, r.Result.Disclosure.ProjectionIntent, r.Result.BudgetAccounting.Effective, [6]bool{input.IncludeRelations, input.IncludeExperienceInsights, input.IncludeGoalContext, input.IncludeDiagnostics, input.IncludeFeedbackDiagnostics, input.FeedbackAwareRanking}, input.TurnID}
 	data, err := json.Marshal(doc)
 	if err != nil || !ValidJSONUnicode(data) {
 		return "", fmt.Errorf("invalid originating read")

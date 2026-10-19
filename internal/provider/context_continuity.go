@@ -29,6 +29,7 @@ var ErrContinuityCapacity = errors.New("continuity capacity exhausted")
 
 type ContextReceipt struct {
 	Reference           string
+	TurnID              string
 	RequestFingerprint  string
 	Digest              ContextDigest
 	IssuedAt, ExpiresAt time.Time
@@ -39,6 +40,13 @@ type ContextReceiptStore interface {
 	CleanupContextReceipts(context.Context, int) (int, error)
 }
 
+// TurnContextReceiptStore atomically persists a turn-bound continuity receipt
+// together with its bounded audit attribution. Implementations that do not
+// provide this operation must not be used for turn-bound continuity writes.
+type TurnContextReceiptStore interface {
+	IssueContextReceiptForTurn(context.Context, RuntimeBinding, string, ContextDigest, string, ContextContinuityConfig, ContextTurnAttribution, func(ContextReceipt) error) (ContextReceipt, error)
+}
+
 func NewContextReference() (string, error) {
 	var raw [16]byte
 	if _, err := rand.Read(raw[:]); err != nil {
@@ -47,7 +55,9 @@ func NewContextReference() (string, error) {
 	return "ctxc_" + hex.EncodeToString(raw[:]), nil
 }
 func ValidateContextReceipt(r ContextReceipt, fingerprint string) error {
-	if r.Digest.ContractVersion != ContextDigestVersion || r.Digest.CanonicalizationVersion != ContextCanonicalVersion || r.Digest.Algorithm != "sha-256" || r.Digest.SelectionPolicyVersion != ContextSelectionVersion || !ValidContextHash(r.Digest.Value) || !ValidContextHash(r.Digest.SelectionPolicyFingerprint) {
+	v1 := r.Digest.ContractVersion == ContextDigestVersion && r.Digest.CanonicalizationVersion == ContextCanonicalVersion
+	v2 := r.Digest.ContractVersion == ContextTurnDigestVersion && r.Digest.CanonicalizationVersion == ContextTurnCanonicalVersion
+	if (!v1 && !v2) || (v1 && r.TurnID != "") || (v2 && r.TurnID == "") || r.Digest.Algorithm != "sha-256" || r.Digest.SelectionPolicyVersion != ContextSelectionVersion || !ValidContextHash(r.Digest.Value) || !ValidContextHash(r.Digest.SelectionPolicyFingerprint) {
 		return ErrContinuityIncompatible
 	}
 	if r.RequestFingerprint != fingerprint {

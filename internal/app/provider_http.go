@@ -3,6 +3,7 @@ package app
 import (
 	"context"
 	"crypto/sha256"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"github.com/FelixSeptem/stele/internal/auth"
@@ -14,6 +15,7 @@ import (
 	"io"
 	"net/http"
 	"strings"
+	"time"
 )
 
 func registerProviderRoutes(mux *http.ServeMux, deps HTTPDependencies) {
@@ -24,6 +26,7 @@ func registerProviderRoutes(mux *http.ServeMux, deps HTTPDependencies) {
 		}
 		doc.ContextContinuity.Enabled = deps.ProviderContextReceipts != nil && deps.ProviderContextContinuity.Validate() == nil && deps.ProviderContextPolicy != nil
 		doc.ContextContinuity.FreshCompare = doc.ContextContinuity.Enabled
+		doc.ContextTurnBinding.Enabled = deps.ProviderContextTurns != nil && deps.ProviderContextAttributions != nil
 		doc.DurableReferences = provider.DurableReferenceCapability(deps.ProviderReferences != nil && deps.ProviderAdapter != nil)
 		doc.Projections = provider.ProjectionCapability(deps.ProviderProjections != nil)
 		if deps.ProviderContextContinuity.Validate() == nil {
@@ -272,6 +275,20 @@ func registerProviderOperationRoutes(mux *http.ServeMux, deps HTTPDependencies) 
 			writeProviderCompatibilityError(w, deps.ProviderSchemaVersions)
 			return
 		}
+		if req.Input.TurnID != "" {
+			if deps.ProviderContextTurns == nil {
+				writeProviderError(w, http.StatusServiceUnavailable, provider.ErrorCategoryDependency, "provider_unavailable", "provider context unavailable", true)
+				return
+			}
+			if err := deps.ProviderContextTurns.AuthorizeContextTurn(r.Context(), b, req.Input.TurnID); err != nil {
+				if errors.Is(err, provider.ErrContextTurnUnavailable) {
+					writeProviderError(w, http.StatusForbidden, provider.ErrorCategoryScope, "context_turn_denied", "context turn denied", false)
+				} else {
+					writeProviderError(w, http.StatusServiceUnavailable, provider.ErrorCategoryDependency, "provider_unavailable", "provider context unavailable", true)
+				}
+				return
+			}
+		}
 		input, err := req.Input.RetrievalInput(b.Scope)
 		if err != nil {
 			writeProviderError(w, 400, provider.ErrorCategoryValidation, "invalid_request", "invalid request", false)
@@ -294,6 +311,7 @@ func registerProviderOperationRoutes(mux *http.ServeMux, deps HTTPDependencies) 
 			writeProviderError(w, 413, "validation", "context_limit_exceeded", "context response exceeds allocation", false)
 			return
 		}
+		admission.SetTurnID(req.Input.TurnID)
 		fingerprint, previous, ok := prepareContextContinuity(w, r, deps, b, req, admission)
 		if !ok {
 			return
@@ -334,6 +352,24 @@ func registerProviderOperationRoutes(mux *http.ServeMux, deps HTTPDependencies) 
 		serialized, ok = persistContextContinuity(w, r, deps, b, req, admission, fingerprint, previous, serialized, func() ([]byte, error) { return admission.Finalize(out, meta) })
 		if !ok {
 			return
+		}
+		// Turn-bound continuity writes persist receipt and attribution atomically
+		// through TurnContextReceiptStore. A non-continuity read records its
+		// attribution only after final response sizing succeeds.
+		if req.Input.TurnID != "" && req.Input.Continuity == nil {
+			if deps.ProviderContextAttributions == nil {
+				writeProviderError(w, http.StatusServiceUnavailable, provider.ErrorCategoryDependency, "provider_unavailable", "provider context unavailable", true)
+				return
+			}
+			var disclosed provider.DisclosedContextResponse
+			if err := json.Unmarshal(serialized, &disclosed); err != nil {
+				writeProviderError(w, http.StatusServiceUnavailable, provider.ErrorCategoryDependency, "provider_unavailable", "provider context unavailable", true)
+				return
+			}
+			if err := deps.ProviderContextAttributions.RecordContextTurnAttribution(r.Context(), b, provider.ContextTurnAttribution{TurnID: req.Input.TurnID, Scope: b.Scope, RequestID: req.Metadata.RequestID, OperationID: req.Metadata.OperationID, Digest: disclosed.Result.ContextDigest, ContinuityReference: disclosed.Result.Continuity.Reference, OccurredAt: time.Now().UTC()}); err != nil {
+				writeProviderError(w, http.StatusServiceUnavailable, provider.ErrorCategoryDependency, "provider_unavailable", "provider context unavailable", true)
+				return
+			}
 		}
 		w.Header().Set("Content-Type", "application/json")
 		w.WriteHeader(200)

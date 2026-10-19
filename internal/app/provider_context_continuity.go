@@ -93,11 +93,11 @@ func persistContextContinuity(w http.ResponseWriter, r *http.Request, deps HTTPD
 		}
 	}
 	var serializationErr error
-	_, err := deps.ProviderContextReceipts.IssueContextReceipt(r.Context(), b, fingerprint, response.Result.ContextDigest, deps.ProviderContextContinuity, func(receipt provider.ContextReceipt) error {
+	finalizeReceipt := func(receipt provider.ContextReceipt) error {
 		if err := provider.ValidateContextReceipt(receipt, fingerprint); err != nil {
 			return err
 		}
-		if receipt.Digest != response.Result.ContextDigest || !provider.ValidContextReference(receipt.Reference) {
+		if receipt.Digest != response.Result.ContextDigest || receipt.TurnID != req.Input.TurnID || !provider.ValidContextReference(receipt.Reference) {
 			return provider.ErrContinuityIncompatible
 		}
 		result.Reference = receipt.Reference
@@ -105,7 +105,20 @@ func persistContextContinuity(w http.ResponseWriter, r *http.Request, deps HTTPD
 		a.SetContinuity(result)
 		body, serializationErr = finalize()
 		return serializationErr
-	})
+	}
+	var err error
+	if req.Input.TurnID != "" {
+		turnStore, ok := deps.ProviderContextReceipts.(provider.TurnContextReceiptStore)
+		if !ok {
+			contextContinuityFailure(w, errors.New("turn-bound receipt persistence unavailable"))
+			return nil, false
+		}
+		_, err = turnStore.IssueContextReceiptForTurn(r.Context(), b, fingerprint, response.Result.ContextDigest, req.Input.TurnID, deps.ProviderContextContinuity, provider.ContextTurnAttribution{
+			TurnID: req.Input.TurnID, RequestID: req.Metadata.RequestID, OperationID: req.Metadata.OperationID, Scope: b.Scope,
+		}, finalizeReceipt)
+	} else {
+		_, err = deps.ProviderContextReceipts.IssueContextReceipt(r.Context(), b, fingerprint, response.Result.ContextDigest, deps.ProviderContextContinuity, finalizeReceipt)
+	}
 	if err != nil {
 		if serializationErr != nil {
 			writeProviderError(w, 413, provider.ErrorCategoryValidation, "context_limit_exceeded", "context response exceeds allocation", false)

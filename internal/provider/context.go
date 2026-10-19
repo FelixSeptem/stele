@@ -18,6 +18,7 @@ type ContextRequest struct {
 	Input    ContextInput      `json:"input"`
 }
 type ContextInput struct {
+	TurnID                     string                  `json:"turn_id,omitempty"`
 	Continuity                 *ContextContinuityInput `json:"continuity,omitempty"`
 	BudgetLimits               *ContextBudgetLimits    `json:"budget_limits,omitempty"`
 	ProjectionIntent           string                  `json:"projection_intent,omitempty"`
@@ -99,7 +100,7 @@ func DecodeContextRequest(data []byte) (ContextRequest, error) {
 	if err != nil {
 		return out, err
 	}
-	inputObject, err := canonicalObject(obj["input"], []string{"continuity", "budget_limits", "query", "budget", "path", "path_prefix", "include_relations", "include_experience_insights", "include_goal_context", "include_diagnostics", "include_feedback_diagnostics", "feedback_aware_ranking", "feedback_ranking_policy", "projection_intent", "disclosure_profile", "response_mode"}, []string{"query", "budget"})
+	inputObject, err := canonicalObject(obj["input"], []string{"turn_id", "continuity", "budget_limits", "query", "budget", "path", "path_prefix", "include_relations", "include_experience_insights", "include_goal_context", "include_diagnostics", "include_feedback_diagnostics", "feedback_aware_ranking", "feedback_ranking_policy", "projection_intent", "disclosure_profile", "response_mode"}, []string{"query", "budget"})
 	if err != nil {
 		return out, err
 	}
@@ -130,6 +131,12 @@ func DecodeContextRequest(data []byte) (ContextRequest, error) {
 	}
 	if err := out.Input.ValidateBudget(); err != nil {
 		return out, err
+	}
+	if out.Input.TurnID != "" && !boundedToken(out.Input.TurnID, 128) {
+		return out, fmt.Errorf("invalid turn id")
+	}
+	if raw := inputObject["turn_id"]; raw != nil && out.Input.TurnID == "" {
+		return out, fmt.Errorf("invalid turn id")
 	}
 	return out, nil
 }

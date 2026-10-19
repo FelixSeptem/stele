@@ -111,6 +111,56 @@ func TestContextContinuityPostgresTransactionsAndUpgrade(t *testing.T) {
 	if count != 1 {
 		t.Fatal("rollback persisted receipt")
 	}
+	// A Provider-created turn carries immutable full-binding evidence. Missing,
+	// foreign, and legacy generic turns all resolve to the same unavailable
+	// result; successful turn receipts and their audit attribution commit (or
+	// roll back) together.
+	if _, err := pool.Exec(ctx, `INSERT INTO memory_session_runs(id,tenant,project,namespace,status,verdict) VALUES($1,$2,$3,$4,'running','unknown')`, b.SessionID, b.Scope.Tenant, b.Scope.Project, b.Scope.Namespace); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := pool.Exec(ctx, `INSERT INTO memory_session_turns(id,session_id,tenant,project,namespace,status,query) VALUES('legacy-turn',$1,$2,$3,$4,'recorded','legacy'),('bound-turn',$1,$2,$3,$4,'recorded','provider')`, b.SessionID, b.Scope.Tenant, b.Scope.Project, b.Scope.Namespace); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := pool.Exec(ctx, `INSERT INTO provider_context_turn_bindings(turn_id,binding_id,principal_id,tenant,project,namespace,agent_id,session_id,conversation_id,provider_instance_id) VALUES('bound-turn',$1,$2,$3,$4,$5,$6,$7,$8,$9)`, b.BindingID, b.PrincipalID, b.Scope.Tenant, b.Scope.Project, b.Scope.Namespace, b.AgentID, b.SessionID, b.ConversationID, b.ProviderInstanceID); err != nil {
+		t.Fatal(err)
+	}
+	for _, turnID := range []string{"missing-turn", "legacy-turn"} {
+		if err := repo.AuthorizeContextTurn(ctx, b, turnID); !errors.Is(err, provider.ErrContextTurnUnavailable) {
+			t.Fatalf("%s authorization error=%v", turnID, err)
+		}
+	}
+	foreignBinding := b
+	foreignBinding.ProviderInstanceID = "foreign-instance"
+	if err := repo.AuthorizeContextTurn(ctx, foreignBinding, "bound-turn"); !errors.Is(err, provider.ErrContextTurnUnavailable) {
+		t.Fatalf("foreign authorization error=%v", err)
+	}
+	if err := repo.AuthorizeContextTurn(ctx, b, "bound-turn"); err != nil {
+		t.Fatal(err)
+	}
+	turnDigest := digest
+	turnDigest.ContractVersion = provider.ContextTurnDigestVersion
+	turnDigest.CanonicalizationVersion = provider.ContextTurnCanonicalVersion
+	turnFP := strings.Repeat("e", 64)
+	attribution := provider.ContextTurnAttribution{TurnID: "bound-turn", Scope: b.Scope, RequestID: "request-turn", OperationID: "operation-turn"}
+	if _, err := repo.IssueContextReceiptForTurn(ctx, b, turnFP, turnDigest, "bound-turn", config, attribution, func(provider.ContextReceipt) error { return rollback }); !errors.Is(err, rollback) {
+		t.Fatalf("turn receipt callback did not abort transaction: %v", err)
+	}
+	_ = pool.QueryRow(ctx, `SELECT count(*) FROM provider_context_turn_attributions`).Scan(&count)
+	if count != 0 {
+		t.Fatal("turn receipt rollback persisted attribution")
+	}
+	boundReceipt, err := repo.IssueContextReceiptForTurn(ctx, b, turnFP, turnDigest, "bound-turn", config, attribution, finalize)
+	if err != nil || boundReceipt.TurnID != "bound-turn" {
+		t.Fatalf("turn receipt=%+v err=%v", boundReceipt, err)
+	}
+	loaded, err := repo.LookupContextReceipt(ctx, b, boundReceipt.Reference)
+	if err != nil || loaded.TurnID != "bound-turn" {
+		t.Fatalf("turn receipt lookup=%+v err=%v", loaded, err)
+	}
+	_ = pool.QueryRow(ctx, `SELECT count(*) FROM provider_context_turn_attributions WHERE continuity_reference=$1 AND turn_id='bound-turn'`, boundReceipt.Reference).Scan(&count)
+	if count != 1 {
+		t.Fatal("turn receipt attribution was not atomic")
+	}
 	errs = make(chan error, 16)
 	for i := 0; i < 16; i++ {
 		wg.Add(1)

@@ -185,6 +185,65 @@ func TestContextReadFingerprintBindsEffectiveReadAndIdentity(t *testing.T) {
 	}
 }
 
+func TestContextTurnChangesDigestAndReadFingerprint(t *testing.T) {
+	scope, response := identityFixture(t, auth.ResponseModeReferenceOnly, false)
+	binding := RuntimeBinding{BindingID: "b", PrincipalID: "principal", Scope: scope, AgentID: "agent", SessionID: "session", ConversationID: "conversation", ProviderInstanceID: "instance"}
+	fingerprint := response.Result.ContextDigest.SelectionPolicyFingerprint
+	legacy, err := ComputeContextDigest(scope, response, fingerprint)
+	if err != nil {
+		t.Fatal(err)
+	}
+	response.Result.TurnID = "turn_1"
+	bound, err := ComputeContextDigest(scope, response, fingerprint)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if bound.ContractVersion != ContextTurnDigestVersion || bound.CanonicalizationVersion != ContextTurnCanonicalVersion || bound.Value == legacy.Value {
+		t.Fatalf("turn digest=%+v legacy=%+v", bound, legacy)
+	}
+	base, err := ContextReadFingerprint(binding, ContextInput{Query: "q", Budget: 1}, response)
+	if err != nil {
+		t.Fatal(err)
+	}
+	turn, err := ContextReadFingerprint(binding, ContextInput{Query: "q", Budget: 1, TurnID: "turn_1"}, response)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if base == turn {
+		t.Fatal("turn did not change read fingerprint")
+	}
+}
+
+func TestContextTurnContinuityReceiptsDoNotCrossTurnBoundaries(t *testing.T) {
+	scope, response := identityFixture(t, auth.ResponseModeReferenceOnly, false)
+	binding := RuntimeBinding{BindingID: "b", PrincipalID: "principal", Scope: scope, AgentID: "agent", SessionID: "session", ConversationID: "conversation", ProviderInstanceID: "instance"}
+	response.Result.TurnID = "turn_1"
+	digest, err := ComputeContextDigest(scope, response, response.Result.ContextDigest.SelectionPolicyFingerprint)
+	if err != nil {
+		t.Fatal(err)
+	}
+	fingerprint, err := ContextReadFingerprint(binding, ContextInput{Query: "q", Budget: 1, TurnID: "turn_1"}, response)
+	if err != nil {
+		t.Fatal(err)
+	}
+	receipt := ContextReceipt{TurnID: "turn_1", RequestFingerprint: fingerprint, Digest: digest}
+	if err := ValidateContextReceipt(receipt, fingerprint); err != nil {
+		t.Fatalf("same turn receipt rejected: %v", err)
+	}
+	other, err := ContextReadFingerprint(binding, ContextInput{Query: "q", Budget: 1, TurnID: "turn_2"}, response)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := ValidateContextReceipt(receipt, other); err != ErrContinuityRequestChanged {
+		t.Fatalf("different turn receipt error=%v", err)
+	}
+	legacy := receipt
+	legacy.TurnID = ""
+	if err := ValidateContextReceipt(legacy, fingerprint); err != ErrContinuityIncompatible {
+		t.Fatalf("turnless v2 receipt error=%v", err)
+	}
+}
+
 func TestContextUnicodeExactValidation(t *testing.T) {
 	for _, data := range []string{`{"q":"\ud83d\ude42"}`, `{"q":"中文🙂"}`, `{"q":"\\ud800"}`, `{"q":"quote\"ok"}`} {
 		if !ValidJSONUnicode([]byte(data)) {

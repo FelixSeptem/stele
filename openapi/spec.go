@@ -4484,10 +4484,11 @@ components:
     ProviderCapabilityDocument:
       type: object
       additionalProperties: false
-      required: [context_digest, context_continuity, durable_references, projections, provider_version, schema_version, operations, scope_dimensions, limits, synchronization, schema_digest, disclosure_policy_version, source_metadata_version, response_modes, disclosure_profiles, context_budget_version, context_packing_policy_version, token_budget_supported]
+      required: [context_digest, context_continuity, context_turn_binding, durable_references, projections, provider_version, schema_version, operations, scope_dimensions, limits, synchronization, schema_digest, disclosure_policy_version, source_metadata_version, response_modes, disclosure_profiles, context_budget_version, context_packing_policy_version, token_budget_supported]
       properties:
         context_digest: {$ref: '#/components/schemas/ProviderContextDigestCapabilities'}
         context_continuity: {$ref: '#/components/schemas/ProviderContextContinuityCapabilities'}
+        context_turn_binding: {$ref: '#/components/schemas/ProviderContextTurnBindingCapabilities'}
         durable_references: {$ref: '#/components/schemas/ProviderDurableReferenceCapabilities'}
         projections: {$ref: '#/components/schemas/ProviderProjectionCapabilities'}
         context_budget_version: {type: string, enum: [context-budget-v1]}

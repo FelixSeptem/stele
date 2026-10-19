@@ -6,6 +6,7 @@ const providerContextSchemas = `    ProviderContextInput:
       required: [query, budget]
       description: Exact snake_case fields only. Scope and session come from the authenticated runtime binding. Path selectors are mutually exclusive and use shared memory-path normalization. Budget counts returned item placements. Optional limits allocate UTF-8 content bytes, exact complete JSON body bytes and unique canonical citation identities independently; omitted fields use server ceilings. Explicit nulls, duplicates, aliases, fractional or overflowing integers, unknown/token fields and trailing JSON are invalid. Bytes are never token estimates. Optional public insight, goal and diagnostic sections remain unsupported.
       properties:
+        turn_id: {type: string, minLength: 1, maxLength: 128, pattern: '^[A-Za-z0-9_.:-]+$'}
         continuity: {$ref: '#/components/schemas/ProviderContextContinuityInput'}
         projection_intent: {type: string, enum: [conversation, task_context, compilation, handoff], default: conversation}
         disclosure_profile: {type: string, maxLength: 64, pattern: '^[A-Za-z0-9_.:-]+$'}
@@ -34,9 +35,9 @@ const providerContextSchemas = `    ProviderContextInput:
       required: [contract_version, algorithm, canonicalization_version, selection_policy_version, selection_policy_fingerprint, value]
       description: Domain-separated SHA-256 of the final authorized semantic projection. Scope comes from the authenticated binding. This digest is neither a credential, a snapshot nor a business-state receipt. See the canonical byte vectors and escaping rules in the Provider integration guide.
       properties:
-        contract_version: {type: string, enum: [context-digest-v1]}
+        contract_version: {type: string, enum: [context-digest-v1, context-turn-digest-v1]}
         algorithm: {type: string, enum: [sha-256]}
-        canonicalization_version: {type: string, enum: [context-canonical-v1]}
+        canonicalization_version: {type: string, enum: [context-canonical-v1, context-turn-canonical-v1]}
         selection_policy_version: {type: string, enum: [context-selection-v1]}
         selection_policy_fingerprint: {type: string, pattern: '^[0-9a-f]{64}$'}
         value: {type: string, pattern: '^[0-9a-f]{64}$'}
@@ -87,9 +88,9 @@ const providerContextSchemas = `    ProviderContextInput:
       additionalProperties: false
       required: [contract_version, algorithm, canonicalization_version, selection_policy_version]
       properties:
-        contract_version: {type: string, enum: [context-digest-v1]}
+        contract_version: {type: string, enum: [context-digest-v1, context-turn-digest-v1]}
         algorithm: {type: string, enum: [sha-256]}
-        canonicalization_version: {type: string, enum: [context-canonical-v1]}
+        canonicalization_version: {type: string, enum: [context-canonical-v1, context-turn-canonical-v1]}
         selection_policy_version: {type: string, enum: [context-selection-v1]}
     ProviderContextContinuityCapabilities:
       type: object
@@ -103,6 +104,15 @@ const providerContextSchemas = `    ProviderContextInput:
         ttl_seconds: {type: integer, minimum: 60, maximum: 604800, default: 86400}
         exact_snapshot_replay: {type: boolean, enum: [false]}
         context_watermark: {type: boolean, enum: [false]}
+    ProviderContextTurnBindingCapabilities:
+      type: object
+      additionalProperties: false
+      required: [enabled, contract_version, digest_contract_version, canonicalization_version]
+      properties:
+        enabled: {type: boolean}
+        contract_version: {type: string, enum: [context-turn-binding-v1]}
+        digest_contract_version: {type: string, enum: [context-turn-digest-v1]}
+        canonicalization_version: {type: string, enum: [context-turn-canonical-v1]}
     ProviderContextBudgetLimits:
       type: object
       additionalProperties: false
@@ -282,6 +292,7 @@ const providerContextSchemas = `    ProviderContextInput:
       additionalProperties: false
       required: [context_digest, continuity, response_mode, disclosure, budget_accounting, profile, recent_session, recent_episodes, relevant_summaries, related_entities, citations]
       properties:
+        turn_id: {type: string, minLength: 1, maxLength: 128, pattern: '^[A-Za-z0-9_.:-]+$'}
         context_digest: {$ref: '#/components/schemas/ProviderContextDigest'}
         continuity: {$ref: '#/components/schemas/ProviderContextContinuityResult'}
         response_mode: {type: string, enum: [reference_only]}
@@ -305,6 +316,7 @@ const providerContextSchemas = `    ProviderContextInput:
       additionalProperties: false
       required: [context_digest, continuity, response_mode, disclosure, budget_accounting, profile, recent_session, recent_episodes, relevant_summaries, related_entities, citations]
       properties:
+        turn_id: {type: string, minLength: 1, maxLength: 128, pattern: '^[A-Za-z0-9_.:-]+$'}
         context_digest: {$ref: '#/components/schemas/ProviderContextDigest'}
         continuity: {$ref: '#/components/schemas/ProviderContextContinuityResult'}
         response_mode: {type: string, enum: [bounded_content]}

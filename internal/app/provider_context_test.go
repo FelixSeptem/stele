@@ -26,6 +26,37 @@ type contextContractAssembler struct {
 	err    error
 }
 
+type contextTurnAuthorizerStub struct{ err error }
+
+func (s contextTurnAuthorizerStub) AuthorizeContextTurn(context.Context, provider.RuntimeBinding, string) error {
+	return s.err
+}
+
+type contextReceiptStoreStub struct{ lookupCalls int }
+
+func (s *contextReceiptStoreStub) LookupContextReceipt(context.Context, provider.RuntimeBinding, string) (provider.ContextReceipt, error) {
+	s.lookupCalls++
+	return provider.ContextReceipt{}, provider.ErrContinuityUnavailable
+}
+func (*contextReceiptStoreStub) IssueContextReceipt(context.Context, provider.RuntimeBinding, string, provider.ContextDigest, provider.ContextContinuityConfig, func(provider.ContextReceipt) error) (provider.ContextReceipt, error) {
+	return provider.ContextReceipt{}, provider.ErrContinuityUnavailable
+}
+func (*contextReceiptStoreStub) CleanupContextReceipts(context.Context, int) (int, error) {
+	return 0, nil
+}
+
+type contextTurnAttributionStoreStub struct {
+	calls int
+	got   provider.ContextTurnAttribution
+	err   error
+}
+
+func (s *contextTurnAttributionStoreStub) RecordContextTurnAttribution(_ context.Context, _ provider.RuntimeBinding, a provider.ContextTurnAttribution) error {
+	s.calls++
+	s.got = a
+	return s.err
+}
+
 func (a *contextContractAssembler) AssembleContext(_ context.Context, in retrieval.AssembleContextInput) (retrieval.AssembledContext, error) {
 	a.input = in
 	a.calls++
@@ -154,6 +185,53 @@ func TestProviderContextDeniedBindingDoesNotDispatch(t *testing.T) {
 		if (w.Code != 401 && w.Code != 403) || a.calls != 0 {
 			t.Fatalf("denied request status=%d calls=%d", w.Code, a.calls)
 		}
+	}
+}
+
+func TestProviderContextRejectsUnavailableTurnBeforeRead(t *testing.T) {
+	for _, turnID := range []string{"foreign", "missing"} {
+		t.Run(turnID, func(t *testing.T) {
+			a := &contextContractAssembler{}
+			receipts := &contextReceiptStoreStub{}
+			request := contextContractHandlerWithDependencies(t, a, func(deps *HTTPDependencies) {
+				deps.ProviderContextTurns = contextTurnAuthorizerStub{err: provider.ErrContextTurnUnavailable}
+				deps.ProviderContextReceipts = receipts
+				deps.ProviderContextContinuity = provider.DefaultContextContinuityConfig()
+			})
+			w := request(`{` + contextMetadata + `,"input":{"query":"q","budget":1,"turn_id":"` + turnID + `","continuity":{"mode":"compare","reference":"ctxc_0123456789abcdef0123456789abcdef"}}}`)
+			if w.Code != http.StatusForbidden || a.calls != 0 || receipts.lookupCalls != 0 || !strings.Contains(w.Body.String(), `"code":"context_turn_denied"`) || strings.Contains(w.Body.String(), turnID) {
+				t.Fatalf("status=%d assemble=%d lookups=%d body=%s", w.Code, a.calls, receipts.lookupCalls, w.Body.String())
+			}
+		})
+	}
+}
+
+func TestProviderContextTurnAuthorityFailsClosedWithoutBreakingTurnlessReads(t *testing.T) {
+	a := &contextContractAssembler{}
+	request := contextContractHandler(t, a)
+	bound := request(`{` + contextMetadata + `,"input":{"query":"q","budget":1,"turn_id":"turn_1"}}`)
+	if bound.Code != http.StatusServiceUnavailable || a.calls != 0 || !strings.Contains(bound.Body.String(), `"code":"provider_unavailable"`) {
+		t.Fatalf("bound status=%d calls=%d body=%s", bound.Code, a.calls, bound.Body.String())
+	}
+	turnless := request(`{` + contextMetadata + `,"input":{"query":"q","budget":1}}`)
+	if turnless.Code != http.StatusOK || a.calls != 1 {
+		t.Fatalf("turnless status=%d calls=%d body=%s", turnless.Code, a.calls, turnless.Body.String())
+	}
+}
+
+func TestProviderContextRecordsOnlyVerifiedTurnAttribution(t *testing.T) {
+	a := &contextContractAssembler{}
+	attributions := &contextTurnAttributionStoreStub{}
+	request := contextContractHandlerWithDependencies(t, a, func(deps *HTTPDependencies) {
+		deps.ProviderContextTurns = contextTurnAuthorizerStub{}
+		deps.ProviderContextAttributions = attributions
+	})
+	w := request(`{` + contextMetadata + `,"input":{"query":"q","budget":1,"turn_id":"turn_1"}}`)
+	if w.Code != http.StatusOK || attributions.calls != 1 {
+		t.Fatalf("status=%d calls=%d body=%s", w.Code, attributions.calls, w.Body.String())
+	}
+	if attributions.got.TurnID != "turn_1" || attributions.got.RequestID != "req-context" || attributions.got.OperationID != "op-context" || attributions.got.Scope.Tenant != "tenant-a" || attributions.got.ContinuityReference != "" || attributions.got.Digest.ContractVersion != provider.ContextTurnDigestVersion {
+		t.Fatalf("attribution=%+v", attributions.got)
 	}
 }
 

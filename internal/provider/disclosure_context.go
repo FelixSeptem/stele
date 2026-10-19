@@ -26,6 +26,7 @@ type DisclosedContextMemory struct {
 	Content string `json:"content"`
 }
 type DisclosedContextResult struct {
+	TurnID            string                  `json:"turn_id,omitempty"`
 	ContextDigest     ContextDigest           `json:"context_digest"`
 	Continuity        ContextContinuityResult `json:"continuity"`
 	BudgetAccounting  ContextBudgetAccounting `json:"budget_accounting"`

@@ -126,6 +126,9 @@ func (r *Repository) AdmitProjection(ctx context.Context, b provider.RuntimeBind
 		if receipt.Digest.Value != req.Input.ContextDigest {
 			return empty, provider.ErrProjectionConflict
 		}
+		if receipt.TurnID != "" && receipt.TurnID != req.Input.TurnID {
+			return empty, provider.ErrProjectionUnavailable
+		}
 		out.ContextDigestAttribution = "verified_receipt"
 	}
 	out.References, err = projectionReferences(ctx, tx, b, profile, req.Input.References)

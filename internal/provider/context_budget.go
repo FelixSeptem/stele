@@ -83,6 +83,7 @@ func (l ProviderLimits) Resolved() ProviderLimits {
 }
 
 type ContextAdmission struct {
+	turnID        string
 	continuity    ContextContinuityResult
 	fingerprint   string
 	scope         memory.Scope
@@ -235,6 +236,7 @@ func (a *ContextAdmission) NoteContextItemLimit(hit retrieval.SearchHit) {
 }
 func (a *ContextAdmission) response(out retrieval.AssembledContext) DisclosedContextResponse {
 	r := ShapeDisclosedContextResponse(out, a.metadata, a.decision, 1000, a.scope)
+	r.Result.TurnID = a.turnID
 	r.Result.BudgetAccounting = a.accounting
 	r.Result.Continuity = a.continuity
 	r.Result.ContextDigest = ContextDigest{ContextDigestVersion, "sha-256", ContextCanonicalVersion, ContextSelectionVersion, a.fingerprint, a.fingerprint}
@@ -318,3 +320,4 @@ func (a *ContextAdmission) SetPolicyFingerprint(s string) error {
 	return nil
 }
 func (a *ContextAdmission) SetContinuity(r ContextContinuityResult) { a.continuity = r }
+func (a *ContextAdmission) SetTurnID(id string)                     { a.turnID = id }

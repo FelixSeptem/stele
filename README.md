@@ -203,6 +203,15 @@ The public runtime uses Provider operations instead.
 See [Best practices](docs/best-practices.md) for practical workflows and
 recovery guidance.
 
+Strict Provider consumers that need session/turn proof may require the
+`context-turn-binding-v1` capability, create a Provider turn, and send its
+optional `turn_id` with context. Stele verifies the same full runtime binding,
+session, and exact scope before retrieval, echoes only the verified ID, and
+binds it into a versioned turn digest/fingerprint. Foreign or legacy-unbound
+turns are denied without existence disclosure; the field never widens memory
+selection or disclosure and provides no role, token, snapshot, or business
+state authority.
+
 ## Contributing documentation and MCP guidance
 
 When changing an MCP tool, its descriptor, annotation, request shape, or safety

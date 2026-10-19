@@ -4,6 +4,8 @@ import (
 	"context"
 	"errors"
 	"time"
+
+	"github.com/FelixSeptem/stele/internal/memory"
 )
 
 var ErrContextTurnUnavailable = errors.New("context_turn_unavailable")
@@ -19,6 +21,7 @@ type ContextTurnAuthorizer interface {
 // for an admitted turn-bound context response.
 type ContextTurnAttribution struct {
 	TurnID, RequestID, OperationID string
+	Scope                          memory.Scope
 	Digest                         ContextDigest
 	ContinuityReference            string
 	OccurredAt                     time.Time

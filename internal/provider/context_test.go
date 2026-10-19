@@ -79,3 +79,21 @@ func TestContextRequestStrictObjectsAndScalars(t *testing.T) {
 		}
 	}
 }
+
+func TestContextRequestTurnIDIsStrict(t *testing.T) {
+	metadata := `"metadata":{"request_id":"r","operation_id":"o","schema_version":"provider-v1"}`
+	for _, body := range []string{
+		`{` + metadata + `,"input":{"query":"q","budget":1,"turn_id":""}}`,
+		`{` + metadata + `,"input":{"query":"q","budget":1,"turn_id":"with space"}}`,
+		`{` + metadata + `,"input":{"query":"q","budget":1,"turn_id":"a/b"}}`,
+		`{` + metadata + `,"input":{"query":"q","budget":1,"turn_id":null}}`,
+	} {
+		if _, err := DecodeContextRequest([]byte(body)); err == nil {
+			t.Fatalf("accepted %s", body)
+		}
+	}
+	request, err := DecodeContextRequest([]byte(`{` + metadata + `,"input":{"query":"q","budget":1,"turn_id":"turn_1"}}`))
+	if err != nil || request.Input.TurnID != "turn_1" {
+		t.Fatalf("request=%+v err=%v", request, err)
+	}
+}

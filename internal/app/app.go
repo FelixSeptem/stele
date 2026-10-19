@@ -740,6 +740,8 @@ func buildAPIRuntime(ctx context.Context, cfg config.Config, deps apiRuntimeDepe
 	httpDeps.ProviderLimits = cfg.Provider.Limits
 	httpDeps.ProviderContextContinuity = cfg.Provider.ContextContinuity
 	httpDeps.ProviderContextReceipts = repo
+	httpDeps.ProviderContextTurns = repo
+	httpDeps.ProviderContextAttributions = repo
 	httpDeps.ProviderContextPolicy = func(ctx context.Context, b provider.RuntimeBinding) ([]byte, error) {
 		return retrievalService.ContextSelectionManifest(ctx, b.Scope, b.SessionID)
 	}
