@@ -63,6 +63,34 @@ func TestProviderAdapterIngestUsesIdempotencyAndIntentGovernance(t *testing.T) {
 	}
 }
 
+type capturingTurnSession struct {
+	input memory.CreateMemorySessionTurnInput
+}
+
+func (s *capturingTurnSession) CreateTurn(_ context.Context, input memory.CreateMemorySessionTurnInput) (memory.MemorySessionTurn, error) {
+	s.input = input
+	return memory.MemorySessionTurn{}, nil
+}
+
+func (*capturingTurnSession) RecordTurnOutcome(context.Context, memory.RecordMemorySessionTurnOutcomeInput) (memory.MemorySessionTurn, error) {
+	return memory.MemorySessionTurn{}, nil
+}
+
+func TestProviderCreateTurnCarriesTrustedBinding(t *testing.T) {
+	session := &capturingTurnSession{}
+	a := NewAdapter(AdapterDependencies{Session: session})
+	b := RuntimeBinding{BindingID: "binding", PrincipalID: "principal", Scope: memory.Scope{Tenant: "t", Project: "p", Namespace: "n"}, AgentID: "agent", SessionID: "session", ConversationID: "conversation", ProviderInstanceID: "instance"}
+	meta := OperationMetadata{RequestID: "r", OperationID: "o", SchemaVersion: "provider-v1"}
+	_, err := a.CreateTurn(context.Background(), b, meta, memory.CreateMemorySessionTurnInput{Query: "q"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	got := session.input.ProviderBinding
+	if got == nil || got.BindingID != b.BindingID || got.PrincipalID != b.PrincipalID || got.Scope != b.Scope || got.SessionID != b.SessionID || got.AgentID != b.AgentID || got.ConversationID != b.ConversationID || got.ProviderInstanceID != b.ProviderInstanceID {
+		t.Fatalf("turn binding = %+v", got)
+	}
+}
+
 func TestShapeCitationsOmitsScoresAndHiddenItems(t *testing.T) {
 	s := retrieval.SearchResult{Hits: []retrieval.SearchHit{{Memory: memory.CanonicalMemory{ID: "m1", State: memory.MemoryStateActive}, Citations: []retrieval.Citation{{MemoryID: "m1", RawEventID: "e1", Operation: "ingest"}}}, {Memory: memory.CanonicalMemory{ID: "m2", State: memory.MemoryStateSuppressed}}}}
 	cs := ShapeSearchCitations(s)

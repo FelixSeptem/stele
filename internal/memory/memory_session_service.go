@@ -188,6 +188,7 @@ func (s *MemorySessionService) CreateTurn(ctx context.Context, input CreateMemor
 		VerificationStatus: ScopeProofVerdictPending,
 		CreatedAt:          now,
 		UpdatedAt:          now,
+		ProviderBinding:    input.ProviderBinding,
 	})
 }
 

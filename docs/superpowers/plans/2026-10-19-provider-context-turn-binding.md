@@ -29,7 +29,7 @@
 - Test: `internal/provider/operation_test.go`
 - Test: `internal/provider/context_turn_test.go`
 
-- [ ] **Step 1: Write the failing ownership tests.**
+- [x] **Step 1: Write the failing ownership tests.**
 
 ```go
 func TestAdapterCreateTurnCarriesOnlyTrustedBinding(t *testing.T) {
@@ -40,11 +40,11 @@ func TestAdapterCreateTurnCarriesOnlyTrustedBinding(t *testing.T) {
 }
 ```
 
-- [ ] **Step 2: Run red.** Run `go test ./internal/memory ./internal/provider -run TestAdapterCreateTurnCarriesOnlyTrustedBinding -count=1`; expect a compile failure because `ProviderBinding` is absent.
+- [x] **Step 2: Run red.** Run `go test ./internal/memory ./internal/provider -run TestAdapterCreateTurnCarriesOnlyTrustedBinding -count=1`; expect a compile failure because `ProviderBinding` is absent.
 
-- [ ] **Step 3: Implement the minimum types and propagation.** Add `memory.RuntimeBindingAttribution` with binding/principal/scope/agent/session/conversation/provider-instance values and validation. Add it as `ProviderBinding *RuntimeBindingAttribution \`json:"-"\`` on the create input and created turn. In `Adapter.CreateTurn`, populate it solely from the validated `provider.RuntimeBinding`; in `MemorySessionService.CreateTurn`, copy it to the new immutable turn. Define `provider.ContextTurnAuthorizer`, `ContextTurnAttributionStore`, `ContextTurnAttribution`, and `ErrContextTurnUnavailable`. Keep generic session requests unbound.
+- [x] **Step 3: Implement the minimum types and propagation.** Add `memory.RuntimeBindingAttribution` with binding/principal/scope/agent/session/conversation/provider-instance values and validation. Add it as `ProviderBinding *RuntimeBindingAttribution \`json:"-"\`` on the create input and created turn. In `Adapter.CreateTurn`, populate it solely from the validated `provider.RuntimeBinding`; in `MemorySessionService.CreateTurn`, copy it to the new immutable turn. Define `provider.ContextTurnAuthorizer`, `ContextTurnAttributionStore`, `ContextTurnAttribution`, and `ErrContextTurnUnavailable`. Keep generic session requests unbound.
 
-- [ ] **Step 4: Run green.** Run `go test ./internal/memory ./internal/provider -count=1`; expect exit 0.
+- [x] **Step 4: Run green.** Run `go test ./internal/memory ./internal/provider -count=1`; expect exit 0.
 
 - [ ] **Step 5: Commit.** Run `git add internal/memory/scope_proof_session.go internal/memory/memory_session_service.go internal/memory/memory_session_service_test.go internal/provider/operation.go internal/provider/operation_test.go internal/provider/context_turn.go internal/provider/context_turn_test.go; git commit -m "feat(provider): bind provider turns to runtime identity"`.
 

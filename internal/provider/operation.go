@@ -295,6 +295,11 @@ func (a *Adapter) CreateTurn(ctx context.Context, binding RuntimeBinding, meta O
 	if input.IdempotencyKey == "" {
 		input.IdempotencyKey = meta.IdempotencyKey
 	}
+	input.ProviderBinding = &memory.RuntimeBindingAttribution{
+		BindingID: binding.BindingID, PrincipalID: binding.PrincipalID, Scope: binding.Scope,
+		AgentID: binding.AgentID, SessionID: binding.SessionID, ConversationID: binding.ConversationID,
+		ProviderInstanceID: binding.ProviderInstanceID,
+	}
 	return a.deps.Session.CreateTurn(ctx, input)
 }
 

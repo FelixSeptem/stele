@@ -230,21 +230,63 @@ type MemorySessionRun struct {
 }
 
 type MemorySessionTurn struct {
-	ID                    string                  `json:"id"`
-	SessionID             string                  `json:"session_id"`
-	Scope                 Scope                   `json:"scope"`
-	IdempotencyKey        string                  `json:"idempotency_key,omitempty"`
-	OutcomeIdempotencyKey string                  `json:"outcome_idempotency_key,omitempty"`
-	Status                MemorySessionTurnStatus `json:"status"`
-	Query                 string                  `json:"query"`
-	ContextEvidence       map[string]any          `json:"context_evidence,omitempty"`
-	OutcomeEventIDs       []string                `json:"outcome_event_ids,omitempty"`
-	ExpectedRecall        []string                `json:"expected_recall,omitempty"`
-	VerificationStatus    ScopeProofVerdict       `json:"verification_status,omitempty"`
-	FailureCategory       ProofFailureCategory    `json:"failure_category,omitempty"`
-	CreatedAt             time.Time               `json:"created_at"`
-	UpdatedAt             time.Time               `json:"updated_at"`
-	VerifiedAt            time.Time               `json:"verified_at,omitempty"`
+	ID                    string                     `json:"id"`
+	SessionID             string                     `json:"session_id"`
+	Scope                 Scope                      `json:"scope"`
+	IdempotencyKey        string                     `json:"idempotency_key,omitempty"`
+	OutcomeIdempotencyKey string                     `json:"outcome_idempotency_key,omitempty"`
+	Status                MemorySessionTurnStatus    `json:"status"`
+	Query                 string                     `json:"query"`
+	ContextEvidence       map[string]any             `json:"context_evidence,omitempty"`
+	OutcomeEventIDs       []string                   `json:"outcome_event_ids,omitempty"`
+	ExpectedRecall        []string                   `json:"expected_recall,omitempty"`
+	VerificationStatus    ScopeProofVerdict          `json:"verification_status,omitempty"`
+	FailureCategory       ProofFailureCategory       `json:"failure_category,omitempty"`
+	CreatedAt             time.Time                  `json:"created_at"`
+	UpdatedAt             time.Time                  `json:"updated_at"`
+	VerifiedAt            time.Time                  `json:"verified_at,omitempty"`
+	ProviderBinding       *RuntimeBindingAttribution `json:"-"`
+}
+
+// RuntimeBindingAttribution is server-owned Provider runtime identity recorded
+// with a turn. It is deliberately excluded from public JSON: callers can
+// neither submit it nor observe a binding bearer identity through session APIs.
+type RuntimeBindingAttribution struct {
+	BindingID          string
+	PrincipalID        string
+	Scope              Scope
+	AgentID            string
+	SessionID          string
+	ConversationID     string
+	ProviderInstanceID string
+}
+
+func (a RuntimeBindingAttribution) Validate() error {
+	if err := a.Scope.Validate(); err != nil {
+		return err
+	}
+	for name, value := range map[string]string{
+		"binding id": a.BindingID, "principal id": a.PrincipalID, "agent id": a.AgentID,
+		"session id": a.SessionID, "conversation id": a.ConversationID, "provider instance id": a.ProviderInstanceID,
+	} {
+		if !runtimeBindingAttributionToken(value) {
+			return fmt.Errorf("%s is invalid", name)
+		}
+	}
+	return nil
+}
+
+func runtimeBindingAttributionToken(value string) bool {
+	if value == "" || len(value) > 256 {
+		return false
+	}
+	for _, r := range value {
+		if (r >= 'a' && r <= 'z') || (r >= 'A' && r <= 'Z') || (r >= '0' && r <= '9') || strings.ContainsRune("-_.:", r) {
+			continue
+		}
+		return false
+	}
+	return true
 }
 
 type MemorySessionVerification struct {
@@ -604,6 +646,7 @@ type CreateMemorySessionTurnInput struct {
 	IncludeRelations          bool
 	IncludeExperienceInsights bool
 	IncludeDiagnostics        bool
+	ProviderBinding           *RuntimeBindingAttribution `json:"-"`
 }
 
 func (i CreateMemorySessionTurnInput) Validate() error {
@@ -618,6 +661,14 @@ func (i CreateMemorySessionTurnInput) Validate() error {
 	}
 	if i.ContextBudget < 0 {
 		return fmt.Errorf("context budget must be greater than or equal to zero")
+	}
+	if i.ProviderBinding != nil {
+		if err := i.ProviderBinding.Validate(); err != nil {
+			return fmt.Errorf("provider binding attribution: %w", err)
+		}
+		if i.ProviderBinding.Scope.Normalized() != i.Scope.Normalized() || i.ProviderBinding.SessionID != strings.TrimSpace(i.SessionID) {
+			return fmt.Errorf("provider binding attribution does not match turn")
+		}
 	}
 	return nil
 }
