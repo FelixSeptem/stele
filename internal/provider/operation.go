@@ -300,6 +300,8 @@ func (a *Adapter) CreateTurn(ctx context.Context, binding RuntimeBinding, meta O
 		AgentID: binding.AgentID, SessionID: binding.SessionID, ConversationID: binding.ConversationID,
 		ProviderInstanceID: binding.ProviderInstanceID,
 	}
+	input.DisclosureProfile = strings.TrimSpace(input.DisclosureProfile)
+	input.ResponseMode = strings.TrimSpace(input.ResponseMode)
 	return a.deps.Session.CreateTurn(ctx, input)
 }
 

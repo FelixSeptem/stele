@@ -23,7 +23,7 @@ func TestPublicRetrievalSchemasDoNotExposeQueryAnalysisInternals(t *testing.T) {
 	if err != nil {
 		t.Fatalf("LoadFromData() error = %v", err)
 	}
-	for _, schemaName := range []string{"MemorySearchRequest", "MemorySearchResponse", "ContextAssembleRequest", "ContextAssembleResponse", "ContextDiagnostic", "ProviderRetrieveRequest", "ProviderContextRequest", "ProviderOperationResponse"} {
+	for _, schemaName := range []string{"MemorySearchRequest", "MemorySearchResponse", "ContextAssembleRequest", "ContextAssembleResponse", "ContextDiagnostic", "ProviderRetrieveRequest", "ProviderRetrieveInput", "ProviderRetrieveResponse", "ProviderRetrieveResult", "ProviderRetrieveMatch", "ProviderTurnRequest", "ProviderTurnInput", "ProviderTurnResponse", "ProviderTurnResult", "ProviderTurnContextEvidence", "ProviderContextRequest", "ProviderOperationResponse"} {
 		schema := doc.Components.Schemas[schemaName]
 		if schema == nil || schema.Value == nil {
 			t.Fatalf("public schema %q is missing", schemaName)
@@ -37,6 +37,12 @@ func TestPublicRetrievalSchemasDoNotExposeQueryAnalysisInternals(t *testing.T) {
 			if _, exposed := schema.Value.Properties[forbidden]; exposed {
 				t.Fatalf("public schema %q exposes query-analysis property %q", schemaName, forbidden)
 			}
+		}
+	}
+	providerRetrieveInput := doc.Components.Schemas["ProviderRetrieveInput"].Value
+	for _, forbidden := range []string{"include_feedback_diagnostics", "feedback_aware_ranking", "feedback_ranking_policy"} {
+		if _, exposed := providerRetrieveInput.Properties[forbidden]; exposed {
+			t.Fatalf("ProviderRetrieveInput exposes internal retrieval control %q", forbidden)
 		}
 	}
 }

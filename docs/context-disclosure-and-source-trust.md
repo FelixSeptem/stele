@@ -52,12 +52,19 @@ discovery lists supported registry entries, never individual entitlements.
 | `POST /v1/provider/context` | Authorized mode-specific projection | Eligible active low/medium sources only |
 | `POST /v1/provider/events`, `POST /v1/events` | Current grant and write access; attestation separately authorized | Safe event ID/replay acknowledgment |
 | `POST /v1/provider/intents` | Current grant and existing intent gates | Intent ID/status acknowledgment |
-| Provider retrieve/sync/forget/turn/outcome | 403 | Denied before operation lookup |
+| `POST /v1/provider/retrieve` | Current grant resolves a mode-specific projection | Active same-scope low/medium sources only; no score, diagnostics, hidden candidate, or foreign citation disclosure |
+| `POST /v1/provider/turns` | Current grant creates a server-issued turn | Runtime-bound session only; stored and returned evidence use the negotiated closed allowlist |
+| Provider sync/forget/turn-outcome | 403 | Denied before operation lookup |
 | Native search/context/list/history/provenance/session/intent reads and lifecycle routes | 403 | Denied before operation lookup |
 | MCP data tools, including reads, writes and lifecycle operations | Denied | Denied before source/binding lookup |
 | Administrative native/MCP operations | Existing administrator and exact-scope checks | Operator privileges remain explicit |
 
-Public runtimes use the Provider context contract. A denied native or MCP route
+Retrieve and turn requests default to the grant's profile and `reference_only`.
+Only a current `memory-content-v1` grant plus explicit `bounded_content` can
+return retrieval content or a turn summary. Public callers cannot provide a
+scope, session, turn ID, role, diagnostic flag, or other authority override;
+the binding supplies scope/session and turns receive server-issued IDs. A denied
+native or MCP route
 does not justify another credential, local ranking, a second memory store, or a
 transport fallback. Future data routes remain closed until they implement the
 same disclosure boundary. Fixed reasoning capability discovery remains usable.

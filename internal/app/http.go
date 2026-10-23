@@ -844,9 +844,11 @@ type memorySearchRequest struct {
 	// which stay recorded/update-time filters. They are mutually exclusive: at
 	// most one of as_of or the valid_from/valid_to pair may be supplied. All
 	// three are absent for an ordinary current search, which is the default.
-	AsOf      string `json:"as_of,omitempty"`
-	ValidFrom string `json:"valid_from,omitempty"`
-	ValidTo   string `json:"valid_to,omitempty"`
+	AsOf              string `json:"as_of,omitempty"`
+	ValidFrom         string `json:"valid_from,omitempty"`
+	ValidTo           string `json:"valid_to,omitempty"`
+	DisclosureProfile string `json:"disclosure_profile,omitempty"`
+	ResponseMode      string `json:"response_mode,omitempty"`
 }
 
 func (req memorySearchRequest) toRetrievalSearchInput() (retrieval.SearchInput, error) {

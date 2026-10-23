@@ -647,6 +647,8 @@ type CreateMemorySessionTurnInput struct {
 	IncludeExperienceInsights bool
 	IncludeDiagnostics        bool
 	ProviderBinding           *RuntimeBindingAttribution `json:"-"`
+	DisclosureProfile         string                     `json:"-"`
+	ResponseMode              string                     `json:"-"`
 }
 
 func (i CreateMemorySessionTurnInput) Validate() error {

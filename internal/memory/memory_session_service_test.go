@@ -100,6 +100,50 @@ func TestMemorySessionServiceRunsServiceSideSessionLoop(t *testing.T) {
 	}
 }
 
+func TestMemorySessionServicePersistsTurnEvidenceByDisclosureMode(t *testing.T) {
+	scope := Scope{Tenant: "tenant-a", Project: "project-a", Namespace: "namespace-a"}
+	for _, tc := range []struct {
+		name        string
+		mode        string
+		wantSummary bool
+	}{
+		{name: "reference only", mode: "reference_only"},
+		{name: "bounded content", mode: "bounded_content", wantSummary: true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			store := &stubMemorySessionStore{sessions: []MemorySessionRun{{ID: "session-a", Scope: scope}}}
+			assembler := &stubMemorySessionContextAssembler{result: MemorySessionContextEvidence{
+				Summary: "private context summary", MemoryIDs: []string{"mem-visible"},
+				Citations: []string{"citation-visible"}, Diagnostics: []string{"private diagnostic"},
+			}}
+			service := NewMemorySessionService(MemorySessionServiceOptions{Store: store, ContextAssembler: assembler})
+			turn, err := service.CreateTurn(context.Background(), CreateMemorySessionTurnInput{
+				Scope: scope, SessionID: "session-a", Query: "query", ResponseMode: tc.mode,
+			})
+			if err != nil {
+				t.Fatalf("CreateTurn() error = %v", err)
+			}
+			if !assembler.gotRequest.DisclosureRequired {
+				t.Fatalf("context request=%+v, want disclosure-required assembly", assembler.gotRequest)
+			}
+			stored := store.turns[0]
+			if tc.wantSummary {
+				if stored.ContextEvidence["summary"] != "private context summary" {
+					t.Fatalf("stored evidence=%v, want authorized summary", stored.ContextEvidence)
+				}
+			} else if _, ok := stored.ContextEvidence["summary"]; ok {
+				t.Fatalf("reference-only stored evidence contains summary: %v", stored.ContextEvidence)
+			}
+			if _, ok := stored.ContextEvidence["diagnostics"]; ok {
+				t.Fatalf("stored evidence contains diagnostics: %v", stored.ContextEvidence)
+			}
+			if len(stored.ContextEvidence["memory_ids"].([]string)) != 1 || len(stored.ContextEvidence["citations"].([]string)) != 1 || turn.ID != stored.ID {
+				t.Fatalf("stored evidence lost safe references: turn=%+v evidence=%v", turn, stored.ContextEvidence)
+			}
+		})
+	}
+}
+
 func TestMemorySessionReportExtractsFailureEvidenceAndNextActions(t *testing.T) {
 	scope := Scope{Tenant: "tenant-a", Project: "project-a", Namespace: "namespace-a"}
 	store := &stubMemorySessionStore{

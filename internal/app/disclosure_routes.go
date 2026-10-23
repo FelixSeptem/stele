@@ -13,7 +13,7 @@ func disclosureRouteGate(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		p, ok := auth.PrincipalFromContext(r.Context())
 		if ok && p.Role != auth.PrincipalRoleAdmin {
-			allowed := r.Method == "POST" && (r.URL.Path == "/v1/provider/runtime" || r.URL.Path == "/v1/provider/context" || r.URL.Path == "/v1/provider/events" || r.URL.Path == "/v1/provider/intents" || r.URL.Path == "/v1/events")
+			allowed := r.Method == "POST" && (r.URL.Path == "/v1/provider/runtime" || r.URL.Path == "/v1/provider/context" || r.URL.Path == "/v1/provider/retrieve" || r.URL.Path == "/v1/provider/turns" || r.URL.Path == "/v1/provider/events" || r.URL.Path == "/v1/provider/intents" || r.URL.Path == "/v1/events")
 			allowed = allowed || (r.Method == "POST" && (r.URL.Path == "/v1/provider/references" || r.URL.Path == "/v1/provider/references/status" || r.URL.Path == "/v1/provider/references/lookup"))
 			allowed = allowed || (r.Method == "POST" && (r.URL.Path == "/v1/provider/projections" || r.URL.Path == "/v1/provider/projections/history"))
 			allowed = allowed || (r.Method == "GET" && (r.URL.Path == "/v1/provider/status" || r.URL.Path == "/v1/provider/capabilities" || r.URL.Path == "/v1/reasoning/capabilities"))

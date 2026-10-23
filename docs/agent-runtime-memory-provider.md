@@ -40,6 +40,45 @@ the binding, expiry, principal, and exact grant before repository access.
 Changing scope headers or an identity returns a generic denial and never
 discloses whether foreign records exist.
 
+## Public retrieval and turn projection
+
+`POST /v1/provider/retrieve` and `POST /v1/provider/turns` require the same
+runtime binding/session headers and current exact-scope disclosure grant as
+Provider context. Retrieve uses a closed `ProviderRetrieveInput`; path and path
+prefix selectors narrow candidates inside the binding and cannot widen scope.
+The effective profile defaults to the current grant's configured profile, and
+the response mode defaults to `reference_only`.
+
+```json
+{
+  "metadata": {"request_id":"retrieve-1","operation_id":"retrieve-op-1","schema_version":"provider-v1"},
+  "input": {"query":"deployment plan","path":"compilations/run-1","top_k":5}
+}
+```
+
+Reference-only results contain active same-scope low/medium references, source
+metadata, versions, and citations derived from returned matches. They omit
+content, scores, diagnostics, raw query, hidden candidates, and arbitrary
+citation identities. Content requires both an allowed `memory-content-v1`
+profile and explicit `response_mode=bounded_content`; a reference-only grant
+receives the same bounded `403 disclosure_denied` whether the profile or mode
+is unauthorized. Current authority-store failures return retryable
+`503 disclosure_unavailable` before search. If the complete serialized result
+exceeds the configured `max_context_bytes` response ceiling, Stele returns
+bounded `413 provider_response_limit_exceeded` without a partial result.
+
+Turn creation accepts `query`, optional `context_budget` (item placements, not
+tokens), `include_relations`, `idempotency_key`, and optional disclosure profile
+and mode. Scope/session are binding-owned; callers cannot supply a session ID,
+turn ID, role, or diagnostic override. The service creates the turn ID. Its
+response omits raw query and exposes only turn/session IDs, status, effective
+profile/mode, and `context_evidence.memory_ids`/`citations`. A summary is present
+only for an explicitly requested, authorized `bounded_content` mode; internal
+diagnostics are never included in Provider turn evidence. Malformed or unknown
+fields return bounded `400 invalid_request`, binding/disclosure denial returns
+generic `403`, and unavailable disclosure authority returns retryable `503`.
+No schema or database migration is required.
+
 ## Durable reference contract (PC5)
 
 When a runtime needs a durable task, run, handoff, or compilation reference,
@@ -393,8 +432,15 @@ than stripping limits, broadening disclosure, switching routes or packing locall
 
 This changes public defaults and requires migrations 0035 and 0036 plus explicit grant
 provisioning. Old bindings are checked against current grants on every supported
-request. Provider retrieve/sync and native/MCP data routes deny public credentials
-before lookup. Administrative operations retain existing exact-scope checks.
+request. Public `POST /v1/provider/retrieve` and `POST /v1/provider/turns` use
+the same current-grant projection boundary: retrieval defaults to closed memory
+references and citation references, while a turn receives a server-issued ID and
+closed evidence allowlist. Explicit `memory-content-v1` plus `bounded_content`
+is required for retrieval content or a turn summary. Neither route accepts a
+caller scope/session/turn/role override, exposes ranking scores, diagnostics,
+hidden candidates or foreign citations, or permits a selector to widen access.
+Provider sync and native/MCP data routes still deny public credentials before
+lookup. Administrative operations retain existing exact-scope checks.
 
 Source metadata on event ingestion defaults to `untrusted/restricted`.
 `attested_data` requires a separate explicitly provisioned entitlement and never

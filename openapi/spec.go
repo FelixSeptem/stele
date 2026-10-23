@@ -216,12 +216,14 @@ paths:
               $ref: '#/components/schemas/ProviderRetrieveRequest'
       responses:
         '200':
-          description: 'Scoped lifecycle-safe retrieval result'
+          description: 'Current exact-scope disclosure projection; no scores, diagnostics, hidden candidates or foreign citations'
           content:
             application/json:
-              schema: {$ref: '#/components/schemas/ProviderOperationResponse'}
-        '400': {description: 'Bounded provider error'}
-        '403': {description: 'Runtime binding or scope denied'}
+              schema: {$ref: '#/components/schemas/ProviderRetrieveResponse'}
+        '400': {description: 'Bounded validation or compatibility error'}
+        '403': {description: 'Runtime binding or current disclosure denied without record-existence detail'}
+        '413': {description: 'The complete projected response exceeds the configured Provider response ceiling; no result is emitted'}
+        '503': {description: 'Current disclosure authority unavailable'}
   /v1/provider/context:
     post:
       operationId: providerAssembleContext
@@ -287,9 +289,14 @@ paths:
             schema:
               $ref: '#/components/schemas/ProviderTurnRequest'
       responses:
-        '201': {description: 'Memory session turn with assembled context'}
-        '400': {description: 'Bounded provider error'}
-        '403': {description: 'Runtime binding or scope denied'}
+        '201':
+          description: 'Server-issued turn with a disclosure-projected evidence allowlist; raw query is omitted'
+          content:
+            application/json:
+              schema: {$ref: '#/components/schemas/ProviderTurnResponse'}
+        '400': {description: 'Bounded validation or compatibility error'}
+        '403': {description: 'Runtime binding or current disclosure denied without record-existence detail'}
+        '503': {description: 'Current disclosure authority unavailable'}
   /v1/provider/turn-outcomes:
     post:
       operationId: providerRecordTurnOutcome
@@ -4644,7 +4651,27 @@ components:
       required: [metadata, input]
       properties:
         metadata: {$ref: '#/components/schemas/ProviderOperationMetadata'}
-        input: {$ref: '#/components/schemas/MemorySearchRequest'}
+        input: {$ref: '#/components/schemas/ProviderRetrieveInput'}
+    ProviderRetrieveInput:
+      type: object
+      additionalProperties: false
+      required: [query]
+      properties:
+        query: {type: string, minLength: 1}
+        path: {type: string, maxLength: 512}
+        path_prefix: {type: string, maxLength: 512}
+        query_embedding: {type: array, items: {type: number}}
+        classes: {type: array, items: {type: string, enum: [profile, episodic, procedural, summary, relation]}}
+        time_from: {type: string, format: date-time}
+        time_to: {type: string, format: date-time}
+        top_k: {type: integer, minimum: 1}
+        include_summaries: {type: boolean, default: false}
+        include_relations: {type: boolean, default: false}
+        as_of: {type: string, format: date-time}
+        valid_from: {type: string, format: date-time}
+        valid_to: {type: string, format: date-time}
+        disclosure_profile: {type: string, enum: [memory-reference-v1, memory-content-v1], description: Defaults to the current grant's configured profile.}
+        response_mode: {type: string, enum: [reference_only, bounded_content], default: reference_only}
     ProviderContextRequest:
       type: object
       additionalProperties: false
@@ -4666,13 +4693,78 @@ components:
         metadata: {$ref: '#/components/schemas/ProviderOperationMetadata'}
         result: {type: object}
         citations: {type: array, items: {$ref: '#/components/schemas/ProviderCitation'}}
+    ProviderRetrieveResponse:
+      type: object
+      additionalProperties: false
+      required: [metadata, result, citations]
+      properties:
+        metadata: {$ref: '#/components/schemas/ProviderOperationMetadata'}
+        result: {$ref: '#/components/schemas/ProviderRetrieveResult'}
+        citations: {type: array, items: {$ref: '#/components/schemas/ProviderCitation'}}
+    ProviderRetrieveResult:
+      type: object
+      additionalProperties: false
+      required: [disclosure_profile, response_mode, matches]
+      properties:
+        disclosure_profile: {type: string, enum: [memory-reference-v1, memory-content-v1]}
+        response_mode: {type: string, enum: [reference_only, bounded_content]}
+        matches: {type: array, items: {$ref: '#/components/schemas/ProviderRetrieveMatch'}}
+    ProviderRetrieveMatch:
+      type: object
+      additionalProperties: false
+      required: [memory_id, memory_path, class, state, version, source_metadata]
+      properties:
+        memory_id: {type: string, maxLength: 128}
+        memory_path: {type: string, maxLength: 512}
+        class: {type: string, enum: [profile, episodic, procedural, summary, relation]}
+        state: {type: string, enum: [active]}
+        version: {type: integer, minimum: 1}
+        source_metadata: {$ref: '#/components/schemas/SourceMetadata'}
+        content: {type: string, description: Present only with authorized memory-content-v1 and explicit bounded_content.}
     ProviderTurnRequest:
       type: object
       additionalProperties: false
       required: [metadata, input]
       properties:
         metadata: {$ref: '#/components/schemas/ProviderOperationMetadata'}
-        input: {type: object}
+        input: {$ref: '#/components/schemas/ProviderTurnInput'}
+    ProviderTurnInput:
+      type: object
+      additionalProperties: false
+      required: [query]
+      properties:
+        query: {type: string, minLength: 1}
+        idempotency_key: {type: string, maxLength: 128}
+        context_budget: {type: integer, minimum: 0, description: 'Maximum context item placements; not tokens.'}
+        include_relations: {type: boolean, default: false}
+        disclosure_profile: {type: string, enum: [memory-reference-v1, memory-content-v1], description: Defaults to the current grant's configured profile.}
+        response_mode: {type: string, enum: [reference_only, bounded_content], default: reference_only}
+    ProviderTurnResponse:
+      type: object
+      additionalProperties: false
+      required: [metadata, result]
+      properties:
+        metadata: {$ref: '#/components/schemas/ProviderOperationMetadata'}
+        result: {$ref: '#/components/schemas/ProviderTurnResult'}
+    ProviderTurnResult:
+      type: object
+      additionalProperties: false
+      required: [turn_id, session_id, status, disclosure_profile, response_mode, context_evidence]
+      properties:
+        turn_id: {type: string, maxLength: 128}
+        session_id: {type: string, maxLength: 128}
+        status: {$ref: '#/components/schemas/MemorySessionTurnStatus'}
+        disclosure_profile: {type: string, enum: [memory-reference-v1, memory-content-v1]}
+        response_mode: {type: string, enum: [reference_only, bounded_content]}
+        context_evidence: {$ref: '#/components/schemas/ProviderTurnContextEvidence'}
+    ProviderTurnContextEvidence:
+      type: object
+      additionalProperties: false
+      required: [memory_ids, citations]
+      properties:
+        memory_ids: {type: array, maxItems: 100, items: {type: string, maxLength: 128}}
+        citations: {type: array, maxItems: 100, items: {type: string, maxLength: 128}}
+        summary: {type: string, maxLength: 4096, description: Present only with authorized memory-content-v1 and explicit bounded_content.}
     ProviderTurnOutcomeRequest:
       type: object
       additionalProperties: false

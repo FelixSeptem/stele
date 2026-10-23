@@ -35,6 +35,12 @@ func TestProviderDisclosureDeniesAlternateHTTPRoutesWithoutBinding(t *testing.T)
 			r.Header.Set(auth.HeaderNamespace, "namespace-a")
 			w := httptest.NewRecorder()
 			h.ServeHTTP(w, r)
+			if route.method == http.MethodPost && (route.path == "/v1/provider/retrieve" || route.path == "/v1/provider/turns") {
+				if w.Code != http.StatusNotFound || strings.Contains(w.Body.String(), "marker") {
+					t.Fatalf("admitted route did not safely pass the gate: %d %s", w.Code, w.Body.String())
+				}
+				return
+			}
 			if w.Code != http.StatusForbidden || !strings.Contains(w.Body.String(), `"code":"disclosure_denied"`) || strings.Contains(w.Body.String(), "marker") {
 				t.Fatalf("alternate route disclosed data or reached dispatch: %d %s", w.Code, w.Body.String())
 			}

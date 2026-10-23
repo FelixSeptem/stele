@@ -1868,6 +1868,8 @@ func (a memorySessionContextAdapter) AssembleSessionContext(ctx context.Context,
 	}
 	result, err := a.assembler.AssembleContext(ctx, retrieval.AssembleContextInput{
 		Scope:                     request.Scope,
+		DisclosureRequired:        request.DisclosureRequired,
+		SessionID:                 request.SessionID,
 		Query:                     request.Query,
 		Budget:                    request.Budget,
 		IncludeRelations:          request.IncludeRelations,

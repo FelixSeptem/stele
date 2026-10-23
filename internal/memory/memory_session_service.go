@@ -19,6 +19,7 @@ type MemorySessionStore interface {
 type MemorySessionContextRequest struct {
 	Scope                     Scope
 	SessionID                 string
+	DisclosureRequired        bool
 	Query                     string
 	Budget                    int
 	IncludeRelations          bool
@@ -163,6 +164,7 @@ func (s *MemorySessionService) CreateTurn(ctx context.Context, input CreateMemor
 	evidence, err := s.contextAssembler.AssembleSessionContext(ctx, MemorySessionContextRequest{
 		Scope:                     input.Scope.Normalized(),
 		SessionID:                 session.ID,
+		DisclosureRequired:        strings.TrimSpace(input.ResponseMode) == "reference_only" || strings.TrimSpace(input.ResponseMode) == "bounded_content",
 		Query:                     strings.TrimSpace(input.Query),
 		Budget:                    budget,
 		IncludeRelations:          input.IncludeRelations,
@@ -171,6 +173,12 @@ func (s *MemorySessionService) CreateTurn(ctx context.Context, input CreateMemor
 	})
 	if err != nil {
 		return MemorySessionTurn{}, err
+	}
+	if mode := strings.TrimSpace(input.ResponseMode); mode == "reference_only" || mode == "bounded_content" {
+		evidence.Diagnostics = nil
+		if mode == "reference_only" {
+			evidence.Summary = ""
+		}
 	}
 	turnID := strings.TrimSpace(input.TurnID)
 	if turnID == "" {

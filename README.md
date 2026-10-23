@@ -88,7 +88,8 @@ Provision an explicit exact-scope disclosure profile, discover capabilities,
 initialize a runtime binding, then request `/v1/provider/context`. The default
 `reference_only` mode returns structured references. `bounded_content` requires
 the `memory-content-v1` profile and an explicit mode request. Public credentials
-cannot use native retrieval or MCP tools, including `who_am_i`.
+can use the disclosure-projected Provider retrieve and server-issued turn
+routes, but cannot use native retrieval or MCP tools, including `who_am_i`.
 
 Durable task/run/handoff/compilation references, context budgeting and digest /
 continuity, and runtime outcome/feedback each use separately negotiated,

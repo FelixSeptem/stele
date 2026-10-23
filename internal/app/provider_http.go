@@ -10,6 +10,7 @@ import (
 	"github.com/FelixSeptem/stele/internal/memory"
 	"github.com/FelixSeptem/stele/internal/policy"
 	"github.com/FelixSeptem/stele/internal/provider"
+	"github.com/FelixSeptem/stele/internal/retrieval"
 	"github.com/FelixSeptem/stele/internal/telemetry"
 	"github.com/FelixSeptem/stele/openapi"
 	"io"
@@ -242,7 +243,7 @@ func registerProviderOperationRoutes(mux *http.ServeMux, deps HTTPDependencies) 
 		b, _ := provider.RuntimeBindingFromContext(r.Context())
 		var req struct {
 			Metadata provider.OperationMetadata `json:"metadata"`
-			Input    memorySearchRequest        `json:"input"`
+			Input    providerRetrieveInput      `json:"input"`
 		}
 		if err := provider.DecodeStrict(readBody(r), &req); err != nil {
 			writeProviderError(w, 400, provider.ErrorCategoryValidation, "invalid_request", "invalid request", false)
@@ -252,17 +253,44 @@ func registerProviderOperationRoutes(mux *http.ServeMux, deps HTTPDependencies) 
 			writeProviderCompatibilityError(w, deps.ProviderSchemaVersions)
 			return
 		}
+		e, ok := currentDisclosure(w, r, deps.PrincipalAuthorizer, b.PrincipalID, b.Scope)
+		if !ok {
+			return
+		}
+		decision, err := e.Resolve(req.Input.DisclosureProfile, req.Input.ResponseMode)
+		if err != nil {
+			writeProviderError(w, http.StatusForbidden, provider.ErrorCategoryScope, "disclosure_denied", "disclosure denied", false)
+			return
+		}
 		input, err := req.Input.toRetrievalSearchInput()
 		if err != nil {
 			writeProviderError(w, 400, provider.ErrorCategoryValidation, "invalid_request", "invalid request", false)
 			return
 		}
+		input.DisclosureRequired = true
+		input.Scope = b.Scope
+		input.SessionID = b.SessionID
 		out, meta, err := deps.ProviderAdapter.Search(r.Context(), b, req.Metadata, input)
 		if err != nil {
 			writeProviderError(w, 400, providerErrorCategory(err), "operation_failed", boundedProviderMessage(err), providerErrorCategory(err) == provider.ErrorCategoryRetryable)
 			return
 		}
-		writeJSON(w, http.StatusOK, map[string]any{"metadata": meta, "result": out, "citations": provider.ShapeSearchCitationsWithLimit(out, providerCitationLimit(deps.ProviderLimits))})
+		projected, citations := projectProviderSearch(out, b.Scope, decision.ResponseMode)
+		if limit := providerCitationLimit(deps.ProviderLimits); len(citations) > limit {
+			citations = citations[:limit]
+			if len(projected.Matches) > limit {
+				projected.Matches = projected.Matches[:limit]
+			}
+		}
+		payload := map[string]any{"metadata": meta, "result": map[string]any{"disclosure_profile": decision.Profile, "response_mode": decision.ResponseMode, "matches": projected.Matches}, "citations": citations}
+		encoded, err := json.Marshal(payload)
+		if err != nil || len(encoded)+1 > deps.ProviderLimits.Resolved().MaxContextBytes {
+			writeProviderError(w, http.StatusRequestEntityTooLarge, provider.ErrorCategoryValidation, "provider_response_limit_exceeded", "provider response exceeds allocation", false)
+			return
+		}
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusOK)
+		_, _ = w.Write(append(encoded, '\n'))
 	})))
 	mux.Handle("POST /v1/provider/context", wrap(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		b, _ := provider.RuntimeBindingFromContext(r.Context())
@@ -378,8 +406,15 @@ func registerProviderOperationRoutes(mux *http.ServeMux, deps HTTPDependencies) 
 	mux.Handle("POST /v1/provider/turns", wrap(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		b, _ := provider.RuntimeBindingFromContext(r.Context())
 		var req struct {
-			Metadata provider.OperationMetadata          `json:"metadata"`
-			Input    memory.CreateMemorySessionTurnInput `json:"input"`
+			Metadata provider.OperationMetadata `json:"metadata"`
+			Input    struct {
+				IdempotencyKey    string `json:"idempotency_key,omitempty"`
+				Query             string `json:"query"`
+				ContextBudget     int    `json:"context_budget"`
+				IncludeRelations  bool   `json:"include_relations"`
+				DisclosureProfile string `json:"disclosure_profile,omitempty"`
+				ResponseMode      string `json:"response_mode,omitempty"`
+			} `json:"input"`
 		}
 		if err := provider.DecodeStrict(readBody(r), &req); err != nil {
 			writeProviderError(w, http.StatusBadRequest, provider.ErrorCategoryValidation, "invalid_request", "invalid request", false)
@@ -389,13 +424,30 @@ func registerProviderOperationRoutes(mux *http.ServeMux, deps HTTPDependencies) 
 			writeProviderCompatibilityError(w, deps.ProviderSchemaVersions)
 			return
 		}
-		out, err := deps.ProviderAdapter.CreateTurn(r.Context(), b, req.Metadata, req.Input)
+		e, ok := currentDisclosure(w, r, deps.PrincipalAuthorizer, b.PrincipalID, b.Scope)
+		if !ok {
+			return
+		}
+		decision, err := e.Resolve(req.Input.DisclosureProfile, req.Input.ResponseMode)
+		if err != nil {
+			writeProviderError(w, http.StatusForbidden, provider.ErrorCategoryScope, "disclosure_denied", "disclosure denied", false)
+			return
+		}
+		input := memory.CreateMemorySessionTurnInput{
+			Scope:          b.Scope,
+			IdempotencyKey: req.Input.IdempotencyKey, Query: req.Input.Query,
+			ContextBudget: req.Input.ContextBudget, IncludeRelations: req.Input.IncludeRelations,
+			IncludeExperienceInsights: false,
+			IncludeDiagnostics:        false,
+			DisclosureProfile:         decision.Profile, ResponseMode: decision.ResponseMode,
+		}
+		out, err := deps.ProviderAdapter.CreateTurn(r.Context(), b, req.Metadata, input)
 		if err != nil {
 			cat := providerErrorCategory(err)
 			writeProviderError(w, http.StatusBadRequest, cat, "operation_failed", boundedProviderMessage(err), cat == provider.ErrorCategoryRetryable)
 			return
 		}
-		writeJSON(w, http.StatusCreated, map[string]any{"metadata": req.Metadata, "result": out})
+		writeJSON(w, http.StatusCreated, map[string]any{"metadata": req.Metadata, "result": projectProviderTurn(out, decision.Profile, decision.ResponseMode)})
 	})))
 	mux.Handle("POST /v1/provider/turn-outcomes", wrap(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		b, _ := provider.RuntimeBindingFromContext(r.Context())
@@ -479,6 +531,124 @@ func registerProviderOperationRoutes(mux *http.ServeMux, deps HTTPDependencies) 
 			"expires_at":           binding.ExpiresAt,
 		})
 	})))
+}
+
+type providerRetrieveResult struct {
+	Matches []providerRetrieveMatch `json:"matches"`
+}
+
+type providerRetrieveInput struct {
+	Query             string               `json:"query"`
+	Path              string               `json:"path,omitempty"`
+	PathPrefix        string               `json:"path_prefix,omitempty"`
+	QueryEmbedding    []float32            `json:"query_embedding,omitempty"`
+	Classes           []memory.MemoryClass `json:"classes,omitempty"`
+	TimeFrom          string               `json:"time_from,omitempty"`
+	TimeTo            string               `json:"time_to,omitempty"`
+	TopK              int                  `json:"top_k,omitempty"`
+	IncludeSummaries  bool                 `json:"include_summaries,omitempty"`
+	IncludeRelations  bool                 `json:"include_relations,omitempty"`
+	AsOf              string               `json:"as_of,omitempty"`
+	ValidFrom         string               `json:"valid_from,omitempty"`
+	ValidTo           string               `json:"valid_to,omitempty"`
+	DisclosureProfile string               `json:"disclosure_profile,omitempty"`
+	ResponseMode      string               `json:"response_mode,omitempty"`
+}
+
+func (input providerRetrieveInput) toRetrievalSearchInput() (retrieval.SearchInput, error) {
+	return (memorySearchRequest{
+		Query: input.Query, Path: input.Path, PathPrefix: input.PathPrefix,
+		QueryEmbedding: input.QueryEmbedding, Classes: input.Classes,
+		TimeFrom: input.TimeFrom, TimeTo: input.TimeTo, TopK: input.TopK,
+		IncludeSummaries: input.IncludeSummaries, IncludeRelations: input.IncludeRelations,
+		AsOf: input.AsOf, ValidFrom: input.ValidFrom, ValidTo: input.ValidTo,
+	}).toRetrievalSearchInput()
+}
+
+type providerTurnResult struct {
+	TurnID            string         `json:"turn_id"`
+	SessionID         string         `json:"session_id"`
+	Status            string         `json:"status"`
+	DisclosureProfile string         `json:"disclosure_profile"`
+	ResponseMode      string         `json:"response_mode"`
+	ContextEvidence   map[string]any `json:"context_evidence"`
+}
+
+func projectProviderTurn(turn memory.MemorySessionTurn, profile, mode string) providerTurnResult {
+	evidence := map[string]any{"memory_ids": []string{}, "citations": []string{}}
+	for _, key := range []string{"memory_ids", "citations"} {
+		if values, ok := turn.ContextEvidence[key].([]string); ok {
+			evidence[key] = boundedProviderTurnReferences(values)
+			continue
+		}
+		if values, ok := turn.ContextEvidence[key].([]any); ok {
+			projected := make([]string, 0, min(len(values), 100))
+			for _, value := range values {
+				if text, ok := value.(string); ok && strings.TrimSpace(text) != "" && len(text) <= 128 && len(projected) < 100 {
+					projected = append(projected, text)
+				}
+			}
+			if len(projected) > 0 {
+				evidence[key] = projected
+			}
+		}
+	}
+	if mode == auth.ResponseModeBoundedContent {
+		if summary, ok := turn.ContextEvidence["summary"].(string); ok && strings.TrimSpace(summary) != "" && len(summary) <= 4096 {
+			evidence["summary"] = summary
+		}
+	}
+	return providerTurnResult{TurnID: turn.ID, SessionID: turn.SessionID, Status: string(turn.Status), DisclosureProfile: profile, ResponseMode: mode, ContextEvidence: evidence}
+}
+
+func boundedProviderTurnReferences(values []string) []string {
+	out := make([]string, 0, min(len(values), 100))
+	for _, value := range values {
+		if strings.TrimSpace(value) == "" || len(value) > 128 {
+			continue
+		}
+		out = append(out, value)
+		if len(out) == 100 {
+			break
+		}
+	}
+	return out
+}
+
+type providerRetrieveMatch struct {
+	MemoryID       string                `json:"memory_id"`
+	MemoryPath     string                `json:"memory_path"`
+	Class          memory.MemoryClass    `json:"class"`
+	State          memory.MemoryState    `json:"state"`
+	Version        int64                 `json:"version"`
+	SourceMetadata memory.SourceMetadata `json:"source_metadata"`
+	Content        string                `json:"content,omitempty"`
+}
+
+func projectProviderSearch(result retrieval.SearchResult, scope memory.Scope, mode string) (providerRetrieveResult, []provider.Citation) {
+	projected := providerRetrieveResult{Matches: make([]providerRetrieveMatch, 0, len(result.Hits))}
+	citations := make([]provider.Citation, 0, len(result.Hits))
+	seen := make(map[string]struct{}, len(result.Hits))
+	for _, hit := range result.Hits {
+		m := hit.Memory
+		if m.State != memory.MemoryStateActive || m.Scope.Normalized() != scope.Normalized() || m.SourceVersion <= 0 || !m.SourceMetadata.Effective().Disclosable() || strings.TrimSpace(m.ID) == "" {
+			continue
+		}
+		if _, ok := seen[m.ID]; ok {
+			continue
+		}
+		seen[m.ID] = struct{}{}
+		match := providerRetrieveMatch{
+			MemoryID: m.ID, MemoryPath: m.MemoryPath, Class: m.Class, State: m.State,
+			Version: m.SourceVersion, SourceMetadata: m.SourceMetadata.Effective(),
+		}
+		if mode == auth.ResponseModeBoundedContent {
+			match.Content = m.Content
+		}
+		projected.Matches = append(projected.Matches, match)
+		citations = append(citations, provider.Citation{SourceKind: "memory", Reference: m.ID, Version: fmt.Sprintf("v%d", m.SourceVersion), Availability: "available"})
+	}
+	return projected, citations
 }
 
 func providerCitationLimit(l provider.ProviderLimits) int {

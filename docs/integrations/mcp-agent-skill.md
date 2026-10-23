@@ -201,7 +201,9 @@ remain available. Do not fall back to direct SQL or an unscoped database client.
 ## Public Provider workflow
 
 A public runtime discovers capabilities, initializes `/v1/provider/runtime` after
-operator provisioning, then calls `/v1/provider/context`. Default
+operator provisioning, then calls `/v1/provider/context`. It may also use
+`POST /v1/provider/retrieve` for a closed retrieval projection and
+`POST /v1/provider/turns` for a server-issued turn. Default
 `reference_only` returns structured references. Explicit `bounded_content` needs
 `memory-content-v1` authority. Validate the mode-specific response and typed
 `source_metadata`; missing fields are a contract failure, never an empty success.
@@ -209,7 +211,10 @@ Source metadata omission on ingestion means `untrusted/restricted`; attestation
 requires independent current exact-scope authority.
 
 Provider event and intent writes return safe IDs/status rather than stored text.
-Public retrieve/sync, native data reads/lifecycle and MCP tools are denied.
+Public retrieve and turns require the current exact-scope disclosure grant and
+runtime binding; retrieve omits scores, diagnostics, hidden candidates and
+foreign citations, and turns return projected evidence. Public sync, native data
+reads/lifecycle and MCP tools are denied.
 A denial does not permit transport fallback, scope changes, alternate credentials,
 local ranking or a local reference/fact store. Consult the
 [Provider JSON contract](../agent-runtime-memory-provider.md#provider-context-json-contract)
