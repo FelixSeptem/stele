@@ -1,5 +1,9 @@
 # Stele Self-Hosting
 
+**Role:** operations reference. For a short local development path, start with
+[Getting started](getting-started.md); return here for production configuration,
+migrations, backup, restore, and recovery.
+
 ## Overview
 
 PC5 reference support reuses existing scope/path indexes and capability
@@ -565,7 +569,7 @@ Run API mode manually with the same bootstrap-admin configuration:
 docker run --rm -p 8080:8080 \
   -e STELE_MODE=api \
   -e STELE_HTTP_ADDR=:8080 \
-  -e STELE_POSTGRES_DSN='postgres://stele:stele@host.docker.internal:5432/stele?sslmode=disable' \
+  -e STELE_POSTGRES_DSN='<operator-managed-dsn>' \
   -e STELE_AUTH_BOOTSTRAP_ADMIN_KEY='<bootstrap-secret>' \
   -e STELE_AUTH_DEFAULT_TENANT=tenant-a \
   -e STELE_AUTH_DEFAULT_PROJECT=project-a \
@@ -2704,7 +2708,7 @@ wrapper verifies `/health` and `/openapi.yaml` remain available. It expects
 configured) for an enabled adapter:
 
 ```powershell
-$env:STELE_TEST_POSTGRES_MCP_DSN = 'postgres://stele:...@localhost:5432/stele_mcp_test?sslmode=disable'
+$env:STELE_TEST_POSTGRES_MCP_DSN = '<operator-managed-dsn>'
 pwsh -NoProfile -File scripts/stele-mcp-conformance.ps1 `
   -EvidencePath .tmp/mcp-conformance-evidence.json `
   -ApiBaseUrl http://localhost:8080

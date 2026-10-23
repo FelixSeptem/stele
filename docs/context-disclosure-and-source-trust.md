@@ -1,5 +1,8 @@
 # Context disclosure and source trust
 
+**Role:** security reference. Start at the
+[documentation portal](README.md) for the architecture and integration map.
+
 PC2 adds `context-disclosure-v1` and `source-metadata-v1` while retaining the
 `provider-v1` envelope. It changes public access defaults. Consumers must discover
 both extension versions and the served OpenAPI digest before using context.

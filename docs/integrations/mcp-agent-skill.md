@@ -1,5 +1,10 @@
 # MCP integration and Agent Skill
 
+**Role:** reference for administrator-operated MCP workflows. Start at the
+[documentation portal](../README.md) when choosing an integration boundary.
+Public agent runtimes use the [Provider contract](../agent-runtime-memory-provider.md),
+not administrator MCP credentials or tools.
+
 Stele's MCP adapter is an optional Streamable HTTP adapter over existing
 OpenAPI-backed services. It is disabled by default and does not create a second
 memory system. Public runtimes use the Provider context contract with an explicitly provisioned

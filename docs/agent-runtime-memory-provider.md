@@ -1,5 +1,10 @@
 # Agent runtime memory provider
 
+**Role:** reference for public agent runtime integration. Start at the
+[documentation portal](README.md) for the integration overview. A Provider
+denial does not authorize MCP, native-read, alternate-credential, local-memory,
+independent-ranking, or context-reconstruction fallback.
+
 Stele exposes an opt-in, OpenAPI-backed memory-provider contract for external
 agent runtimes. The provider is a service adapter: it does not execute agents,
 build prompts, call models, or maintain a second memory store.

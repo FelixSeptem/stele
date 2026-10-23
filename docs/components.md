@@ -1,5 +1,8 @@
 # Key components
 
+**Role:** maintainer reference. Start at the
+[documentation portal](README.md) for the system overview and contributor path.
+
 This page maps the public architecture to the repository's implementation
 areas. The linked Go packages and contracts are authoritative when this guide
 and an implementation differ.

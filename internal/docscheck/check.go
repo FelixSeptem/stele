@@ -38,9 +38,13 @@ func Check(root string) error {
 	}
 	files := []string{
 		"README.md",
+		"docs/README.md",
+		"docs/getting-started.md",
 		"docs/architecture.md",
 		"docs/components.md",
 		"docs/best-practices.md",
+		"docs/self-hosting.md",
+		"docs/agent-runtime-memory-provider.md",
 		"docs/integrations/mcp-agent-skill.md",
 		"skills/stele-memory/SKILL.md",
 	}
@@ -58,6 +62,43 @@ func Check(root string) error {
 		issues = append(issues, localLinkIssues(root, relative, string(data))...)
 		issues = append(issues, unsafeExampleIssues(relative, string(data))...)
 	}
+	issues = append(issues, requiredTextIssues("docs/README.md", "portal-navigation", contents["docs/README.md"], []string{
+		"## Understand Stele",
+		"## Run Stele",
+		"## Integrate Stele",
+		"## Extend and maintain Stele",
+	})...)
+	issues = append(issues, requiredTextIssues("docs/getting-started.md", "getting-started-contract", contents["docs/getting-started.md"], []string{
+		"**Role:** tutorial",
+		"PostgreSQL is the only system of record",
+		"## Choose your next integration path",
+		"self-hosting.md",
+	})...)
+	issues = append(issues, requiredTextIssues("docs/architecture.md", "architecture-navigation", contents["docs/architecture.md"], []string{
+		"## Authorization and disclosure flow",
+		"## Event-to-memory lifecycle",
+		"## Choosing an integration boundary",
+		"PostgreSQL is the only system of record",
+	})...)
+	issues = append(issues, requiredTextIssues("README.md", "entry-point-navigation", contents["README.md"], []string{
+		"## Documentation",
+		"docs/README.md",
+		"## Choose an integration boundary",
+	})...)
+	issues = append(issues, requiredTextIssues("docs/agent-runtime-memory-provider.md", "entry-point-navigation", contents["docs/agent-runtime-memory-provider.md"], []string{
+		"**Role:** reference",
+		"README.md",
+		"does not authorize",
+	})...)
+	issues = append(issues, requiredTextIssues("docs/integrations/mcp-agent-skill.md", "entry-point-navigation", contents["docs/integrations/mcp-agent-skill.md"], []string{
+		"**Role:** reference",
+		"../README.md",
+		"administrator-operated",
+	})...)
+	issues = append(issues, requiredTextIssues("docs/self-hosting.md", "entry-point-navigation", contents["docs/self-hosting.md"], []string{
+		"**Role:** operations reference",
+		"getting-started.md",
+	})...)
 
 	for _, descriptor := range mcp.ToolDescriptors() {
 		for _, relative := range []string{"docs/integrations/mcp-agent-skill.md", "skills/stele-memory/SKILL.md"} {
@@ -97,6 +138,16 @@ func Check(root string) error {
 		messages = append(messages, issue.Error())
 	}
 	return fmt.Errorf("documentation consistency check failed:\n- %s", strings.Join(messages, "\n- "))
+}
+
+func requiredTextIssues(path, rule, text string, required []string) []Issue {
+	issues := make([]Issue, 0)
+	for _, want := range required {
+		if !strings.Contains(text, want) {
+			issues = append(issues, Issue{Path: path, Rule: rule, Message: fmt.Sprintf("required text %q is missing", want)})
+		}
+	}
+	return issues
 }
 
 var markdownLinkPattern = regexp.MustCompile(`\[[^\]]*\]\(\s*(?:<([^>]+)>|([^\s)]+))`)

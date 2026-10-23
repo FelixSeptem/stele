@@ -1,5 +1,11 @@
 # Stele architecture
 
+**Role:** overview. This page explains system boundaries and data flow;
+[components](components.md), [self-hosting](self-hosting.md), the
+[Provider contract](agent-runtime-memory-provider.md), and the
+[OpenAPI source](../openapi/spec.go) remain the detailed authorities for their
+subjects.
+
 Stele is a self-hosted agent memory service. It stores durable memory and
 evidence in PostgreSQL, uses pgvector and PostgreSQL full-text search for
 retrieval, and exposes governed OpenAPI and optional MCP adapters to an
@@ -36,6 +42,78 @@ client-owned memory database, or make a second persistence system authoritative.
 
 Workers and schedulers do not bypass the same scope, lifecycle, provenance, and
 append-only rules used by API requests.
+
+## Authorization and disclosure flow
+
+Protected requests are resolved in order. The authenticated principal must
+have an active grant for the exact tenant/project/namespace scope; public
+Provider reads also require a server-issued runtime binding and a disclosure
+profile configured for that scope. Lifecycle and source eligibility are
+applied before retrieval results are projected into bounded citations or
+context. Caller-supplied fields cannot widen scope, override a business role,
+select a more permissive profile, or open another memory path.
+
+```mermaid
+flowchart LR
+    Principal[Authenticated principal] --> Grant[Exact scope grant]
+    Grant --> Binding[Runtime binding and session]
+    Binding --> Profile[Configured disclosure profile]
+    Profile --> Eligible[Lifecycle and source eligibility]
+    Eligible --> Retrieve[Scoped retrieval]
+    Retrieve --> Project[Bounded projection and citations]
+```
+
+Provider denial is final for that request. It does not authorize switching to
+administrator MCP, native read APIs, another credential, local memory,
+independent ranking, or reconstructed context.
+
+## Event-to-memory lifecycle
+
+Writes first create durable service-owned event or intent records. Worker
+processing is asynchronous: it validates governance rules, produces candidates,
+and may append a new canonical version with provenance. Canonical memory is
+never overwritten in place. Retrieval reads eligible current projections;
+suppressed, forgotten, or deleted records do not re-enter ordinary results
+through broader search.
+
+```mermaid
+flowchart LR
+    Write[Event or intent] --> Durable[Durable record and provenance]
+    Durable --> Worker[Asynchronous worker governance]
+    Worker --> Candidate[Candidate memory]
+    Candidate --> Version[Canonical version and provenance]
+    Version --> Lifecycle{Lifecycle state}
+    Lifecycle -->|active| Retrieval[Eligible retrieval]
+    Lifecycle -->|suppressed / forgotten / deleted| Excluded[Excluded from ordinary retrieval]
+    Retrieval --> Response[Bounded response with citations]
+```
+
+Each transition preserves scope and lineage so citations can be traced to
+service-governed evidence without disclosing hidden candidates or internal
+ranking state.
+
+## Choosing an integration boundary
+
+| Need | Boundary | Ownership |
+| --- | --- | --- |
+| Public agent runtime needs governed context or memory writes | Provider | Versioned capabilities, exact binding, disclosure, bounded result |
+| Administrator needs review and lifecycle tools | MCP | Optional adapter using administrator authorization |
+| Custom service needs a specific HTTP operation | Native OpenAPI | Endpoint-level contract; caller retains integration logic |
+| Change Stele internals | Go packages | Maintainer-only package APIs and repository tests |
+
+Use the [Provider guide](agent-runtime-memory-provider.md) for public runtimes
+and [MCP guide](integrations/mcp-agent-skill.md) for administrator workflows.
+Provider denials do not permit fallback to another integration boundary.
+Exact request and response behavior is defined by the OpenAPI and versioned
+Provider contracts, not this overview.
+
+## What Stele does not own
+
+Stele does not execute model inference, own prompts, define product tasks or
+business roles, commit application generations, or budget client-side model
+tokens. The integrating application owns those responsibilities. Stele owns
+memory persistence, governance, exact-scope authorization, retrieval, bounded
+disclosure, provenance, lifecycle, and its own operational evidence.
 
 ## Request and memory flow
 

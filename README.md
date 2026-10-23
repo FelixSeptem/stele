@@ -66,6 +66,21 @@ exact-scope runtime principal before calling protected memory APIs.
 Follow the complete bootstrap, migration, embedding, backup, restore, and smoke
 instructions in [Self-hosting](docs/self-hosting.md).
 
+## Documentation
+
+Start with the [documentation portal](docs/README.md). It provides the
+recommended path for understanding, running, integrating, and maintaining
+Stele.
+
+## Choose an integration boundary
+
+| You need to... | Start with | Do not use it for |
+| --- | --- | --- |
+| Give a public agent runtime governed context or writes | [Provider runtime](docs/agent-runtime-memory-provider.md) | administrator MCP or native-read fallback |
+| Let an administrator inspect or review memory | [MCP integration](docs/integrations/mcp-agent-skill.md) | public agent credentials |
+| Build a custom service client | [OpenAPI](openapi/spec.go) | bypassing principal and scope rules |
+| Operate a deployment | [Self-hosting](docs/self-hosting.md) | application business-state management |
+
 ## Agent access: Provider runtime and administrator MCP
 
 Public agent credentials use the [Provider contract](docs/agent-runtime-memory-provider.md).
@@ -75,53 +90,16 @@ initialize a runtime binding, then request `/v1/provider/context`. The default
 the `memory-content-v1` profile and an explicit mode request. Public credentials
 cannot use native retrieval or MCP tools, including `who_am_i`.
 
-Durable task/run/handoff/compilation references use the separately negotiated
-PC5 contract described in the [Provider reference section](docs/agent-runtime-memory-provider.md#durable-reference-contract-pc5).
-
-Runtime turn/outcome/feedback evidence uses the separate PC6 capability,
-`turn-outcome-feedback-projection-v1`, with append-only corrections and bounded
-history. Admission does not complete tasks or activate ranking/insights. See
-[projection maintenance](docs/provider-evidence-projections.md) for migration
-0037, request/response bounds, asynchronous feedback and rollback.
-
-Discover `context_budget_version=context-budget-v1`,
-`context_packing_policy_version=context-packing-v1`, and
-`token_budget_supported=false` alongside the disclosure/source versions. Required
-`input.budget` counts item placements; optional `budget_limits` allocates UTF-8
-content bytes, complete serialized response bytes and unique citations. Omitted
-limits use independently published server ceilings; zero content/citations is
-valid. Defaults are 100 items, 100 citations, 1 MiB response bytes and content
-bytes inherited from the resolved response ceiling. Every successful response
-includes closed `result.budget_accounting` with requested/effective limits, exact
-usage and safe selection reasons. Whole items and their citations share one
-allocation; deterministic accounting reservation can leave unused space.
-
-Consumers reserve other prompt space, validate actual body length and all usage
-against effective limits, and treat missing/incompatible accounting as a contract
-failure. Bytes are never token estimates, and optional public insights/goals/raw
-diagnostics remain closed. An infeasible empty envelope returns bounded 413 with
-no partial result; malformed limits use 400, current disclosure denial 403 and
-unavailable authority retryable 503. Strict consumers must migrate schemas and
-discover the extension explicitly; disable affected access before rolling back
-to a service that lacks it. The [Provider guide](docs/agent-runtime-memory-provider.md)
-covers units, ordering, errors and migration, and [self-hosting](docs/self-hosting.md)
-covers independent configuration. Historical PC1/PC2 evidence does not prove PC3
-readiness or PC4 digest/continuity readiness.
-
-Provider context also returns a mandatory versioned SHA-256 digest of the final
-authorized projection and a continuity result. Omit continuity for a fresh
-read; request `{"mode":"issue"}` to receive an expiring opaque metadata-only
-comparison reference; send `{"mode":"compare","reference":"ctxc_<32 lowercase hex>"}`
-for a later full fresh body marked `unchanged` or `changed`. This is not HTTP
-cache validation: Stele never returns 304, a historical body, a snapshot replay
-or a watermark. Receipts persist only identity/fingerprint/digest/timestamps,
-never queries, content, citations or response bodies. Consumers verify
-`context-digest-v1`, `context-canonical-v1`, `context-selection-v1` and
-`context-continuity-v1`, recompute the digest from the exact captured body, and
-stop on 409 continuity refusals or retryable 503 rather than locally ranking,
-packing or reconstructing context. [Provider contract details and byte vectors](docs/agent-runtime-memory-provider.md#projection-digest-and-fresh-continuity)
-and [self-hosting settings](docs/self-hosting.md#provider-context-continuity-configuration)
-describe rollout, bounds and rollback.
+Durable task/run/handoff/compilation references, context budgeting and digest /
+continuity, and runtime outcome/feedback each use separately negotiated,
+versioned Provider capabilities. Session/turn correlation can require the
+`context-turn-binding-v1` capability; the optional turn identifier is verified
+against the full runtime binding and exact scope and does not widen retrieval or
+disclosure. See the [Provider reference](docs/agent-runtime-memory-provider.md)
+for request shapes, byte units, limits, errors, migration and rollback, and
+[projection maintenance](docs/provider-evidence-projections.md) for feedback
+behavior. Byte limits are not token estimates; client token budgeting remains
+the integrating application's responsibility.
 
 Read the [disclosure and source trust guide](docs/context-disclosure-and-source-trust.md)
 for profile administration, source labels, endpoint denials and migration.
@@ -173,21 +151,12 @@ The public runtime uses Provider operations instead.
 | `memory_forget_apply` | Apply reviewed candidate IDs | destructive, idempotent |
 | `memory_forget` | Act on one known memory ID | destructive, idempotent |
 
-## Documentation map
+## Documentation paths
 
-| Reader need | Start here |
-| --- | --- |
-| Understand system boundaries and data flow | [Architecture](docs/architecture.md) |
-| Locate package responsibilities and extension points | [Key components](docs/components.md) |
-| Integrate an agent through MCP | [MCP integration and Agent Skill](docs/integrations/mcp-agent-skill.md) |
-| Import a reviewed Markdown snapshot over HTTP | [Memory repository import](docs/integrations/memory-repository-import.md) |
-| Operate memory safely | [Best practices](docs/best-practices.md) |
-| Deploy, migrate, back up, and verify | [Self-hosting](docs/self-hosting.md) |
-| Integrate a runtime provider | [Agent runtime provider](docs/agent-runtime-memory-provider.md) |
-| Migrate Provider context JSON | [Typed context contract and maintenance notes](docs/agent-runtime-memory-provider.md#provider-context-json-contract) |
-| Understand public API schemas | [OpenAPI specification](openapi/spec.go) |
-| Run optional MCP conformance | [`scripts/stele-mcp-conformance.ps1`](scripts/stele-mcp-conformance.ps1) |
-| Review planned and archived changes | [OpenSpec configuration](openspec/config.yaml) |
+- **Understand:** [Architecture](docs/architecture.md), [components](docs/components.md), and [best practices](docs/best-practices.md).
+- **Run:** [Getting started](docs/getting-started.md) and [self-hosting](docs/self-hosting.md).
+- **Integrate:** [Provider](docs/agent-runtime-memory-provider.md), [MCP](docs/integrations/mcp-agent-skill.md), [memory repository import](docs/integrations/memory-repository-import.md), and the [OpenAPI source](openapi/spec.go).
+- **Extend and maintain:** [Agent Skill](skills/stele-memory/SKILL.md), [MCP conformance](scripts/stele-mcp-conformance.ps1), and [OpenSpec changes](openspec/changes).
 
 ## Operating principles
 

@@ -1,5 +1,9 @@
 # Memory repository snapshot import
 
+**Role:** integration reference for the optional review-first Markdown import
+boundary. Start at the [documentation portal](../README.md) to choose between
+this path, Provider, MCP, and native OpenAPI.
+
 Stele accepts a bounded `memory-repo-v1` Markdown snapshot through HTTP only.
 It is a one-way, review-first adapter: PostgreSQL remains the system of record,
 and accepted facts enter existing governed `remember` intent processing rather

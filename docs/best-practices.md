@@ -1,5 +1,8 @@
 # Stele best practices
 
+**Role:** integration guidance. Start at the
+[documentation portal](README.md) to choose the right service boundary.
+
 These practices apply to operators, integrations, and agents using the public
 OpenAPI or MCP boundaries.
 
