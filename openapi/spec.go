@@ -107,6 +107,7 @@ paths:
   /v1/provider/runtime:
     post:
       operationId: initializeProviderRuntime
+      description: Create an opaque runtime binding for one exact-scope session. PostgreSQL-backed deployments atomically create the server-owned session record needed by the first Provider turn; an existing session ID may be reused only within the same exact scope.
       security:
         - PublicAPIKey: []
       requestBody:

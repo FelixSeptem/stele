@@ -40,6 +40,13 @@ the binding, expiry, principal, and exact grant before repository access.
 Changing scope headers or an identity returns a generic denial and never
 discloses whether foreign records exist.
 
+In PostgreSQL-backed deployments, runtime initialization atomically persists
+the binding and ensures its session record exists in that exact scope. This
+lets the first `POST /v1/provider/turns` create a server-issued turn without a
+separate native session-creation call. An existing session ID is reused only
+when its tenant, project, and namespace match; a cross-scope collision rejects
+the bootstrap and does not persist the binding.
+
 ## Public retrieval and turn projection
 
 `POST /v1/provider/retrieve` and `POST /v1/provider/turns` require the same
