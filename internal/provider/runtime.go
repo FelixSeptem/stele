@@ -101,6 +101,15 @@ type RuntimeBindingStore interface {
 	Lookup(context.Context, string) (RuntimeBinding, error)
 }
 
+// RuntimeBindingSessionStore atomically admits a runtime binding and its
+// server-owned memory session. Production stores implement this optional
+// capability so the first provider turn can use the session returned by the
+// runtime bootstrap without a separate caller-created session request.
+type RuntimeBindingSessionStore interface {
+	RuntimeBindingStore
+	CreateWithSession(context.Context, RuntimeBinding, memory.MemorySessionRun) error
+}
+
 // MemoryBindingStore is a bounded in-process store intended for tests and
 // single-process development. Production deployments should provide a
 // PostgreSQL-backed RuntimeBindingStore.
@@ -217,7 +226,18 @@ func (i *RuntimeInitializer) Initialize(ctx context.Context, principal auth.Prin
 		return RuntimeBinding{}, fmt.Errorf("generate runtime binding: %w", err)
 	}
 	binding := RuntimeBinding{BindingID: bindingID, PrincipalID: principal.ID, Scope: scope, AgentID: strings.TrimSpace(input.AgentID), SessionID: strings.TrimSpace(input.SessionID), ConversationID: strings.TrimSpace(input.ConversationID), ProviderInstanceID: instance, CreatedAt: now, ExpiresAt: now.Add(i.ttl)}
-	if err := i.bindings.Create(ctx, binding); err != nil {
+	session := memory.MemorySessionRun{
+		ID: binding.SessionID, Scope: scope, Status: memory.MemorySessionStatusActive,
+		Verdict: memory.ScopeProofVerdictPending, Actor: principal.ID,
+		Reason: "provider runtime initialization", CreatedAt: now, UpdatedAt: now,
+		StartedAt: now,
+	}
+	if store, ok := i.bindings.(RuntimeBindingSessionStore); ok {
+		err = store.CreateWithSession(ctx, binding, session)
+	} else {
+		err = i.bindings.Create(ctx, binding)
+	}
+	if err != nil {
 		return RuntimeBinding{}, fmt.Errorf("persist runtime binding: %w", err)
 	}
 	return binding, nil

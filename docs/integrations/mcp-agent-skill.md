@@ -207,6 +207,8 @@ operator provisioning, then calls `/v1/provider/context`. It may also use
 `reference_only` returns structured references. Explicit `bounded_content` needs
 `memory-content-v1` authority. Validate the mode-specific response and typed
 `source_metadata`; missing fields are a contract failure, never an empty success.
+PostgreSQL-backed initialization atomically ensures the binding's session exists
+in the exact scope; the first turn needs no separate native session creation.
 Source metadata omission on ingestion means `untrusted/restricted`; attestation
 requires independent current exact-scope authority.
 

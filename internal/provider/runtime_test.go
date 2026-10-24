@@ -47,6 +47,40 @@ func TestRuntimeInitializerResolvesExactScopeAndSeparatesIdentity(t *testing.T) 
 	}
 }
 
+func TestRuntimeInitializerBootstrapsServerOwnedSessionWhenStoreSupportsIt(t *testing.T) {
+	a := &runtimeAuthorizer{grant: true}
+	store := &runtimeBindingSessionStoreStub{bindings: NewMemoryBindingStore()}
+	initializer := NewRuntimeInitializer(RuntimeInitializerOptions{Authorizer: a, Bindings: store, Now: func() time.Time { return time.Unix(100, 0).UTC() }})
+	binding, err := initializer.Initialize(context.Background(), auth.Principal{ID: "principal-1", Status: auth.PrincipalStatusActive}, RuntimeInitialization{Scope: exactScope(), AgentID: "agent-1", SessionID: "session-1"})
+	if err != nil {
+		t.Fatalf("Initialize() error = %v", err)
+	}
+	if store.session.ID != binding.SessionID || store.session.Scope != binding.Scope || store.session.Status != memory.MemorySessionStatusActive || store.session.Verdict != memory.ScopeProofVerdictPending {
+		t.Fatalf("bootstrapped session=%+v, want binding-owned active session", store.session)
+	}
+}
+
+type runtimeBindingSessionStoreStub struct {
+	bindings *MemoryBindingStore
+	session  memory.MemorySessionRun
+}
+
+func (s *runtimeBindingSessionStoreStub) Create(ctx context.Context, binding RuntimeBinding) error {
+	return s.bindings.Create(ctx, binding)
+}
+
+func (s *runtimeBindingSessionStoreStub) Lookup(ctx context.Context, id string) (RuntimeBinding, error) {
+	return s.bindings.Lookup(ctx, id)
+}
+
+func (s *runtimeBindingSessionStoreStub) CreateWithSession(ctx context.Context, binding RuntimeBinding, session memory.MemorySessionRun) error {
+	if err := s.bindings.Create(ctx, binding); err != nil {
+		return err
+	}
+	s.session = session
+	return nil
+}
+
 func TestRuntimeInitializerRejectsInvalidOrUnauthorizedBeforeStore(t *testing.T) {
 	a := &runtimeAuthorizer{grant: false}
 	store := NewMemoryBindingStore()

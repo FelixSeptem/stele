@@ -20,7 +20,9 @@ task completion. Choose the access path from the configured principal role.
    `token_budget_supported=false`; validate against the served OpenAPI digest.
    Missing budget capability is incompatibility: do not strip limits or fall back.
    Initialize the runtime through `/v1/provider/runtime` and
-   retain the server-issued binding for that principal and scope.
+   retain the server-issued binding for that principal and scope. PostgreSQL-
+   backed initialization ensures the exact-scope session record exists, so the
+   first Provider turn needs no separate native session-creation call.
 3. Request `/v1/provider/context` with canonical snake_case fields. Default to
    `response_mode=reference_only`. Use `bounded_content` only when the configured
    grant permits `memory-content-v1` and the workflow needs source text. See the

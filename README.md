@@ -90,6 +90,9 @@ initialize a runtime binding, then request `/v1/provider/context`. The default
 the `memory-content-v1` profile and an explicit mode request. Public credentials
 can use the disclosure-projected Provider retrieve and server-issued turn
 routes, but cannot use native retrieval or MCP tools, including `who_am_i`.
+PostgreSQL-backed runtime initialization also ensures the exact-scope session
+record exists, so the first Provider turn does not require a separate native
+session-creation call.
 
 Durable task/run/handoff/compilation references, context budgeting and digest /
 continuity, and runtime outcome/feedback each use separately negotiated,
