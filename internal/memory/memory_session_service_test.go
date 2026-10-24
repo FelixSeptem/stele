@@ -100,6 +100,28 @@ func TestMemorySessionServiceRunsServiceSideSessionLoop(t *testing.T) {
 	}
 }
 
+func TestMemorySessionServiceAcceptsProviderBindingWithoutConversationID(t *testing.T) {
+	scope := Scope{Tenant: "tenant-provider", Project: "project-provider", Namespace: "namespace-provider"}
+	binding := &RuntimeBindingAttribution{
+		BindingID: "binding-provider", PrincipalID: "principal-provider", Scope: scope,
+		AgentID: "agent-provider", SessionID: "session-provider", ProviderInstanceID: "instance-provider",
+	}
+	store := &stubMemorySessionStore{sessions: []MemorySessionRun{{ID: binding.SessionID, Scope: scope}}}
+	service := NewMemorySessionService(MemorySessionServiceOptions{
+		Store: store, ContextAssembler: &stubMemorySessionContextAssembler{},
+	})
+
+	turn, err := service.CreateTurn(context.Background(), CreateMemorySessionTurnInput{
+		Scope: scope, SessionID: binding.SessionID, Query: "turn without conversation", ProviderBinding: binding,
+	})
+	if err != nil {
+		t.Fatalf("CreateTurn() error = %v, want optional conversation identity accepted", err)
+	}
+	if turn.ProviderBinding == nil || turn.ProviderBinding.ConversationID != "" {
+		t.Fatalf("turn provider binding = %+v, want binding with no conversation identity", turn.ProviderBinding)
+	}
+}
+
 func TestMemorySessionServicePersistsTurnEvidenceByDisclosureMode(t *testing.T) {
 	scope := Scope{Tenant: "tenant-a", Project: "project-a", Namespace: "namespace-a"}
 	for _, tc := range []struct {

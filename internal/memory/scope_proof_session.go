@@ -267,11 +267,14 @@ func (a RuntimeBindingAttribution) Validate() error {
 	}
 	for name, value := range map[string]string{
 		"binding id": a.BindingID, "principal id": a.PrincipalID, "agent id": a.AgentID,
-		"session id": a.SessionID, "conversation id": a.ConversationID, "provider instance id": a.ProviderInstanceID,
+		"session id": a.SessionID, "provider instance id": a.ProviderInstanceID,
 	} {
 		if !runtimeBindingAttributionToken(value) {
 			return fmt.Errorf("%s is invalid", name)
 		}
+	}
+	if a.ConversationID != "" && !runtimeBindingAttributionToken(a.ConversationID) {
+		return fmt.Errorf("conversation id is invalid")
 	}
 	return nil
 }
