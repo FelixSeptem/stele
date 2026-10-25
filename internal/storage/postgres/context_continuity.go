@@ -8,6 +8,7 @@ import (
 
 	"github.com/FelixSeptem/stele/internal/provider"
 	"github.com/jackc/pgx/v5"
+	"github.com/jackc/pgx/v5/pgtype"
 )
 
 const receiptColumns = `reference,request_fingerprint,digest_contract,canonical_version,digest_algorithm,selection_version,selection_fingerprint,digest_value,issued_at,expires_at,turn_id`
@@ -18,7 +19,11 @@ func receiptIdentityArgs(b provider.RuntimeBinding) []any {
 }
 func scanReceipt(row pgx.Row) (provider.ContextReceipt, error) {
 	var r provider.ContextReceipt
-	err := row.Scan(&r.Reference, &r.RequestFingerprint, &r.Digest.ContractVersion, &r.Digest.CanonicalizationVersion, &r.Digest.Algorithm, &r.Digest.SelectionPolicyVersion, &r.Digest.SelectionPolicyFingerprint, &r.Digest.Value, &r.IssuedAt, &r.ExpiresAt, &r.TurnID)
+	var turnID pgtype.Text
+	err := row.Scan(&r.Reference, &r.RequestFingerprint, &r.Digest.ContractVersion, &r.Digest.CanonicalizationVersion, &r.Digest.Algorithm, &r.Digest.SelectionPolicyVersion, &r.Digest.SelectionPolicyFingerprint, &r.Digest.Value, &r.IssuedAt, &r.ExpiresAt, &turnID)
+	if turnID.Valid {
+		r.TurnID = turnID.String
+	}
 	return r, err
 }
 func (r *Repository) LookupContextReceipt(ctx context.Context, b provider.RuntimeBinding, reference string) (provider.ContextReceipt, error) {
@@ -29,7 +34,11 @@ func (r *Repository) LookupContextReceipt(ctx context.Context, b provider.Runtim
 	// Clock comparison happens in PostgreSQL, never on an API replica's clock.
 	var out provider.ContextReceipt
 	var expired bool
-	err := r.db.QueryRow(ctx, `SELECT `+receiptColumns+`,expires_at<=clock_timestamp() FROM provider_context_receipts WHERE `+receiptIdentity+` AND reference=$10`, args...).Scan(&out.Reference, &out.RequestFingerprint, &out.Digest.ContractVersion, &out.Digest.CanonicalizationVersion, &out.Digest.Algorithm, &out.Digest.SelectionPolicyVersion, &out.Digest.SelectionPolicyFingerprint, &out.Digest.Value, &out.IssuedAt, &out.ExpiresAt, &out.TurnID, &expired)
+	var turnID pgtype.Text
+	err := r.db.QueryRow(ctx, `SELECT `+receiptColumns+`,expires_at<=clock_timestamp() FROM provider_context_receipts WHERE `+receiptIdentity+` AND reference=$10`, args...).Scan(&out.Reference, &out.RequestFingerprint, &out.Digest.ContractVersion, &out.Digest.CanonicalizationVersion, &out.Digest.Algorithm, &out.Digest.SelectionPolicyVersion, &out.Digest.SelectionPolicyFingerprint, &out.Digest.Value, &out.IssuedAt, &out.ExpiresAt, &turnID, &expired)
+	if turnID.Valid {
+		out.TurnID = turnID.String
+	}
 	if errors.Is(err, pgx.ErrNoRows) {
 		return out, provider.ErrContinuityUnavailable
 	}

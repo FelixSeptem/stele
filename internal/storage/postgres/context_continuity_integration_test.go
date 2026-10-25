@@ -72,6 +72,10 @@ func TestContextContinuityPostgresTransactionsAndUpgrade(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	loadedFirst, err := repo.LookupContextReceipt(ctx, b, first.Reference)
+	if err != nil || loadedFirst.Reference != first.Reference || loadedFirst.TurnID != "" {
+		t.Fatalf("unbound receipt lookup=%+v err=%v", loadedFirst, err)
+	}
 	if !first.ExpiresAt.Equal(b.ExpiresAt.UTC().Truncate(time.Second)) || first.IssuedAt.Nanosecond() != 0 {
 		t.Fatal("database time/binding expiry cap invalid")
 	}
