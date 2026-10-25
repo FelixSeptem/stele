@@ -4593,7 +4593,7 @@ components:
       additionalProperties: false
       required: [metadata, event_type, content]
       properties:
-        source_metadata: {$ref: '#/components/schemas/SourceMetadata'}
+        source_metadata: {$ref: '#/components/schemas/SourceMetadata', description: 'Optional source disclosure labels. Omission defaults to untrusted/restricted and is excluded from public retrieval and context.'}
         metadata: {$ref: '#/components/schemas/ProviderOperationMetadata'}
         event_type: {type: string}
         content: {type: string}

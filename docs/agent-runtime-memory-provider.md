@@ -69,7 +69,11 @@ content, scores, diagnostics, raw query, hidden candidates, and arbitrary
 citation identities. Content requires both an allowed `memory-content-v1`
 profile and explicit `response_mode=bounded_content`; a reference-only grant
 receives the same bounded `403 disclosure_denied` whether the profile or mode
-is unauthorized. Current authority-store failures return retryable
+is unauthorized. Event ingestion without `source_metadata` is accepted but
+defaults to `untrusted/restricted`; governance may still promote that event,
+but it will not appear in public retrieve or context results. Supply explicit
+`low` or `medium` classification only when the application's data policy permits
+that disclosure. Current authority-store failures return retryable
 `503 disclosure_unavailable` before search. If the complete serialized result
 exceeds the configured `max_context_bytes` response ceiling, Stele returns
 bounded `413 provider_response_limit_exceeded` without a partial result.

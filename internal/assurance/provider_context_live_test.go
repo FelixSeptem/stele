@@ -656,18 +656,26 @@ func TestProviderContextFreshPostgresLive(t *testing.T) {
 			path           string
 			classification memory.SourceClassification
 			action         string
+			omitMetadata   bool
 		}{
-			{visiblePath, memory.SourceClassificationMedium, ""},
-			{hiddenPath, memory.SourceClassificationMedium, "suppress"},
-			{"pc1/context/forgotten", memory.SourceClassificationLow, "expire"},
-			{"pc1/context/deleted", memory.SourceClassificationMedium, "delete"},
-			{"pc1/context/high", memory.SourceClassificationHigh, ""},
-			{"pc1/context/restricted", memory.SourceClassificationRestricted, ""},
+			{path: visiblePath, classification: memory.SourceClassificationMedium},
+			{path: "runtimeprobe/tasks/stele:references:task", classification: memory.SourceClassificationMedium},
+			{path: "runtimeprobe/runs/stele:references:run", classification: memory.SourceClassificationMedium},
+			{path: "knowledge/generations/987654321", classification: memory.SourceClassificationMedium},
+			{path: "pc1/context/missing-source-metadata", omitMetadata: true},
+			{path: hiddenPath, classification: memory.SourceClassificationMedium, action: "suppress"},
+			{path: "pc1/context/forgotten", classification: memory.SourceClassificationLow, action: "expire"},
+			{path: "pc1/context/deleted", classification: memory.SourceClassificationMedium, action: "delete"},
+			{path: "pc1/context/high", classification: memory.SourceClassificationHigh},
+			{path: "pc1/context/restricted", classification: memory.SourceClassificationRestricted},
 		} {
 			path := fixture.path
 			meta := metadata(path)
 			meta.IdempotencyKey = "pc1-event-" + strings.ReplaceAll(path, "/", "-")
 			body := map[string]any{"metadata": meta, "event_type": "conversation.message", "memory_path": path, "content": "Durable context fixture for provider contract verification.", "metadata_map": map[string]any{"fixture": "pc1"}, "source_metadata": memory.SourceMetadata{Version: memory.SourceMetadataVersion, Trust: memory.SourceTrustUntrusted, Classification: fixture.classification}}
+			if fixture.omitMetadata {
+				delete(body, "source_metadata")
+			}
 			data, status := call("POST", "/v1/provider/events", runtimeKey, body, &binding, false)
 			var event provider.IngestResult
 			if status != 201 || json.Unmarshal(data, &event) != nil || event.EventID == "" {
@@ -702,8 +710,35 @@ func TestProviderContextFreshPostgresLive(t *testing.T) {
 				t.Fatal("governance completion missing within bound")
 			}
 			report.GovernanceCompleted++
+			retrieveBody := map[string]any{
+				"metadata": metadata("exact-path-retrieve"),
+				"input": map[string]any{
+					"query": "Durable context fixture for provider contract verification.",
+					"path":  path,
+					"top_k": 1,
+				},
+			}
+			data, status = call("POST", "/v1/provider/retrieve", runtimeKey, retrieveBody, &binding, false)
+			var retrieved struct {
+				Result struct {
+					Matches []struct {
+						MemoryID   string `json:"memory_id"`
+						MemoryPath string `json:"memory_path"`
+					} `json:"matches"`
+				} `json:"result"`
+			}
+			wantDisclosure := fixture.classification != memory.SourceClassificationHigh && fixture.classification != memory.SourceClassificationRestricted && !fixture.omitMetadata
+			if status != http.StatusOK || json.Unmarshal(data, &retrieved) != nil {
+				t.Fatalf("public exact-path retrieve failed for path %q (HTTP %d)", path, status)
+			}
+			if wantDisclosure && (len(retrieved.Result.Matches) != 1 || retrieved.Result.Matches[0].MemoryID == "" || retrieved.Result.Matches[0].MemoryPath != path) {
+				t.Fatalf("eligible public exact-path retrieve missing for path %q", path)
+			}
+			if !wantDisclosure && len(retrieved.Result.Matches) != 0 {
+				t.Fatalf("ineligible public exact-path retrieve disclosed path %q", path)
+			}
 			selected := flatten(read(path, ""))
-			if fixture.classification == memory.SourceClassificationHigh || fixture.classification == memory.SourceClassificationRestricted {
+			if fixture.omitMetadata || fixture.classification == memory.SourceClassificationHigh || fixture.classification == memory.SourceClassificationRestricted {
 				if len(selected) != 0 {
 					t.Fatal("ineligible source disclosed its identity")
 				}
