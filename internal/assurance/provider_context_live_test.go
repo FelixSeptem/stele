@@ -343,6 +343,35 @@ func TestProviderContextFreshPostgresLive(t *testing.T) {
 		id = strings.ReplaceAll(id, "/", "-")
 		return provider.OperationMetadata{RequestID: "pc1-" + stage + "-" + id, OperationID: "pc1-" + id, SchemaVersion: "provider-v1"}
 	}
+	turnBindings := []provider.RuntimeBinding{binding}
+	if stage == "initial" {
+		initData, initStatus := call("POST", "/v1/provider/runtime", runtimeKey, provider.RuntimeInitialization{
+			Scope: scope, AgentID: "pc1-context-verifier", SessionID: "pc1-context-session-with-conversation",
+			ConversationID: "pc1-context-conversation",
+		}, nil, false)
+		var explicitConversationBinding provider.RuntimeBinding
+		if initStatus != 201 || json.Unmarshal(initData, &explicitConversationBinding) != nil {
+			t.Fatalf("public runtime initialization with conversation failed (HTTP %d)", initStatus)
+		}
+		turnBindings = append(turnBindings, explicitConversationBinding)
+	}
+	for index, turnBinding := range turnBindings {
+		turnID := fmt.Sprintf("turn-%d", index)
+		turnRequest := map[string]any{
+			"metadata": metadata(turnID),
+			"input":    map[string]any{"query": "context fixture"},
+		}
+		turnData, turnStatus := call("POST", "/v1/provider/turns", runtimeKey, turnRequest, &turnBinding, false)
+		var turnEnvelope struct {
+			Result struct {
+				TurnID    string `json:"turn_id"`
+				SessionID string `json:"session_id"`
+			} `json:"result"`
+		}
+		if turnStatus != http.StatusCreated || json.Unmarshal(turnData, &turnEnvelope) != nil || turnEnvelope.Result.TurnID == "" || turnEnvelope.Result.SessionID != turnBinding.SessionID {
+			t.Fatalf("public turn creation failed for conversation identity present=%t (HTTP %d): %s", turnBinding.ConversationID != "", turnStatus, turnData)
+		}
+	}
 	readMode := func(path, prefix, mode string) provider.DisclosedContextResponse {
 		body := provider.ContextRequest{Metadata: metadata("read"), Input: provider.ContextInput{Query: "context fixture", Budget: 20, Path: path, PathPrefix: prefix, IncludeDiagnostics: true, ResponseMode: mode}}
 		data, status := call("POST", "/v1/provider/context", runtimeKey, body, &binding, false)
@@ -400,7 +429,7 @@ func TestProviderContextFreshPostgresLive(t *testing.T) {
 		body.Input.Continuity = &provider.ContextContinuityInput{Mode: "compare", Reference: ref}
 		data, code = call("POST", "/v1/provider/context", runtimeKey, body, &binding, false)
 		if code != 200 {
-			t.Fatal("continuity compare failed")
+			t.Fatalf("continuity compare failed (HTTP %d)", code)
 		}
 		comp, err := contract.ValidateForRequest(data, scope, "provider-v1", body.Input, &caps.Limits)
 		if err != nil {
@@ -976,7 +1005,7 @@ AND r.source_metadata->>'trust'='untrusted' AND r.source_metadata->>'classificat
 	if code != 403 {
 		t.Fatal("revoked old binding disclosed context")
 	}
-	report.Checks = []string{"public_http_schema", "capability_digest", "governance_completed", "event_replay", "nonroot_exact_path", "explicit_prefix", "genuine_empty", "foreign_scope_denied", "lifecycle_excluded", "citations_present"}
+	report.Checks = []string{"public_http_schema", "capability_digest", "governance_completed", "event_replay", "nonroot_exact_path", "explicit_prefix", "genuine_empty", "foreign_scope_denied", "lifecycle_excluded", "citations_present", "provider_turn_creation_optional_and_explicit_conversation"}
 	report.Checks = append(report.Checks, "durable_source_labels", "label_replay_conflict", "reference_only_schema", "old_binding_downgrade", "alternate_route_denials", "attestation_authorization", "attestation_replay_reauthorization", "revoked_binding_denied", "unconfigured_profile_denied", "forgotten_deleted_excluded", "high_restricted_excluded")
 	report.Checks = append(report.Checks, "budget_discovery", "budget_actual_body_bytes", "budget_utf8_content_bytes", "budget_unique_citations", "budget_zero_content", "budget_zero_citations", "budget_omitted_limits", "budget_server_intersection", "budget_minimum_response_413", "budget_unsupported_sections", "budget_safe_empty_no_reasons")
 	if stage == "restart" {

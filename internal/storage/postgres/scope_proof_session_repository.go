@@ -415,6 +415,14 @@ func (r *Repository) CreateMemorySessionTurn(ctx context.Context, turn memory.Me
 	if err != nil {
 		return memory.MemorySessionTurn{}, fmt.Errorf("marshal memory session turn context evidence: %w", err)
 	}
+	outcomeEventIDs := turn.OutcomeEventIDs
+	if outcomeEventIDs == nil {
+		outcomeEventIDs = []string{}
+	}
+	expectedRecall := turn.ExpectedRecall
+	if expectedRecall == nil {
+		expectedRecall = []string{}
+	}
 	if turn.ProviderBinding != nil {
 		if err := turn.ProviderBinding.Validate(); err != nil {
 			return memory.MemorySessionTurn{}, err
@@ -451,7 +459,7 @@ DO UPDATE SET idempotency_key = EXCLUDED.idempotency_key
 RETURNING id, session_id, tenant, project, namespace, idempotency_key, outcome_idempotency_key, status, query, context_evidence,
 	outcome_event_ids, expected_recall, verification_status, failure_category,
 	created_at, updated_at, verified_at
-`, turn.ID, turn.SessionID, turn.Scope.Tenant, turn.Scope.Project, turn.Scope.Namespace, nullableString(turn.IdempotencyKey), turn.Status, turn.Query, contextEvidence, turn.OutcomeEventIDs, turn.ExpectedRecall, nullableString(string(turn.VerificationStatus)), nullableString(string(turn.FailureCategory)), turn.CreatedAt, turn.UpdatedAt, nullableTime(turn.VerifiedAt)))
+`, turn.ID, turn.SessionID, turn.Scope.Tenant, turn.Scope.Project, turn.Scope.Namespace, nullableString(turn.IdempotencyKey), turn.Status, turn.Query, contextEvidence, outcomeEventIDs, expectedRecall, nullableString(string(turn.VerificationStatus)), nullableString(string(turn.FailureCategory)), turn.CreatedAt, turn.UpdatedAt, nullableTime(turn.VerifiedAt)))
 		if err != nil {
 			return memory.MemorySessionTurn{}, err
 		}
@@ -507,8 +515,8 @@ RETURNING id, session_id, tenant, project, namespace, idempotency_key, outcome_i
 		turn.Status,
 		turn.Query,
 		contextEvidence,
-		turn.OutcomeEventIDs,
-		turn.ExpectedRecall,
+		outcomeEventIDs,
+		expectedRecall,
 		nullableString(string(turn.VerificationStatus)),
 		nullableString(string(turn.FailureCategory)),
 		turn.CreatedAt,

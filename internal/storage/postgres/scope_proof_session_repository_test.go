@@ -160,6 +160,32 @@ func TestRepositoryCreatesAndReadsMemorySessionWithTurn(t *testing.T) {
 	}
 }
 
+func TestRepositoryCreatesMemorySessionTurnWithEmptyArrayDefaults(t *testing.T) {
+	mock, err := pgxmock.NewPool()
+	if err != nil {
+		t.Fatalf("pgxmock.NewPool() error = %v", err)
+	}
+	defer mock.Close()
+
+	scope := memory.Scope{Tenant: "tenant-a", Project: "project-a", Namespace: "namespace-a"}
+	now := time.Date(2026, 7, 11, 17, 0, 0, 0, time.UTC)
+	turn := memory.MemorySessionTurn{
+		ID: "turn-empty-arrays", SessionID: "session-empty-arrays", Scope: scope,
+		Status: memory.MemorySessionTurnStatusContextAssembled, Query: "query",
+		ContextEvidence: map[string]any{}, CreatedAt: now, UpdatedAt: now,
+	}
+	mock.ExpectQuery("INSERT INTO memory_session_turns").
+		WithArgs(turn.ID, turn.SessionID, scope.Tenant, scope.Project, scope.Namespace, nil, turn.Status, turn.Query, []byte(`{}`), []string{}, []string{}, nil, nil, now, now, nil).
+		WillReturnRows(memorySessionTurnRows().AddRow(turn.ID, turn.SessionID, scope.Tenant, scope.Project, scope.Namespace, nil, nil, turn.Status, turn.Query, []byte(`{}`), []string{}, []string{}, nil, nil, now, now, nil))
+
+	if _, err := NewRepository(mock).CreateMemorySessionTurn(context.Background(), turn); err != nil {
+		t.Fatalf("CreateMemorySessionTurn() error = %v, want nil slices persisted as empty arrays", err)
+	}
+	if err := mock.ExpectationsWereMet(); err != nil {
+		t.Fatalf("ExpectationsWereMet() error = %v", err)
+	}
+}
+
 func TestRepositoryListsScopeProofRunsAndMemorySessionsAndCreatesEvidenceLink(t *testing.T) {
 	mock, err := pgxmock.NewPool()
 	if err != nil {
