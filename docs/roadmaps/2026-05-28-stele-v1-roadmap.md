@@ -1464,7 +1464,27 @@ Reasoning:
 
 ## Reference-Informed Expansion Backlog
 
-This section captures external reference findings that should inform post-v1 planning without changing the current execution order. The immediate references are `alash3al/stash`, a Go, PostgreSQL, pgvector, and MCP-oriented agent memory project, and `supermemoryai/supermemory`, whose public repository supplies MCP/SDK contracts and documentation rather than its core memory engine. Treat this section as a research backlog, not as an approved implementation plan.
+This section captures external reference findings that should inform post-v1 planning without changing the current execution order. The references include `alash3al/stash`, a Go, PostgreSQL, pgvector, and MCP-oriented agent memory project; `supermemoryai/supermemory`, whose public repository supplies MCP/SDK contracts and documentation rather than its core memory engine; and `MemTensor/MemOS`, an application-oriented memory platform with a self-hosted service and agent plugins. Treat this section as a research backlog, not as an approved implementation plan.
+
+### MemOS Reference Summary
+
+MemOS was reviewed at repository HEAD
+`adcb9f270c982f2b9ff8db9714792829d3bd6ab8` on 2026-10-28. The relevant
+public references are its [README](https://github.com/MemTensor/MemOS/blob/adcb9f270c982f2b9ff8db9714792829d3bd6ab8/README.md),
+[MemReader guide](https://github.com/MemTensor/MemOS/blob/adcb9f270c982f2b9ff8db9714792829d3bd6ab8/docs/en/open_source/modules/mem_reader.md),
+and [MemScheduler guide](https://github.com/MemTensor/MemOS/blob/adcb9f270c982f2b9ff8db9714792829d3bd6ab8/docs/en/open_source/modules/mem_scheduler.md).
+
+Patterns worth carrying into Stele's research backlog:
+
+- **Progressive ingestion and refinement:** distinguish fast durable admission from slower extraction/refinement, and make the transition measurable. Stele already uses hot event writes and asynchronous PostgreSQL-backed governance/derived work; the remaining candidate is end-to-end freshness and quality evidence, not another scheduler or memory store.
+- **Explicit feedback and correction workflow:** make feedback a first-class input to review and governed change. Stele already has append-only task-evaluation correction, usefulness feedback, governed intents, and feedback projections. Any follow-up should test whether clients can reliably connect a correction signal to a governed successor version while preserving provenance and excluding superseded signals; it must not add in-place canonical mutation.
+- **Longitudinal agent-task evaluation:** evaluate whether memory improves or harms repeated external tasks over time. Stele already records externally reported task outcomes and has retrieval benchmarks; a candidate should focus on reproducible multi-turn/task-series evidence without Stele executing an agent or judging generated answers.
+
+Patterns not adopted as Stele service architecture:
+
+- MemOS MemCube composition is not a replacement for Stele's exact tenant/project/namespace authorization. Cross-scope composition would require a separate explicit authorization contract and is not proposed here.
+- MemOS's default self-hosted Neo4j + Qdrant stack and application-side agent plugins are outside Stele's PostgreSQL-only system-of-record and service-only ownership boundaries. Do not add a second canonical store, SDK, UI, or agent lifecycle implementation based on this comparison.
+- MemOS product and benchmark claims are not Stele release evidence. Any quality claim must use Stele-owned datasets/configuration, exact-scope and lifecycle safety gates, reproducible reports, and the existing release policy.
 
 ### Stash Reference Summary
 
@@ -1684,12 +1704,39 @@ scoped P8.1 MCP adapter):
    archived handoffs against exact-scope freshness, source-watermark, policy,
    representation, attestation, and rollback requirements, revoking activation
    eligibility fail-closed while retaining evidence history.
+9. MemOS-informed staged-ingestion freshness and quality evaluation (research
+   candidate): measure event admission, governance completion, canonical
+   promotion, and public retrievability as distinct bounded stages under retry,
+   worker restart, and representative load. Reuse the durable work queue,
+   governance records, and assurance surfaces; do not add a competing scheduler
+   or report an accepted event as retrievable memory. Promote to OpenSpec only
+   if existing freshness/SLO evidence cannot answer a concrete operator or
+   integration question.
+10. MemOS-informed correction-to-governed-version conformance (research
+    candidate): verify that an external correction can be attributed to the
+    affected scoped evidence, enter an authorized governed mutation, append a
+    successor version, and preserve correction/replay history while superseded
+    signals stop influencing active summaries. Reuse existing feedback,
+    correction, and intent contracts; promote only if a specific end-to-end
+    contract gap remains.
+11. MemOS-informed longitudinal agent-task memory evaluation (research
+    candidate): define reproducible task-series fixtures that compare memory
+    usefulness, stale/noisy-memory harm, provenance coverage, and safety across
+    repeated external task outcomes. The harness may ingest externally judged
+    outcomes but must not execute agents, generate answers, or make Stele the
+    task-success authority. Reuse task-success evidence, benchmark manifests,
+    qrels, and safety gates; promote only if current benchmark families do not
+    cover a demonstrated longitudinal evaluation gap.
 
-All eight reference follow-up tracks above and PC2 (change 070) are archived
-baselines; PC3 is implemented, verified, and archived as change 071, PC4 is
-implemented and archived as change 045, PC5 is implemented, verified and
-archived as change 072, and PC6 below is implemented, verified, and archived as change 073. An
-archived track is reopened only for an identified contract or regression gap.
+The eight original reference follow-up tracks above are archived baselines.
+PC2 (change 070) is archived; PC3 is implemented, verified, and archived as
+change 071, PC4 is implemented and archived as change 045, PC5 is implemented,
+verified, and archived as change 072, and PC6 below is implemented, verified,
+and archived as change 073. An archived track is reopened only for an
+identified contract or regression gap.
+MemOS-informed items 9–11 remain unprioritized research candidates, not approved
+implementation work; each requires a concrete uncovered gap and measurable
+acceptance signal before a separate OpenSpec proposal is created.
 
 ## Provider Context And Runtime Integration Proposals (2026-10-16)
 
