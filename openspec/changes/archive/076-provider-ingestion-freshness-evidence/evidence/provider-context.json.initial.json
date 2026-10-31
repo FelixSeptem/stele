@@ -1,0 +1,237 @@
+{
+  "result": "passed",
+  "stage": "initial",
+  "schema_version": "provider-v1",
+  "openapi_digest": "51e865fbdc3afa0d8adc807e78f53b634ecc4722e0c7ae73223e20cb8574c32b",
+  "image_digest": "sha256:e8f037f8618dc6af51af624da22b724cf27f0283cb1dd50416f57b6d0c92dbbd",
+  "source_revision": "f879f7f92e5f63b892a81d19dc916b37e94787e8",
+  "source_digest": "c54c860c7363b7fc4ebcaf3c5cfbf5dcd8c8fc21e22bee9a2aacffb629cb1fac",
+  "scope_hash": "26917a53061439262957a19a54af13197e1bf4b0f2456817c75d6e38f21f02be",
+  "identity_hash": "d5f7d5c3900775050a599c24f0eb551066bb90eec55206f0bfa19b3e6c75620a",
+  "citation_hash": "540594727942afa63c89ac1da61f7fdc50e22d69d21ecf25bbdc02d7fcf56bcc",
+  "governance_completed": 11,
+  "disclosure_policy_version": "context-disclosure-v1",
+  "source_metadata_version": "source-metadata-v1",
+  "durable_labels_verified": true,
+  "checks": [
+    "public_http_schema",
+    "capability_digest",
+    "governance_completed",
+    "event_replay",
+    "nonroot_exact_path",
+    "explicit_prefix",
+    "genuine_empty",
+    "foreign_scope_denied",
+    "lifecycle_excluded",
+    "citations_present",
+    "provider_turn_creation_optional_and_explicit_conversation",
+    "durable_source_labels",
+    "label_replay_conflict",
+    "reference_only_schema",
+    "old_binding_downgrade",
+    "alternate_route_denials",
+    "attestation_authorization",
+    "attestation_replay_reauthorization",
+    "revoked_binding_denied",
+    "unconfigured_profile_denied",
+    "forgotten_deleted_excluded",
+    "high_restricted_excluded",
+    "budget_discovery",
+    "budget_actual_body_bytes",
+    "budget_utf8_content_bytes",
+    "budget_unique_citations",
+    "budget_zero_content",
+    "budget_zero_citations",
+    "budget_omitted_limits",
+    "budget_server_intersection",
+    "budget_minimum_response_413",
+    "budget_unsupported_sections",
+    "budget_safe_empty_no_reasons"
+  ],
+  "budget_contract_version": "context-budget-v1",
+  "budget_packing_version": "context-packing-v1",
+  "budget_outcomes": [
+    "content-omitted:selected",
+    "content-empty-limits:selected",
+    "content-oversized:selected",
+    "content-zero-content:budget_exhausted",
+    "content-zero-citations:budget_exhausted",
+    "content-unsupported:selected",
+    "content-safe-empty-0:empty",
+    "content-safe-empty-1:empty",
+    "content-safe-empty-2:empty",
+    "content-safe-empty-3:empty",
+    "content-safe-empty-4:empty",
+    "content-safe-empty-5:empty",
+    "content-minimum-response:413",
+    "reference-omitted:selected",
+    "reference-empty-limits:selected",
+    "reference-oversized:selected",
+    "reference-zero-content:selected",
+    "reference-zero-citations:budget_exhausted",
+    "reference-unsupported:selected",
+    "reference-safe-empty-0:empty",
+    "reference-safe-empty-1:empty",
+    "reference-safe-empty-2:empty",
+    "reference-safe-empty-3:empty",
+    "reference-safe-empty-4:empty",
+    "reference-safe-empty-5:empty",
+    "reference-minimum-response:413"
+  ],
+  "budget_usage": [
+    {
+      "citations": 1,
+      "content_bytes": 118,
+      "items": 1,
+      "response_bytes": 2354
+    },
+    {
+      "citations": 1,
+      "content_bytes": 118,
+      "items": 1,
+      "response_bytes": 2364
+    },
+    {
+      "citations": 1,
+      "content_bytes": 118,
+      "items": 1,
+      "response_bytes": 2385
+    },
+    {
+      "citations": 0,
+      "content_bytes": 0,
+      "items": 0,
+      "response_bytes": 1439
+    },
+    {
+      "citations": 0,
+      "content_bytes": 0,
+      "items": 0,
+      "response_bytes": 1443
+    },
+    {
+      "citations": 1,
+      "content_bytes": 118,
+      "items": 1,
+      "response_bytes": 2435
+    },
+    {
+      "citations": 0,
+      "content_bytes": 0,
+      "items": 0,
+      "response_bytes": 1408
+    },
+    {
+      "citations": 0,
+      "content_bytes": 0,
+      "items": 0,
+      "response_bytes": 1408
+    },
+    {
+      "citations": 0,
+      "content_bytes": 0,
+      "items": 0,
+      "response_bytes": 1408
+    },
+    {
+      "citations": 0,
+      "content_bytes": 0,
+      "items": 0,
+      "response_bytes": 1408
+    },
+    {
+      "citations": 0,
+      "content_bytes": 0,
+      "items": 0,
+      "response_bytes": 1408
+    },
+    {
+      "citations": 0,
+      "content_bytes": 0,
+      "items": 0,
+      "response_bytes": 1408
+    },
+    {
+      "citations": 1,
+      "content_bytes": 0,
+      "items": 1,
+      "response_bytes": 2225
+    },
+    {
+      "citations": 1,
+      "content_bytes": 0,
+      "items": 1,
+      "response_bytes": 2235
+    },
+    {
+      "citations": 1,
+      "content_bytes": 0,
+      "items": 1,
+      "response_bytes": 2256
+    },
+    {
+      "citations": 1,
+      "content_bytes": 0,
+      "items": 1,
+      "response_bytes": 2226
+    },
+    {
+      "citations": 0,
+      "content_bytes": 0,
+      "items": 0,
+      "response_bytes": 1448
+    },
+    {
+      "citations": 1,
+      "content_bytes": 0,
+      "items": 1,
+      "response_bytes": 2306
+    },
+    {
+      "citations": 0,
+      "content_bytes": 0,
+      "items": 0,
+      "response_bytes": 1413
+    },
+    {
+      "citations": 0,
+      "content_bytes": 0,
+      "items": 0,
+      "response_bytes": 1413
+    },
+    {
+      "citations": 0,
+      "content_bytes": 0,
+      "items": 0,
+      "response_bytes": 1413
+    },
+    {
+      "citations": 0,
+      "content_bytes": 0,
+      "items": 0,
+      "response_bytes": 1413
+    },
+    {
+      "citations": 0,
+      "content_bytes": 0,
+      "items": 0,
+      "response_bytes": 1413
+    },
+    {
+      "citations": 0,
+      "content_bytes": 0,
+      "items": 0,
+      "response_bytes": 1413
+    }
+  ],
+  "budget_identity_hash": "959be3c9e9409759820e0fa60167de0e67dd296f96a3c06680eb6d26cb90999f",
+  "budget_citation_hash": "9154626e36f12d183e78c4c7ea5164789b0e3f10d51df6ee826efe1882988223",
+  "context_digest_version": "context-digest-v1",
+  "context_continuity_version": "context-continuity-v1",
+  "context_digest_hash": "e233c5ef52df5aa6c388826187a2533b71f4b0f440d1ba20c8506853b1a69a6c",
+  "continuity_outcomes": [
+    "issued",
+    "unchanged"
+  ],
+  "continuity_checked": true
+}

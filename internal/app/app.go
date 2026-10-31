@@ -840,6 +840,7 @@ func buildAPIRuntime(ctx context.Context, cfg config.Config, deps apiRuntimeDepe
 		now:      time.Now,
 		observer: deps.observer,
 	}
+	httpDeps.ProviderReadObserver = repo
 	httpDeps.GovernanceAdmin = repo
 	httpDeps.ContextProjectionAdmin = memory.NewContextProjectionMaintenanceService(repo)
 	httpDeps.DerivedInsightAdmin = repo
@@ -867,13 +868,15 @@ func buildAPIRuntime(ctx context.Context, cfg config.Config, deps apiRuntimeDepe
 		providerConformance = assurance.ProviderHandlerExecutor{Adapter: httpDeps.ProviderAdapter, Capabilities: httpDeps.ProviderCapabilities, Synchronizer: httpDeps.ProviderSynchronizer}
 	}
 	httpDeps.AssuranceAdmin = assurance.NewService(assurance.ServiceOptions{
-		Store:               repo,
-		Workflow:            repo,
-		Now:                 time.Now,
-		NewID:               newQualityID,
-		Observer:            deps.observer,
-		Logger:              httpDeps.Logger,
-		ProviderConformance: providerConformance,
+		Store:                           repo,
+		Workflow:                        repo,
+		IngestionFreshnessCollector:     repo,
+		IngestionFreshnessEvidenceStore: repo,
+		Now:                             time.Now,
+		NewID:                           newQualityID,
+		Observer:                        deps.observer,
+		Logger:                          httpDeps.Logger,
+		ProviderConformance:             providerConformance,
 	})
 	qualityService := memory.NewQualityService(memory.QualityServiceOptions{
 		Store:              repo,

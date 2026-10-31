@@ -78,6 +78,17 @@ that disclosure. Current authority-store failures return retryable
 exceeds the configured `max_context_bytes` response ceiling, Stele returns
 bounded `413 provider_response_limit_exceeded` without a partial result.
 
+Administrators can inspect redacted event-to-read freshness through
+`GET /v1/admin/assurance/ingestion-freshness?fixture_reference=<event-uuid>`.
+The endpoint takes tenant/project/namespace only from authenticated admin scope
+headers and resolves the UUID inside that exact scope. It reports fixed stages
+(`admitted`, `governance_completed`, `canonical_active`, `public_retrievable`)
+and bounded dispositions, latency and SLO buckets. Public-read evidence is
+recorded only after a successful disclosed Provider retrieve has passed response
+size validation. Missing, foreign, hidden, or source-ineligible records do not
+reveal existence; ordinary Provider responses are unchanged. The report is
+operational evidence only, not task completion or a memory-write receipt.
+
 Turn creation accepts `query`, optional `context_budget` (item placements, not
 tokens), `include_relations`, `idempotency_key`, and optional disclosure profile
 and mode. Scope/session are binding-owned; callers cannot supply a session ID,

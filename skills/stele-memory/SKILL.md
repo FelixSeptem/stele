@@ -91,6 +91,15 @@ task completion. Choose the access path from the configured principal role.
    authority. An accepted/replayed acknowledgment is not proof of canonical
    promotion, retrieval completion or a completed business task.
 
+   An authorized operator may use
+   `GET /v1/admin/assurance/ingestion-freshness?fixture_reference=<event-uuid>`
+   with exact scope headers to inspect bounded admission, governance,
+   canonical-active and public-retrievable stages. Only a completed Provider
+   read after disclosure and response validation proves the last stage. Reports
+   intentionally omit scope and record identifiers; missing, foreign, hidden
+   and unavailable fixtures must not be distinguished by fallback queries.
+   Freshness is diagnostic evidence, never a task-success or commit receipt.
+
    For durable task/run/handoff/compilation references, first require the
    `durable_references` capability at `durable-reference-v1`; fail closed when
    absent. Use the write, status, and exact lookup routes documented in the

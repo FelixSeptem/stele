@@ -288,6 +288,16 @@ func registerProviderOperationRoutes(mux *http.ServeMux, deps HTTPDependencies) 
 			writeProviderError(w, http.StatusRequestEntityTooLarge, provider.ErrorCategoryValidation, "provider_response_limit_exceeded", "provider response exceeds allocation", false)
 			return
 		}
+		if deps.ProviderReadObserver != nil && len(projected.Matches) > 0 {
+			memoryIDs := make([]string, 0, len(projected.Matches))
+			for _, match := range projected.Matches {
+				memoryIDs = append(memoryIDs, match.MemoryID)
+			}
+			if err := deps.ProviderReadObserver.RecordProviderMemoryRead(r.Context(), b.Scope, memoryIDs, time.Now().UTC()); err != nil {
+				writeProviderError(w, http.StatusServiceUnavailable, provider.ErrorCategoryDependency, "provider_unavailable", "provider retrieval unavailable", true)
+				return
+			}
+		}
 		w.Header().Set("Content-Type", "application/json")
 		w.WriteHeader(http.StatusOK)
 		_, _ = w.Write(append(encoded, '\n'))

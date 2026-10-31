@@ -92,6 +92,14 @@ Each transition preserves scope and lineage so citations can be traced to
 service-governed evidence without disclosing hidden candidates or internal
 ranking state.
 
+The admin assurance surface can inspect one opaque event fixture through four
+distinct observations: durable admission, governance completion, active
+canonical promotion, and a successful authorized Provider retrieval. The final
+stage is recorded only after disclosure projection and response-size checks;
+write acceptance or promotion alone never implies public retrievability. Reports
+are deterministic, exact-scope, hash/category-only evidence and do not change
+memory, lifecycle, disclosure, or task state.
+
 ## Choosing an integration boundary
 
 | Need | Boundary | Ownership |

@@ -826,6 +826,9 @@ type stubRankingRolloutAdminService struct {
 }
 
 type stubAssuranceAdminService struct {
+	gotFreshnessInspection assurance.IngestionFreshnessInspectionInput
+	freshnessReport        assurance.IngestionFreshnessReport
+	freshnessErr           error
 	gotHealthCreate        assurance.HealthEvaluationInput
 	gotHealthRead          assurance.ReadHealthEvaluationInput
 	gotIncidentList        assurance.ListIncidentsInput
@@ -862,6 +865,11 @@ type stubAssuranceAdminService struct {
 	recoveryVerification   assurance.RecoveryVerification
 	recoveryVerifications  []assurance.RecoveryVerification
 	err                    error
+}
+
+func (s *stubAssuranceAdminService) InspectIngestionFreshness(ctx context.Context, input assurance.IngestionFreshnessInspectionInput) (assurance.IngestionFreshnessReport, error) {
+	s.gotFreshnessInspection = input
+	return s.freshnessReport, s.freshnessErr
 }
 
 func (s *stubAssuranceAdminService) CreateHealthEvaluation(ctx context.Context, input assurance.HealthEvaluationInput) (assurance.HealthEvaluation, error) {
@@ -5502,6 +5510,7 @@ func TestNewHTTPHandlerServesAssuranceAdminAPIs(t *testing.T) {
 	scope := memory.Scope{Tenant: "tenant-a", Project: "project-a", Namespace: "namespace-a"}
 	now := time.Date(2026, 7, 18, 10, 0, 0, 0, time.UTC)
 	service := &stubAssuranceAdminService{
+		freshnessReport: assurance.IngestionFreshnessReport{ContractVersion: assurance.IngestionFreshnessVersion, FixtureHash: strings.Repeat("a", 64), IdentityHash: strings.Repeat("b", 64), Result: assurance.IngestionFreshnessResultDegraded, SLO: "not_evaluated", Stages: []assurance.IngestionFreshnessStageReport{{Kind: assurance.IngestionStageAdmitted, Disposition: assurance.IngestionDispositionUnavailable, Freshness: "missing", SLO: "not_evaluated"}, {Kind: assurance.IngestionStageGovernanceCompleted, Disposition: assurance.IngestionDispositionUnavailable, Freshness: "missing", SLO: "not_evaluated"}, {Kind: assurance.IngestionStageCanonicalActive, Disposition: assurance.IngestionDispositionUnavailable, Freshness: "missing", SLO: "not_evaluated"}, {Kind: assurance.IngestionStagePublicRetrievable, Disposition: assurance.IngestionDispositionUnavailable, Freshness: "missing", SLO: "not_evaluated"}}},
 		healthEvaluation: assurance.HealthEvaluation{
 			ID:        "health_eval_1",
 			Scope:     scope,
@@ -5615,6 +5624,25 @@ func TestNewHTTPHandlerServesAssuranceAdminAPIs(t *testing.T) {
 		AdminAPIKeys:   map[string]struct{}{"admin-key": {}},
 		AssuranceAdmin: service,
 	})
+
+	fixtureReference := "00000000-0000-4000-8000-000000000001"
+	freshnessReq := httptest.NewRequest(http.MethodGet, "/v1/admin/assurance/ingestion-freshness?fixture_reference="+fixtureReference, nil)
+	setAdminScopeHeaders(freshnessReq)
+	freshnessResp := httptest.NewRecorder()
+	handler.ServeHTTP(freshnessResp, freshnessReq)
+	if freshnessResp.Code != http.StatusOK || !strings.Contains(freshnessResp.Body.String(), `"contract_version":"ingestion-freshness-v1"`) || strings.Contains(freshnessResp.Body.String(), scope.Tenant) {
+		t.Fatalf("freshness inspection status=%d body=%s", freshnessResp.Code, freshnessResp.Body.String())
+	}
+	if service.gotFreshnessInspection.Scope != scope || service.gotFreshnessInspection.FixtureReference != fixtureReference {
+		t.Fatalf("freshness inspection input=%+v, want authenticated exact scope and opaque reference", service.gotFreshnessInspection)
+	}
+	invalidFreshnessReq := httptest.NewRequest(http.MethodGet, "/v1/admin/assurance/ingestion-freshness?fixture_reference=not-a-uuid", nil)
+	setAdminScopeHeaders(invalidFreshnessReq)
+	invalidFreshnessResp := httptest.NewRecorder()
+	handler.ServeHTTP(invalidFreshnessResp, invalidFreshnessReq)
+	if invalidFreshnessResp.Code != http.StatusBadRequest || strings.Contains(invalidFreshnessResp.Body.String(), "not-a-uuid") {
+		t.Fatalf("invalid freshness status=%d body=%s, want bounded 400", invalidFreshnessResp.Code, invalidFreshnessResp.Body.String())
+	}
 
 	healthCreateReq := httptest.NewRequest(http.MethodPost, "/v1/admin/assurance/health-evaluations", strings.NewReader(`{"observed_at":"2026-07-18T10:00:00Z","runtime_readiness":{"status":"healthy","severity":"info","reason":"runtime_ready","evidence":{"ready":true}}}`))
 	setAdminScopeHeaders(healthCreateReq)

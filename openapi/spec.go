@@ -1596,6 +1596,37 @@ paths:
             application/json:
               schema:
                 $ref: '#/components/schemas/RankingRolloutPolicy'
+  /v1/admin/assurance/ingestion-freshness:
+    get:
+      operationId: inspectAdminIngestionFreshness
+      parameters:
+        - $ref: '#/components/parameters/AdminAPIKey'
+        - $ref: '#/components/parameters/TenantHeader'
+        - $ref: '#/components/parameters/ProjectHeader'
+        - $ref: '#/components/parameters/NamespaceHeader'
+        - in: query
+          name: fixture_reference
+          required: true
+          schema:
+            type: string
+            format: uuid
+            minLength: 1
+            maxLength: 128
+      responses:
+        '200':
+          description: Exact-scope redacted ingestion freshness evidence
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/IngestionFreshnessReport'
+        '400':
+          description: Invalid fixture reference
+        '401':
+          description: Missing or invalid admin API key
+        '404':
+          description: Fixture is unavailable in the exact scope
+        '503':
+          description: Freshness inspection is unavailable
   /v1/admin/assurance/health-evaluations:
     get:
       operationId: listAdminAssuranceHealthEvaluations
@@ -5710,6 +5741,52 @@ components:
         created_at:
           type: string
           format: date-time
+    IngestionFreshnessStage:
+      type: object
+      additionalProperties: false
+      required: [kind, disposition, freshness, slo]
+      properties:
+        kind:
+          type: string
+          enum: [admitted, governance_completed, canonical_active, public_retrievable]
+        disposition:
+          type: string
+          enum: [complete, pending, retrying, exhausted, ineligible, hidden, unavailable, invalid]
+        latency_bucket:
+          type: string
+          enum: [zero, under_1s, 1s_10s, 10s_1m, 1m_5m, 5m_plus]
+        freshness:
+          type: string
+          enum: [fresh, missing, pending, retrying, exhausted, ineligible, hidden, unavailable, invalid]
+        slo:
+          type: string
+          enum: [within_window, outside_window, not_evaluated]
+    IngestionFreshnessReport:
+      type: object
+      additionalProperties: false
+      required: [contract_version, fixture_hash, identity_hash, result, slo, stages]
+      properties:
+        contract_version:
+          type: string
+          enum: [ingestion-freshness-v1]
+        fixture_hash:
+          type: string
+          pattern: '^[0-9a-f]{64}$'
+        identity_hash:
+          type: string
+          pattern: '^[0-9a-f]{64}$'
+        result:
+          type: string
+          enum: [fresh, degraded, invalid]
+        slo:
+          type: string
+          enum: [within_window, outside_window, not_evaluated]
+        stages:
+          type: array
+          minItems: 4
+          maxItems: 4
+          items:
+            $ref: '#/components/schemas/IngestionFreshnessStage'
     MissingEvidenceDiagnostic:
       type: object
       properties:

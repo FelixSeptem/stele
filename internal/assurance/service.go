@@ -86,23 +86,85 @@ func (s WorkflowHealthSnapshot) Validate() error {
 }
 
 type ServiceOptions struct {
-	Store               AssuranceStore
-	Workflow            WorkflowHealthReader
-	Now                 func() time.Time
-	NewID               func(prefix string) string
-	Observer            telemetry.Observer
-	Logger              *log.Logger
-	ProviderConformance ProviderFixtureExecutor
+	Store                           AssuranceStore
+	Workflow                        WorkflowHealthReader
+	IngestionFreshnessCollector     IngestionFreshnessCollector
+	IngestionFreshnessEvidenceStore IngestionFreshnessEvidenceStore
+	Now                             func() time.Time
+	NewID                           func(prefix string) string
+	Observer                        telemetry.Observer
+	Logger                          *log.Logger
+	ProviderConformance             ProviderFixtureExecutor
 }
 
 type Service struct {
-	store               AssuranceStore
-	workflow            WorkflowHealthReader
-	now                 func() time.Time
-	newID               func(prefix string) string
-	observer            telemetry.Observer
-	logger              *log.Logger
-	providerConformance ProviderFixtureExecutor
+	store                           AssuranceStore
+	workflow                        WorkflowHealthReader
+	ingestionFreshnessCollector     IngestionFreshnessCollector
+	ingestionFreshnessEvidenceStore IngestionFreshnessEvidenceStore
+	now                             func() time.Time
+	newID                           func(prefix string) string
+	observer                        telemetry.Observer
+	logger                          *log.Logger
+	providerConformance             ProviderFixtureExecutor
+}
+
+// EvaluateIngestionFreshness evaluates a bounded stage observation without
+// reading or mutating memory state. The caller is responsible for collecting
+// the observations through an already-authorized exact-scope path.
+func (s *Service) EvaluateIngestionFreshness(ctx context.Context, input IngestionFreshnessInput) (IngestionFreshnessReport, error) {
+	report, err := EvaluateIngestionFreshness(input)
+	if s != nil && s.observer != nil {
+		status := "degraded"
+		if err != nil {
+			status = "invalid"
+		} else if report.Result == IngestionFreshnessResultFresh {
+			status = "fresh"
+		}
+		s.observer.RecordOperation(ctx, telemetry.OperationEvent{
+			Mode: "assurance", Component: "ingestion_freshness", Operation: "evaluate",
+			Status: status, Count: len(input.Stages), ObservedAt: input.ObservedAt,
+		})
+	}
+	return report, err
+}
+
+// InspectIngestionFreshness collects server-owned exact-scope observations and
+// stores only their redacted, replay-safe evidence report.
+func (s *Service) InspectIngestionFreshness(ctx context.Context, input IngestionFreshnessInspectionInput) (IngestionFreshnessReport, error) {
+	if err := input.Validate(); err != nil {
+		return IngestionFreshnessReport{}, err
+	}
+	if s == nil || s.ingestionFreshnessCollector == nil || s.ingestionFreshnessEvidenceStore == nil {
+		return IngestionFreshnessReport{}, fmt.Errorf("ingestion freshness inspection is not configured")
+	}
+	observedAt := input.ObservedAt.UTC()
+	if observedAt.IsZero() {
+		observedAt = s.now().UTC()
+	}
+	collected, err := s.ingestionFreshnessCollector.CollectIngestionFreshness(ctx, input.Scope.Normalized(), strings.TrimSpace(input.FixtureReference), observedAt)
+	if err != nil {
+		return IngestionFreshnessReport{}, err
+	}
+	if collected.Scope.Normalized() != input.Scope.Normalized() {
+		return IngestionFreshnessReport{}, fmt.Errorf("ingestion freshness collector scope mismatch")
+	}
+	report, err := s.EvaluateIngestionFreshness(ctx, collected)
+	if err != nil {
+		return IngestionFreshnessReport{}, err
+	}
+	evidence, err := s.ingestionFreshnessEvidenceStore.StoreIngestionFreshnessEvidence(ctx, IngestionFreshnessEvidence{
+		Scope:        input.Scope.Normalized(),
+		FixtureHash:  report.FixtureHash,
+		IdentityHash: report.IdentityHash,
+		Report:       report,
+		ObservedAt:   observedAt,
+		CreatedAt:    s.now().UTC(),
+	})
+	if err != nil {
+		return IngestionFreshnessReport{}, err
+	}
+	return evidence.Report, nil
 }
 
 type HealthObservation struct {
@@ -425,7 +487,7 @@ func NewService(options ServiceOptions) *Service {
 			return fmt.Sprintf("%s_%d", strings.TrimSpace(prefix), now().UnixNano())
 		}
 	}
-	return &Service{store: options.Store, workflow: options.Workflow, now: now, newID: newID, observer: options.Observer, logger: options.Logger, providerConformance: options.ProviderConformance}
+	return &Service{store: options.Store, workflow: options.Workflow, ingestionFreshnessCollector: options.IngestionFreshnessCollector, ingestionFreshnessEvidenceStore: options.IngestionFreshnessEvidenceStore, now: now, newID: newID, observer: options.Observer, logger: options.Logger, providerConformance: options.ProviderConformance}
 }
 
 func (s *Service) CreateHealthEvaluation(ctx context.Context, input HealthEvaluationInput) (HealthEvaluation, error) {

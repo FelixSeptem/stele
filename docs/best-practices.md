@@ -11,6 +11,12 @@ then use exact ID/path lookup. Validate scope, UUID lineage, limits, lifecycle,
 and disclosure on every response. Never treat HTTP acceptance as canonical
 promotion or fall back to ranked search when PC5 is unavailable.
 
+For operator diagnosis, use the admin exact-scope ingestion-freshness endpoint
+to distinguish admission, governance, canonical promotion, and an observed
+public read. A report missing the final stage is not proof that an item is
+retrievable; never infer it from a successful write or database promotion, and
+never use freshness evidence as task or artifact completion authority.
+
 For runtime outcome/feedback evidence, negotiate PC6 and preserve a stable
 effect ID plus idempotency key per source revision. Append corrections with a
 greater revision and new key; never equate admission or `feedback_state=pending`

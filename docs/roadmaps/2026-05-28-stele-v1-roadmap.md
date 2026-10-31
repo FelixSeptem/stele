@@ -1704,14 +1704,14 @@ scoped P8.1 MCP adapter):
    archived handoffs against exact-scope freshness, source-watermark, policy,
    representation, attestation, and rollback requirements, revoking activation
    eligibility fail-closed while retaining evidence history.
-9. MemOS-informed staged-ingestion freshness and quality evaluation (research
-   candidate): measure event admission, governance completion, canonical
-   promotion, and public retrievability as distinct bounded stages under retry,
-   worker restart, and representative load. Reuse the durable work queue,
-   governance records, and assurance surfaces; do not add a competing scheduler
-   or report an accepted event as retrievable memory. Promote to OpenSpec only
-   if existing freshness/SLO evidence cannot answer a concrete operator or
-   integration question.
+9. MemOS-informed staged-ingestion freshness and quality evaluation (implemented,
+   verified, and archived as `076-provider-ingestion-freshness-evidence`): measure event
+   admission, governance completion, canonical promotion, and public
+   retrievability as distinct bounded stages under retry, worker restart, and
+   representative load. The implementation reuses the durable work queue,
+   governance records, PostgreSQL assurance evidence and public-read
+   observations; it adds no competing scheduler and never reports an accepted
+   event as retrievable memory.
 10. MemOS-informed correction-to-governed-version conformance (research
     candidate): verify that an external correction can be attributed to the
     affected scoped evidence, enter an authorized governed mutation, append a
@@ -1734,9 +1734,10 @@ change 071, PC4 is implemented and archived as change 045, PC5 is implemented,
 verified, and archived as change 072, and PC6 below is implemented, verified,
 and archived as change 073. An archived track is reopened only for an
 identified contract or regression gap.
-MemOS-informed items 9–11 remain unprioritized research candidates, not approved
-implementation work; each requires a concrete uncovered gap and measurable
-acceptance signal before a separate OpenSpec proposal is created.
+MemOS-informed item 9 is implemented and awaiting archive sequencing. Items
+10–11 remain unprioritized research candidates, not approved implementation
+work; each requires a concrete uncovered gap and measurable acceptance signal
+before a separate OpenSpec proposal is created.
 
 ## Provider Context And Runtime Integration Proposals (2026-10-16)
 

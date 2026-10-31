@@ -70,6 +70,7 @@ func TestEventIngestContractRequiresIdempotencyAndDocumentsReplay(t *testing.T) 
 
 func TestSpecYAMLIncludesMemoryManagementRoutes(t *testing.T) {
 	for _, want := range []string{
+		"/v1/admin/assurance/ingestion-freshness",
 		"/v1/memories",
 		"/v1/memories/{memory_id}",
 		"/v1/memories/{memory_id}/history",
@@ -503,6 +504,8 @@ func TestSpecYAMLIncludesAssuranceAdminRoutesAndSchemas(t *testing.T) {
 		"AlertDeliveryAttempt",
 		"ConformanceProfile",
 		"ConformanceRun",
+		"IngestionFreshnessReport",
+		"IngestionFreshnessStage",
 		"MissingEvidenceDiagnostic",
 		"ReadinessReport",
 		"RecoveryVerification",
@@ -524,6 +527,7 @@ func TestSpecYAMLAssuranceAdminOperationsRequireAdminAuthAndScope(t *testing.T) 
 	}
 
 	for _, path := range []string{
+		"/v1/admin/assurance/ingestion-freshness",
 		"/v1/admin/assurance/health-evaluations",
 		"/v1/admin/assurance/health-evaluations/{health_evaluation_id}",
 		"/v1/admin/assurance/incidents",

@@ -78,6 +78,19 @@ STELE_MIGRATION_OUTPUT=json STELE_POSTGRES_DSN='<operator-managed-dsn>' stele mi
 
 `migrate up` is forward-only and uses the same PostgreSQL migration ledger and
 serialization as runtime startup. It never performs an automatic downgrade.
+Migration 0041 adds exact-scope public-read observations and redacted ingestion
+freshness evidence. The down migration is intentionally unsupported because
+these records are audit history; disable inspection and retain evidence when
+rolling back application binaries.
+
+Administrators may inspect an event fixture with
+`GET /v1/admin/assurance/ingestion-freshness?fixture_reference=<event-uuid>`
+using the normal admin API key and exact scope headers. The response distinguishes
+admitted, governance-completed, canonical-active, and public-retrievable stages.
+Default windows are 15 minutes from admission to inspection and 5 minutes for
+each governance/canonical or canonical/retrieval transition. Reports contain
+opaque hashes and bounded categories, not scope values, event or memory IDs,
+paths, content, query text, candidates, or ranking data.
 
 `migrate status` reports the driver state (`status`, `current_version`,
 `latest_version`, `dirty`, and `pending`) together with

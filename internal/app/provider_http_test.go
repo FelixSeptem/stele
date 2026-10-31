@@ -198,7 +198,8 @@ func TestProviderRetrieveAcceptsOpenAPITopKField(t *testing.T) {
 		Memory: memory.CanonicalMemory{ID: "hidden-foreign-marker", Scope: memory.Scope{Tenant: "foreign", Project: scope.Project, Namespace: scope.Namespace}, MemoryPath: "foreign/path", Class: memory.MemoryClassProfile, State: memory.MemoryStateActive, Content: "foreign-content-marker", SourceVersion: 1, SourceMetadata: memory.SourceMetadata{Version: memory.SourceMetadataVersion, Trust: memory.SourceTrustUntrusted, Classification: memory.SourceClassificationLow}},
 	}}}}
 	adapter := provider.NewAdapter(provider.AdapterDependencies{Searcher: searcher})
-	h := NewHTTPHandler(HTTPDependencies{ProviderEnabled: true, ProviderSchemaVersions: []string{"provider-v1"}, ProviderAdapter: adapter, ProviderBindings: bindings, PrincipalAuthorizer: referenceHTTPAuthorizer{authorizer}})
+	readObserver := &stubProviderReadObserver{}
+	h := NewHTTPHandler(HTTPDependencies{ProviderEnabled: true, ProviderSchemaVersions: []string{"provider-v1"}, ProviderAdapter: adapter, ProviderBindings: bindings, PrincipalAuthorizer: referenceHTTPAuthorizer{authorizer}, ProviderReadObserver: readObserver})
 	request := httptest.NewRequest(http.MethodPost, "/v1/provider/retrieve", strings.NewReader(`{"metadata":{"request_id":"req-1","operation_id":"op-1","schema_version":"provider-v1"},"input":{"query":"smoke query","path":"compilations/run-1","top_k":7}}`))
 	request.Header.Set("X-API-Key", "retrieve-key")
 	request.Header.Set(provider.HeaderRuntimeBinding, binding.BindingID)
@@ -210,6 +211,9 @@ func TestProviderRetrieveAcceptsOpenAPITopKField(t *testing.T) {
 	h.ServeHTTP(response, request)
 	if response.Code != http.StatusOK {
 		t.Fatalf("retrieve status=%d body=%s; documented top_k must be accepted", response.Code, response.Body.String())
+	}
+	if len(readObserver.memoryIDs) != 1 || readObserver.memoryIDs[0] != "mem-retrieve" || readObserver.scope != scope || readObserver.observedAt.IsZero() {
+		t.Fatalf("public read observation=%+v ids=%v, want only the disclosed same-scope match", readObserver, readObserver.memoryIDs)
 	}
 	if searcher.gotInput.Query != "smoke query" || searcher.gotInput.TopK != 7 {
 		t.Fatalf("search input=%+v, want query and top_k from OpenAPI request", searcher.gotInput)
@@ -250,6 +254,20 @@ func TestProviderRetrieveAcceptsOpenAPITopKField(t *testing.T) {
 	if largeResponse.Code != http.StatusRequestEntityTooLarge || !strings.Contains(largeResponse.Body.String(), `"code":"provider_response_limit_exceeded"`) || strings.Contains(largeResponse.Body.String(), `"result"`) {
 		t.Fatalf("oversized Provider retrieval was not refused whole: %d %s", largeResponse.Code, largeResponse.Body.String())
 	}
+}
+
+type stubProviderReadObserver struct {
+	scope      memory.Scope
+	memoryIDs  []string
+	observedAt time.Time
+	err        error
+}
+
+func (s *stubProviderReadObserver) RecordProviderMemoryRead(_ context.Context, scope memory.Scope, memoryIDs []string, observedAt time.Time) error {
+	s.scope = scope
+	s.memoryIDs = append([]string(nil), memoryIDs...)
+	s.observedAt = observedAt
+	return s.err
 }
 
 func TestProviderTurnsAreBoundToCurrentDisclosureAndRuntimeSession(t *testing.T) {

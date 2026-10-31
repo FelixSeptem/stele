@@ -18,6 +18,10 @@ and an implementation differ.
 
 The API resolves identity and exact scope before repository access. It should
 not contain a second persistence or authorization implementation for an adapter.
+`GET /v1/admin/assurance/ingestion-freshness` uses authenticated exact-scope
+context and an opaque event fixture reference; PostgreSQL correlates governance,
+canonical and successful Provider-read observations. Only redacted reports are
+retained, with fixture identity protected by a scoped unique key.
 
 ## Storage and memory governance
 
@@ -70,6 +74,8 @@ for allocation units, zero/omission, errors and compatibility.
 
 Workers own asynchronous consolidation and recovery. Schedulers decide when
 bounded work is dispatched; they do not directly mutate API authorization state.
+Freshness collection reads worker timestamps and lifecycle state; it does not
+claim or retry governance work.
 
 ## MCP adapter
 

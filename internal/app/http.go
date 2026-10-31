@@ -30,6 +30,7 @@ import (
 	"github.com/FelixSeptem/stele/internal/workflow"
 	"github.com/FelixSeptem/stele/internal/workqueue"
 	"github.com/FelixSeptem/stele/openapi"
+	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
 )
 
@@ -90,6 +91,7 @@ type HTTPDependencies struct {
 	ProviderBindings            provider.RuntimeBindingStore
 	ProviderAdapter             *provider.Adapter
 	ProviderReferences          provider.ReferenceStore
+	ProviderReadObserver        ProviderReadObserver
 	ProviderProjections         provider.ProjectionStore
 	ProviderSynchronizer        *provider.Synchronizer
 	ProviderSchemaVersions      []string
@@ -100,6 +102,10 @@ type HTTPDependencies struct {
 	ProviderContextPolicy       func(context.Context, provider.RuntimeBinding) ([]byte, error)
 	ProviderLimits              provider.ProviderLimits
 	ReasoningCapabilities       reasoning.Capability
+}
+
+type ProviderReadObserver interface {
+	RecordProviderMemoryRead(context.Context, memory.Scope, []string, time.Time) error
 }
 
 type ContextProjectionAdminService interface {
@@ -336,6 +342,7 @@ type ReleaseEvidenceReconciliationAdminService interface {
 }
 
 type AssuranceAdminService interface {
+	InspectIngestionFreshness(ctx context.Context, input assurance.IngestionFreshnessInspectionInput) (assurance.IngestionFreshnessReport, error)
 	CreateHealthEvaluation(ctx context.Context, input assurance.HealthEvaluationInput) (assurance.HealthEvaluation, error)
 	ListHealthEvaluations(ctx context.Context, scope memory.Scope) ([]assurance.HealthEvaluation, error)
 	ReadHealthEvaluation(ctx context.Context, input assurance.ReadHealthEvaluationInput) (assurance.HealthEvaluation, error)
@@ -1495,6 +1502,7 @@ func NewHTTPHandler(deps HTTPDependencies) http.Handler {
 	)
 	mux.Handle("GET /v1/admin/assurance/health-evaluations", adminAssurance)
 	mux.Handle("POST /v1/admin/assurance/health-evaluations", adminAssurance)
+	mux.Handle("GET /v1/admin/assurance/ingestion-freshness", adminAssurance)
 	mux.Handle("GET /v1/admin/assurance/health-evaluations/{health_evaluation_id}", adminAssurance)
 	mux.Handle("GET /v1/admin/assurance/incidents", adminAssurance)
 	mux.Handle("GET /v1/admin/assurance/incidents/{incident_id}", adminAssurance)
@@ -3336,6 +3344,22 @@ func handleAdminAssurance(w http.ResponseWriter, r *http.Request, service Assura
 
 	path := r.URL.Path
 	switch {
+	case path == "/v1/admin/assurance/ingestion-freshness" && r.Method == http.MethodGet:
+		fixtureReference := strings.TrimSpace(r.URL.Query().Get("fixture_reference"))
+		if fixtureReference == "" {
+			http.Error(w, "invalid fixture_reference", http.StatusBadRequest)
+			return
+		}
+		if _, err := uuid.Parse(fixtureReference); err != nil {
+			http.Error(w, "invalid fixture_reference", http.StatusBadRequest)
+			return
+		}
+		report, err := service.InspectIngestionFreshness(r.Context(), assurance.IngestionFreshnessInspectionInput{Scope: scope, FixtureReference: fixtureReference})
+		if err != nil {
+			writeAdminAssuranceError(w, err, "failed to inspect ingestion freshness")
+			return
+		}
+		writeJSON(w, http.StatusOK, report)
 	case path == "/v1/admin/assurance/health-evaluations" && r.Method == http.MethodPost:
 		handleAdminAssuranceHealthCreate(w, r, service, scope)
 	case path == "/v1/admin/assurance/health-evaluations" && r.Method == http.MethodGet:
