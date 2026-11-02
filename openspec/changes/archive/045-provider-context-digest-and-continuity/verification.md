@@ -70,7 +70,6 @@ not contain credentials, scope values, raw references, projection digests, memor
 identifiers, or context payloads. The verifier removed its generated Compose
 project, volume and temporary credentials on completion.
 
-`scripts/check-docs-consistency.ps1`,
 `scripts/check-openspec-roadmap-status-consistency.ps1`, and
 `scripts/check-openspec-example-impact-declaration.ps1` are not present in this
 repository revision, so they were not represented as passing gates. The existing

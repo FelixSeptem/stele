@@ -9,4 +9,4 @@
 
 - [x] 2.1 Add contract or documentation tests for category-to-class mapping and the non-authoritative treatment of remembered capabilities and limits; verify the focused contract tests pass.
 - [x] 2.2 Add or update example conformance checks for exact scope, shared path validation, lifecycle-visible retrieval, and existing result/context budgets; verify the self-hosting contract test passes.
-- [x] 2.3 Run `openspec validate --all --strict` and `pwsh -File scripts/check-self-hosting-smoke-docs.ps1`; verify both commands pass (the originally named docs-consistency script is absent in this checkout).
+- [x] 2.3 Run `openspec validate --all --strict` and `pwsh -File scripts/check-self-hosting-smoke-docs.ps1`; verify both commands pass.

@@ -58,6 +58,6 @@ index condition. The segment-boundary predicate excludes siblings such as
 - `pwsh -File scripts/check-self-hosting-smoke-docs.ps1` — passed.
 - `git diff --check` — passed.
 
-The historical `scripts/check-quality-gate.ps1` and
-`scripts/check-docs-consistency.ps1` paths referenced by the handoff are not
-present in this checkout, so those two checks could not be executed.
+The historical `scripts/check-quality-gate.ps1` path referenced by the handoff
+is not present in this checkout, so that check could not be executed. The
+documentation gate and docs package contract test recorded above were executed.

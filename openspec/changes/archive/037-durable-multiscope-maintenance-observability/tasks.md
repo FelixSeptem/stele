@@ -32,7 +32,7 @@
 ## 5. Documentation and rollout controls
 
 - [x] 5.1 Add configuration reference for maintenance identity, lease, retry, freshness, SLO, telemetry, retention, and conformance limits; verify `.env.local.example` contains placeholders only.
-- [x] 5.2 Document operator evidence collection, PostgreSQL 18 + pgvector maintenance smoke, rollback, stale recovery, and canonical-data safety; verify existing self-hosting smoke docs check passes (the referenced docs-consistency script is absent in this repository).
+- [x] 5.2 Document operator evidence collection, PostgreSQL 18 + pgvector maintenance smoke, rollback, stale recovery, and canonical-data safety; verify `pwsh -File scripts/check-self-hosting-smoke-docs.ps1` passes.
 - [x] 5.3 Add disabled-by-default rollout and fallback wiring; verify failed conformance gates preserve the previously approved scheduler and retrieval behavior.
 - [x] 5.4 Add deterministic CI coverage for focused maintenance/conformance tests and redaction checks; verify CI commands run without external provider credentials.
 

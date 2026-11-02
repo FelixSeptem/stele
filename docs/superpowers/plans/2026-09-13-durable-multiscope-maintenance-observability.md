@@ -253,7 +253,7 @@
 - Modify: `internal/app/app.go`, `internal/config/config.go`
 - Modify: `docs/self-hosting.md`, `docs/retrieval-release-gate.md`
 - Modify: `.env.local.example`
-- Create/modify: `scripts/check-docs-consistency.ps1` only if required by existing checks
+- Use the existing `scripts/check-documentation.ps1` documentation gate
 - Test: `internal/app/app_test.go`, `internal/config/config_test.go`, docs checks
 
 - [ ] **Step 1: Write failing scheduler/config/docs tests**
@@ -266,7 +266,7 @@
 
 - [ ] **Step 3: Verify integration and docs**
 
-  Run: `go test ./internal/app ./internal/config -run 'Test.*(Conformance|Maintenance|Fallback)' -count=1; pwsh -File scripts/check-docs-consistency.ps1`
+  Run: `go test ./internal/app ./internal/config -run 'Test.*(Conformance|Maintenance|Fallback)' -count=1; pwsh -File scripts/check-documentation.ps1`
 
   Expected: PASS. Commit: `git commit -am "docs: document maintenance conformance operations"`.
 
