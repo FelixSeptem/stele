@@ -39,7 +39,7 @@ func main() {
 
 func runBenchmark(args []string, stdout, stderr io.Writer) error {
 	if len(args) == 0 {
-		return fmt.Errorf("benchmark command must be one of: list, fetch, normalize, run, lock-task-series, run-task-series, report, contract, specialized, stress, clean, run-smoke, run-postgres-smoke")
+		return fmt.Errorf("benchmark command must be one of: list, fetch, normalize, run, lock-task-series, run-task-series, report, contract, lock-bfcl-v4, bfcl-v4, specialized, stress, clean, run-smoke, run-postgres-smoke")
 	}
 	encoder := json.NewEncoder(stdout)
 	switch args[0] {
@@ -86,6 +86,18 @@ func runBenchmark(args []string, stdout, stderr io.Writer) error {
 			return err
 		}
 		return encoder.Encode(result)
+	case "bfcl-v4":
+		result, err := benchmarkBFCLV4(args[1:])
+		if err != nil {
+			return err
+		}
+		return encoder.Encode(result)
+	case "lock-bfcl-v4":
+		result, err := benchmarkBFCLV4Lock(args[1:])
+		if err != nil {
+			return err
+		}
+		return encoder.Encode(result)
 	case "specialized":
 		result, err := benchmarkSpecialized(args[1:])
 		if err != nil {
@@ -125,7 +137,7 @@ func runBenchmark(args []string, stdout, stderr io.Writer) error {
 		}
 		return encoder.Encode(result)
 	default:
-		_, _ = fmt.Fprintln(stderr, "benchmark command must be one of: list, fetch, normalize, run, lock-task-series, run-task-series, report, contract, specialized, stress, clean, run-smoke, run-postgres-smoke")
+		_, _ = fmt.Fprintln(stderr, "benchmark command must be one of: list, fetch, normalize, run, lock-task-series, run-task-series, report, contract, lock-bfcl-v4, bfcl-v4, specialized, stress, clean, run-smoke, run-postgres-smoke")
 		return fmt.Errorf("unsupported benchmark command %q", args[0])
 	}
 }
@@ -229,6 +241,65 @@ func benchmarkContract(args []string) (benchmark.ContractReport, error) {
 		return benchmark.ContractReport{}, &benchmark.StatusError{Status: benchmark.StatusInvalidManifest, Message: "decode contract fixture", Cause: err}
 	}
 	return benchmark.ReplayContract(cases), nil
+}
+
+func benchmarkBFCLV4(args []string) (benchmark.BFCLV4ConformanceReport, error) {
+	flags := flag.NewFlagSet("benchmark bfcl-v4", flag.ContinueOnError)
+	flags.SetOutput(io.Discard)
+	sourcePath := flags.String("source", "", "local checksum-locked BFCL V4 memory source bundle JSON")
+	tenant := flags.String("tenant", "", "exact benchmark tenant")
+	project := flags.String("project", "", "exact benchmark project")
+	namespace := flags.String("namespace", "", "exact benchmark namespace")
+	if err := flags.Parse(args); err != nil {
+		return benchmark.BFCLV4ConformanceReport{}, err
+	}
+	if strings.TrimSpace(*sourcePath) == "" || strings.TrimSpace(*tenant) == "" || strings.TrimSpace(*project) == "" || strings.TrimSpace(*namespace) == "" {
+		return benchmark.BFCLV4ConformanceReport{}, fmt.Errorf("--source, --tenant, --project, and --namespace are required")
+	}
+	source, err := os.Open(*sourcePath)
+	if err != nil {
+		return benchmark.BFCLV4ConformanceReport{}, &benchmark.StatusError{Status: benchmark.StatusPrerequisiteMissing, Message: "BFCL V4 source is unavailable", Cause: err}
+	}
+	defer source.Close()
+	encoded, err := io.ReadAll(io.LimitReader(source, 64*1024*1024+1))
+	if err != nil || len(encoded) > 64*1024*1024 {
+		return benchmark.BFCLV4ConformanceReport{}, &benchmark.StatusError{Status: benchmark.StatusInvalidManifest, Message: "BFCL V4 source is unreadable or exceeds the byte limit", Cause: err}
+	}
+	bundle, err := benchmark.LoadBFCLV4Source(encoded)
+	if err != nil {
+		return benchmark.BFCLV4ConformanceReport{}, err
+	}
+	return benchmark.RunBFCLV4Conformance(bundle, memory.Scope{Tenant: *tenant, Project: *project, Namespace: *namespace})
+}
+
+func benchmarkBFCLV4Lock(args []string) (map[string]string, error) {
+	flags := flag.NewFlagSet("benchmark lock-bfcl-v4", flag.ContinueOnError)
+	flags.SetOutput(io.Discard)
+	sourcePath := flags.String("source", "", "local BFCL V4 memory source bundle JSON")
+	if err := flags.Parse(args); err != nil {
+		return nil, err
+	}
+	if strings.TrimSpace(*sourcePath) == "" {
+		return nil, fmt.Errorf("--source is required")
+	}
+	source, err := os.Open(*sourcePath)
+	if err != nil {
+		return nil, &benchmark.StatusError{Status: benchmark.StatusPrerequisiteMissing, Message: "BFCL V4 source is unavailable", Cause: err}
+	}
+	defer source.Close()
+	encoded, err := io.ReadAll(io.LimitReader(source, 64*1024*1024+1))
+	if err != nil || len(encoded) > 64*1024*1024 {
+		return nil, &benchmark.StatusError{Status: benchmark.StatusInvalidManifest, Message: "BFCL V4 source is unreadable or exceeds the byte limit", Cause: err}
+	}
+	bundle, err := benchmark.DecodeBFCLV4Source(encoded)
+	if err != nil {
+		return nil, err
+	}
+	checksum, err := benchmark.BFCLV4SourceChecksum(bundle)
+	if err != nil {
+		return nil, err
+	}
+	return map[string]string{"source_checksum": checksum}, nil
 }
 
 func benchmarkSpecialized(args []string) (map[string]any, error) {

@@ -19,10 +19,12 @@ aggregated into one quality score.
 The default remains offline. Prepare restricted datasets in a local cache with a
 checksum-locked manifest, then use `benchmark fetch`, `benchmark normalize`, and
 `benchmark run`. No command silently downloads a model or substitutes another
-dataset. `benchmark contract --fixture <path>`, `benchmark specialized`, and
-`benchmark stress` provide repository-owned offline checks for the expansion
-tracks. Use `benchmark clean --dataset <name> --version <version> --run-id <id>`
-to remove run-scoped artifacts while retaining reports by default.
+dataset. `benchmark contract --fixture <path>`, `benchmark bfcl-v4 --source
+<path> --tenant <tenant> --project <project> --namespace <namespace>`,
+`benchmark specialized`, and `benchmark stress` provide offline checks for the
+expansion tracks. Use `benchmark clean --dataset <name> --version <version>
+--run-id <id>` to remove run-scoped artifacts while retaining reports by
+default.
 
 For reproducibility, retain the manifest SHA256, upstream revision, conversion
 version, normalized checksum, qrels checksum, embedding and strategy profiles,
@@ -78,6 +80,72 @@ Lexical-only smoke is allowed only when explicitly selected. The runner does not
 - `smoke`: repository-owned bounded fixture; suitable for CI and installation verification.
 - `local-full`: full locally cached dataset and vectors; no network fallback.
 - `reproducible-extended`: full data plus locked model/profile, strategy/chunk settings, qrels and random seed metadata.
+
+## BFCL V4 Provider-contract conformance
+
+`benchmark bfcl-v4` evaluates a locally supplied, checksum-locked BFCL V4
+memory-source envelope for one of `memory_kv`, `memory_rec_sum`, or
+`memory_vector`. The envelope carries a license-reviewed local extraction of
+the upstream source together with its raw-source digest, upstream revision,
+conversion version, prerequisite/snapshot digests, and the normalized operation
+records that Stele can evaluate. Keep the raw upstream source outside Git.
+
+The command validates Provider-contract compatibility only. It does not invoke
+a model or BFCL agent harness, call remote tools, execute the upstream judge,
+or produce an official BFCL score. Unsupported operations and incomplete
+prerequisite state remain explicit nonpassing coverage outcomes; they are never
+silently mapped to another operation. Source-provided fields cannot widen the
+declared project/tenant/namespace scope or override lifecycle refusal rules.
+The exact scope is supplied independently through the command flags and every
+source case must match it exactly.
+
+Prepare the envelope with an empty `source_checksum`, then calculate its
+canonical lock and insert the returned value before running conformance:
+
+```powershell
+go run ./cmd/stele benchmark lock-bfcl-v4 `
+  --source D:\stele-benchmark-data\bfcl-v4\memory-kv-envelope.json
+
+go run ./cmd/stele benchmark bfcl-v4 `
+  --source D:\stele-benchmark-data\bfcl-v4\memory-kv-envelope.json `
+  --tenant benchmark `
+  --project bfcl `
+  --namespace local
+```
+
+The local envelope shape is intentionally narrow:
+
+```json
+{
+  "manifest": {
+    "schema_version": "bfcl-v4-memory-source-v1",
+    "dataset": "bfcl-v4-memory",
+    "version": "v4.0",
+    "upstream_revision": "<7-to-64-character-hexadecimal-revision>",
+    "source_sha256": "<sha256-of-reviewed-source>",
+    "source_checksum": "<output-of-lock-bfcl-v4>",
+    "conversion_version": "bfcl-v4-provider-v1",
+    "subset": "memory_kv"
+  },
+  "prerequisites": [{"id": "snapshot-1", "snapshot_sha256": "<sha256>"}],
+  "cases": [{
+    "id": "<local-case-id>",
+    "operation": "get",
+    "arguments": {},
+    "expected": {},
+    "scope": {"tenant": "benchmark", "project": "bfcl", "namespace": "local"},
+    "prerequisite_id": "snapshot-1"
+  }]
+}
+```
+
+The emitted report retains family identity, source revision/digests,
+prerequisite digest, aggregate supported/unsupported/incomplete coverage,
+contract metrics, status, and cleanup verification. It deliberately omits raw
+source records, scopes, memory identifiers, hidden candidates, and individual
+operation identities. A retained non-synthetic, license-reviewed local source
+run is required before using this track as external-input evidence; repository
+tests verify only the adapter and safety contract.
 
 ## Experimental adapters and operations
 

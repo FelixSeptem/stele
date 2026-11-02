@@ -1507,7 +1507,11 @@ proposal is prepared.
    retrieval-ranking quality. The upstream flow has a memory prerequisite/snapshot
    stage and evaluates agent tool use, so a Stele adapter may claim only the
    contract checks it actually runs; it must not present an offline replay as
-   equivalent to the complete BFCL score.
+   equivalent to the complete BFCL score. Stele now has a local, checksum-locked
+   source-envelope conformance path that reports compatible, unsupported, and
+   incomplete operation coverage separately from Provider safety outcomes. A
+   retained, license-reviewed non-synthetic source run remains required before
+   this track is used as external-input evidence.
 3. **DolphinBench — end-to-end memory-assisted task outcome.** Treat this as
    the highest-priority new longitudinal/task-series candidate: it evaluates
    whether an external agent uses prior interaction memory to complete tasks.
@@ -1793,6 +1797,13 @@ PostgreSQL 18.6 + pgvector 0.8.6 real-stack acceptance run with 20 stages per
 condition, complete provenance coverage, separate observational quality/safety
 verdicts, and zero seeded-record residue after cleanup. The bounded report is
 retained at [`docs/evidence/longitudinal-dolphinbench-v81cb6f-live.json`](../evidence/longitudinal-dolphinbench-v81cb6f-live.json).
+The BFCL V4 memory candidate now has a bounded local Provider-contract
+conformance implementation: it accepts caller-owned checksum-locked source
+envelopes, preserves prerequisite/snapshot and scope/lifecycle refusal
+expectations, and reports source coverage separately from contract metrics. It
+does not execute agents, models, remote tools, or the BFCL judge, and it cannot
+support an official-score claim. A reviewed non-synthetic source bundle plus a
+retained redacted run report remain the next evidence prerequisite.
 
 ## Provider Context And Runtime Integration Proposals (2026-10-16)
 

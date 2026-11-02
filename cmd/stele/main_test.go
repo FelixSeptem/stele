@@ -231,6 +231,108 @@ func TestRunBenchmarkReportReturnsPersistedSmokeReport(t *testing.T) {
 	}
 }
 
+func TestRunBenchmarkBFCLV4RunsLockedLocalSourceWithoutScopeDisclosure(t *testing.T) {
+	bundle := benchmark.BFCLV4SourceBundle{
+		Manifest: benchmark.BFCLV4SourceManifest{
+			SchemaVersion:     benchmark.BFCLV4SourceSchemaVersion,
+			Dataset:           "bfcl-v4-memory",
+			Version:           "v4.0",
+			UpstreamRevision:  "abcdef1",
+			SourceSHA256:      strings.Repeat("a", 64),
+			ConversionVersion: "bfcl-v4-provider-v1",
+			Subset:            "memory_kv",
+		},
+		Prerequisites: []benchmark.BFCLV4Prerequisite{{ID: "snapshot-a", SnapshotSHA256: strings.Repeat("b", 64)}},
+		Cases:         []benchmark.BFCLV4SourceCase{{ID: "read", Operation: "get", Arguments: map[string]any{}, Expected: map[string]any{}, Scope: memory.Scope{Tenant: "bench", Project: "bfcl", Namespace: "local"}, PrerequisiteID: "snapshot-a"}},
+	}
+	checksum, err := benchmark.BFCLV4SourceChecksum(bundle)
+	if err != nil {
+		t.Fatal(err)
+	}
+	bundle.Manifest.SourceChecksum = checksum
+	encoded, err := json.Marshal(bundle)
+	if err != nil {
+		t.Fatal(err)
+	}
+	path := filepath.Join(t.TempDir(), "bfcl-v4.json")
+	if err := os.WriteFile(path, encoded, 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	var stdout, stderr bytes.Buffer
+	if err := runBenchmark([]string{"bfcl-v4", "--source", path, "--tenant", "bench", "--project", "bfcl", "--namespace", "local"}, &stdout, &stderr); err != nil {
+		t.Fatal(err)
+	}
+	if !bytes.Contains(stdout.Bytes(), []byte(`"dataset":"bfcl-v4-memory"`)) || !bytes.Contains(stdout.Bytes(), []byte(`"passing":true`)) {
+		t.Fatalf("unexpected BFCL V4 output: %s", stdout.String())
+	}
+	if bytes.Contains(stdout.Bytes(), []byte(`"scope"`)) || bytes.Contains(stdout.Bytes(), []byte("bench")) {
+		t.Fatalf("BFCL V4 output leaks source scope: %s", stdout.String())
+	}
+}
+
+func TestRunBenchmarkBFCLV4RequiresLocalSource(t *testing.T) {
+	var stdout, stderr bytes.Buffer
+	err := runBenchmark([]string{"bfcl-v4", "--source", filepath.Join(t.TempDir(), "missing.json"), "--tenant", "bench", "--project", "bfcl", "--namespace", "local"}, &stdout, &stderr)
+	if benchmark.StatusOf(err) != benchmark.StatusPrerequisiteMissing {
+		t.Fatalf("missing source status = %q, err = %v", benchmark.StatusOf(err), err)
+	}
+}
+
+func TestRunBenchmarkLockBFCLV4PrintsCanonicalSourceChecksum(t *testing.T) {
+	bundle := benchmark.BFCLV4SourceBundle{
+		Manifest: benchmark.BFCLV4SourceManifest{
+			SchemaVersion:     benchmark.BFCLV4SourceSchemaVersion,
+			Dataset:           "bfcl-v4-memory",
+			Version:           "v4.0",
+			UpstreamRevision:  "abcdef1",
+			SourceSHA256:      strings.Repeat("a", 64),
+			ConversionVersion: "bfcl-v4-provider-v1",
+			Subset:            "memory_kv",
+		},
+		Prerequisites: []benchmark.BFCLV4Prerequisite{{ID: "snapshot-a", SnapshotSHA256: strings.Repeat("b", 64)}},
+		Cases:         []benchmark.BFCLV4SourceCase{{ID: "read", Operation: "get", Arguments: map[string]any{}, Expected: map[string]any{}, Scope: memory.Scope{Tenant: "bench", Project: "bfcl", Namespace: "local"}, PrerequisiteID: "snapshot-a"}},
+	}
+	encoded, err := json.Marshal(bundle)
+	if err != nil {
+		t.Fatal(err)
+	}
+	path := filepath.Join(t.TempDir(), "bfcl-v4-unlocked.json")
+	if err := os.WriteFile(path, encoded, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	var stdout, stderr bytes.Buffer
+	if err := runBenchmark([]string{"lock-bfcl-v4", "--source", path}, &stdout, &stderr); err != nil {
+		t.Fatal(err)
+	}
+	var locks map[string]string
+	if err := json.Unmarshal(stdout.Bytes(), &locks); err != nil {
+		t.Fatal(err)
+	}
+	if len(locks["source_checksum"]) != 64 {
+		t.Fatalf("source lock = %#v", locks)
+	}
+}
+
+func TestRunBenchmarkContractFixtureRemainsSupported(t *testing.T) {
+	fixture := []benchmark.ContractCase{{ID: "fixture-read", Subset: "memory_kv", Operation: benchmark.ContractOperation{Name: "get", Scope: memory.Scope{Tenant: "bench", Project: "fixture", Namespace: "contract"}}}}
+	encoded, err := json.Marshal(fixture)
+	if err != nil {
+		t.Fatal(err)
+	}
+	path := filepath.Join(t.TempDir(), "contract.json")
+	if err := os.WriteFile(path, encoded, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	var stdout, stderr bytes.Buffer
+	if err := runBenchmark([]string{"contract", "--fixture", path}, &stdout, &stderr); err != nil {
+		t.Fatal(err)
+	}
+	if !bytes.Contains(stdout.Bytes(), []byte(`"dataset":"bfcl-memory"`)) || !bytes.Contains(stdout.Bytes(), []byte(`"status":"success"`)) {
+		t.Fatalf("unexpected fixture contract output: %s", stdout.String())
+	}
+}
+
 func writeBenchmarkManifest(t *testing.T, manifest benchmark.DatasetManifest) string {
 	t.Helper()
 	encoded, err := json.Marshal(manifest)

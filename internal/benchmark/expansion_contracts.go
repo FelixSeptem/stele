@@ -110,13 +110,14 @@ func ReplayContract(cases []ContractCase) ContractReport {
 		if item.Operation.Scope.Tenant == "foreign" {
 			outcome.ScopeFailure, outcome.Reason = true, "foreign tenant denied"
 		}
-		if item.Operation.Lifecycle == memory.MemoryStateForgotten || item.Operation.Lifecycle == memory.MemoryStateSuppressed || item.Operation.Lifecycle == memory.MemoryStateDeleted {
+		hiddenLifecycle := item.Operation.Lifecycle == memory.MemoryStateForgotten || item.Operation.Lifecycle == memory.MemoryStateSuppressed || item.Operation.Lifecycle == memory.MemoryStateDeleted
+		if hiddenLifecycle {
 			outcome.LifecycleFailure = !item.Operation.MustRefuse
 			if outcome.LifecycleFailure {
 				outcome.Reason = "hidden lifecycle must be refused"
 			}
 		}
-		outcome.Refusal = item.Operation.MustRefuse && (outcome.Malformed || outcome.ScopeFailure || outcome.LifecycleFailure)
+		outcome.Refusal = item.Operation.MustRefuse && (outcome.Malformed || outcome.ScopeFailure || outcome.LifecycleFailure || hiddenLifecycle)
 		outcome.Valid = !outcome.Malformed && !outcome.ScopeFailure && !outcome.LifecycleFailure && (!item.Operation.MustRefuse || outcome.Refusal)
 		if !outcome.Valid || outcome.ScopeFailure || outcome.LifecycleFailure {
 			report.Status = StatusQualityGateFailed
