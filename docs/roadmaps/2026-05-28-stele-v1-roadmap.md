@@ -1486,6 +1486,55 @@ Patterns not adopted as Stele service architecture:
 - MemOS's default self-hosted Neo4j + Qdrant stack and application-side agent plugins are outside Stele's PostgreSQL-only system-of-record and service-only ownership boundaries. Do not add a second canonical store, SDK, UI, or agent lifecycle implementation based on this comparison.
 - MemOS product and benchmark claims are not Stele release evidence. Any quality claim must use Stele-owned datasets/configuration, exact-scope and lifecycle safety gates, reproducible reports, and the existing release policy.
 
+### Industry Agent-Memory Benchmark Candidates (research completed 2026-11-02)
+
+The benchmark landscape review recommends a layered evaluation portfolio rather
+than one aggregate score. These are roadmap candidates and evaluation roles, not
+claims that every upstream benchmark is already integrated or suitable for an
+immediate release gate. Upstream dataset terms, revisions, checksums, evaluator
+behavior, and reproducibility requirements must be revalidated when a concrete
+proposal is prepared.
+
+1. **LongMemEval — memory-quality evaluation.** Keep this as the primary
+   externally sourced memory retrieval/update-quality track, covering
+   cross-session recall, temporal and updated facts, evidence, and abstention.
+   Stele already has an adapter and a checksum-locked non-synthetic local
+   PostgreSQL + pgvector report; retain that as the foundation and refresh it
+   under the current manifest and release-evidence policy. Do not treat answer
+   generation or an LLM judge as Stele-owned behavior.
+2. **BFCL V4 memory subsets — provider/tool contract evaluation.** Evaluate
+   `memory_kv`, `memory_vector`, and `memory_rec_sum` independently from
+   retrieval-ranking quality. The upstream flow has a memory prerequisite/snapshot
+   stage and evaluates agent tool use, so a Stele adapter may claim only the
+   contract checks it actually runs; it must not present an offline replay as
+   equivalent to the complete BFCL score.
+3. **DolphinBench — end-to-end memory-assisted task outcome.** Treat this as
+   the highest-priority new longitudinal/task-series candidate: it evaluates
+   whether an external agent uses prior interaction memory to complete tasks.
+   Danny or another separately owned harness executes the agent and task
+   environment. Stele remains a memory service and may provide scoped memory
+   access and bounded evidence; it does not execute the agent, grade answers,
+   or own business task outcomes. Preserve the benchmark's run/grading rules
+   and record model, harness, memory system, and cost identity when results are
+   compared.
+4. **LoCoMo — fast regression baseline.** Retain the existing adapter and
+   repository-owned synthetic smoke for deterministic CI. Use the restricted
+   external corpus only through its locked local manifest; do not treat the
+   synthetic fixture as real retrieval-quality evidence.
+5. **MemoryAgentBench and Mem2ActBench — later research candidates.** Revisit
+   only after reviewing source terms, data access, evaluator/harness ownership,
+   and whether their competency/task coverage adds a gap not already measured
+   by LongMemEval, BFCL, and DolphinBench.
+
+Cross-benchmark acceptance keeps family-specific reports and metrics separate.
+All tracks retain Stele-owned exact tenant/project/namespace isolation,
+lifecycle visibility, forgetting, provenance, disclosure, and restart/safety
+checks as non-substitutable gates. External leaderboard scores do not satisfy
+these gates or become Stele release evidence by themselves. The next planning
+step is a scoped OpenSpec proposal for the layered portfolio and any concrete
+adapter/harness boundary; no benchmark implementation is authorized by this
+roadmap entry alone.
+
 ### Stash Reference Summary
 
 Useful patterns to study:
@@ -1720,13 +1769,16 @@ scoped P8.1 MCP adapter):
     transactional admission, retry, completion, and legacy handoff; PostgreSQL
     remains authoritative.
 11. MemOS-informed longitudinal agent-task memory evaluation (research
-    candidate): define reproducible task-series fixtures that compare memory
-    usefulness, stale/noisy-memory harm, provenance coverage, and safety across
-    repeated external task outcomes. The harness may ingest externally judged
-    outcomes but must not execute agents, generate answers, or make Stele the
-    task-success authority. Reuse task-success evidence, benchmark manifests,
-    qrels, and safety gates; promote only if current benchmark families do not
-    cover a demonstrated longitudinal evaluation gap.
+    complete; OpenSpec proposal candidate): define reproducible task-series
+    fixtures that compare memory usefulness, stale/noisy-memory harm,
+    provenance coverage, and safety across repeated external task outcomes.
+    The industry benchmark review identified LongMemEval, BFCL V4 memory, and
+    DolphinBench as complementary tracks, with LoCoMo retained as a fast
+    baseline. The harness may ingest externally judged outcomes but must not
+    execute agents, generate answers, or make Stele the task-success authority.
+    Reuse task-success evidence, benchmark manifests, qrels, and safety gates;
+    scope the implementation proposal only after dataset terms and run contracts
+    are verified.
 
 The eight original reference follow-up tracks above are archived baselines.
 PC2 (change 070) is archived; PC3 is implemented, verified, and archived as
@@ -1735,10 +1787,11 @@ verified, and archived as change 072, and PC6 below is implemented, verified,
 and archived as change 073. An archived track is reopened only for an
 identified contract or regression gap.
 MemOS-informed item 9 is implemented and awaiting archive sequencing. Item 10
-is implemented, verified, and archived as change 077. Item 11 remains an
-unprioritized research candidate, not approved implementation work; it requires
-a concrete uncovered longitudinal evaluation gap and measurable acceptance
-signal before a separate OpenSpec proposal is created.
+is implemented, verified, and archived as change 077. Item 11's benchmark
+research is complete and documented above; the resulting portfolio is a
+proposal candidate, not approved implementation work. A separate OpenSpec
+proposal must still define concrete dataset locks, measurable acceptance
+signals, ownership boundaries, and release-gate treatment before implementation.
 
 ## Provider Context And Runtime Integration Proposals (2026-10-16)
 
