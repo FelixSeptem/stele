@@ -116,6 +116,66 @@ retaining report artifacts for audit.
 The CI smoke workflow uses only the checked-in fixture. It does not download
 external corpora, models, vectors, or judges and does not require PostgreSQL.
 
+## Longitudinal task-series evaluation
+
+The longitudinal evaluator compares at least two explicitly declared memory
+conditions over the same ordered task stages. Each stage supplies an externally
+judged `succeeded`, `partial`, `failed`, or `inconclusive` verdict; Stele never
+infers an outcome. `inconclusive` is excluded from utility denominators and
+makes the series incomplete. Utility uses the locked metric mapping
+`succeeded=1`, `partial=0.5`, `failed=0`. Stale/noisy harm counts only annotated
+evidence aliases that were actually returned by retrieval. Provenance coverage
+counts only returned aliases with verified citations, exact scope and visible
+lifecycle. Scope/lifecycle failures independently fail the safety gate even
+when task utility is higher. Condition differences are observational, not
+causal claims.
+
+Prepare a local JSON source bundle with `manifest` and `corpora` fields. The
+manifest contains `schema_version`, `metric_version`, exact `scope`, one
+`baseline: true` condition plus comparison conditions, ordered `stages`, each
+stage's `query_id`, exact `scope`, external `verdict`, and `evidence` aliases
+with optional `stale` / `noisy` labels. Each condition's normalized corpus must
+contain exactly those queries; declared evidence aliases must be active,
+same-scope events linked to that query by qrels. `synthetic_fixture` identifies
+whether the source is synthetic. Keep task content and source corpora local;
+the retained aggregate report excludes task/query text, scopes, aliases,
+identifiers and candidate details.
+
+For `synthetic_fixture: false`, the bundle also requires a runnable
+`dataset_manifest` with the upstream URL and revision, license, raw-source
+SHA-256, conversion version, split identity, and runnable support declaration.
+The runner records only its digest/name/version in the aggregate report. A
+non-synthetic claim without this provenance lock is refused.
+
+First compute the deterministic source and qrel locks:
+
+```powershell
+go run ./cmd/stele benchmark lock-task-series --source D:\stele-benchmark-data\task-series\bundle.json
+```
+
+Insert the returned `qrels_checksum` and `source_checksum` into the bundle's
+manifest, then run against an isolated PostgreSQL + pgvector database:
+
+```powershell
+$env:STELE_POSTGRES_DSN = "postgres://stele:stele@127.0.0.1:55432/stele?sslmode=disable"
+go run ./cmd/stele benchmark run-task-series `
+  --source D:\stele-benchmark-data\task-series\bundle.json `
+  --report D:\stele-benchmark-data\task-series\reports\longitudinal.json `
+  --tenant benchmark `
+  --project task-series `
+  --namespace local
+```
+
+The command has no network fallback, requires an exact-scope source bundle and
+PostgreSQL DSN, runs each condition in a separate benchmark-owned scope through
+the normal fixture seeder and retrieval replay path, and writes a mode-0600
+aggregate report. `synthetic_fixture: true`, incomplete outcomes, checksum
+mismatch, or any safety failure cannot satisfy longitudinal completion
+evidence. A non-synthetic completion report must also contain
+`cleanup_verified: true`; a cleanup failure is a failed run and no retained
+report can be used as acceptance evidence. No public API or production retrieval
+policy is changed.
+
 ## Troubleshooting
 
 | Status | Meaning | Action |
@@ -126,6 +186,8 @@ external corpora, models, vectors, or judges and does not require PostgreSQL.
 | safety failure | A forbidden, cross-scope or non-active memory was returned. | Treat the run as non-releasable and inspect scope/lifecycle filters. |
 | quality gate failure | Metrics regressed without a safety violation. | Compare the report using the same corpus, qrels and embedding profile before changing ranking or chunking policy. |
 | `capacity_refused` | The local event/query/byte budget is too small for the selected corpus. | Increase the explicit local budget or choose a bounded split/batch; do not bypass the refusal by importing into a production scope. |
+| task-series `checksum_mismatch` | The source bundle or its condition qrels changed after locking. | Re-review the external outcomes and normalized corpora, then recompute both locks. |
+| task-series incomplete | A condition has inconclusive or superseded stages without current externally judged coverage. | Supply compatible external outcomes for every ordered stage; do not infer missing verdicts. |
 
 ## PostgreSQL and pgvector
 

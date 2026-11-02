@@ -39,7 +39,7 @@ func main() {
 
 func runBenchmark(args []string, stdout, stderr io.Writer) error {
 	if len(args) == 0 {
-		return fmt.Errorf("benchmark command must be one of: list, fetch, normalize, run, report, contract, specialized, stress, clean, run-smoke, run-postgres-smoke")
+		return fmt.Errorf("benchmark command must be one of: list, fetch, normalize, run, lock-task-series, run-task-series, report, contract, specialized, stress, clean, run-smoke, run-postgres-smoke")
 	}
 	encoder := json.NewEncoder(stdout)
 	switch args[0] {
@@ -62,6 +62,18 @@ func runBenchmark(args []string, stdout, stderr io.Writer) error {
 		return encoder.Encode(result)
 	case "run":
 		result, err := benchmarkRun(args[1:])
+		if err != nil {
+			return err
+		}
+		return encoder.Encode(result)
+	case "run-task-series":
+		result, err := benchmarkTaskSeries(args[1:])
+		if err != nil {
+			return err
+		}
+		return encoder.Encode(result)
+	case "lock-task-series":
+		result, err := benchmarkTaskSeriesLocks(args[1:])
 		if err != nil {
 			return err
 		}
@@ -113,9 +125,89 @@ func runBenchmark(args []string, stdout, stderr io.Writer) error {
 		}
 		return encoder.Encode(result)
 	default:
-		_, _ = fmt.Fprintln(stderr, "benchmark command must be one of: list, fetch, normalize, run, report, contract, specialized, stress, clean, run-smoke, run-postgres-smoke")
+		_, _ = fmt.Fprintln(stderr, "benchmark command must be one of: list, fetch, normalize, run, lock-task-series, run-task-series, report, contract, specialized, stress, clean, run-smoke, run-postgres-smoke")
 		return fmt.Errorf("unsupported benchmark command %q", args[0])
 	}
+}
+
+func benchmarkTaskSeries(args []string) (benchmark.TaskSeriesReport, error) {
+	flags := flag.NewFlagSet("benchmark run-task-series", flag.ContinueOnError)
+	flags.SetOutput(io.Discard)
+	sourcePath := flags.String("source", "", "local checksum-locked task-series source bundle JSON")
+	reportPath := flags.String("report", "", "path for the bounded aggregate JSON report")
+	tenant := flags.String("tenant", "benchmark", "benchmark tenant")
+	project := flags.String("project", "task-series", "benchmark project")
+	namespace := flags.String("namespace", "local", "benchmark namespace")
+	if err := flags.Parse(args); err != nil {
+		return benchmark.TaskSeriesReport{}, err
+	}
+	if strings.TrimSpace(*sourcePath) == "" || strings.TrimSpace(*reportPath) == "" {
+		return benchmark.TaskSeriesReport{}, fmt.Errorf("--source and --report are required")
+	}
+	dsn := strings.TrimSpace(os.Getenv("STELE_POSTGRES_DSN"))
+	if dsn == "" {
+		return benchmark.TaskSeriesReport{}, fmt.Errorf("STELE_POSTGRES_DSN is required for benchmark run-task-series")
+	}
+	source, err := os.Open(*sourcePath)
+	if err != nil {
+		return benchmark.TaskSeriesReport{}, &benchmark.StatusError{Status: benchmark.StatusPrerequisiteMissing, Message: "task-series source is unavailable", Cause: err}
+	}
+	defer source.Close()
+	bundle, err := benchmark.LoadTaskSeriesSourceReader(source)
+	if err != nil {
+		return benchmark.TaskSeriesReport{}, err
+	}
+	baseScope := memory.Scope{Tenant: *tenant, Project: *project, Namespace: *namespace}
+	if err := baseScope.Validate(); err != nil {
+		return benchmark.TaskSeriesReport{}, fmt.Errorf("validate benchmark scope: %w", err)
+	}
+	report, err := benchmark.RunTaskSeriesPostgres(context.Background(), dsn, bundle.Manifest, bundle.Corpora, baseScope, bundle.DatasetManifest, bundle.SyntheticFixture)
+	if err != nil {
+		return benchmark.TaskSeriesReport{}, err
+	}
+	encoded, err := benchmark.MarshalTaskSeriesReport(report)
+	if err != nil {
+		return benchmark.TaskSeriesReport{}, err
+	}
+	if err := os.MkdirAll(filepath.Dir(*reportPath), 0o750); err != nil {
+		return benchmark.TaskSeriesReport{}, fmt.Errorf("create report directory: %w", err)
+	}
+	if err := os.WriteFile(*reportPath, encoded, 0o600); err != nil {
+		return benchmark.TaskSeriesReport{}, fmt.Errorf("write task-series report: %w", err)
+	}
+	return report, nil
+}
+
+func benchmarkTaskSeriesLocks(args []string) (map[string]string, error) {
+	flags := flag.NewFlagSet("benchmark lock-task-series", flag.ContinueOnError)
+	flags.SetOutput(io.Discard)
+	sourcePath := flags.String("source", "", "local task-series source bundle JSON")
+	if err := flags.Parse(args); err != nil {
+		return nil, err
+	}
+	if strings.TrimSpace(*sourcePath) == "" {
+		return nil, fmt.Errorf("--source is required")
+	}
+	source, err := os.Open(*sourcePath)
+	if err != nil {
+		return nil, &benchmark.StatusError{Status: benchmark.StatusPrerequisiteMissing, Message: "task-series source is unavailable", Cause: err}
+	}
+	defer source.Close()
+	encoded, err := io.ReadAll(io.LimitReader(source, 64*1024*1024+1))
+	if err != nil || len(encoded) > 64*1024*1024 {
+		return nil, &benchmark.StatusError{Status: benchmark.StatusInvalidManifest, Message: "task-series source is unreadable or exceeds the byte limit", Cause: err}
+	}
+	decoder := json.NewDecoder(bytes.NewReader(encoded))
+	decoder.DisallowUnknownFields()
+	var bundle benchmark.TaskSeriesSourceBundle
+	if err := decoder.Decode(&bundle); err != nil {
+		return nil, &benchmark.StatusError{Status: benchmark.StatusInvalidManifest, Message: "decode task-series source", Cause: err}
+	}
+	qrelChecksum, sourceChecksum, err := benchmark.TaskSeriesSourceLocks(bundle)
+	if err != nil {
+		return nil, err
+	}
+	return map[string]string{"qrels_checksum": qrelChecksum, "source_checksum": sourceChecksum}, nil
 }
 
 func benchmarkContract(args []string) (benchmark.ContractReport, error) {

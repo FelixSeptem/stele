@@ -15,6 +15,7 @@ import (
 	"github.com/FelixSeptem/stele/internal/app"
 	"github.com/FelixSeptem/stele/internal/benchmark"
 	"github.com/FelixSeptem/stele/internal/config"
+	"github.com/FelixSeptem/stele/internal/memory"
 	"github.com/FelixSeptem/stele/internal/storage/postgres"
 )
 
@@ -69,6 +70,49 @@ func TestRunBenchmarkPostgresSmokeRequiresDSN(t *testing.T) {
 	err := runBenchmark([]string{"run-postgres-smoke"}, &stdout, &stderr)
 	if err == nil || !strings.Contains(err.Error(), "STELE_POSTGRES_DSN") {
 		t.Fatalf("expected DSN prerequisite error, got %v", err)
+	}
+}
+
+func TestRunBenchmarkTaskSeriesLockPrintsQRELAndSourceChecksums(t *testing.T) {
+	manifest := benchmark.TaskSeriesManifest{
+		SchemaVersion:  benchmark.TaskSeriesSchemaVersion,
+		MetricVersion:  benchmark.TaskSeriesMetricVersion,
+		SourceChecksum: "",
+		QRELChecksum:   "",
+		Scope:          memory.Scope{Tenant: "benchmark", Project: "task-series", Namespace: "fixture"},
+		Conditions: []benchmark.TaskSeriesCondition{
+			{ID: "reference", Baseline: true, Stages: []benchmark.TaskSeriesStage{{ID: "stage-1", QueryID: "query-1", Scope: memory.Scope{Tenant: "benchmark", Project: "task-series", Namespace: "fixture"}, Verdict: benchmark.TaskSeriesVerdictSucceeded, Evidence: []benchmark.TaskSeriesEvidence{{Reference: "event-1"}}}}},
+			{ID: "candidate", Stages: []benchmark.TaskSeriesStage{{ID: "stage-1", QueryID: "query-1", Scope: memory.Scope{Tenant: "benchmark", Project: "task-series", Namespace: "fixture"}, Verdict: benchmark.TaskSeriesVerdictSucceeded, Evidence: []benchmark.TaskSeriesEvidence{{Reference: "event-1"}}}}},
+		},
+	}
+	corpora := map[string]benchmark.NormalizedCorpus{}
+	for _, condition := range manifest.Conditions {
+		corpora[condition.ID] = benchmark.NormalizedCorpus{
+			SchemaVersion: benchmark.SchemaVersion,
+			Queries:       []benchmark.BenchmarkQuery{{ID: "query-1", Scope: manifest.Scope, SessionID: "stage-1", Text: "query"}},
+			Events:        []benchmark.MemoryEventRecord{{ID: "event-1", Scope: manifest.Scope, SessionID: "stage-1", Class: memory.MemoryClassEpisodic, Text: "evidence", ExpectedState: memory.MemoryStateActive}},
+			QRELs:         []benchmark.QREL{{QueryID: "query-1", EvidenceID: "event-1", Grade: 2}},
+		}
+	}
+	bundle := benchmark.TaskSeriesSourceBundle{Manifest: manifest, Corpora: corpora}
+	encoded, err := json.Marshal(bundle)
+	if err != nil {
+		t.Fatal(err)
+	}
+	path := filepath.Join(t.TempDir(), "task-series.json")
+	if err := os.WriteFile(path, encoded, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	var stdout, stderr bytes.Buffer
+	if err := runBenchmark([]string{"lock-task-series", "--source", path}, &stdout, &stderr); err != nil {
+		t.Fatal(err)
+	}
+	var locks map[string]string
+	if err := json.Unmarshal(stdout.Bytes(), &locks); err != nil {
+		t.Fatal(err)
+	}
+	if len(locks["qrels_checksum"]) != 64 || len(locks["source_checksum"]) != 64 {
+		t.Fatalf("incomplete task-series locks: %s", stdout.String())
 	}
 }
 

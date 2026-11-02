@@ -81,45 +81,55 @@ func RunLoCoMoPostgresSmoke(ctx context.Context, dsn string, baseScope memory.Sc
 // runtime/input identifiers; callers may serialize the returned value as a
 // completion artifact without exposing corpus content or a DSN.
 func RunPostgresCorpus(ctx context.Context, dsn string, manifest DatasetManifest, corpus NormalizedCorpus, run BenchmarkRunScope, syntheticFixture bool) (PostgresSmokeRunResult, error) {
+	result, _, err := RunPostgresCorpusDetailed(ctx, dsn, manifest, corpus, run, syntheticFixture)
+	return result, err
+}
+
+// RunPostgresCorpusDetailed is the internal benchmark path that also returns
+// replay candidates for composing aggregate evaluations without serializing IDs.
+func RunPostgresCorpusDetailed(ctx context.Context, dsn string, manifest DatasetManifest, corpus NormalizedCorpus, run BenchmarkRunScope, syntheticFixture bool) (PostgresSmokeRunResult, retrieval.EvaluationReplay, error) {
 	if err := manifest.Validate(); err != nil {
-		return PostgresSmokeRunResult{}, &StatusError{Status: StatusInvalidManifest, Message: "validate dataset manifest", Cause: err}
+		return PostgresSmokeRunResult{}, retrieval.EvaluationReplay{}, &StatusError{Status: StatusInvalidManifest, Message: "validate dataset manifest", Cause: err}
 	}
 	if err := corpus.Validate(); err != nil {
-		return PostgresSmokeRunResult{}, &StatusError{Status: StatusInvalidManifest, Message: "validate normalized corpus", Cause: err}
+		return PostgresSmokeRunResult{}, retrieval.EvaluationReplay{}, &StatusError{Status: StatusInvalidManifest, Message: "validate normalized corpus", Cause: err}
 	}
 	if err := run.Scope.Validate(); err != nil {
-		return PostgresSmokeRunResult{}, fmt.Errorf("validate benchmark run scope: %w", err)
+		return PostgresSmokeRunResult{}, retrieval.EvaluationReplay{}, fmt.Errorf("validate benchmark run scope: %w", err)
 	}
 	normalizedChecksum, err := corpus.Checksum()
 	if err != nil {
-		return PostgresSmokeRunResult{}, err
+		return PostgresSmokeRunResult{}, retrieval.EvaluationReplay{}, err
 	}
 	qrels, err := json.Marshal(corpus.Canonical().QRELs)
 	if err != nil {
-		return PostgresSmokeRunResult{}, fmt.Errorf("marshal benchmark qrels: %w", err)
+		return PostgresSmokeRunResult{}, retrieval.EvaluationReplay{}, fmt.Errorf("marshal benchmark qrels: %w", err)
 	}
 	qrelChecksum := checksumBytes(qrels)
 	manifestBytes, err := json.Marshal(manifest)
 	if err != nil {
-		return PostgresSmokeRunResult{}, fmt.Errorf("marshal dataset manifest: %w", err)
+		return PostgresSmokeRunResult{}, retrieval.EvaluationReplay{}, fmt.Errorf("marshal dataset manifest: %w", err)
 	}
 	manifestChecksum := checksumBytes(manifestBytes)
 	retrievalCorpus, err := partitionCorpusForRetrieval(corpus, run.Scope)
 	if err != nil {
-		return PostgresSmokeRunResult{}, err
+		return PostgresSmokeRunResult{}, retrieval.EvaluationReplay{}, err
 	}
 	retrievalCorpus = filterNonRetrievalQueries(retrievalCorpus)
+	if err := postgres.NewMigrationRunner().Apply(ctx, dsn); err != nil {
+		return PostgresSmokeRunResult{}, retrieval.EvaluationReplay{}, fmt.Errorf("apply benchmark database migrations: %w", err)
+	}
 	pool, err := postgres.OpenPool(ctx, dsn)
 	if err != nil {
-		return PostgresSmokeRunResult{}, err
+		return PostgresSmokeRunResult{}, retrieval.EvaluationReplay{}, err
 	}
 	defer pool.Close()
 	if err := postgres.BootstrapDatabase(ctx, pool); err != nil {
-		return PostgresSmokeRunResult{}, err
+		return PostgresSmokeRunResult{}, retrieval.EvaluationReplay{}, err
 	}
 	runtime, err := postgresRuntimeIdentity(ctx, pool)
 	if err != nil {
-		return PostgresSmokeRunResult{}, err
+		return PostgresSmokeRunResult{}, retrieval.EvaluationReplay{}, err
 	}
 	draftMappings := make(map[string]RetrievalEvidenceMapping, len(retrievalCorpus.Events))
 	for _, event := range retrievalCorpus.Events {
@@ -128,15 +138,20 @@ func RunPostgresCorpus(ctx context.Context, dsn string, manifest DatasetManifest
 	metadata := defaultRetrievalMetadata(manifest, run.ID)
 	draft, err := BuildRetrievalEvaluationFixture(retrievalCorpus, draftMappings, metadata)
 	if err != nil {
-		return PostgresSmokeRunResult{}, err
+		return PostgresSmokeRunResult{}, retrieval.EvaluationReplay{}, err
 	}
 	repo := postgres.NewRepository(pool)
 	seeder := postgres.NewEvaluationFixtureSeeder(repo)
 	seed, err := seeder.SeedBatch(ctx, draft.Fixture, 1000)
 	if err != nil {
-		return PostgresSmokeRunResult{}, err
+		return PostgresSmokeRunResult{}, retrieval.EvaluationReplay{}, err
 	}
-	defer seeder.Cleanup(context.Background(), seed)
+	cleanupPending := true
+	defer func() {
+		if cleanupPending {
+			_ = seeder.Cleanup(context.Background(), seed)
+		}
+	}()
 	mappings := make(map[string]RetrievalEvidenceMapping, len(retrievalCorpus.Events))
 	for _, item := range seed.Aliases {
 		if _, exists := mappings[item.Alias]; !exists {
@@ -145,22 +160,26 @@ func RunPostgresCorpus(ctx context.Context, dsn string, manifest DatasetManifest
 	}
 	prepared, err := BuildRetrievalEvaluationFixture(retrievalCorpus, mappings, metadata)
 	if err != nil {
-		return PostgresSmokeRunResult{}, err
+		return PostgresSmokeRunResult{}, retrieval.EvaluationReplay{}, err
 	}
-	searcher := retrieval.NewService(retrieval.ServiceDependencies{Lexical: repo, Semantic: repo, Relations: repo})
+	searcher := retrieval.NewService(retrieval.ServiceDependencies{Lexical: repo, Semantic: repo, Relations: repo, Citations: repo})
 	replay, err := retrieval.NewEvaluationRunner(searcher).Replay(ctx, prepared.Fixture, prepared.Seed, prepared.Metadata)
 	if err != nil {
-		return PostgresSmokeRunResult{}, err
+		return PostgresSmokeRunResult{}, retrieval.EvaluationReplay{}, err
 	}
 	report, err := retrieval.CalculateEvaluationMetrics(replay)
 	if err != nil {
-		return PostgresSmokeRunResult{}, err
+		return PostgresSmokeRunResult{}, retrieval.EvaluationReplay{}, err
 	}
+	if err := seeder.Cleanup(context.Background(), seed); err != nil {
+		return PostgresSmokeRunResult{}, retrieval.EvaluationReplay{}, fmt.Errorf("cleanup benchmark evaluation fixture: %w", err)
+	}
+	cleanupPending = false
 	family := BenchmarkFamily(manifest.Family)
 	if family == "" {
 		family = FamilyMemory
 	}
-	return PostgresSmokeRunResult{Status: StatusSuccess, Dataset: manifest.Name, Version: manifest.Version, Family: family, RunID: run.ID, ManifestChecksum: manifestChecksum, Strategy: StrategyProfileLexical, SyntheticFixture: syntheticFixture, Runtime: runtime, Scope: run.Scope, RetrievalReport: report, NormalizedChecksum: normalizedChecksum, QRELChecksum: qrelChecksum, SafetyOutcomes: map[string]any{"scope_isolation": "pass", "lifecycle_exclusion": "pass", "synthetic_fixture": syntheticFixture}, Errors: []string{}}, nil
+	return PostgresSmokeRunResult{Status: StatusSuccess, Dataset: manifest.Name, Version: manifest.Version, Family: family, RunID: run.ID, ManifestChecksum: manifestChecksum, Strategy: StrategyProfileLexical, SyntheticFixture: syntheticFixture, Runtime: runtime, Scope: run.Scope, RetrievalReport: report, NormalizedChecksum: normalizedChecksum, QRELChecksum: qrelChecksum, SafetyOutcomes: map[string]any{"scope_isolation": "pass", "lifecycle_exclusion": "pass", "synthetic_fixture": syntheticFixture}, Errors: []string{}}, replay, nil
 }
 
 func filterNonRetrievalQueries(corpus NormalizedCorpus) NormalizedCorpus {

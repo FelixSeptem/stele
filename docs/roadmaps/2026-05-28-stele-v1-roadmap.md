@@ -1768,17 +1768,16 @@ scoped P8.1 MCP adapter):
     active summaries. Riverqueue executes only memory-intent work with
     transactional admission, retry, completion, and legacy handoff; PostgreSQL
     remains authoritative.
-11. MemOS-informed longitudinal agent-task memory evaluation (research
-    complete; OpenSpec proposal candidate): define reproducible task-series
-    fixtures that compare memory usefulness, stale/noisy-memory harm,
-    provenance coverage, and safety across repeated external task outcomes.
-    The industry benchmark review identified LongMemEval, BFCL V4 memory, and
-    DolphinBench as complementary tracks, with LoCoMo retained as a fast
-    baseline. The harness may ingest externally judged outcomes but must not
-    execute agents, generate answers, or make Stele the task-success authority.
-    Reuse task-success evidence, benchmark manifests, qrels, and safety gates;
-    scope the implementation proposal only after dataset terms and run contracts
-    are verified.
+11. MemOS-informed longitudinal agent-task memory evaluation (implemented,
+    verified, and archived as [change 078](../../openspec/changes/archive/078-longitudinal-agent-task-memory-evaluation/proposal.md)): define reproducible task-series fixtures that compare memory
+    usefulness, stale/noisy-memory harm, provenance coverage, and safety across
+    repeated external task outcomes. The industry benchmark review retains
+    LongMemEval, BFCL V4 memory, and DolphinBench as complementary tracks, with
+    LoCoMo as a fast baseline. The harness may ingest externally judged outcomes
+    but must not execute agents, generate answers, or make Stele the
+    task-success authority. Reuse task-success evidence, benchmark manifests,
+    qrels, and safety gates; any future adapter still requires verified dataset
+    terms and run contracts.
 
 The eight original reference follow-up tracks above are archived baselines.
 PC2 (change 070) is archived; PC3 is implemented, verified, and archived as
@@ -1786,12 +1785,14 @@ change 071, PC4 is implemented and archived as change 045, PC5 is implemented,
 verified, and archived as change 072, and PC6 below is implemented, verified,
 and archived as change 073. An archived track is reopened only for an
 identified contract or regression gap.
-MemOS-informed item 9 is implemented and awaiting archive sequencing. Item 10
-is implemented, verified, and archived as change 077. Item 11's benchmark
-research is complete and documented above; the resulting portfolio is a
-proposal candidate, not approved implementation work. A separate OpenSpec
-proposal must still define concrete dataset locks, measurable acceptance
-signals, ownership boundaries, and release-gate treatment before implementation.
+MemOS-informed item 9 is implemented, verified, and archived as change 076;
+item 10 is implemented, verified, and archived as change 077. Item 11 is
+implemented, verified, and archived as [change 078](../../openspec/changes/archive/078-longitudinal-agent-task-memory-evaluation/verification.md):
+its checksum-locked, non-synthetic DolphinBench-derived source passed the fresh
+PostgreSQL 18.6 + pgvector 0.8.6 real-stack acceptance run with 20 stages per
+condition, complete provenance coverage, separate observational quality/safety
+verdicts, and zero seeded-record residue after cleanup. The bounded report is
+retained at [`docs/evidence/longitudinal-dolphinbench-v81cb6f-live.json`](../evidence/longitudinal-dolphinbench-v81cb6f-live.json).
 
 ## Provider Context And Runtime Integration Proposals (2026-10-16)
 
