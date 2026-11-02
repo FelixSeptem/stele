@@ -35,9 +35,10 @@ type MemoryIntentGovernanceRouter interface {
 }
 
 type MemoryIntentWorker struct {
-	Router    MemoryIntentGovernanceRouter
-	Validator MemoryIntentTargetValidator
-	Now       func() time.Time
+	Router              MemoryIntentGovernanceRouter
+	Validator           MemoryIntentTargetValidator
+	CorrectionValidator MemoryIntentCorrectionValidator
+	Now                 func() time.Time
 }
 
 type MemoryIntentOutcomeRecorder interface {
@@ -97,6 +98,14 @@ func (w MemoryIntentWorker) Process(ctx context.Context, record MemoryIntentReco
 	}
 	if w.Router == nil {
 		return MemoryIntentOutcome{}, fmt.Errorf("memory intent governance router is not configured")
+	}
+	if record.Correction != nil {
+		if w.CorrectionValidator == nil {
+			return MemoryIntentOutcome{Status: MemoryIntentStatusSuppressed, DiagnosticCategory: MemoryIntentDiagnosticEvidenceIncomplete, OutcomeReference: record.ID}, nil
+		}
+		if err := w.CorrectionValidator.ValidateMemoryIntentCorrection(ctx, record); err != nil {
+			return MemoryIntentOutcome{Status: MemoryIntentStatusSuppressed, DiagnosticCategory: MemoryIntentDiagnosticEvidenceIncomplete, OutcomeReference: record.ID}, nil
+		}
 	}
 	if w.Validator != nil && record.Type != MemoryIntentRemember {
 		input := MemoryIntentInput{Scope: record.Scope, MemoryPath: record.MemoryPath, Type: record.Type, TargetMemoryID: record.TargetMemoryID, TargetVersion: record.TargetVersion, Content: record.Content, Actor: record.Actor, Reason: record.Reason, Provenance: record.Provenance, RequestID: record.RequestID, OperationID: record.OperationID, IdempotencyKey: record.IdempotencyKey, TargetInsightID: record.TargetInsightID, Evidence: record.Evidence}

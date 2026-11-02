@@ -126,6 +126,19 @@ task completion. Choose the access path from the configured principal role.
    Recheck current references; missing/foreign/hidden attribution is unavailable
    without identities. Never substitute generic turn/outcome input for PC6.
 
+   To convert a corrected projection into an authorized memory update, separately
+   require `corrections.enabled=true` and
+   `provider-correction-governed-version-v1`. Use only
+   `POST /v1/provider/corrections` with the corrected projection ID, exact target
+   memory/version, bounded replacement content, reason, and stable idempotency
+   key. Stele resolves binding, source revision and PC5 lineage; do not infer or
+   submit role, scope, grant, or correction association yourself. The 202
+   response is only an accepted/replayed intent receipt, not promotion or task
+   completion. If unsupported, unavailable, stale or conflicting, stop and
+   report a bounded outcome: never fall back to generic evidence, direct SQL,
+   local correction storage, or direct canonical mutation. See the
+   [correction update contract](../../docs/agent-runtime-memory-provider.md#governed-correction-updates).
+
 Public credentials are denied on Provider retrieve/sync/forget, native data
 reads/lifecycle and all MCP data tools, including `who_am_i`. Stop on that denial;
 do not switch transport, credentials, scope or write path to bypass it.

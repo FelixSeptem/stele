@@ -4523,11 +4523,12 @@ components:
     ProviderCapabilityDocument:
       type: object
       additionalProperties: false
-      required: [context_digest, context_continuity, context_turn_binding, durable_references, projections, provider_version, schema_version, operations, scope_dimensions, limits, synchronization, schema_digest, disclosure_policy_version, source_metadata_version, response_modes, disclosure_profiles, context_budget_version, context_packing_policy_version, token_budget_supported]
+      required: [context_digest, context_continuity, context_turn_binding, corrections, durable_references, projections, provider_version, schema_version, operations, scope_dimensions, limits, synchronization, schema_digest, disclosure_policy_version, source_metadata_version, response_modes, disclosure_profiles, context_budget_version, context_packing_policy_version, token_budget_supported]
       properties:
         context_digest: {$ref: '#/components/schemas/ProviderContextDigestCapabilities'}
         context_continuity: {$ref: '#/components/schemas/ProviderContextContinuityCapabilities'}
         context_turn_binding: {$ref: '#/components/schemas/ProviderContextTurnBindingCapabilities'}
+        corrections: {$ref: '#/components/schemas/ProviderCorrectionCapabilities'}
         durable_references: {$ref: '#/components/schemas/ProviderDurableReferenceCapabilities'}
         projections: {$ref: '#/components/schemas/ProviderProjectionCapabilities'}
         context_budget_version: {type: string, enum: [context-budget-v1]}
@@ -5301,7 +5302,16 @@ components:
         target_insight_id: {type: string}
         request_fingerprint: {type: string}
         evidence: {type: array, items: {$ref: '#/components/schemas/MemoryIntentEvidence'}}
+        correction_attribution: {$ref: '#/components/schemas/MemoryIntentCorrectionAttribution'}
         created_at: {type: string, format: date-time}
+    MemoryIntentCorrectionAttribution:
+      type: object
+      additionalProperties: false
+      required: [projection_id, source_revision, state]
+      properties:
+        projection_id: {type: string, format: uuid}
+        source_revision: {type: integer, minimum: 2}
+        state: {type: string, enum: [verified]}
     MemoryIntentEvidence:
       type: object
       required: [scope, kind, id]
@@ -9338,6 +9348,7 @@ components:
 `
 	spec = strings.Replace(spec, "components:\n", disclosurePaths+"components:\n", 1)
 	spec = strings.Replace(spec, "  /v1/memory-intents:\n", memoryRepositoryPaths+"  /v1/memory-intents:\n", 1)
+	spec = strings.Replace(spec, "  /v1/provider/intents:\n", providerCorrectionPaths+"  /v1/provider/intents:\n", 1)
 	spec = strings.Replace(spec, "  /v1/provider/context:\n", providerReferencePaths+providerProjectionPaths()+"  /v1/provider/context:\n", 1)
-	return strings.Replace(spec+memoryRepositorySchemas+providerContextSchemas+providerReferenceSchemas+providerProjectionSchemas+disclosureSchemas, "  /mcp:\n", "  "+mcpPath+":\n", 1)
+	return strings.Replace(spec+memoryRepositorySchemas+providerContextSchemas+providerReferenceSchemas+providerProjectionSchemas+providerCorrectionSchemas+disclosureSchemas, "  /mcp:\n", "  "+mcpPath+":\n", 1)
 }

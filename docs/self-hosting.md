@@ -2628,7 +2628,10 @@ reason, request identity, and idempotency key. `contradiction` carries at least
 two in-scope evidence references; `feedback` names an existing insight target.
 
 Submission persists an immutable request and hands only its stable reference to
-the PostgreSQL durable work queue. It does not mutate canonical memory inline.
+Riverqueue in its dedicated PostgreSQL schema. It does not mutate canonical
+memory inline. Intent admission and enqueue are atomic; worker governance
+effects, transition history, and job completion commit together. Other
+derived-work kinds remain on their existing queue.
 Equivalent retries return the original request identity; a different normalized
 payload under the same scoped idempotency key is rejected as a conflict.
 
@@ -2648,6 +2651,15 @@ intent persistence; a worker with the same policy disabled leaves already
 queued work inspectable for retry. Re-enable with the same exact scope and
 compatible version to resume `accepted` or `pending` work. Policy changes do
 not delete intent rows, transitions, queue history, or canonical versions.
+
+Provider correction updates are separately negotiated through
+`provider-correction-governed-version-v1`; keep the capability disabled until
+fresh PostgreSQL + pgvector correction-to-successor, denial, replay, restart,
+River retry, and legacy handoff evidence is complete. PostgreSQL migration
+`0043` records River job linkage, while River's own migrations live in the
+`stele_river` schema. `auto` applies both migration sets; `validate` and `off`
+require both ledgers to match the pinned versions. Preserve the schema and
+accepted intent history when disabling the capability or rolling back code.
 
 The SDK contract tests run without external agents. The durable review-manifest
 test and the complete real-stack conformance matrix can additionally run only

@@ -14,6 +14,30 @@ func TestMemoryIntentWorkerRejectsStaleTargetWithoutRouting(t *testing.T) {
 	}
 }
 
+func TestMemoryIntentWorkerSuppressesStaleCorrectionWithoutRouting(t *testing.T) {
+	router := &intentRouterStub{}
+	record := workerRecord(MemoryIntentUpdate)
+	record.Correction = &CorrectionAttribution{ProjectionID: "11111111-1111-4111-8111-111111111111", SourceRevision: 2, BindingID: "binding", PrincipalID: "principal"}
+	worker := MemoryIntentWorker{Router: router, CorrectionValidator: correctionRejectingStub{}}
+	out, err := worker.Process(context.Background(), record)
+	if err != nil || out.Status != MemoryIntentStatusSuppressed || out.DiagnosticCategory != MemoryIntentDiagnosticEvidenceIncomplete || router.calls != 0 {
+		t.Fatalf("outcome=%+v err=%v calls=%d", out, err, router.calls)
+	}
+}
+
+func TestMemoryIntentWorkerSuppressesCorrectionWhenValidatorIsNotConfigured(t *testing.T) {
+	router := &intentRouterStub{}
+	record := workerRecord(MemoryIntentUpdate)
+	record.Correction = &CorrectionAttribution{ProjectionID: "11111111-1111-4111-8111-111111111111", SourceRevision: 2, BindingID: "binding", PrincipalID: "principal", State: "verified"}
+	out, err := (MemoryIntentWorker{Router: router}).Process(context.Background(), record)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if out.Status != MemoryIntentStatusSuppressed || out.DiagnosticCategory != MemoryIntentDiagnosticEvidenceIncomplete || router.calls != 0 {
+		t.Fatalf("missing correction validator was not fail-closed: outcome=%+v routed=%d", out, router.calls)
+	}
+}
+
 func TestMemoryIntentWorkerKeepsContradictionAndFeedbackOutOfActiveLifecycle(t *testing.T) {
 	for _, typ := range []MemoryIntentType{MemoryIntentContradiction, MemoryIntentFeedback} {
 		router := &intentRouterStub{active: true}
@@ -115,6 +139,12 @@ func workerRecord(typ MemoryIntentType) MemoryIntentRecord {
 type intentTargetRejectingStub struct{}
 
 func (intentTargetRejectingStub) ValidateMemoryIntentTarget(context.Context, MemoryIntentInput) error {
+	return context.Canceled
+}
+
+type correctionRejectingStub struct{}
+
+func (correctionRejectingStub) ValidateMemoryIntentCorrection(context.Context, MemoryIntentRecord) error {
 	return context.Canceled
 }
 

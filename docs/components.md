@@ -29,6 +29,9 @@ retained, with fixture identity protected by a scoped unique key.
   append-only history, leases, and scope predicates.
 - `internal/memory`: memory classes, canonical versions, intents, sessions,
   lifecycle inputs, validation, and service-level contracts.
+- `internal/jobs`: River worker adapter for governed memory intents; it carries
+  intent IDs only and keeps transaction ownership inside the PostgreSQL
+  repository boundary. Other derived-work kinds remain on the existing worker.
 - `internal/policy`: forgetting and retention policy decisions.
 - `internal/governance`: raw-event governance, claims, recovery, and audit.
 
@@ -104,8 +107,10 @@ separate; [maintenance details](provider-evidence-projections.md) cover their
 versioning, bounds and recovery.
 
 The provider adapter composes existing event, intent, retrieval, context,
-lifecycle, and status services. The synchronization contract adds bounded
-initial snapshots, ordered replay, cursor acknowledgment, and explicit
+lifecycle, and status services. Correction updates add an opt-in,
+server-attributed path from a corrected projection into an ordinary governed
+update intent; they do not create a direct canonical write. The synchronization
+contract adds bounded initial snapshots, ordered replay, cursor acknowledgment, and explicit
 `resync_required` recovery. It does not create a client-owned memory store.
 
 See [agent runtime provider](agent-runtime-memory-provider.md) and the

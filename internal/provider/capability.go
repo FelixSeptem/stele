@@ -225,6 +225,7 @@ type ContextTurnBindingCapabilities struct {
 	CanonicalizationVersion string `json:"canonicalization_version"`
 }
 type CapabilityDocument struct {
+	Corrections                 CorrectionCapabilities         `json:"corrections"`
 	Projections                 ProjectionCapabilities         `json:"projections"`
 	DurableReferences           DurableReferenceCapabilities   `json:"durable_references"`
 	ContextDigest               ContextDigestCapabilities      `json:"context_digest"`
@@ -249,6 +250,9 @@ type CapabilityDocument struct {
 }
 
 func (d CapabilityDocument) Validate() error {
+	if err := d.Corrections.Validate(); err != nil {
+		return err
+	}
 	if d.ContextDigest != (ContextDigestCapabilities{ContextDigestVersion, "sha-256", ContextCanonicalVersion, ContextSelectionVersion}) || d.ContextContinuity.ContractVersion != ContextContinuityVersion || d.ContextContinuity.MaxReferenceBytes != 37 || d.ContextContinuity.TTLSeconds < 60 || d.ContextContinuity.TTLSeconds > 604800 || d.ContextContinuity.ExactSnapshotReplay || d.ContextContinuity.ContextWatermark || d.ContextContinuity.Enabled != d.ContextContinuity.FreshCompare {
 		return fmt.Errorf("unsupported context identity capabilities")
 	}
@@ -298,6 +302,7 @@ func Discover(in CapabilityInput) CapabilityDocument {
 	}
 	d.DurableReferences = DurableReferenceCapability(false)
 	d.Projections = ProjectionCapability(false)
+	d.Corrections = CorrectionCapability(false)
 	if strings.TrimSpace(d.SchemaVersion) == "" {
 		d.SchemaVersion = "schema-v1"
 	}

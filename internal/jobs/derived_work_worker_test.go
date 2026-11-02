@@ -2,11 +2,14 @@ package jobs
 
 import (
 	"context"
+	"errors"
 	"testing"
 	"time"
 
 	"github.com/FelixSeptem/stele/internal/memory"
 	"github.com/FelixSeptem/stele/internal/workqueue"
+	"github.com/riverqueue/river"
+	"github.com/riverqueue/river/rivertype"
 )
 
 type derivedWorkStoreStub struct {
@@ -57,6 +60,44 @@ func TestDerivedWorkWorkerUsesCommonCheckpointAndCompletionPath(t *testing.T) {
 	}
 	if len(store.checkpoints) != 1 || len(store.completed) != 1 || store.completed[0].EvidenceReference != "evidence-1" {
 		t.Fatalf("checkpoint=%+v completed=%+v", store.checkpoints, store.completed)
+	}
+}
+
+func TestDerivedWorkWorkerRefusesMemoryIntentKindAfterRiverCutover(t *testing.T) {
+	scope := memory.Scope{Tenant: "t", Project: "p", Namespace: "n"}
+	kind := workqueue.WorkKindMemoryIntent
+	store := &derivedWorkStoreStub{}
+	worker := DerivedWorkWorker{Store: store, Executor: derivedWorkExecutorStub{}, Scope: scope, WorkerID: "worker", Kind: &kind}
+	if processed, err := worker.RunOnce(context.Background()); err == nil || processed != 0 {
+		t.Fatalf("RunOnce() = %d, %v; want memory-intent kind rejected", processed, err)
+	}
+	if len(store.completed) != 0 || len(store.retries) != 0 || len(store.checkpoints) != 0 {
+		t.Fatalf("legacy worker touched memory-intent state: %+v", store)
+	}
+}
+
+type memoryIntentJobStoreStub struct {
+	jobID  int64
+	intent memory.MemoryIntentRecord
+	called bool
+}
+
+func (s *memoryIntentJobStoreStub) ExecuteMemoryIntentJob(ctx context.Context, job *river.Job[MemoryIntentJobArgs], execute func(context.Context, memory.MemoryIntentRecord) error) error {
+	s.called = true
+	s.jobID = job.ID
+	return execute(ctx, s.intent)
+}
+
+func TestRiverMemoryIntentWorkerReturnsExecutionFailureForRiverRetry(t *testing.T) {
+	store := &memoryIntentJobStoreStub{intent: memory.MemoryIntentRecord{ID: "intent-1"}}
+	wantErr := context.DeadlineExceeded
+	worker := RiverMemoryIntentWorker{Store: store, Execute: func(context.Context, memory.MemoryIntentRecord) error { return wantErr }}
+	job := &river.Job[MemoryIntentJobArgs]{JobRow: &rivertype.JobRow{ID: 42}, Args: MemoryIntentJobArgs{IntentID: "intent-1"}}
+	if err := worker.Work(context.Background(), job); !errors.Is(err, wantErr) {
+		t.Fatalf("Work() error = %v, want %v", err, wantErr)
+	}
+	if !store.called || store.jobID != 42 {
+		t.Fatalf("store execution = called %t job %d, want River job 42", store.called, store.jobID)
 	}
 }
 

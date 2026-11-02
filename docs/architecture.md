@@ -148,6 +148,13 @@ PostgreSQL is the only system of record. The principal persistence layers are:
 - embeddings and retrieval projections;
 - durable intent, job, lease, retention, and assurance records.
 
+Governed memory intents use Riverqueue in a dedicated PostgreSQL schema for
+durable scheduling and retry. The intent ledger remains authoritative and the
+River payload contains only the intent ID. Intent admission and job insertion
+share one transaction; worker governance effects, intent history, and River job
+completion share another. Other derived-work kinds remain on their existing
+queue during this bounded cutover.
+
 pgvector is an indexed retrieval capability, not a second source of truth.
 PostgreSQL full-text search remains available for lexical-only deployments.
 

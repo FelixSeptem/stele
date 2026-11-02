@@ -36,7 +36,7 @@ func TestProjectionPostgresTransactions(t *testing.T) {
 		t.Fatal(err)
 	}
 	status, err := NewMigrationRunner().Status(ctx, dsn)
-	if err != nil || status.Dirty || status.CurrentVersion != 37 {
+	if err != nil || status.Dirty || status.CurrentVersion != CurrentMigrationVersion {
 		t.Fatalf("migration not clean: %+v %v", status, err)
 	}
 	b := provider.RuntimeBinding{BindingID: "pc6_binding", PrincipalID: "pc6_principal", Scope: memory.Scope{Tenant: "t", Project: "p", Namespace: "n"}, AgentID: "a", SessionID: "s", ConversationID: "c", ProviderInstanceID: "pi", CreatedAt: time.Now().UTC(), ExpiresAt: time.Now().UTC().Add(time.Hour)}

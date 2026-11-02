@@ -9,6 +9,8 @@ import (
 	"sort"
 	"strings"
 	"time"
+
+	"github.com/google/uuid"
 )
 
 const (
@@ -23,6 +25,66 @@ type MemoryIntentEvidence struct {
 	Kind    string `json:"kind"`
 	ID      string `json:"id"`
 	Version int64  `json:"version,omitempty"`
+}
+
+// CorrectionAttribution is created only after the Provider correction resolver
+// verifies a current corrected projection against the authenticated runtime
+// binding. It is deliberately not a field on MemoryIntentInput, so generic
+// callers cannot claim correction authority through ordinary intent evidence.
+type CorrectionAttribution struct {
+	ProjectionID   string `json:"projection_id"`
+	SourceRevision int64  `json:"source_revision"`
+	BindingID      string `json:"-"`
+	PrincipalID    string `json:"-"`
+	State          string `json:"state"`
+}
+
+func (a CorrectionAttribution) Validate() error {
+	if parsed, err := uuid.Parse(strings.TrimSpace(a.ProjectionID)); err != nil || parsed == uuid.Nil {
+		return fmt.Errorf("correction projection identity is required")
+	}
+	if a.SourceRevision <= 1 {
+		return fmt.Errorf("correction source revision must be greater than one")
+	}
+	if !boundedCorrectionIdentity(a.BindingID) || !boundedCorrectionIdentity(a.PrincipalID) {
+		return fmt.Errorf("correction binding and principal identities are required and bounded")
+	}
+	return nil
+}
+
+func boundedCorrectionIdentity(value string) bool {
+	value = strings.TrimSpace(value)
+	return value != "" && len(value) <= MemoryIntentMaxEvidenceRef
+}
+
+// CorrectionIntentFingerprint returns a distinct replay key for a normal
+// governed update plus its server-verified correction source. It intentionally
+// builds on the ordinary canonical intent fingerprint so every existing scope,
+// target, content, reason, request, operation, and idempotency component stays
+// in the calculation.
+func CorrectionIntentFingerprint(input MemoryIntentInput, attribution CorrectionAttribution, policyVersion string) (string, error) {
+	policyVersion = strings.TrimSpace(policyVersion)
+	if err := attribution.Validate(); err != nil {
+		return "", err
+	}
+	if policyVersion == "" || len(policyVersion) > 128 {
+		return "", fmt.Errorf("correction policy version is required and bounded")
+	}
+	base, err := input.CanonicalFingerprint()
+	if err != nil {
+		return "", err
+	}
+	payload := struct {
+		IntentFingerprint string                `json:"intent_fingerprint"`
+		Correction        CorrectionAttribution `json:"correction"`
+		PolicyVersion     string                `json:"policy_version"`
+	}{IntentFingerprint: base, Correction: attribution, PolicyVersion: policyVersion}
+	b, err := json.Marshal(payload)
+	if err != nil {
+		return "", fmt.Errorf("marshal correction intent fingerprint: %w", err)
+	}
+	digest := sha256.Sum256(b)
+	return hex.EncodeToString(digest[:]), nil
 }
 
 func (e MemoryIntentEvidence) Validate(scope Scope) error {

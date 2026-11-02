@@ -50,6 +50,7 @@ type HTTPDependencies struct {
 	PrincipalAdmin              PrincipalAdministrationService
 	EventIngestor               memory.EventIngestor
 	MemoryIntent                MemoryIntentAPI
+	MemoryIntentPolicy          memory.MemoryIntentPolicyGate
 	MemoryIntentRead            MemoryIntentReader
 	MemoryRepository            MemoryRepositoryAPI
 	ReflectionReviewAdmin       ReflectionReviewAPI
@@ -93,6 +94,7 @@ type HTTPDependencies struct {
 	ProviderReferences          provider.ReferenceStore
 	ProviderReadObserver        ProviderReadObserver
 	ProviderProjections         provider.ProjectionStore
+	ProviderCorrections         provider.CorrectionResolver
 	ProviderSynchronizer        *provider.Synchronizer
 	ProviderSchemaVersions      []string
 	ProviderContextReceipts     provider.ContextReceiptStore

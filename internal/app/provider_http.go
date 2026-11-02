@@ -30,6 +30,10 @@ func registerProviderRoutes(mux *http.ServeMux, deps HTTPDependencies) {
 		doc.ContextTurnBinding.Enabled = deps.ProviderContextTurns != nil && deps.ProviderContextAttributions != nil
 		doc.DurableReferences = provider.DurableReferenceCapability(deps.ProviderReferences != nil && deps.ProviderAdapter != nil)
 		doc.Projections = provider.ProjectionCapability(deps.ProviderProjections != nil)
+		doc.Corrections = provider.CorrectionCapability(deps.ProviderCorrections != nil && deps.MemoryIntentPolicy != nil)
+		if doc.Corrections.Enabled {
+			doc.Operations = append(doc.Operations, provider.CorrectionOperationName)
+		}
 		if deps.ProviderContextContinuity.Validate() == nil {
 			doc.ContextContinuity.TTLSeconds = deps.ProviderContextContinuity.TTLSeconds
 		}
@@ -70,6 +74,7 @@ func registerProviderRoutes(mux *http.ServeMux, deps HTTPDependencies) {
 		registerProviderSyncRoute(mux, deps)
 	}
 	registerProviderProjectionRoutes(mux, deps)
+	registerProviderCorrectionRoutes(mux, deps)
 	if deps.ProviderAdapter != nil {
 		registerProviderOperationRoutes(mux, deps)
 		registerProviderReferenceRoutes(mux, deps)

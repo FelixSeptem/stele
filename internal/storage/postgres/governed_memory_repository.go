@@ -6,6 +6,7 @@ import (
 	"database/sql"
 	"encoding/hex"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"strings"
 	"time"
@@ -14,6 +15,7 @@ import (
 	"github.com/FelixSeptem/stele/internal/memory"
 	"github.com/FelixSeptem/stele/internal/workqueue"
 	"github.com/google/uuid"
+	"github.com/jackc/pgx/v5"
 )
 
 // AppendMemoryIntent persists one governed intent. Idempotency and operation
@@ -31,6 +33,7 @@ func (r *Repository) AppendMemoryIntent(ctx context.Context, record memory.Memor
 	if record.CreatedAt.IsZero() {
 		record.CreatedAt = time.Now().UTC()
 	}
+	db := r.queryer(ctx)
 	var pathErr error
 	record.MemoryPath, pathErr = memory.NormalizeMemoryPath(record.MemoryPath)
 	if pathErr != nil {
@@ -45,7 +48,7 @@ func (r *Repository) AppendMemoryIntent(ctx context.Context, record memory.Memor
 	}
 	if record.MemoryPath == memory.MemoryPathRoot && record.TargetInsightID == "" && len(record.Evidence) == 0 && record.PolicyVersion == "" && record.OutcomeReference == "" && record.PrecedenceVersion == "" && record.PrecedenceStage == "" && record.PrecedenceOutcome == "" {
 		const legacy = `INSERT INTO memory_intents (id,tenant,project,namespace,intent_type,actor,reason,provenance,request_id,operation_id,idempotency_key,request_fingerprint,target_memory_id,target_version,payload,status,created_at) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,NULLIF($13,''),NULLIF($14,0),$15,$16,$17) RETURNING id,tenant,project,namespace,intent_type,actor,reason,provenance,request_id,operation_id,idempotency_key,target_memory_id,target_version,payload,status,created_at`
-		row := r.db.QueryRow(ctx, legacy, record.ID, record.Scope.Tenant, record.Scope.Project, record.Scope.Namespace, record.Type, record.Actor, record.Reason, prov, record.RequestID, record.OperationID, record.IdempotencyKey, fp, record.TargetMemoryID, record.TargetVersion, payload, record.Status, record.CreatedAt)
+		row := db.QueryRow(ctx, legacy, record.ID, record.Scope.Tenant, record.Scope.Project, record.Scope.Namespace, record.Type, record.Actor, record.Reason, prov, record.RequestID, record.OperationID, record.IdempotencyKey, fp, record.TargetMemoryID, record.TargetVersion, payload, record.Status, record.CreatedAt)
 		created, err := scanMemoryIntentLegacy(row)
 		if err == nil {
 			created.MemoryPath = memory.MemoryPathRoot
@@ -53,7 +56,7 @@ func (r *Repository) AppendMemoryIntent(ctx context.Context, record memory.Memor
 			return created, nil
 		}
 		const existing = `SELECT request_fingerprint,id,tenant,project,namespace,intent_type,actor,reason,provenance,request_id,operation_id,idempotency_key,target_memory_id,target_version,payload,status,created_at FROM memory_intents WHERE tenant=$1 AND project=$2 AND namespace=$3 AND (idempotency_key=$4 OR operation_id=$5) ORDER BY created_at LIMIT 1`
-		existingRecord, existingFingerprint, lookupErr := scanMemoryIntentWithFingerprintLegacy(r.db.QueryRow(ctx, existing, record.Scope.Tenant, record.Scope.Project, record.Scope.Namespace, record.IdempotencyKey, record.OperationID))
+		existingRecord, existingFingerprint, lookupErr := scanMemoryIntentWithFingerprintLegacy(db.QueryRow(ctx, existing, record.Scope.Tenant, record.Scope.Project, record.Scope.Namespace, record.IdempotencyKey, record.OperationID))
 		if lookupErr != nil {
 			return memory.MemoryIntentRecord{}, fmt.Errorf("append memory intent: %w", err)
 		}
@@ -70,14 +73,14 @@ func (r *Repository) AppendMemoryIntent(ctx context.Context, record memory.Memor
 VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,NULLIF($14,''),NULLIF($15,0),NULLIF($16,''),$17,NULLIF($18,''),NULLIF($19,''),$20,$21,$22,$23,$24,$25)
 ON CONFLICT DO NOTHING
 RETURNING id,tenant,project,namespace,memory_path,intent_type,actor,reason,provenance,request_id,operation_id,idempotency_key,target_memory_id,target_version,target_insight_id,evidence_refs,outcome_reference,policy_version,precedence_version,precedence_stage,precedence_outcome,payload,status,created_at`
-	row := r.db.QueryRow(ctx, q, record.ID, record.Scope.Tenant, record.Scope.Project, record.Scope.Namespace, record.MemoryPath, record.Type, record.Actor, record.Reason, prov, record.RequestID, record.OperationID, record.IdempotencyKey, fp, record.TargetMemoryID, record.TargetVersion, record.TargetInsightID, evidenceRefs, record.OutcomeReference, record.PolicyVersion, record.PrecedenceVersion, record.PrecedenceStage, record.PrecedenceOutcome, payload, record.Status, record.CreatedAt)
+	row := db.QueryRow(ctx, q, record.ID, record.Scope.Tenant, record.Scope.Project, record.Scope.Namespace, record.MemoryPath, record.Type, record.Actor, record.Reason, prov, record.RequestID, record.OperationID, record.IdempotencyKey, fp, record.TargetMemoryID, record.TargetVersion, record.TargetInsightID, evidenceRefs, record.OutcomeReference, record.PolicyVersion, record.PrecedenceVersion, record.PrecedenceStage, record.PrecedenceOutcome, payload, record.Status, record.CreatedAt)
 	created, err := scanMemoryIntent(row)
 	if err == nil {
 		created.RequestFingerprint = fp
 		return created, nil
 	}
 	const existing = `SELECT request_fingerprint,id,tenant,project,namespace,memory_path,intent_type,actor,reason,provenance,request_id,operation_id,idempotency_key,target_memory_id,target_version,target_insight_id,evidence_refs,outcome_reference,policy_version,precedence_version,precedence_stage,precedence_outcome,payload,status,created_at FROM memory_intents WHERE tenant=$1 AND project=$2 AND namespace=$3 AND (idempotency_key=$4 OR operation_id=$5) ORDER BY created_at LIMIT 1`
-	existingRecord, existingFingerprint, lookupErr := scanMemoryIntentWithFingerprint(r.db.QueryRow(ctx, existing, record.Scope.Tenant, record.Scope.Project, record.Scope.Namespace, record.IdempotencyKey, record.OperationID))
+	existingRecord, existingFingerprint, lookupErr := scanMemoryIntentWithFingerprint(db.QueryRow(ctx, existing, record.Scope.Tenant, record.Scope.Project, record.Scope.Namespace, record.IdempotencyKey, record.OperationID))
 	if lookupErr != nil {
 		return memory.MemoryIntentRecord{}, fmt.Errorf("append memory intent: %w", err)
 	}
@@ -114,7 +117,7 @@ func (r *Repository) AppendMemoryIntentTransition(ctx context.Context, transitio
 		transition.ID = uuid.NewString()
 	}
 	const query = `INSERT INTO memory_intent_transitions (id,intent_id,tenant,project,namespace,sequence,from_status,to_status,actor,reason,diagnostic_category,work_reference,outcome_reference,occurred_at) VALUES ($1,$2,$3,$4,$5,$6,NULLIF($7,''),$8,$9,$10,$11,NULLIF($12,''),NULLIF($13,''),$14) ON CONFLICT (intent_id, sequence) DO NOTHING`
-	_, err := r.db.Exec(ctx, query, transition.ID, transition.IntentID, transition.Scope.Tenant, transition.Scope.Project, transition.Scope.Namespace, transition.Sequence, transition.From, transition.To, transition.Actor, transition.Reason, transition.DiagnosticCategory, transition.WorkReference, transition.OutcomeReference, transition.OccurredAt.UTC())
+	_, err := r.queryer(ctx).Exec(ctx, query, transition.ID, transition.IntentID, transition.Scope.Tenant, transition.Scope.Project, transition.Scope.Namespace, transition.Sequence, transition.From, transition.To, transition.Actor, transition.Reason, transition.DiagnosticCategory, transition.WorkReference, transition.OutcomeReference, transition.OccurredAt.UTC())
 	if err != nil {
 		return fmt.Errorf("append memory intent transition: %w", err)
 	}
@@ -127,7 +130,7 @@ func (r *Repository) ReadMemoryIntentHistory(ctx context.Context, scope memory.S
 		return memory.MemoryIntentHistory{}, err
 	}
 	const query = `SELECT id,intent_id,tenant,project,namespace,sequence,from_status,to_status,actor,reason,diagnostic_category,work_reference,outcome_reference,occurred_at FROM memory_intent_transitions WHERE intent_id::text=$1 AND tenant=$2 AND project=$3 AND namespace=$4 ORDER BY sequence ASC`
-	rows, err := r.db.Query(ctx, query, intentID, scope.Tenant, scope.Project, scope.Namespace)
+	rows, err := r.queryer(ctx).Query(ctx, query, intentID, scope.Tenant, scope.Project, scope.Namespace)
 	if err != nil {
 		return memory.MemoryIntentHistory{}, fmt.Errorf("read memory intent history: %w", err)
 	}
@@ -149,7 +152,13 @@ func (r *Repository) ListMemoryIntents(ctx context.Context, input memory.MemoryI
 	if err := input.Validate(); err != nil {
 		return nil, err
 	}
-	const query = `SELECT id,tenant,project,namespace,memory_path,intent_type,actor,reason,provenance,request_id,operation_id,idempotency_key,target_memory_id,target_version,target_insight_id,evidence_refs,outcome_reference,policy_version,precedence_version,precedence_stage,precedence_outcome,payload,status,created_at FROM memory_intents WHERE tenant=$1 AND project=$2 AND namespace=$3 AND ($4::timestamptz IS NULL OR created_at < $4) ORDER BY created_at DESC,id DESC LIMIT $5`
+	const query = `SELECT i.id,i.tenant,i.project,i.namespace,i.memory_path,i.intent_type,i.actor,i.reason,i.provenance,i.request_id,i.operation_id,i.idempotency_key,i.target_memory_id,i.target_version,i.target_insight_id,i.evidence_refs,i.outcome_reference,i.policy_version,i.precedence_version,i.precedence_stage,i.precedence_outcome,i.payload,i.status,i.created_at,
+	c.projection_id::text,c.source_revision,c.binding_id,c.principal_id,c.attribution_state
+FROM memory_intents i
+LEFT JOIN memory_intent_correction_attributions c
+ ON c.intent_id=i.id AND c.tenant=i.tenant AND c.project=i.project AND c.namespace=i.namespace
+WHERE i.tenant=$1 AND i.project=$2 AND i.namespace=$3 AND ($4::timestamptz IS NULL OR i.created_at < $4)
+ORDER BY i.created_at DESC,i.id DESC LIMIT $5`
 	var cursor any
 	if !input.Cursor.IsZero() {
 		cursor = input.Cursor.UTC()
@@ -158,19 +167,44 @@ func (r *Repository) ListMemoryIntents(ctx context.Context, input memory.MemoryI
 	if err != nil {
 		return nil, fmt.Errorf("list memory intents: %w", err)
 	}
-	defer rows.Close()
 	items := make([]memory.MemoryIntentRecord, 0, input.Limit)
 	for rows.Next() {
-		item, err := scanMemoryIntent(rows)
+		var projectionID, bindingID, principalID, attributionState *string
+		var sourceRevision *int64
+		item, err := scanMemoryIntent(correctionMemoryIntentScanner{rows: rows, correction: []any{&projectionID, &sourceRevision, &bindingID, &principalID, &attributionState}})
 		if err != nil {
+			rows.Close()
 			return nil, fmt.Errorf("scan memory intent: %w", err)
+		}
+		if projectionID != nil {
+			if sourceRevision == nil || bindingID == nil || principalID == nil || attributionState == nil {
+				rows.Close()
+				return nil, fmt.Errorf("incomplete correction attribution in scoped intent list")
+			}
+			attribution := memory.CorrectionAttribution{ProjectionID: *projectionID, SourceRevision: *sourceRevision, BindingID: *bindingID, PrincipalID: *principalID, State: *attributionState}
+			if err := attribution.Validate(); err != nil || attribution.State != "verified" {
+				rows.Close()
+				return nil, fmt.Errorf("invalid correction attribution in scoped intent list")
+			}
+			item.Correction = &attribution
 		}
 		items = append(items, item)
 	}
-	if err := rows.Err(); err != nil {
-		return nil, err
+	rowsErr := rows.Err()
+	rows.Close()
+	if rowsErr != nil {
+		return nil, rowsErr
 	}
 	return items, nil
+}
+
+type correctionMemoryIntentScanner struct {
+	rows       interface{ Scan(...any) error }
+	correction []any
+}
+
+func (s correctionMemoryIntentScanner) Scan(dest ...any) error {
+	return s.rows.Scan(append(dest, s.correction...)...)
 }
 
 func (r *Repository) AppendReflectionReview(ctx context.Context, record memory.ReflectionReviewRecord) (memory.ReflectionReviewRecord, error) {
@@ -222,7 +256,7 @@ WHERE cm.id::text = $1 AND cm.tenant = $2 AND cm.project = $3 AND cm.namespace =
 GROUP BY cm.state`
 	var state memory.MemoryState
 	var version int64
-	if err := r.db.QueryRow(ctx, query, input.TargetMemoryID, input.Scope.Tenant, input.Scope.Project, input.Scope.Namespace).Scan(&state, &version); err != nil {
+	if err := r.queryer(ctx).QueryRow(ctx, query, input.TargetMemoryID, input.Scope.Tenant, input.Scope.Project, input.Scope.Namespace).Scan(&state, &version); err != nil {
 		return fmt.Errorf("memory intent target not found: %w", err)
 	}
 	if state != memory.MemoryStateActive {
@@ -248,7 +282,30 @@ SELECT id, tenant, project, namespace, memory_path, intent_type, actor, reason, 
        policy_version, precedence_version, precedence_stage, precedence_outcome, payload, status, created_at
 FROM memory_intents
 WHERE id::text = $1 AND tenant = $2 AND project = $3 AND namespace = $4`
-	return scanMemoryIntent(r.db.QueryRow(ctx, query, intentID, scope.Tenant, scope.Project, scope.Namespace))
+	record, err := scanMemoryIntent(r.queryer(ctx).QueryRow(ctx, query, intentID, scope.Tenant, scope.Project, scope.Namespace))
+	if err != nil {
+		return record, err
+	}
+	return r.readMemoryIntentCorrection(ctx, record)
+}
+
+func (r *Repository) readMemoryIntentCorrection(ctx context.Context, record memory.MemoryIntentRecord) (memory.MemoryIntentRecord, error) {
+	var attribution memory.CorrectionAttribution
+	err := r.queryer(ctx).QueryRow(ctx, `SELECT projection_id::text,source_revision,binding_id,principal_id
+FROM memory_intent_correction_attributions
+WHERE intent_id=$1::uuid AND tenant=$2 AND project=$3 AND namespace=$4`, record.ID, record.Scope.Tenant, record.Scope.Project, record.Scope.Namespace).Scan(&attribution.ProjectionID, &attribution.SourceRevision, &attribution.BindingID, &attribution.PrincipalID)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return record, nil
+	}
+	if err != nil {
+		return record, fmt.Errorf("read correction attribution: %w", err)
+	}
+	if err := attribution.Validate(); err != nil {
+		return record, fmt.Errorf("invalid correction attribution: %w", err)
+	}
+	attribution.State = "verified"
+	record.Correction = &attribution
+	return record, nil
 }
 
 var _ interface {
@@ -348,7 +405,10 @@ func scanMemoryIntent(s interface{ Scan(...any) error }) (memory.MemoryIntentRec
 		if out.MemoryPath == "" {
 			out.MemoryPath = p.MemoryPath
 		}
-		out.TargetInsightID, out.Evidence, out.PolicyVersion = p.TargetInsightID, p.Evidence, p.PolicyVersion
+		out.TargetInsightID, out.Evidence = p.TargetInsightID, p.Evidence
+		if strings.TrimSpace(p.PolicyVersion) != "" {
+			out.PolicyVersion = p.PolicyVersion
+		}
 	}
 	return out, nil
 }

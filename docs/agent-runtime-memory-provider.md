@@ -580,3 +580,40 @@ receipt attribution is verified only when its `turn_id` matches. Migration
 0040 adds immutable ownership and bounded attribution metadata; legacy turns
 are never silently claimed, and audit records contain no query, content,
 selected IDs, citations, hidden candidates, or ranking data.
+
+## Governed correction updates
+
+Strict consumers that need to turn a corrected external outcome into a memory
+update must separately require `corrections.enabled=true` and
+`contract_version=provider-correction-governed-version-v1` from the capabilities
+response, and require the `corrections` operation token in its `operations`
+list. The correction capability's `operation` field identifies the exact
+`POST /v1/provider/corrections` route. A strict consumer can use
+`provider.RequireCorrectionCapability` to reject disabled, malformed, or
+incomplete advertisements. The dedicated route is not a
+replacement for `/v1/provider/intents`; it accepts one corrected projection,
+one target memory UUID and expected version, bounded replacement content, and a
+reason. Request size is limited to 32768 bytes, content to 16384 bytes, and
+reason to 512 bytes. Read the served OpenAPI for the closed envelope and exact
+metadata requirements.
+
+The request uses the current runtime binding/session and exact scope. Stele
+resolves the projection head and eligible durable-reference lineage from its own
+PostgreSQL records and verifies that the target/version still match. A caller
+cannot supply or override scope, role, grant, binding, lineage, or disclosure.
+The response is HTTP 202 with only the governed `intent_id`, `accepted|replayed`
+status, and `attribution_state=verified`; it is not proof that a candidate was
+promoted or that the task succeeded. Equivalent retries use the same
+idempotency key; conflicting reuse is not retried with altered content.
+
+Foreign, missing, first-revision, hidden, or mismatched sources return the same
+HTTP 410 `correction_unavailable`; stale attribution and idempotency conflict
+are bounded HTTP 409 outcomes. A retryable dependency failure is HTTP 503.
+Strict clients fail closed if the capability is absent and must not fall back to
+generic intent evidence, direct database access, local correction ledgers,
+alternate scope, or canonical mutation. Correction and intent attribution are
+immutable. The River-backed worker rechecks eligibility and target version,
+creates a governed successor asynchronously, and rolls candidate/version,
+intent transition, and River completion back together on retryable failure.
+Disabling the capability stops new requests; migrations and accepted audit
+history are retained during rollback.

@@ -37,6 +37,7 @@ type transactionStarter interface {
 type Repository struct {
 	db              queryRower
 	tx              transactionStarter
+	riverIntentJobs riverIntentJobInserter
 	embeddingRouter embedding.Router
 	// now supplies the evaluation instant for fact-validity filtering. It is
 	// injectable so tests can pin one instant and prove a request never mixes
@@ -48,6 +49,49 @@ type Repository struct {
 	// reads to the approved pre-temporal baseline without touching stored
 	// intervals or the correction ledger.
 	temporalPolicyDisabled bool
+}
+
+type repositoryTxContextKey struct{}
+
+type repositoryManagedTx struct {
+	pgx.Tx
+	owned bool
+}
+
+func (tx repositoryManagedTx) Commit(ctx context.Context) error {
+	if !tx.owned {
+		return nil
+	}
+	return tx.Tx.Commit(ctx)
+}
+
+func (tx repositoryManagedTx) Rollback(ctx context.Context) error {
+	if !tx.owned {
+		return nil
+	}
+	return tx.Tx.Rollback(ctx)
+}
+
+func (r *Repository) queryer(ctx context.Context) queryRower {
+	if tx, ok := ctx.Value(repositoryTxContextKey{}).(pgx.Tx); ok && tx != nil {
+		return tx
+	}
+	return r.db
+}
+
+func (r *Repository) beginTx(ctx context.Context) (pgx.Tx, error) {
+	if tx, ok := ctx.Value(repositoryTxContextKey{}).(pgx.Tx); ok && tx != nil {
+		return repositoryManagedTx{Tx: tx}, nil
+	}
+	tx, err := r.tx.BeginTx(ctx, pgx.TxOptions{})
+	if err != nil {
+		return nil, err
+	}
+	return repositoryManagedTx{Tx: tx, owned: true}, nil
+}
+
+func withRepositoryTx(ctx context.Context, tx pgx.Tx) context.Context {
+	return context.WithValue(ctx, repositoryTxContextKey{}, tx)
 }
 
 // SetTemporalPolicyDisabled turns temporal-aware filtering off for repository
@@ -91,7 +135,7 @@ func NewRepositoryWithEmbeddingRouter(db interface {
 }
 
 func (r *Repository) WriteRawEvent(ctx context.Context, input memory.IngestEventInput) (memory.RawEvent, error) {
-	return writeRawEvent(ctx, r.db, input)
+	return writeRawEvent(ctx, r.queryer(ctx), input)
 }
 
 func (r *Repository) WriteProvenance(ctx context.Context, record memory.ProvenanceRecord) error {
@@ -127,7 +171,7 @@ func (r *Repository) CreateCandidate(ctx context.Context, candidate governance.C
 		return governance.CandidateMemory{}, err
 	}
 
-	tx, err := r.tx.BeginTx(ctx, pgx.TxOptions{})
+	tx, err := r.beginTx(ctx)
 	if err != nil {
 		return governance.CandidateMemory{}, fmt.Errorf("begin create candidate transaction: %w", err)
 	}
@@ -272,7 +316,7 @@ func (r *Repository) TransitionCandidateStatus(ctx context.Context, transition g
 		return governance.CandidateMemory{}, err
 	}
 
-	tx, err := r.tx.BeginTx(ctx, pgx.TxOptions{})
+	tx, err := r.beginTx(ctx)
 	if err != nil {
 		return governance.CandidateMemory{}, fmt.Errorf("begin candidate transition transaction: %w", err)
 	}
@@ -778,7 +822,7 @@ func (r *Repository) ApplyGovernanceRecovery(ctx context.Context, input governan
 		return governance.GovernanceRecoveryOutcome{}, err
 	}
 
-	tx, err := r.tx.BeginTx(ctx, pgx.TxOptions{})
+	tx, err := r.beginTx(ctx)
 	if err != nil {
 		return governance.GovernanceRecoveryOutcome{}, fmt.Errorf("begin governance recovery transaction: %w", err)
 	}
@@ -1610,7 +1654,7 @@ func (r *Repository) PromoteCandidate(ctx context.Context, input governance.Cano
 		return memory.CanonicalMemory{}, memory.MemoryVersion{}, pathErr
 	}
 	input.Candidate.MemoryPath = path
-	tx, err := r.tx.BeginTx(ctx, pgx.TxOptions{})
+	tx, err := r.beginTx(ctx)
 	if err != nil {
 		return memory.CanonicalMemory{}, memory.MemoryVersion{}, fmt.Errorf("begin canonical promotion transaction: %w", err)
 	}
@@ -1728,6 +1772,7 @@ RETURNING id, tenant, project, namespace, memory_path, class, state, content, cr
 			MemoryID:          input.MemoryID,
 			Operation:         "promote_candidate",
 			CreatedAt:         input.CreatedAt,
+			SourceContext:     input.SourceContext,
 		}); err != nil {
 			return memory.CanonicalMemory{}, memory.MemoryVersion{}, err
 		}
@@ -1757,7 +1802,7 @@ SET state = $2,
 	memory_path = $10
 WHERE id = $1
 RETURNING id, tenant, project, namespace, memory_path, class, state, content, created_at, updated_at,
-	temporal_fact_id, ingested_at, valid_from, valid_to, validity_source
+	temporal_fact_id, COALESCE(ingested_at, created_at), valid_from, valid_to, validity_source
 `
 	validity, err := promotedTemporalValidity(input)
 	if err != nil {
@@ -1816,6 +1861,7 @@ RETURNING id, tenant, project, namespace, memory_path, class, state, content, cr
 		MemoryID:          input.MemoryID,
 		Operation:         "promote_candidate",
 		CreatedAt:         input.CreatedAt,
+		SourceContext:     input.SourceContext,
 	}); err != nil {
 		return memory.CanonicalMemory{}, memory.MemoryVersion{}, err
 	}
@@ -4278,7 +4324,7 @@ func (r *Repository) ApplyLifecycleAction(ctx context.Context, action governance
 		}
 	}
 
-	tx, err := r.tx.BeginTx(ctx, pgx.TxOptions{})
+	tx, err := r.beginTx(ctx)
 	if err != nil {
 		return memory.CanonicalMemory{}, fmt.Errorf("begin lifecycle action transaction: %w", err)
 	}

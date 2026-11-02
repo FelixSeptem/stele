@@ -1712,13 +1712,13 @@ scoped P8.1 MCP adapter):
    governance records, PostgreSQL assurance evidence and public-read
    observations; it adds no competing scheduler and never reports an accepted
    event as retrievable memory.
-10. MemOS-informed correction-to-governed-version conformance (research
-    candidate): verify that an external correction can be attributed to the
-    affected scoped evidence, enter an authorized governed mutation, append a
-    successor version, and preserve correction/replay history while superseded
-    signals stop influencing active summaries. Reuse existing feedback,
-    correction, and intent contracts; promote only if a specific end-to-end
-    contract gap remains.
+10. MemOS-informed correction-to-governed-version conformance (implemented,
+    verified, and archived as change 077): bind external corrections to exact-
+    scope evidence and authorized governed updates; append successor versions;
+    preserve correction/replay history; and exclude superseded signals from
+    active summaries. Riverqueue executes only memory-intent work with
+    transactional admission, retry, completion, and legacy handoff; PostgreSQL
+    remains authoritative.
 11. MemOS-informed longitudinal agent-task memory evaluation (research
     candidate): define reproducible task-series fixtures that compare memory
     usefulness, stale/noisy-memory harm, provenance coverage, and safety across
@@ -1734,10 +1734,11 @@ change 071, PC4 is implemented and archived as change 045, PC5 is implemented,
 verified, and archived as change 072, and PC6 below is implemented, verified,
 and archived as change 073. An archived track is reopened only for an
 identified contract or regression gap.
-MemOS-informed item 9 is implemented and awaiting archive sequencing. Items
-10–11 remain unprioritized research candidates, not approved implementation
-work; each requires a concrete uncovered gap and measurable acceptance signal
-before a separate OpenSpec proposal is created.
+MemOS-informed item 9 is implemented and awaiting archive sequencing. Item 10
+is implemented, verified, and archived as change 077. Item 11 remains an
+unprioritized research candidate, not approved implementation work; it requires
+a concrete uncovered longitudinal evaluation gap and measurable acceptance
+signal before a separate OpenSpec proposal is created.
 
 ## Provider Context And Runtime Integration Proposals (2026-10-16)
 

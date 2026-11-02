@@ -2,6 +2,8 @@ package memory
 
 import (
 	"context"
+	"encoding/json"
+	"reflect"
 	"strings"
 	"testing"
 	"time"
@@ -77,6 +79,65 @@ func TestMemoryIntentFingerprintNormalizesEquivalentRetries(t *testing.T) {
 	}
 }
 
+func TestCorrectionAttributionIsServerOwnedAndChangesCorrectionFingerprint(t *testing.T) {
+	input := governedInput()
+	input.Type = MemoryIntentUpdate
+	input.TargetMemoryID = "09f8bdb0-8aeb-4efd-a82a-8cf1b093997a"
+	input.TargetVersion = 2
+
+	if _, exposed := reflect.TypeOf(MemoryIntentInput{}).FieldByName("Correction"); exposed {
+		t.Fatal("generic MemoryIntentInput must not expose caller-controlled correction attribution")
+	}
+
+	first := CorrectionAttribution{
+		ProjectionID:   "2acbd3aa-f0b5-4217-bdf3-d7cfc0304972",
+		SourceRevision: 2,
+		BindingID:      "binding-1",
+		PrincipalID:    "principal-1",
+	}
+	second := first
+	second.SourceRevision = 3
+
+	a, err := CorrectionIntentFingerprint(input, first, "policy-v1")
+	if err != nil {
+		t.Fatalf("CorrectionIntentFingerprint() first error = %v", err)
+	}
+	b, err := CorrectionIntentFingerprint(input, second, "policy-v1")
+	if err != nil {
+		t.Fatalf("CorrectionIntentFingerprint() second error = %v", err)
+	}
+	if a == b {
+		t.Fatal("correction source revision must change correction fingerprint")
+	}
+	policyFingerprint, err := CorrectionIntentFingerprint(input, first, "policy-v2")
+	if err != nil || policyFingerprint == a {
+		t.Fatalf("correction policy version must change fingerprint: fingerprint=%q error=%v", policyFingerprint, err)
+	}
+	if _, err := CorrectionIntentFingerprint(input, first, " "); err == nil {
+		t.Fatal("empty correction policy version must be rejected")
+	}
+	if err := (CorrectionAttribution{ProjectionID: first.ProjectionID, SourceRevision: 1, BindingID: first.BindingID, PrincipalID: first.PrincipalID}).Validate(); err == nil {
+		t.Fatal("first projection revision must not be a correction attribution")
+	}
+}
+
+func TestCorrectionAttributionJSONIsBoundedAndOmitsInternalBindingIdentity(t *testing.T) {
+	encoded, err := json.Marshal(CorrectionAttribution{ProjectionID: "11111111-1111-4111-8111-111111111111", SourceRevision: 2, BindingID: "private-binding", PrincipalID: "private-principal", State: "verified"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	var got map[string]any
+	if err := json.Unmarshal(encoded, &got); err != nil {
+		t.Fatal(err)
+	}
+	if len(got) != 3 || got["projection_id"] != "11111111-1111-4111-8111-111111111111" || got["source_revision"] != float64(2) || got["state"] != "verified" {
+		t.Fatalf("bounded correction attribution = %s", encoded)
+	}
+	if strings.Contains(string(encoded), "private-binding") || strings.Contains(string(encoded), "private-principal") {
+		t.Fatalf("correction attribution exposed internal authority: %s", encoded)
+	}
+}
+
 func TestMemoryIntentValidationRejectsForeignEvidenceAndIncompleteSpecialTypes(t *testing.T) {
 	input := governedInput()
 	input.Type = MemoryIntentContradiction
@@ -125,6 +186,18 @@ func TestMemoryIntentServiceReplayRepairsTransitionAndQueueHandoff(t *testing.T)
 	}
 }
 
+func TestMemoryIntentServiceUsesAtomicAcceptorWithoutLegacyHandoff(t *testing.T) {
+	processor := &atomicIntentAcceptorStub{}
+	service := MemoryIntentService{Processor: processor, NewID: func() string { return "intent-atomic" }}
+	created, err := service.Submit(context.Background(), governedInput())
+	if err != nil || created.ID != "intent-atomic" || processor.atomicCalls != 1 {
+		t.Fatalf("Submit() = %+v, %v; atomic calls = %d", created, err, processor.atomicCalls)
+	}
+	if processor.appendCalls != 0 || processor.transitionCalls != 0 || processor.enqueueCalls != 0 {
+		t.Fatalf("legacy writes after atomic acceptance: append=%d transition=%d enqueue=%d", processor.appendCalls, processor.transitionCalls, processor.enqueueCalls)
+	}
+}
+
 type disabledIntentPolicy struct{}
 
 func (disabledIntentPolicy) EvaluateMemoryIntent(context.Context, MemoryIntentInput) (MemoryIntentPolicyDecision, error) {
@@ -141,6 +214,35 @@ type replayIntentProcessorStub struct {
 	stored          MemoryIntentRecord
 	enqueueCalls    int
 	transitionCalls int
+}
+
+type atomicIntentAcceptorStub struct {
+	atomicCalls     int
+	appendCalls     int
+	transitionCalls int
+	enqueueCalls    int
+}
+
+func (s *atomicIntentAcceptorStub) AcceptMemoryIntent(_ context.Context, record MemoryIntentRecord) (MemoryIntentRecord, error) {
+	s.atomicCalls++
+	record.ID = "intent-atomic"
+	record.Status = MemoryIntentStatusAccepted
+	return record, nil
+}
+
+func (s *atomicIntentAcceptorStub) AppendMemoryIntent(context.Context, MemoryIntentRecord) (MemoryIntentRecord, error) {
+	s.appendCalls++
+	return MemoryIntentRecord{}, nil
+}
+
+func (s *atomicIntentAcceptorStub) AppendMemoryIntentTransition(context.Context, MemoryIntentTransition) error {
+	s.transitionCalls++
+	return nil
+}
+
+func (s *atomicIntentAcceptorStub) EnqueueMemoryIntent(context.Context, MemoryIntentRecord) error {
+	s.enqueueCalls++
+	return nil
 }
 
 func (s *replayIntentProcessorStub) AppendMemoryIntent(_ context.Context, record MemoryIntentRecord) (MemoryIntentRecord, error) {

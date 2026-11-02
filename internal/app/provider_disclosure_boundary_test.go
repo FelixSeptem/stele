@@ -23,7 +23,7 @@ func TestProviderDisclosureDeniesAlternateHTTPRoutesWithoutBinding(t *testing.T)
 		{"POST", "/v1/memories/search"}, {"POST", "/v1/context"}, {"GET", "/v1/memories"},
 		{"GET", "/v1/memories/hidden-identity-marker/history"}, {"GET", "/v1/memories/hidden-identity-marker/provenance"},
 		{"GET", "/v1/memory-sessions/hidden-identity-marker"}, {"GET", "/v1/memory-intents/hidden-identity-marker"},
-		{"POST", "/v1/provider/retrieve"}, {"POST", "/v1/provider/sync"}, {"POST", "/v1/provider/turns"},
+		{"POST", "/v1/provider/retrieve"}, {"POST", "/v1/provider/sync"}, {"POST", "/v1/provider/turns"}, {"POST", "/v1/provider/corrections"},
 		{"POST", "/v1/provider/forget"}, {"POST", "/v1/mcp"},
 		{"GET", "/v1/future-content-route/hidden-identity-marker"},
 	} {
@@ -35,7 +35,7 @@ func TestProviderDisclosureDeniesAlternateHTTPRoutesWithoutBinding(t *testing.T)
 			r.Header.Set(auth.HeaderNamespace, "namespace-a")
 			w := httptest.NewRecorder()
 			h.ServeHTTP(w, r)
-			if route.method == http.MethodPost && (route.path == "/v1/provider/retrieve" || route.path == "/v1/provider/turns") {
+			if route.method == http.MethodPost && (route.path == "/v1/provider/retrieve" || route.path == "/v1/provider/turns" || route.path == "/v1/provider/corrections") {
 				if w.Code != http.StatusNotFound || strings.Contains(w.Body.String(), "marker") {
 					t.Fatalf("admitted route did not safely pass the gate: %d %s", w.Code, w.Body.String())
 				}

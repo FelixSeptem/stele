@@ -194,3 +194,58 @@ snapshots are separate from PC4/PC5 reports. A failed or incomplete phase writes
 a nonpassing report; another contract's passing report cannot establish PC6
 readiness. `-UseExistingStack` requires explicit owned-stack credentials and an
 observation DSN and does not establish fresh-stack provenance by itself.
+
+## Correction-to-version handoff
+
+The separately negotiated `corrections` capability is available only when the
+service has both a correction resolver and an enabled memory-intent policy.
+The capability document advertises the `corrections` operation token only
+when both are ready; its nested `operation` field names the exact route. A
+strict runtime validates the whole document and requires the enabled contract,
+operation token and version before calling
+`provider-correction-governed-version-v1` at
+`POST /v1/provider/corrections`; it does not reuse generic intent evidence as
+proof of correction ownership. The closed request names a corrected
+`projection_id`, target memory UUID and `expected_version`, plus bounded content
+and reason. Exact binding, projection-head ownership, current PC5 reference
+eligibility and target lineage are resolved server-side before intent
+idempotency or queue admission.
+
+The public acknowledgement exposes only the governed intent UUID, status and a
+fixed verified-attribution state. It never returns source payload, event IDs,
+candidate IDs, ranking details or target lineage. Missing, foreign, first,
+hidden and target-mismatched sources collapse to HTTP 410
+`lifecycle/correction_unavailable`; stale source/target is HTTP 409
+`stale/correction_stale`; key collision is HTTP 409
+`conflict/correction_conflict`. Authorization or storage dependencies return
+retryable HTTP 503. Compatible clients replay an equivalent request with the
+same key and do not switch to generic intents, direct SQL, alternate scope, or
+local mutation on denial.
+
+Accepted intents remain asynchronous. The worker revalidates source and target,
+then uses the existing candidate/promotion path to append a successor version
+and immutable provenance. It does not overwrite the previous version or
+complete the external task. Riverqueue v0.44.1 is used only for memory-intent
+execution: job arguments carry the intent UUID, admission inserts the River job
+in the intent transaction, and governance writes, intent transition, and
+`JobCompleteTx` commit in one transaction. A failed attempt rolls back all
+three and remains retryable. Other derived-work kinds continue using the
+existing queue. The dedicated `stele_river` schema is migrated with the normal
+PostgreSQL migration policy; validate/off startup requires the schema to be at
+the pinned River migration version. Legacy recoverable memory-intent queue rows
+are transactionally handed off once, while terminal historical rows are not
+replayed.
+
+Migration `0042` stores immutable correction attribution and `0043` records the
+River handoff. Rollback disables the capability and worker route, but retains
+both migration history and accepted data; do not drop the River schema or
+requeue completed history as an operational rollback shortcut. Full readiness
+still requires owned fresh-stack evidence for correction promotion,
+supersession, restart, retry and handoff; successful admission alone is not a
+release gate.
+
+Run `pwsh -File scripts/stele-provider-correction-verify.ps1` to execute the
+owned PostgreSQL 18 + pgvector correction, River retry/handoff, projection
+supersession and API/worker restart fixtures. The script starts and removes its
+own temporary container and writes only bounded suite status and image digest
+to its report; it does not retain DSNs or request data.

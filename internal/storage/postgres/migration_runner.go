@@ -14,6 +14,8 @@ import (
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgconn"
 	"github.com/jackc/pgx/v5/stdlib"
+	"github.com/riverqueue/river/riverdriver/riverpgxv5"
+	"github.com/riverqueue/river/rivermigrate"
 )
 
 type MigrationStatus string
@@ -63,11 +65,16 @@ type MigrationRunner struct {
 
 const migrationIntegrityLockID int64 = 0x5354454C45 // "STELE"
 
+const RiverSchemaName = "stele_river"
+
 func MigrateDatabase(ctx context.Context, dsn string, policy string) error {
 	runner := NewMigrationRunner()
 	switch strings.TrimSpace(policy) {
 	case "", "auto":
-		return runner.Apply(ctx, dsn)
+		if err := runner.Apply(ctx, dsn); err != nil {
+			return err
+		}
+		return MigrateRiverDatabase(ctx, dsn, "auto")
 	case "validate", "off":
 		state, err := runner.Status(ctx, dsn)
 		if err != nil {
@@ -76,10 +83,57 @@ func MigrateDatabase(ctx context.Context, dsn string, policy string) error {
 		if state.Status != MigrationStatusCurrent {
 			return migrationStateError(state)
 		}
-		return nil
+		return MigrateRiverDatabase(ctx, dsn, "validate")
 	default:
 		return fmt.Errorf("unsupported migration policy %q", policy)
 	}
+}
+
+func MigrateRiverDatabase(ctx context.Context, dsn, policy string) error {
+	pool, err := OpenPool(ctx, dsn)
+	if err != nil {
+		return fmt.Errorf("open River migration pool: %w", err)
+	}
+	defer pool.Close()
+
+	if strings.TrimSpace(policy) == "auto" {
+		if _, err := pool.Exec(ctx, `CREATE SCHEMA IF NOT EXISTS `+RiverSchemaName); err != nil {
+			return fmt.Errorf("create River schema: %w", err)
+		}
+	} else {
+		var exists bool
+		if err := pool.QueryRow(ctx, `SELECT to_regclass($1) IS NOT NULL`, RiverSchemaName+`.river_migration`).Scan(&exists); err != nil {
+			return fmt.Errorf("inspect River migration schema: %w", err)
+		}
+		if !exists {
+			return fmt.Errorf("River schema is not migrated")
+		}
+	}
+
+	migrator, err := rivermigrate.New(riverpgxv5.New(pool), &rivermigrate.Config{Schema: RiverSchemaName})
+	if err != nil {
+		return fmt.Errorf("initialize River migrator: %w", err)
+	}
+	if strings.TrimSpace(policy) == "auto" {
+		if _, err := migrator.Migrate(ctx, rivermigrate.DirectionUp, nil); err != nil {
+			return fmt.Errorf("migrate River schema: %w", err)
+		}
+		return nil
+	}
+	current, err := migrator.ExistingVersions(ctx)
+	if err != nil {
+		return fmt.Errorf("read River migration versions: %w", err)
+	}
+	all := migrator.AllVersions()
+	if len(current) != len(all) {
+		return fmt.Errorf("River schema has %d migration versions, want %d", len(current), len(all))
+	}
+	for i := range all {
+		if current[i].Version != all[i].Version {
+			return fmt.Errorf("River schema migration version mismatch at index %d", i)
+		}
+	}
+	return nil
 }
 
 func NewMigrationRunner() MigrationRunner {

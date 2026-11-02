@@ -143,6 +143,9 @@ snapshot. Do not assume skipped events were applied.
 
 - Keep PostgreSQL as the only system of record.
 - Run migrations before enabling new API/provider capabilities.
+- Treat River schema migration as part of PostgreSQL startup policy. Keep the
+  intent ledger authoritative, preserve legacy queue history, and do not drop
+  River jobs or replay terminal rows as a rollback shortcut.
 - Keep MCP and provider adapters disabled until exact-scope smoke and
   conformance checks pass.
 - Use explicit owned PostgreSQL + pgvector databases for integration evidence.

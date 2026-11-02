@@ -79,11 +79,12 @@ func (RuleBasedConsolidator) Decide(ctx context.Context, candidate CandidateMemo
 }
 
 type CanonicalPromotion struct {
-	Candidate CandidateMemory
-	MemoryID  string
-	VersionID string
-	Version   int64
-	CreatedAt time.Time
+	Candidate     CandidateMemory
+	MemoryID      string
+	VersionID     string
+	Version       int64
+	CreatedAt     time.Time
+	SourceContext map[string]any
 }
 
 type CanonicalRepository interface {

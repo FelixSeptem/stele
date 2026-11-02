@@ -47,6 +47,9 @@ func (w DerivedWorkWorker) RunOnce(ctx context.Context) (int, error) {
 	if w.Store == nil || w.Executor == nil {
 		return 0, fmt.Errorf("derived work store and executor are required")
 	}
+	if w.Kind != nil && *w.Kind == workqueue.WorkKindMemoryIntent {
+		return 0, fmt.Errorf("memory-intent work is handled by River")
+	}
 	if err := w.Scope.Validate(); err != nil {
 		return 0, err
 	}

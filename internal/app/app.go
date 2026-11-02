@@ -8,6 +8,7 @@ import (
 	"net/http"
 	"sort"
 	"strings"
+	"sync"
 	"sync/atomic"
 	"time"
 
@@ -31,6 +32,9 @@ import (
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgconn"
+	"github.com/jackc/pgx/v5/pgxpool"
+	"github.com/riverqueue/river"
+	"github.com/riverqueue/river/riverdriver/riverpgxv5"
 )
 
 type Runner interface {
@@ -164,6 +168,75 @@ type backgroundScheduler interface {
 	Start(ctx context.Context) error
 }
 
+type backgroundWorkerGroup struct {
+	workers []backgroundWorker
+}
+
+func (g backgroundWorkerGroup) Start(ctx context.Context) error {
+	if len(g.workers) == 0 {
+		return fmt.Errorf("background worker group is empty")
+	}
+	runCtx, cancel := context.WithCancel(ctx)
+	defer cancel()
+	errCh := make(chan error, len(g.workers))
+	var wg sync.WaitGroup
+	for _, worker := range g.workers {
+		worker := worker
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			if err := worker.Start(runCtx); err != nil && runCtx.Err() == nil {
+				errCh <- err
+			}
+		}()
+	}
+	var runErr error
+	select {
+	case <-ctx.Done():
+	case runErr = <-errCh:
+		cancel()
+	}
+	cancel()
+	wg.Wait()
+	return runErr
+}
+
+type riverBackgroundWorker struct {
+	client *river.Client[pgx.Tx]
+}
+
+func (w riverBackgroundWorker) Start(ctx context.Context) error {
+	if w.client == nil {
+		return fmt.Errorf("River client is required")
+	}
+	if err := w.client.Start(ctx); err != nil {
+		return err
+	}
+	<-ctx.Done()
+	stopCtx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
+	defer cancel()
+	return w.client.Stop(stopCtx)
+}
+
+func newMemoryIntentRiverClient(pool postgresRuntimeStore, worker *jobs.RiverMemoryIntentWorker) (*river.Client[pgx.Tx], error) {
+	pgxPool, ok := pool.(*pgxpool.Pool)
+	if !ok {
+		return nil, nil
+	}
+	config := &river.Config{Schema: postgres.RiverSchemaName}
+	if worker != nil {
+		workers := river.NewWorkers()
+		river.AddWorker(workers, worker)
+		config.Workers = workers
+		config.Queues = map[string]river.QueueConfig{river.QueueDefault: {MaxWorkers: 8}}
+	}
+	client, err := river.NewClient(riverpgxv5.New(pgxPool), config)
+	if err != nil {
+		return nil, fmt.Errorf("initialize River memory-intent client: %w", err)
+	}
+	return client, nil
+}
+
 type embeddingRuntime struct {
 	Router    embedding.Router
 	Providers embedding.ProviderResolver
@@ -243,7 +316,7 @@ func (r memoryIntentGovernanceRouter) ProcessRememberOrUpdate(ctx context.Contex
 		return memory.MemoryIntentOutcome{}, err
 	}
 	candidate := memoryRepositoryCandidate(uuid.NewString(), event.ID, record.Scope, record.MemoryPath, class, record.Content, source, now)
-	created, err := r.repo.CreateCandidate(ctx, candidate, memory.ProvenanceRecord{ID: uuid.NewString(), Scope: record.Scope, RawEventID: event.ID, CandidateMemoryID: candidate.ID, Actor: record.Actor, Operation: "memory_intent_candidate", CreatedAt: now, SourceContext: map[string]any{"intent_id": record.ID}})
+	created, err := r.repo.CreateCandidate(ctx, candidate, memory.ProvenanceRecord{ID: uuid.NewString(), Scope: record.Scope, RawEventID: event.ID, CandidateMemoryID: candidate.ID, Actor: record.Actor, Operation: "memory_intent_candidate", CreatedAt: now, SourceContext: memoryIntentProvenanceContext(record)})
 	if err != nil {
 		return memory.MemoryIntentOutcome{}, err
 	}
@@ -254,13 +327,27 @@ func (r memoryIntentGovernanceRouter) ProcessRememberOrUpdate(ctx context.Contex
 	if memoryID == "" {
 		memoryID = uuid.NewString()
 	}
-	if _, _, err := r.repo.PromoteCandidate(ctx, governance.CanonicalPromotion{Candidate: created, MemoryID: memoryID, VersionID: uuid.NewString(), Version: 1, CreatedAt: now}); err != nil {
+	if _, _, err := r.repo.PromoteCandidate(ctx, governance.CanonicalPromotion{Candidate: created, MemoryID: memoryID, VersionID: uuid.NewString(), Version: 1, CreatedAt: now, SourceContext: memoryIntentProvenanceContext(record)}); err != nil {
 		return memory.MemoryIntentOutcome{}, err
 	}
-	if _, err := r.repo.TransitionCandidateStatus(ctx, governance.CandidateStatusTransition{CandidateID: created.ID, ToStatus: governance.CandidateStatusPromoted, UpdatedAt: now}, memory.ProvenanceRecord{ID: uuid.NewString(), Scope: record.Scope, RawEventID: event.ID, CandidateMemoryID: created.ID, MemoryID: memoryID, Actor: record.Actor, Operation: "memory_intent_promote", CreatedAt: now, SourceContext: map[string]any{"intent_id": record.ID}}); err != nil {
+	if _, err := r.repo.TransitionCandidateStatus(ctx, governance.CandidateStatusTransition{CandidateID: created.ID, ToStatus: governance.CandidateStatusPromoted, UpdatedAt: now}, memory.ProvenanceRecord{ID: uuid.NewString(), Scope: record.Scope, RawEventID: event.ID, CandidateMemoryID: created.ID, MemoryID: memoryID, Actor: record.Actor, Operation: "memory_intent_promote", CreatedAt: now, SourceContext: memoryIntentProvenanceContext(record)}); err != nil {
 		return memory.MemoryIntentOutcome{}, err
 	}
 	return memory.MemoryIntentOutcome{Status: memory.MemoryIntentStatusActive, DiagnosticCategory: memory.MemoryIntentDiagnosticAccepted, OutcomeReference: memoryID, CandidateReference: created.ID}, nil
+}
+
+// memoryIntentProvenanceContext keeps the correction association auditable
+// without copying its source payload, target lineage, binding, or principal
+// identifiers into candidate/canonical provenance. The correction record is
+// created only by the bound Provider resolver and revalidated by the worker.
+func memoryIntentProvenanceContext(record memory.MemoryIntentRecord) map[string]any {
+	context := map[string]any{"intent_id": record.ID}
+	if record.Correction == nil || record.Correction.Validate() != nil {
+		return context
+	}
+	context["correction_projection_id"] = record.Correction.ProjectionID
+	context["correction_source_revision"] = record.Correction.SourceRevision
+	return context
 }
 
 // memoryRepositoryCandidate preserves the effective source label from a
@@ -678,6 +765,14 @@ func buildAPIRuntime(ctx context.Context, cfg config.Config, deps apiRuntimeDepe
 	}
 
 	repo := postgres.NewRepositoryWithEmbeddingRouter(pool, embeddingRuntime.Router)
+	riverClient, err := newMemoryIntentRiverClient(pool, nil)
+	if err != nil {
+		pool.Close()
+		return apiRuntime{}, err
+	}
+	if riverClient != nil {
+		repo.SetMemoryIntentRiverInserter(riverClient)
+	}
 	derivedQueue, err := workqueue.NewAdapter(cfg.DerivedWork, repo)
 	if err != nil {
 		pool.Close()
@@ -761,6 +856,7 @@ func buildAPIRuntime(ctx context.Context, cfg config.Config, deps apiRuntimeDepe
 	}
 	intentService := memory.MemoryIntentService{Processor: repo, Policy: intentPolicy, Now: time.Now}
 	httpDeps.MemoryIntent = intentService
+	httpDeps.MemoryIntentPolicy = intentPolicy
 	// Admission is intentionally opt-in. Disabling it removes only new
 	// registration/preview/submission admission; accepted durable work remains
 	// governed by the existing worker path.
@@ -787,6 +883,7 @@ func buildAPIRuntime(ctx context.Context, cfg config.Config, deps apiRuntimeDepe
 		}
 		httpDeps.ProviderReferences = repo
 		httpDeps.ProviderProjections = repo
+		httpDeps.ProviderCorrections = repo
 		httpDeps.ProviderAdapter = provider.NewAdapter(provider.AdapterDependencies{
 			ReferenceStore: repo,
 			Ingestor:       ingestor, IdempotentIngestor: ingestor, Intent: intentService,
@@ -1132,7 +1229,6 @@ func buildWorkerRuntime(ctx context.Context, cfg config.Config, deps workerRunti
 		Now:           now,
 		Observer:      deps.observer,
 	}
-	intentKind := workqueue.WorkKindMemoryIntent
 	intentService := memory.MemoryIntentService{
 		Processor: repo,
 		Policy: memory.StaticMemoryIntentPolicy{
@@ -1140,18 +1236,22 @@ func buildWorkerRuntime(ctx context.Context, cfg config.Config, deps workerRunti
 		},
 		Now: now, NewID: newID,
 	}
-	intentWorker := jobs.DerivedWorkWorker{
-		Store: repo,
-		Executor: jobs.MemoryIntentWorkExecutor{
-			Reader:   repo,
-			History:  repo,
-			Worker:   memory.MemoryIntentWorker{Router: memoryIntentGovernanceRouter{repo: repo, now: now}, Validator: repo},
-			Recorder: repo,
-			Policy:   memory.StaticMemoryIntentPolicy{Scope: scope, PolicyVersion: cfg.MemoryIntent.PolicyVersion, Enabled: cfg.MemoryIntent.Enabled},
+	intentExecution := jobs.MemoryIntentRiverExecution{
+		History: repo,
+		Worker: memory.MemoryIntentWorker{
+			Router: memoryIntentGovernanceRouter{repo: repo, now: now}, Validator: repo, CorrectionValidator: repo,
 		},
-		Scope: scope, WorkerID: "stele-memory-intent-worker", BatchSize: 16,
-		LeaseDuration: governanceWorkerLeaseDuration, RetryBackoff: cfg.Jobs.GovernanceRetryBackoff,
-		Now: now, Kind: &intentKind,
+		Recorder: repo,
+		Policy:   memory.StaticMemoryIntentPolicy{Scope: scope, PolicyVersion: cfg.MemoryIntent.PolicyVersion, Enabled: cfg.MemoryIntent.Enabled},
+	}
+	riverIntentWorker := &jobs.RiverMemoryIntentWorker{Store: repo, Execute: intentExecution.Execute}
+	riverClient, err := newMemoryIntentRiverClient(pool, riverIntentWorker)
+	if err != nil {
+		pool.Close()
+		return workerRuntime{}, err
+	}
+	if riverClient != nil {
+		repo.SetMemoryIntentRiverInserter(riverClient)
 	}
 	repositoryImportKind := workqueue.WorkKindMemoryRepositoryImport
 	repositoryImportWorker := jobs.DerivedWorkWorker{
@@ -1170,25 +1270,37 @@ func buildWorkerRuntime(ctx context.Context, cfg config.Config, deps workerRunti
 		// Admission may be disabled after a deployment, but accepted plans must
 		// still drain through current governed intent policy.
 		workers = append(workers, repositoryImportWorker)
-		if cfg.MemoryIntent.Enabled {
-			workers = append(workers, intentWorker)
-		}
+	}
+	backgroundWorkers := []backgroundWorker{jobs.PollingWorker{
+		Worker:       jobs.CompositeWorker{Workers: workers},
+		PollInterval: cfg.Jobs.WorkerPollInterval,
+		ErrorBackoff: cfg.Jobs.WorkerErrorBackoff,
+	}}
+	if riverClient != nil {
+		backgroundWorkers = append(backgroundWorkers, riverBackgroundWorker{client: riverClient})
 	}
 
 	return workerRuntime{
 		bootstrapper: bootstrapperFunc(func(ctx context.Context) error {
-			return deps.bootstrapDatabase(ctx, pool)
+			if err := deps.bootstrapDatabase(ctx, pool); err != nil {
+				return err
+			}
+			if riverClient != nil {
+				return repo.HandoffLegacyMemoryIntentJobs(ctx)
+			}
+			return nil
 		}),
-		worker: jobs.PollingWorker{
-			Worker:       jobs.CompositeWorker{Workers: workers},
-			PollInterval: cfg.Jobs.WorkerPollInterval,
-			ErrorBackoff: cfg.Jobs.WorkerErrorBackoff,
-		},
+		worker:     backgroundWorkerGroup{workers: backgroundWorkers},
 		reasoning:  buildReasoningCapability(cfg.Reasoning, deps.reasoningProvider),
 		readiness:  runtimeReadinessChecker(config.ModeWorker, pool, embeddingRuntime, true, deps.observer),
 		authorizer: principalAuthorizerForRuntime(cfg, repo, now),
 		cleanup: func() {
 			derivedQueue.Close()
+			if riverClient != nil {
+				stopCtx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
+				_ = riverClient.Stop(stopCtx)
+				cancel()
+			}
 			pool.Close()
 		},
 		observer: deps.observer,

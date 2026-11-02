@@ -105,6 +105,12 @@ for request shapes, byte units, limits, errors, migration and rollback, and
 behavior. Byte limits are not token estimates; client token budgeting remains
 the integrating application's responsibility.
 
+Corrected projection evidence can enter an asynchronous governed update only
+through the separately negotiated
+`provider-correction-governed-version-v1` capability. The correction route
+verifies binding and target lineage, then returns an intent acknowledgment;
+Stele does not take ownership of task completion or directly overwrite memory.
+
 Read the [disclosure and source trust guide](docs/context-disclosure-and-source-trust.md)
 for profile administration, source labels, endpoint denials and migration.
 

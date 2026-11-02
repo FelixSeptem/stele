@@ -646,9 +646,19 @@ func TestBuildWorkerRuntimeWiresDurableRetrySettings(t *testing.T) {
 		t.Fatalf("buildWorkerRuntime() error = %v", err)
 	}
 
-	poller, ok := runtime.worker.(jobs.PollingWorker)
+	group, ok := runtime.worker.(backgroundWorkerGroup)
 	if !ok {
-		t.Fatalf("runtime worker type = %T, want jobs.PollingWorker", runtime.worker)
+		t.Fatalf("runtime worker type = %T, want backgroundWorkerGroup", runtime.worker)
+	}
+	var poller jobs.PollingWorker
+	for _, worker := range group.workers {
+		if candidate, ok := worker.(jobs.PollingWorker); ok {
+			poller = candidate
+			break
+		}
+	}
+	if poller.Worker == nil {
+		t.Fatal("background worker group is missing the legacy derived-work poller")
 	}
 
 	worker, ok := findGovernanceWorker(poller.Worker)

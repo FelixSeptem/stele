@@ -128,6 +128,7 @@ type MemoryIntentRecord struct {
 	IdempotencyKey     string
 	TargetInsightID    string
 	Evidence           []MemoryIntentEvidence
+	Correction         *CorrectionAttribution
 	OutcomeReference   string
 	RequestFingerprint string
 	PolicyVersion      string
@@ -140,6 +141,12 @@ type MemoryIntentRecord struct {
 
 type MemoryIntentProcessor interface {
 	AppendMemoryIntent(context.Context, MemoryIntentRecord) (MemoryIntentRecord, error)
+}
+
+// MemoryIntentAtomicAcceptor persists a new intent, its initial transition,
+// and durable execution handoff as one storage transaction.
+type MemoryIntentAtomicAcceptor interface {
+	AcceptMemoryIntent(context.Context, MemoryIntentRecord) (MemoryIntentRecord, error)
 }
 
 // MemoryIntentEnqueuer is implemented by stores that can hand an accepted
@@ -158,6 +165,13 @@ type MemoryIntentTransitionWriter interface {
 // handed to downstream governance work.
 type MemoryIntentTargetValidator interface {
 	ValidateMemoryIntentTarget(context.Context, MemoryIntentInput) error
+}
+
+// MemoryIntentCorrectionValidator is an optional execution-time recheck for a
+// correction association admitted by a Provider resolver. It remains separate
+// from generic target validation so ordinary evidence cannot impersonate it.
+type MemoryIntentCorrectionValidator interface {
+	ValidateMemoryIntentCorrection(context.Context, MemoryIntentRecord) error
 }
 
 type MemoryIntentService struct {
@@ -227,6 +241,9 @@ func (s MemoryIntentService) Submit(ctx context.Context, input MemoryIntentInput
 		TargetInsightID: strings.TrimSpace(input.TargetInsightID), Evidence: input.Evidence, RequestFingerprint: fingerprint, PolicyVersion: policyVersion,
 		PrecedenceVersion: precedence.Version, PrecedenceStage: precedence.Stage, PrecedenceOutcome: precedence.Outcome,
 		Status: MemoryIntentStatusAccepted, CreatedAt: now,
+	}
+	if acceptor, ok := s.Processor.(MemoryIntentAtomicAcceptor); ok {
+		return acceptor.AcceptMemoryIntent(ctx, record)
 	}
 	created, err := s.Processor.AppendMemoryIntent(ctx, record)
 	if err != nil {
