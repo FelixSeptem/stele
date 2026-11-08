@@ -37,6 +37,8 @@ BEGIN
         WHERE m.id = NEW.memory_id
           AND m.tenant = NEW.tenant AND m.project = NEW.project AND m.namespace = NEW.namespace
           AND m.class = 'procedural'
+          AND m.state = 'active'
+          AND v.version = (SELECT max(current_v.version) FROM memory_versions current_v WHERE current_v.memory_id = m.id)
     ) THEN
         RAISE EXCEPTION 'procedural verification target scope or version mismatch';
     END IF;
