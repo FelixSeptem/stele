@@ -167,7 +167,7 @@ func postgresProceduralVerification() memory.ProceduralMemoryVerification {
 		MemoryID: "00000000-0000-0000-0000-000000000102", TargetVersion: 3,
 		ClaimFingerprint: strings.Repeat("a", 64), ApplicabilityFingerprint: strings.Repeat("b", 64),
 		Disposition: memory.ProceduralVerificationDispositionSupported,
-		Evidence:    []memory.ProceduralVerificationEvidence{{Kind: memory.ProceduralVerificationEvidenceToolObservation, ID: "00000000-0000-0000-0000-000000000103", SourceVersion: 1, Corroborates: true}},
+		Evidence:    []memory.ProceduralVerificationEvidence{{Kind: memory.ProceduralVerificationEvidenceToolObservation, SourceKind: memory.ProceduralVerificationEvidenceSourceRawEvent, ID: "00000000-0000-0000-0000-000000000103", SourceVersion: 1, Corroborates: true}},
 		Actor:       "operator", Reason: "verified", PolicyVersion: "policy-v1", SourceWatermark: "watermark-1",
 		CreatedAt: time.Date(2026, time.November, 8, 0, 0, 0, 0, time.UTC),
 	}
@@ -175,7 +175,7 @@ func postgresProceduralVerification() memory.ProceduralMemoryVerification {
 
 func proceduralVerificationRows(record memory.ProceduralMemoryVerification, fingerprint string) *pgxmock.Rows {
 	return pgxmock.NewRows([]string{"id", "tenant", "project", "namespace", "memory_id", "target_version", "fingerprint", "claim_fingerprint", "applicability_fingerprint", "disposition", "evidence", "source_watermark", "policy_version", "actor", "reason", "corrected_content", "created_at"}).
-		AddRow(record.ID, record.Scope.Tenant, record.Scope.Project, record.Scope.Namespace, record.MemoryID, record.TargetVersion, fingerprint, record.ClaimFingerprint, record.ApplicabilityFingerprint, record.Disposition, []byte(`[{"scope":{"tenant":"tenant-a","project":"project-a","namespace":"namespace-a"},"kind":"tool_observation","polarity":"","id":"00000000-0000-0000-0000-000000000103","source_version":1,"corroborates":true}]`), record.SourceWatermark, record.PolicyVersion, record.Actor, record.Reason, nil, record.CreatedAt)
+		AddRow(record.ID, record.Scope.Tenant, record.Scope.Project, record.Scope.Namespace, record.MemoryID, record.TargetVersion, fingerprint, record.ClaimFingerprint, record.ApplicabilityFingerprint, record.Disposition, []byte(`[{"scope":{"tenant":"tenant-a","project":"project-a","namespace":"namespace-a"},"kind":"tool_observation","source_kind":"raw_event","polarity":"","id":"00000000-0000-0000-0000-000000000103","source_version":1,"corroborates":true}]`), record.SourceWatermark, record.PolicyVersion, record.Actor, record.Reason, nil, record.CreatedAt)
 }
 
 func proceduralRevalidationRunRows(now time.Time, scope memory.Scope) *pgxmock.Rows {

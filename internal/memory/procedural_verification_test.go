@@ -10,7 +10,7 @@ func TestProceduralVerificationSupportedRequiresIndependentCorroboration(t *test
 	verification := validProceduralMemoryVerification()
 	verification.Disposition = ProceduralVerificationDispositionSupported
 	verification.Evidence = []ProceduralVerificationEvidence{{
-		Kind:          ProceduralVerificationEvidenceTranscript,
+		Kind: ProceduralVerificationEvidenceTranscript, SourceKind: ProceduralVerificationEvidenceSourceRawEvent,
 		ID:            "event-1",
 		SourceVersion: 1,
 		Corroborates:  false,
@@ -81,7 +81,7 @@ func TestProceduralVerificationAllowsInconclusiveAndNeedsRevalidationWithoutCorr
 		verification := validProceduralMemoryVerification()
 		verification.Disposition = disposition
 		verification.Evidence = []ProceduralVerificationEvidence{{
-			Kind: ProceduralVerificationEvidenceTranscript, ID: "transcript-1", SourceVersion: 1,
+			Kind: ProceduralVerificationEvidenceTranscript, SourceKind: ProceduralVerificationEvidenceSourceRawEvent, ID: "transcript-1", SourceVersion: 1,
 		}}
 		if err := verification.Validate(); err != nil {
 			t.Fatalf("%s verification Validate() error = %v", disposition, err)
@@ -92,7 +92,7 @@ func TestProceduralVerificationAllowsInconclusiveAndNeedsRevalidationWithoutCorr
 func TestProceduralVerificationModelAssertionNeverCountsAsIndependentCorroboration(t *testing.T) {
 	verification := validProceduralMemoryVerification()
 	verification.Evidence = []ProceduralVerificationEvidence{{
-		Kind: ProceduralVerificationEvidenceModelAssertion, ID: "model-1", SourceVersion: 1, Corroborates: true,
+		Kind: ProceduralVerificationEvidenceModelAssertion, SourceKind: ProceduralVerificationEvidenceSourceRawEvent, ID: "model-1", SourceVersion: 1, Corroborates: true,
 	}}
 
 	err := verification.Validate()
@@ -118,7 +118,7 @@ func TestProceduralVerificationRejectsInvalidFingerprintAndOversizedReason(t *te
 func TestProceduralVerificationFingerprintNormalizesEvidenceOrder(t *testing.T) {
 	left := validProceduralMemoryVerification()
 	left.Evidence = append(left.Evidence, ProceduralVerificationEvidence{
-		Kind: ProceduralVerificationEvidenceExternalEvaluation, ID: "evaluation-1", SourceVersion: 2, Corroborates: true,
+		Kind: ProceduralVerificationEvidenceExternalEvaluation, SourceKind: ProceduralVerificationEvidenceSourceExternalEvaluation, ID: "evaluation-1", SourceVersion: 2, Corroborates: true,
 	})
 	right := left
 	right.Evidence = append([]ProceduralVerificationEvidence(nil), left.Evidence...)
@@ -155,6 +155,19 @@ func TestProceduralRevalidationRunRequiresBoundedDurableIdentity(t *testing.T) {
 	}
 }
 
+func TestProceduralVerificationRequiresTypedEvidenceSource(t *testing.T) {
+	verification := validProceduralMemoryVerification()
+	verification.Evidence[0].SourceKind = ""
+	if err := verification.Validate(); err == nil || !strings.Contains(err.Error(), "source kind") {
+		t.Fatalf("Validate() error = %v, want source-kind error", err)
+	}
+
+	verification.Evidence[0].SourceKind = ProceduralVerificationEvidenceSourceRawEvent
+	if err := verification.Validate(); err != nil {
+		t.Fatalf("typed source Validate() error = %v", err)
+	}
+}
+
 func validProceduralMemoryVerification() ProceduralMemoryVerification {
 	return ProceduralMemoryVerification{
 		ID:                       "verification-1",
@@ -165,11 +178,9 @@ func validProceduralMemoryVerification() ProceduralMemoryVerification {
 		ApplicabilityFingerprint: strings.Repeat("b", 64),
 		Disposition:              ProceduralVerificationDispositionSupported,
 		Evidence: []ProceduralVerificationEvidence{{
-			Scope:         Scope{Tenant: "tenant-a", Project: "project-a", Namespace: "namespace-a"},
-			Kind:          ProceduralVerificationEvidenceToolObservation,
-			ID:            "event-1",
-			SourceVersion: 1,
-			Corroborates:  true,
+			Scope: Scope{Tenant: "tenant-a", Project: "project-a", Namespace: "namespace-a"},
+			Kind:  ProceduralVerificationEvidenceToolObservation, SourceKind: ProceduralVerificationEvidenceSourceRawEvent,
+			ID: "event-1", SourceVersion: 1, Corroborates: true,
 		}},
 		Actor:           "operator",
 		Reason:          "verified against the observed tool result",

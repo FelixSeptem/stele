@@ -109,13 +109,39 @@ func (p ProceduralVerificationEvidencePolarity) Valid() bool {
 	}
 }
 
+// ProceduralVerificationEvidenceSourceKind identifies the durable record that
+// supplied an observation. It is separate from evidence Kind (the method used
+// to observe it), allowing the revalidator to re-resolve exactly this source
+// and version without selecting new evidence.
+type ProceduralVerificationEvidenceSourceKind string
+
+const (
+	ProceduralVerificationEvidenceSourceRawEvent           ProceduralVerificationEvidenceSourceKind = "raw_event"
+	ProceduralVerificationEvidenceSourceMemoryVersion      ProceduralVerificationEvidenceSourceKind = "memory_version"
+	ProceduralVerificationEvidenceSourceUsefulnessFeedback ProceduralVerificationEvidenceSourceKind = "usefulness_feedback"
+	ProceduralVerificationEvidenceSourceExternalEvaluation ProceduralVerificationEvidenceSourceKind = "external_evaluation"
+)
+
+func (k ProceduralVerificationEvidenceSourceKind) Valid() bool {
+	switch k {
+	case ProceduralVerificationEvidenceSourceRawEvent,
+		ProceduralVerificationEvidenceSourceMemoryVersion,
+		ProceduralVerificationEvidenceSourceUsefulnessFeedback,
+		ProceduralVerificationEvidenceSourceExternalEvaluation:
+		return true
+	default:
+		return false
+	}
+}
+
 type ProceduralVerificationEvidence struct {
-	Scope         Scope                                  `json:"scope"`
-	Kind          ProceduralVerificationEvidenceKind     `json:"kind"`
-	Polarity      ProceduralVerificationEvidencePolarity `json:"polarity"`
-	ID            string                                 `json:"id"`
-	SourceVersion int64                                  `json:"source_version"`
-	Corroborates  bool                                   `json:"corroborates"`
+	Scope         Scope                                    `json:"scope"`
+	Kind          ProceduralVerificationEvidenceKind       `json:"kind"`
+	SourceKind    ProceduralVerificationEvidenceSourceKind `json:"source_kind"`
+	Polarity      ProceduralVerificationEvidencePolarity   `json:"polarity"`
+	ID            string                                   `json:"id"`
+	SourceVersion int64                                    `json:"source_version"`
+	Corroborates  bool                                     `json:"corroborates"`
 }
 
 func (e ProceduralVerificationEvidence) Validate(scope Scope) error {
@@ -132,6 +158,9 @@ func (e ProceduralVerificationEvidence) Validate(scope Scope) error {
 	}
 	if !e.Kind.Valid() {
 		return fmt.Errorf("evidence kind %q is invalid", e.Kind)
+	}
+	if !e.SourceKind.Valid() {
+		return fmt.Errorf("evidence source kind %q is invalid", e.SourceKind)
 	}
 	if e.Polarity != "" && !e.Polarity.Valid() {
 		return fmt.Errorf("evidence polarity %q is invalid", e.Polarity)
@@ -399,8 +428,8 @@ func ProceduralMemoryVerificationFingerprint(v ProceduralMemoryVerification) (st
 	}
 	sort.Slice(evidence, func(i, j int) bool {
 		left, right := evidence[i], evidence[j]
-		return strings.Join([]string{left.Scope.Normalized().Tenant, left.Scope.Normalized().Project, left.Scope.Normalized().Namespace, string(left.Kind), left.ID, fmt.Sprint(left.SourceVersion), string(left.Polarity), fmt.Sprint(left.Corroborates)}, "\x00") <
-			strings.Join([]string{right.Scope.Normalized().Tenant, right.Scope.Normalized().Project, right.Scope.Normalized().Namespace, string(right.Kind), right.ID, fmt.Sprint(right.SourceVersion), string(right.Polarity), fmt.Sprint(right.Corroborates)}, "\x00")
+		return strings.Join([]string{left.Scope.Normalized().Tenant, left.Scope.Normalized().Project, left.Scope.Normalized().Namespace, string(left.Kind), string(left.SourceKind), left.ID, fmt.Sprint(left.SourceVersion), string(left.Polarity), fmt.Sprint(left.Corroborates)}, "\x00") <
+			strings.Join([]string{right.Scope.Normalized().Tenant, right.Scope.Normalized().Project, right.Scope.Normalized().Namespace, string(right.Kind), string(right.SourceKind), right.ID, fmt.Sprint(right.SourceVersion), string(right.Polarity), fmt.Sprint(right.Corroborates)}, "\x00")
 	})
 	payload := struct {
 		Scope                    Scope                             `json:"scope"`
