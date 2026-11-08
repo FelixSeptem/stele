@@ -4,12 +4,20 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"sort"
 	"strings"
 	"time"
 	"unicode/utf8"
 )
+
+// ErrNotFound is returned for a resource that is absent from the caller's
+// exact scope. Callers must not distinguish an absent record from a foreign
+// one.
+var ErrNotFound = errors.New("memory resource not found")
+
+var ErrProceduralRevalidationLeaseLost = errors.New("procedural revalidation lease ownership lost")
 
 // The verification limits intentionally keep the append-only ledger compact.
 // Source content remains at its authoritative source; the ledger carries only
@@ -220,10 +228,68 @@ type ProceduralRevalidationRun struct {
 	MaxAttempts            int                             `json:"max_attempts"`
 	LeaseOwner             string                          `json:"lease_owner,omitempty"`
 	LeaseExpiresAt         time.Time                       `json:"lease_expires_at,omitempty"`
+	NextAttemptAt          time.Time                       `json:"next_attempt_at,omitempty"`
 	TerminalVerificationID string                          `json:"terminal_verification_id,omitempty"`
 	FailureCategory        string                          `json:"failure_category,omitempty"`
 	CreatedAt              time.Time                       `json:"created_at"`
 	UpdatedAt              time.Time                       `json:"updated_at,omitempty"`
+}
+
+type ClaimProceduralRevalidationRunsInput struct {
+	Scope         Scope
+	WorkerID      string
+	Now           time.Time
+	LeaseDuration time.Duration
+	Limit         int
+}
+
+type CompleteProceduralRevalidationRunInput struct {
+	Scope                  Scope
+	RunID                  string
+	WorkerID               string
+	Status                 ProceduralRevalidationRunStatus
+	TerminalVerificationID string
+	CompletedAt            time.Time
+}
+
+func (i CompleteProceduralRevalidationRunInput) Validate() error {
+	if err := i.Scope.Validate(); err != nil {
+		return err
+	}
+	for name, value := range map[string]string{
+		"revalidation run id": i.RunID, "revalidation worker id": i.WorkerID,
+		"terminal verification id": i.TerminalVerificationID,
+	} {
+		if err := boundedRequiredText(name, value, ProceduralVerificationMaxIDBytes); err != nil {
+			return err
+		}
+	}
+	if i.Status != ProceduralRevalidationRunStatusCompleted && i.Status != ProceduralRevalidationRunStatusFailed && i.Status != ProceduralRevalidationRunStatusExhausted {
+		return fmt.Errorf("revalidation completion status %q is invalid", i.Status)
+	}
+	if i.CompletedAt.IsZero() {
+		return fmt.Errorf("revalidation completion time is required")
+	}
+	return nil
+}
+
+func (i ClaimProceduralRevalidationRunsInput) Validate() error {
+	if err := i.Scope.Validate(); err != nil {
+		return err
+	}
+	if err := boundedRequiredText("revalidation worker id", i.WorkerID, ProceduralVerificationMaxIDBytes); err != nil {
+		return err
+	}
+	if i.Now.IsZero() {
+		return fmt.Errorf("revalidation claim time is required")
+	}
+	if i.LeaseDuration <= 0 || i.LeaseDuration > time.Hour {
+		return fmt.Errorf("revalidation lease duration must be between zero and one hour")
+	}
+	if i.Limit <= 0 || i.Limit > ProceduralVerificationMaxEvidence {
+		return fmt.Errorf("revalidation claim limit must be between one and %d", ProceduralVerificationMaxEvidence)
+	}
+	return nil
 }
 
 func (r ProceduralRevalidationRun) Validate() error {
