@@ -207,6 +207,34 @@ type ProceduralVerificationEvidenceResolver interface {
 	ValidateProceduralVerificationEvidence(context.Context, Scope, ProceduralVerificationEvidence) error
 }
 
+type ProceduralVerificationPolicyDecision struct {
+	Enabled bool
+	Version string
+}
+
+type ProceduralVerificationPolicy interface {
+	EvaluateProceduralVerification(context.Context, Scope) (ProceduralVerificationPolicyDecision, error)
+}
+
+// StaticProceduralVerificationPolicy is the process-local policy adapter used
+// by configuration wiring. It is exact-scope so enabling an installation never
+// silently turns the workflow on for every tenant.
+type StaticProceduralVerificationPolicy struct {
+	Scope   Scope
+	Enabled bool
+	Version string
+}
+
+func (p StaticProceduralVerificationPolicy) EvaluateProceduralVerification(_ context.Context, scope Scope) (ProceduralVerificationPolicyDecision, error) {
+	if err := scope.Validate(); err != nil {
+		return ProceduralVerificationPolicyDecision{}, err
+	}
+	if err := p.Scope.Validate(); err != nil || p.Scope.Normalized() != scope.Normalized() {
+		return ProceduralVerificationPolicyDecision{Enabled: false, Version: strings.TrimSpace(p.Version)}, nil
+	}
+	return ProceduralVerificationPolicyDecision{Enabled: p.Enabled, Version: strings.TrimSpace(p.Version)}, nil
+}
+
 // ProceduralVerificationService admits only attributable administrator
 // assertions. It contains no retrieval or model invocation: each cited source
 // must be resolved by the repository-owned resolver before persistence.
