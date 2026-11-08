@@ -161,6 +161,29 @@ func TestProceduralVerificationRepositoryListsTargetHistoryInExactScope(t *testi
 	}
 }
 
+func TestProceduralVerificationRepositoryResolvesCurrentTargetAndTypedEvidence(t *testing.T) {
+	mock, err := pgxmock.NewPool()
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer mock.Close()
+	record := postgresProceduralVerification()
+	mock.ExpectQuery("FROM canonical_memories m").WithArgs(record.Scope.Tenant, record.Scope.Project, record.Scope.Namespace, record.MemoryID, record.TargetVersion).
+		WillReturnRows(pgxmock.NewRows([]string{"eligible"}).AddRow(true))
+	mock.ExpectQuery("FROM raw_events").WithArgs(record.Scope.Tenant, record.Scope.Project, record.Scope.Namespace, record.Evidence[0].ID).
+		WillReturnRows(pgxmock.NewRows([]string{"eligible"}).AddRow(true))
+	repo := NewRepository(mock)
+	if err := repo.ValidateProceduralVerificationTarget(context.Background(), record); err != nil {
+		t.Fatalf("target validation: %v", err)
+	}
+	if err := repo.ValidateProceduralVerificationEvidence(context.Background(), record.Scope, record.Evidence[0]); err != nil {
+		t.Fatalf("evidence validation: %v", err)
+	}
+	if err := mock.ExpectationsWereMet(); err != nil {
+		t.Fatal(err)
+	}
+}
+
 func postgresProceduralVerification() memory.ProceduralMemoryVerification {
 	return memory.ProceduralMemoryVerification{
 		ID: "00000000-0000-0000-0000-000000000101", Scope: memory.Scope{Tenant: "tenant-a", Project: "project-a", Namespace: "namespace-a"},

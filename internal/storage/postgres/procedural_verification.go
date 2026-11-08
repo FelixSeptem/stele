@@ -58,6 +58,82 @@ RETURNING id::text, tenant, project, namespace, memory_id::text, target_version,
 	return r.readProceduralMemoryVerificationByFingerprint(ctx, record.Scope, fingerprint)
 }
 
+// ValidateProceduralVerificationTarget is the admission-time proof that the
+// target is still an active, current procedural version in the asserted scope.
+// It deliberately returns the same not-found category for foreign, hidden,
+// stale, and nonprocedural targets.
+func (r *Repository) ValidateProceduralVerificationTarget(ctx context.Context, record memory.ProceduralMemoryVerification) error {
+	const query = `
+SELECT EXISTS (
+    SELECT 1
+    FROM canonical_memories m
+    JOIN memory_versions v ON v.memory_id = m.id AND v.version = $5
+    WHERE m.tenant = $1 AND m.project = $2 AND m.namespace = $3 AND m.id = $4::uuid
+      AND m.class = 'procedural' AND m.state = 'active'
+      AND NOT EXISTS (SELECT 1 FROM memory_versions successor WHERE successor.memory_id = m.id AND successor.version > v.version)
+) AS eligible
+`
+	var eligible bool
+	if err := r.queryer(ctx).QueryRow(ctx, query, record.Scope.Tenant, record.Scope.Project, record.Scope.Namespace, record.MemoryID, record.TargetVersion).Scan(&eligible); err != nil {
+		return fmt.Errorf("resolve procedural verification target: %w", err)
+	}
+	if !eligible {
+		return memory.ErrNotFound
+	}
+	return nil
+}
+
+// ValidateProceduralVerificationEvidence proves a durable, exact-scope source
+// remains eligible. It never searches for replacements: the kind, identifier,
+// and observed version recorded in the immutable evidence row are its entire
+// authority.
+func (r *Repository) ValidateProceduralVerificationEvidence(ctx context.Context, scope memory.Scope, evidence memory.ProceduralVerificationEvidence) error {
+	if err := scope.Validate(); err != nil {
+		return err
+	}
+	if err := evidence.Validate(scope); err != nil {
+		return err
+	}
+	var query string
+	args := []any{scope.Tenant, scope.Project, scope.Namespace, evidence.ID}
+	switch evidence.SourceKind {
+	case memory.ProceduralVerificationEvidenceSourceRawEvent:
+		// Raw events are immutable. Version one denotes the only durable source
+		// revision and makes drift detectable if this contract later evolves.
+		if evidence.SourceVersion != 1 {
+			return memory.ErrNotFound
+		}
+		query = `SELECT EXISTS (SELECT 1 FROM raw_events WHERE tenant = $1 AND project = $2 AND namespace = $3 AND id = $4::uuid) AS eligible`
+	case memory.ProceduralVerificationEvidenceSourceMemoryVersion:
+		query = `SELECT EXISTS (
+            SELECT 1 FROM memory_versions v JOIN canonical_memories m ON m.id = v.memory_id
+            WHERE m.tenant = $1 AND m.project = $2 AND m.namespace = $3
+              AND v.id = $4::uuid AND v.version = $5 AND m.state = 'active'
+        ) AS eligible`
+		args = append(args, evidence.SourceVersion)
+	case memory.ProceduralVerificationEvidenceSourceUsefulnessFeedback:
+		if evidence.SourceVersion != 1 {
+			return memory.ErrNotFound
+		}
+		query = `SELECT EXISTS (SELECT 1 FROM usefulness_feedback WHERE tenant = $1 AND project = $2 AND namespace = $3 AND id = $4 AND superseded_at IS NULL) AS eligible`
+	case memory.ProceduralVerificationEvidenceSourceExternalEvaluation:
+		if evidence.SourceVersion != 1 {
+			return memory.ErrNotFound
+		}
+		query = `SELECT EXISTS (SELECT 1 FROM task_evaluations WHERE tenant = $1 AND project = $2 AND namespace = $3 AND id = $4::uuid AND correction_state = 'active') AS eligible`
+	default:
+		return memory.ErrNotFound
+	}
+	var eligible bool
+	if err := r.queryer(ctx).QueryRow(ctx, query, args...).Scan(&eligible); err != nil {
+		return fmt.Errorf("resolve procedural verification evidence: %w", err)
+	}
+	if !eligible {
+		return memory.ErrNotFound
+	}
+	return nil
+}
+
 func (r *Repository) ReadProceduralMemoryVerification(ctx context.Context, scope memory.Scope, id string) (memory.ProceduralMemoryVerification, error) {
 	if err := scope.Validate(); err != nil {
 		return memory.ProceduralMemoryVerification{}, err
