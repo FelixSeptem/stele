@@ -168,6 +168,23 @@ func TestProceduralVerificationRequiresTypedEvidenceSource(t *testing.T) {
 	}
 }
 
+func TestProceduralVerificationLineageIsBoundedAndAdminScoped(t *testing.T) {
+	lineage := ProceduralVerificationLineage{
+		Scope: Scope{Tenant: "tenant-a", Project: "project-a", Namespace: "namespace-a"}, MemoryID: "memory-1", TargetVersion: 2,
+		Verifications: []ProceduralMemoryVerification{validProceduralMemoryVerification()},
+		Runs:          []ProceduralRevalidationRun{{ID: "run-1"}},
+	}
+	lineage.Verifications[0].MemoryID = lineage.MemoryID
+	lineage.Verifications[0].TargetVersion = lineage.TargetVersion
+	if err := lineage.Validate(); err != nil {
+		t.Fatalf("Validate() error = %v", err)
+	}
+	lineage.Verifications[0].Scope.Tenant = "foreign"
+	if err := lineage.Validate(); err == nil || !strings.Contains(err.Error(), "scope") {
+		t.Fatalf("foreign lineage error = %v", err)
+	}
+}
+
 func validProceduralMemoryVerification() ProceduralMemoryVerification {
 	return ProceduralMemoryVerification{
 		ID:                       "verification-1",

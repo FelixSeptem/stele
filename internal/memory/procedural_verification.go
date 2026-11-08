@@ -216,6 +216,49 @@ type ProceduralVerificationService struct {
 	Evidence ProceduralVerificationEvidenceResolver
 }
 
+// ProceduralVerificationLineage is the bounded admin audit projection. It is
+// intentionally not embedded in MemoryHistory or QueryStore: ordinary memory
+// history and Provider retrieval must not acquire a verification disclosure
+// path merely because the ledger exists.
+type ProceduralVerificationLineage struct {
+	Scope         Scope
+	MemoryID      string
+	TargetVersion int64
+	Verifications []ProceduralMemoryVerification
+	Runs          []ProceduralRevalidationRun
+}
+
+func (l ProceduralVerificationLineage) Validate() error {
+	if err := l.Scope.Validate(); err != nil {
+		return fmt.Errorf("procedural verification lineage scope: %w", err)
+	}
+	if err := boundedRequiredText("procedural verification lineage memory id", l.MemoryID, ProceduralVerificationMaxIDBytes); err != nil {
+		return err
+	}
+	if l.TargetVersion <= 0 {
+		return fmt.Errorf("procedural verification lineage target version must be greater than zero")
+	}
+	if len(l.Verifications) > 100 || len(l.Runs) > 100 {
+		return fmt.Errorf("procedural verification lineage exceeds bounded history")
+	}
+	for index, verification := range l.Verifications {
+		if verification.Scope.Normalized() != l.Scope.Normalized() || verification.MemoryID != l.MemoryID || verification.TargetVersion != l.TargetVersion {
+			return fmt.Errorf("procedural verification lineage verification %d has mismatched scope or target", index)
+		}
+	}
+	for index, run := range l.Runs {
+		// A redacted run projection may omit fields in a future list view. When
+		// present, identity fields must still bind exactly to this lineage.
+		if run.ID == "" {
+			return fmt.Errorf("procedural verification lineage run %d is invalid", index)
+		}
+		if run.Scope != (Scope{}) && (run.Scope.Normalized() != l.Scope.Normalized() || run.MemoryID != l.MemoryID || run.TargetVersion != l.TargetVersion) {
+			return fmt.Errorf("procedural verification lineage run %d has mismatched scope or target", index)
+		}
+	}
+	return nil
+}
+
 func (s ProceduralVerificationService) Record(ctx context.Context, record ProceduralMemoryVerification) (ProceduralMemoryVerification, error) {
 	if err := record.Validate(); err != nil {
 		return ProceduralMemoryVerification{}, err

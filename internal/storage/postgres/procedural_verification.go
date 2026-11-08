@@ -191,6 +191,55 @@ LIMIT $6
 	return history, nil
 }
 
+// ReadProceduralVerificationLineage is deliberately separate from ordinary
+// canonical-memory history. Its caller is the privileged admin boundary that
+// has already proved scope authority; this repository method reinforces that
+// scope on each ledger and run query.
+func (r *Repository) ReadProceduralVerificationLineage(ctx context.Context, scope memory.Scope, memoryID string, targetVersion int64) (memory.ProceduralVerificationLineage, error) {
+	if err := scope.Validate(); err != nil {
+		return memory.ProceduralVerificationLineage{}, err
+	}
+	if memoryID == "" || targetVersion <= 0 {
+		return memory.ProceduralVerificationLineage{}, fmt.Errorf("procedural verification lineage input is invalid")
+	}
+	verifications, err := r.ListProceduralMemoryVerificationHistory(ctx, scope, memoryID, targetVersion, 100)
+	if err != nil {
+		return memory.ProceduralVerificationLineage{}, err
+	}
+	const query = `
+SELECT id::text, tenant, project, namespace, verification_id::text,
+    memory_id::text, target_version, source_watermark, trigger, work_identity,
+    status, attempt_count, max_attempts, lease_owner, lease_expires_at,
+    next_attempt_at, terminal_verification_id::text, failure_category,
+    created_at, updated_at, terminal_at
+FROM procedural_memory_revalidation_runs
+WHERE tenant = $1 AND project = $2 AND namespace = $3
+  AND memory_id = $4::uuid AND target_version = $5
+ORDER BY created_at DESC, id DESC
+LIMIT $6
+`
+	rows, err := r.queryer(ctx).Query(ctx, query, scope.Tenant, scope.Project, scope.Namespace, memoryID, targetVersion, 100)
+	if err != nil {
+		return memory.ProceduralVerificationLineage{}, fmt.Errorf("read procedural revalidation lineage: %w", err)
+	}
+	defer rows.Close()
+	lineage := memory.ProceduralVerificationLineage{Scope: scope, MemoryID: memoryID, TargetVersion: targetVersion, Verifications: verifications}
+	for rows.Next() {
+		run, err := scanProceduralRevalidationRun(rows)
+		if err != nil {
+			return memory.ProceduralVerificationLineage{}, fmt.Errorf("scan procedural revalidation lineage: %w", err)
+		}
+		lineage.Runs = append(lineage.Runs, run)
+	}
+	if err := rows.Err(); err != nil {
+		return memory.ProceduralVerificationLineage{}, fmt.Errorf("iterate procedural revalidation lineage: %w", err)
+	}
+	if err := lineage.Validate(); err != nil {
+		return memory.ProceduralVerificationLineage{}, err
+	}
+	return lineage, nil
+}
+
 func (r *Repository) readProceduralMemoryVerificationByFingerprint(ctx context.Context, scope memory.Scope, fingerprint string) (memory.ProceduralMemoryVerification, error) {
 	const query = `
 SELECT id::text, tenant, project, namespace, memory_id::text, target_version, fingerprint,

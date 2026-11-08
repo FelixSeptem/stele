@@ -207,6 +207,35 @@ func TestProceduralVerificationRepositoryReadsRevalidationRunInExactScope(t *tes
 	}
 }
 
+func TestProceduralVerificationRepositoryReadsAdminLineageWithinOneTargetScope(t *testing.T) {
+	mock, err := pgxmock.NewPool()
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer mock.Close()
+	now := time.Date(2026, time.November, 8, 1, 0, 0, 0, time.UTC)
+	record := postgresProceduralVerification()
+	fingerprint, err := memory.ProceduralMemoryVerificationFingerprint(record)
+	if err != nil {
+		t.Fatal(err)
+	}
+	mock.ExpectQuery("FROM procedural_memory_verifications").WithArgs(record.Scope.Tenant, record.Scope.Project, record.Scope.Namespace, record.MemoryID, record.TargetVersion, 100).
+		WillReturnRows(proceduralVerificationRows(record, fingerprint))
+	mock.ExpectQuery("FROM procedural_memory_revalidation_runs").WithArgs(record.Scope.Tenant, record.Scope.Project, record.Scope.Namespace, record.MemoryID, record.TargetVersion, 100).
+		WillReturnRows(proceduralRevalidationRunRows(now, record.Scope))
+
+	lineage, err := NewRepository(mock).ReadProceduralVerificationLineage(context.Background(), record.Scope, record.MemoryID, record.TargetVersion)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(lineage.Verifications) != 1 || len(lineage.Runs) != 1 || lineage.Verifications[0].ID != record.ID {
+		t.Fatalf("lineage = %+v", lineage)
+	}
+	if err := mock.ExpectationsWereMet(); err != nil {
+		t.Fatal(err)
+	}
+}
+
 func postgresProceduralVerification() memory.ProceduralMemoryVerification {
 	return memory.ProceduralMemoryVerification{
 		ID: "00000000-0000-0000-0000-000000000101", Scope: memory.Scope{Tenant: "tenant-a", Project: "project-a", Namespace: "namespace-a"},
