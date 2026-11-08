@@ -84,6 +84,29 @@ func TestProceduralVerificationRepositoryClaimsExpiredRevalidationRun(t *testing
 	}
 }
 
+func TestProceduralVerificationRepositoryClaimsReferencedPendingRunWithLeaseOwnership(t *testing.T) {
+	mock, err := pgxmock.NewPool()
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer mock.Close()
+	now := time.Date(2026, time.November, 8, 1, 0, 0, 0, time.UTC)
+	scope := memory.Scope{Tenant: "tenant-a", Project: "project-a", Namespace: "namespace-a"}
+	mock.ExpectQuery("UPDATE procedural_memory_revalidation_runs").WithArgs(scope.Tenant, scope.Project, scope.Namespace, "00000000-0000-0000-0000-000000000201", "worker-a", now, now.Add(time.Minute)).
+		WillReturnRows(proceduralRevalidationRunRows(now, scope))
+
+	run, err := NewRepository(mock).ClaimProceduralRevalidationRun(context.Background(), memory.ClaimProceduralRevalidationRunInput{Scope: scope, RunID: "00000000-0000-0000-0000-000000000201", WorkerID: "worker-a", Now: now, LeaseDuration: time.Minute})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if run.LeaseOwner != "worker-b" {
+		t.Fatalf("run lease owner = %q", run.LeaseOwner)
+	}
+	if err := mock.ExpectationsWereMet(); err != nil {
+		t.Fatal(err)
+	}
+}
+
 func TestProceduralVerificationRepositoryCreatesRevalidationRunByScopedWorkIdentity(t *testing.T) {
 	mock, err := pgxmock.NewPool()
 	if err != nil {

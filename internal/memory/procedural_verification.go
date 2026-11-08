@@ -393,6 +393,33 @@ type ClaimProceduralRevalidationRunsInput struct {
 	Limit         int
 }
 
+// ClaimProceduralRevalidationRunInput binds derived queue delivery to the
+// durable run it references. The same run may be redelivered after a queue
+// restart, but only one worker can own its lease at a time.
+type ClaimProceduralRevalidationRunInput struct {
+	Scope         Scope
+	RunID         string
+	WorkerID      string
+	Now           time.Time
+	LeaseDuration time.Duration
+}
+
+func (i ClaimProceduralRevalidationRunInput) Validate() error {
+	if err := i.Scope.Validate(); err != nil {
+		return err
+	}
+	if err := boundedRequiredText("revalidation run id", i.RunID, ProceduralVerificationMaxIDBytes); err != nil {
+		return err
+	}
+	if err := boundedRequiredText("revalidation worker id", i.WorkerID, ProceduralVerificationMaxIDBytes); err != nil {
+		return err
+	}
+	if i.Now.IsZero() || i.LeaseDuration <= 0 || i.LeaseDuration > time.Hour {
+		return fmt.Errorf("revalidation run lease input is invalid")
+	}
+	return nil
+}
+
 type CompleteProceduralRevalidationRunInput struct {
 	Scope                  Scope
 	RunID                  string

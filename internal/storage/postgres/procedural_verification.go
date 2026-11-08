@@ -305,6 +305,40 @@ RETURNING r.id::text, r.tenant, r.project, r.namespace, r.verification_id::text,
 	return runs, nil
 }
 
+// ClaimProceduralRevalidationRun binds a delivered derived-work reference to a
+// lease on exactly one durable run. A redelivery while the lease is live fails
+// closed; an expired lease is safely reclaimable after process restart.
+func (r *Repository) ClaimProceduralRevalidationRun(ctx context.Context, input memory.ClaimProceduralRevalidationRunInput) (memory.ProceduralRevalidationRun, error) {
+	if err := input.Validate(); err != nil {
+		return memory.ProceduralRevalidationRun{}, err
+	}
+	const query = `
+UPDATE procedural_memory_revalidation_runs
+SET status = 'running', lease_owner = $5, lease_expires_at = $7,
+    attempt_count = attempt_count + 1, updated_at = $6
+WHERE tenant = $1 AND project = $2 AND namespace = $3 AND id = $4::uuid
+  AND status IN ('pending', 'running')
+  AND next_attempt_at <= $6
+  AND (lease_expires_at IS NULL OR lease_expires_at <= $6)
+RETURNING id::text, tenant, project, namespace, verification_id::text,
+    memory_id::text, target_version, source_watermark, trigger, work_identity,
+    status, attempt_count, max_attempts, lease_owner, lease_expires_at,
+    next_attempt_at, terminal_verification_id::text, failure_category,
+    created_at, updated_at, terminal_at
+`
+	run, err := scanProceduralRevalidationRun(r.queryer(ctx).QueryRow(ctx, query,
+		input.Scope.Tenant, input.Scope.Project, input.Scope.Namespace, input.RunID, input.WorkerID,
+		input.Now.UTC(), input.Now.UTC().Add(input.LeaseDuration),
+	))
+	if errors.Is(err, pgx.ErrNoRows) {
+		return memory.ProceduralRevalidationRun{}, memory.ErrProceduralRevalidationLeaseLost
+	}
+	if err != nil {
+		return memory.ProceduralRevalidationRun{}, fmt.Errorf("claim procedural revalidation run: %w", err)
+	}
+	return run, nil
+}
+
 func (r *Repository) CreateProceduralRevalidationRun(ctx context.Context, run memory.ProceduralRevalidationRun) (memory.ProceduralRevalidationRun, error) {
 	if err := run.Validate(); err != nil {
 		return memory.ProceduralRevalidationRun{}, err
