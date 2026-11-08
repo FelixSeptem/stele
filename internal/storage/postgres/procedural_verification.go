@@ -294,6 +294,32 @@ RETURNING id::text, tenant, project, namespace, verification_id::text,
 	return stored, nil
 }
 
+func (r *Repository) ReadProceduralRevalidationRun(ctx context.Context, scope memory.Scope, runID string) (memory.ProceduralRevalidationRun, error) {
+	if err := scope.Validate(); err != nil {
+		return memory.ProceduralRevalidationRun{}, err
+	}
+	if runID == "" {
+		return memory.ProceduralRevalidationRun{}, fmt.Errorf("procedural revalidation run id is required")
+	}
+	const query = `
+SELECT id::text, tenant, project, namespace, verification_id::text,
+    memory_id::text, target_version, source_watermark, trigger, work_identity,
+    status, attempt_count, max_attempts, lease_owner, lease_expires_at,
+    next_attempt_at, terminal_verification_id::text, failure_category,
+    created_at, updated_at, terminal_at
+FROM procedural_memory_revalidation_runs
+WHERE tenant = $1 AND project = $2 AND namespace = $3 AND id = $4::uuid
+`
+	run, err := scanProceduralRevalidationRun(r.queryer(ctx).QueryRow(ctx, query, scope.Tenant, scope.Project, scope.Namespace, runID))
+	if errors.Is(err, pgx.ErrNoRows) {
+		return memory.ProceduralRevalidationRun{}, memory.ErrNotFound
+	}
+	if err != nil {
+		return memory.ProceduralRevalidationRun{}, fmt.Errorf("read procedural revalidation run: %w", err)
+	}
+	return run, nil
+}
+
 func (r *Repository) CompleteProceduralRevalidationRun(ctx context.Context, input memory.CompleteProceduralRevalidationRunInput) error {
 	if err := input.Validate(); err != nil {
 		return err

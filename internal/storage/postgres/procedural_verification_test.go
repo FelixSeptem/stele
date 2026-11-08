@@ -184,6 +184,29 @@ func TestProceduralVerificationRepositoryResolvesCurrentTargetAndTypedEvidence(t
 	}
 }
 
+func TestProceduralVerificationRepositoryReadsRevalidationRunInExactScope(t *testing.T) {
+	mock, err := pgxmock.NewPool()
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer mock.Close()
+	now := time.Date(2026, time.November, 8, 1, 0, 0, 0, time.UTC)
+	scope := memory.Scope{Tenant: "tenant-a", Project: "project-a", Namespace: "namespace-a"}
+	mock.ExpectQuery("FROM procedural_memory_revalidation_runs").WithArgs(scope.Tenant, scope.Project, scope.Namespace, "00000000-0000-0000-0000-000000000201").
+		WillReturnRows(proceduralRevalidationRunRows(now, scope))
+
+	run, err := NewRepository(mock).ReadProceduralRevalidationRun(context.Background(), scope, "00000000-0000-0000-0000-000000000201")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if run.ID == "" || run.Scope != scope || run.TargetVersion != 3 {
+		t.Fatalf("run = %+v", run)
+	}
+	if err := mock.ExpectationsWereMet(); err != nil {
+		t.Fatal(err)
+	}
+}
+
 func postgresProceduralVerification() memory.ProceduralMemoryVerification {
 	return memory.ProceduralMemoryVerification{
 		ID: "00000000-0000-0000-0000-000000000101", Scope: memory.Scope{Tenant: "tenant-a", Project: "project-a", Namespace: "namespace-a"},
