@@ -36,6 +36,10 @@ detail.
 
 ## Extend and maintain Stele
 
+- Consult the [Stele v1 roadmap](roadmaps/2026-05-28-stele-v1-roadmap.md) for
+  baseline status and follow-up priorities, and the
+  [evidence-verified memory maintenance roadmap](roadmaps/2026-11-08-evidence-verified-memory-maintenance-roadmap.md)
+  for the Anthropic-informed verification, correction, and evaluation backlog.
 - Read [Key components](components.md) before changing Go package ownership.
 - Use [Self-hosting](self-hosting.md) for deployment and recovery operations.
 - Follow the repository's [tests](../docs/documentation_test.go) and

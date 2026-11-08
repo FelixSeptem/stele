@@ -1466,6 +1466,35 @@ Reasoning:
 
 This section captures external reference findings that should inform post-v1 planning without changing the current execution order. The references include `alash3al/stash`, a Go, PostgreSQL, pgvector, and MCP-oriented agent memory project; `supermemoryai/supermemory`, whose public repository supplies MCP/SDK contracts and documentation rather than its core memory engine; and `MemTensor/MemOS`, an application-oriented memory platform with a self-hosted service and agent plugins. Treat this section as a research backlog, not as an approved implementation plan.
 
+### Anthropic Agent Memory Research (2026-11-08)
+
+The [evidence-verified memory maintenance roadmap](2026-11-08-evidence-verified-memory-maintenance-roadmap.md)
+captures the review of Anthropic's
+[The components of agent memory](https://www.anthropic.com/research/components-of-agent-memory)
+(published 2026-11-06). Research is complete; the follow-up tracks are candidates
+pending OpenSpec proposals and implementation evidence, not delivered behavior
+or permission to activate existing experiments.
+
+Recommended sequence: EV1 verification evidence, then EV2 targeted background
+correction, followed by EV3 task-appropriate representations and EV4 resident
+context promotion/demotion. EV5 longitudinal evaluation starts with EV1 and
+accompanies every track. These local identifiers do not replace the global
+priority order or reopen archived P2/P5/P6, RQ, or Provider foundations.
+
+Reuse reflection/intents, source lineage, successor versions, context
+projections, progressive retrieval experiments, feedback, and task-series
+evaluation. Distinguish claim verification from confidence, provenance, and
+active lifecycle; compare corrections against attributable observations rather
+than treating model transcripts as inherently true. Prioritize a bounded
+procedural-lesson correction loop with subsequent-task evidence before broader
+representation changes. Keep PostgreSQL authoritative, evidence scope-safe,
+reasoning optional, and experimental activation subject to existing gates.
+
+The detailed roadmap records source limitations, existing implementation and
+enablement boundaries, dependencies, acceptance evidence, rollback, and required
+maintenance documentation. Its first candidate slice combines EV1/EV2 with EV5
+fixtures; vendor benchmark gains are not Stele acceptance targets.
+
 ### MemOS Reference Summary
 
 MemOS was reviewed at repository HEAD
