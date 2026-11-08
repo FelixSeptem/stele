@@ -1,6 +1,7 @@
 package memory
 
 import (
+	"context"
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
@@ -189,6 +190,55 @@ type ProceduralMemoryVerification struct {
 	SourceWatermark          string                            `json:"source_watermark"`
 	CorrectedContent         string                            `json:"corrected_content,omitempty"`
 	CreatedAt                time.Time                         `json:"created_at"`
+}
+
+// ProceduralVerificationStore owns append-only persistence. Target and
+// evidence validation remain separate because a generic caller must never be
+// able to turn an arbitrary identifier into proof by writing it to the ledger.
+type ProceduralVerificationStore interface {
+	AppendProceduralMemoryVerification(context.Context, ProceduralMemoryVerification) (ProceduralMemoryVerification, error)
+}
+
+type ProceduralVerificationTargetResolver interface {
+	ValidateProceduralVerificationTarget(context.Context, ProceduralMemoryVerification) error
+}
+
+type ProceduralVerificationEvidenceResolver interface {
+	ValidateProceduralVerificationEvidence(context.Context, Scope, ProceduralVerificationEvidence) error
+}
+
+// ProceduralVerificationService admits only attributable administrator
+// assertions. It contains no retrieval or model invocation: each cited source
+// must be resolved by the repository-owned resolver before persistence.
+type ProceduralVerificationService struct {
+	Store    ProceduralVerificationStore
+	Targets  ProceduralVerificationTargetResolver
+	Evidence ProceduralVerificationEvidenceResolver
+}
+
+func (s ProceduralVerificationService) Record(ctx context.Context, record ProceduralMemoryVerification) (ProceduralMemoryVerification, error) {
+	if err := record.Validate(); err != nil {
+		return ProceduralMemoryVerification{}, err
+	}
+	if s.Store == nil || s.Targets == nil || s.Evidence == nil {
+		return ProceduralMemoryVerification{}, fmt.Errorf("procedural verification service is not configured")
+	}
+	if err := s.Targets.ValidateProceduralVerificationTarget(ctx, record); err != nil {
+		return ProceduralMemoryVerification{}, fmt.Errorf("validate procedural verification target: %w", err)
+	}
+	for index, evidence := range record.Evidence {
+		if evidence.Scope == (Scope{}) {
+			evidence.Scope = record.Scope.Normalized()
+		}
+		if err := s.Evidence.ValidateProceduralVerificationEvidence(ctx, record.Scope, evidence); err != nil {
+			return ProceduralMemoryVerification{}, fmt.Errorf("validate procedural verification evidence %d: %w", index, err)
+		}
+	}
+	stored, err := s.Store.AppendProceduralMemoryVerification(ctx, record)
+	if err != nil {
+		return ProceduralMemoryVerification{}, fmt.Errorf("append procedural verification: %w", err)
+	}
+	return stored, nil
 }
 
 // ProceduralRevalidationTrigger identifies why a previously recorded
