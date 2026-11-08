@@ -56,7 +56,7 @@ func TestProceduralVerificationMigrationDefinesScopedImmutableLedgerAndLeaseRuns
 		"procedural_memory_verifications_scope_fingerprint_idx",
 		"procedural_memory_verifications_append_only",
 		"procedural_memory_revalidation_runs_scope_work_identity_idx",
-		"tenant", "project", "namespace", "evidence jsonb", "lease_expires_at", "m.state = 'active'", "max(current_v.version)",
+		"tenant", "project", "namespace", "evidence jsonb", "lease_expires_at", "m.state = 'active'", "max(current_v.version)", "derived_work_items_kind_check", "procedural_revalidation",
 	} {
 		if !strings.Contains(sql, required) {
 			t.Errorf("procedural verification migration missing %q", required)

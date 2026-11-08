@@ -114,3 +114,7 @@ $$;
 CREATE TRIGGER procedural_memory_revalidation_runs_scope_guard
     BEFORE INSERT OR UPDATE ON procedural_memory_revalidation_runs
     FOR EACH ROW EXECUTE FUNCTION verify_procedural_revalidation_run_scope();
+
+ALTER TABLE derived_work_items DROP CONSTRAINT IF EXISTS derived_work_items_kind_check;
+ALTER TABLE derived_work_items ADD CONSTRAINT derived_work_items_kind_check
+    CHECK (kind IN ('reflection', 'compaction', 'projection_rebuild', 'insight_maintenance', 'freshness_retention', 'memory_intent', 'memory_repository_import', 'procedural_revalidation'));

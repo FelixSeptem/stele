@@ -34,11 +34,12 @@ const (
 	WorkKindFreshnessRetention     WorkKind = "freshness_retention"
 	WorkKindMemoryIntent           WorkKind = "memory_intent"
 	WorkKindMemoryRepositoryImport WorkKind = "memory_repository_import"
+	WorkKindProceduralRevalidation WorkKind = "procedural_revalidation"
 )
 
 func (k WorkKind) Valid() bool {
 	switch k {
-	case WorkKindReflection, WorkKindCompaction, WorkKindProjectionRebuild, WorkKindInsightMaintenance, WorkKindFreshnessRetention, WorkKindMemoryIntent, WorkKindMemoryRepositoryImport:
+	case WorkKindReflection, WorkKindCompaction, WorkKindProjectionRebuild, WorkKindInsightMaintenance, WorkKindFreshnessRetention, WorkKindMemoryIntent, WorkKindMemoryRepositoryImport, WorkKindProceduralRevalidation:
 		return true
 	default:
 		return false
