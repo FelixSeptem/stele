@@ -533,6 +533,104 @@ func TestBuildWorkerRuntimeAssemblesGovernanceWorker(t *testing.T) {
 	}
 }
 
+func TestBuildWorkerRuntimeWiresEnabledProceduralRevalidation(t *testing.T) {
+	mock, err := pgxmock.NewPool()
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer mock.Close()
+	cfg := config.Config{
+		Mode:        config.ModeWorker,
+		PostgresDSN: "postgres://runtime",
+		Auth:        config.AuthConfig{DefaultTenant: "tenant-a", DefaultProject: "project-a", DefaultNamespace: "namespace-a"},
+		ProceduralVerification: config.ProceduralVerificationConfig{
+			Enabled: true, BatchSize: 7, MaxAttempts: 5, LeaseDuration: 2 * time.Minute, Retention: 24 * time.Hour,
+		},
+	}
+	observer := telemetry.NewMetricsObserver()
+	runtime, err := buildWorkerRuntime(context.Background(), cfg, workerRuntimeDependencies{
+		openPool:          func(context.Context, string) (postgresRuntimeStore, error) { return mock, nil },
+		bootstrapDatabase: func(context.Context, postgresRuntimeStore) error { return nil },
+		observer:          observer,
+	})
+	if err != nil {
+		t.Fatalf("buildWorkerRuntime() error = %v", err)
+	}
+	group, ok := runtime.worker.(backgroundWorkerGroup)
+	if !ok {
+		t.Fatalf("runtime worker type = %T, want backgroundWorkerGroup", runtime.worker)
+	}
+	foundWorker := false
+	for _, background := range group.workers {
+		poller, ok := background.(jobs.PollingWorker)
+		if !ok {
+			continue
+		}
+		if worker, ok := findProceduralRevalidationWorker(poller.Worker); ok {
+			if worker.BatchSize != 7 || worker.LeaseDuration != 2*time.Minute {
+				t.Fatalf("procedural revalidation worker = %+v, want configured limits", worker)
+			}
+			executor, ok := worker.Executor.(jobs.ProceduralRevalidationWorker)
+			if !ok || executor.Observer != observer {
+				t.Fatalf("procedural revalidation worker observer = %#v, want runtime observer", executor.Observer)
+			}
+			foundWorker = true
+		}
+	}
+	if !foundWorker {
+		t.Fatal("enabled worker runtime did not register procedural revalidation executor")
+	}
+	for _, background := range group.workers {
+		poller, ok := background.(jobs.PollingWorker)
+		if !ok {
+			continue
+		}
+		if recovery, ok := findProceduralRevalidationRecovery(poller.Worker); ok {
+			if recovery.Observer != observer {
+				t.Fatalf("procedural revalidation recovery observer = %#v, want runtime observer", recovery.Observer)
+			}
+			return
+		}
+	}
+	t.Fatal("enabled worker runtime did not register procedural revalidation recovery")
+}
+
+func TestBuildAPIRuntimeWiresEnabledProceduralVerificationAdmin(t *testing.T) {
+	mock, err := pgxmock.NewPool()
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer mock.Close()
+	cfg := config.Config{
+		Mode: config.ModeAPI, HTTPAddr: ":9090", PostgresDSN: "postgres://runtime",
+		Auth: config.AuthConfig{DefaultTenant: "tenant-a", DefaultProject: "project-a", DefaultNamespace: "namespace-a"},
+		ProceduralVerification: config.ProceduralVerificationConfig{
+			Enabled: true, PolicyVersion: "policy-v2", BatchSize: 7, MaxAttempts: 5, LeaseDuration: 2 * time.Minute, Retention: 24 * time.Hour,
+		},
+	}
+	observer := telemetry.NewMetricsObserver()
+	var got HTTPDependencies
+	_, err = buildAPIRuntime(context.Background(), cfg, apiRuntimeDependencies{
+		openPool:          func(context.Context, string) (postgresRuntimeStore, error) { return mock, nil },
+		bootstrapDatabase: func(context.Context, postgresRuntimeStore) error { return nil },
+		newServer: func(_ string, deps HTTPDependencies) httpServer {
+			got = deps
+			return &stubAPIServer{err: http.ErrServerClosed}
+		},
+		observer: observer,
+	})
+	if err != nil {
+		t.Fatalf("buildAPIRuntime() error = %v", err)
+	}
+	if got.ProceduralVerificationAdmin == nil || got.ProceduralVerificationPolicyVersion != "policy-v2" {
+		t.Fatalf("procedural verification HTTP dependencies = %+v, want enabled admin service and policy", got)
+	}
+	service, ok := got.ProceduralVerificationAdmin.(proceduralVerificationAdminService)
+	if !ok || service.verification.Observer != observer || service.revalidation.Observer != observer {
+		t.Fatalf("procedural verification admin observer wiring = %#v, want runtime observer", service)
+	}
+}
+
 func TestBuildWorkerAndSchedulerRuntimeWireReadinessChecks(t *testing.T) {
 	workerMock, err := pgxmock.NewPool()
 	if err != nil {
@@ -727,6 +825,40 @@ func findAssuranceAlertDeliveryWorker(worker jobs.LoopWorker) (jobs.AssuranceAle
 		}
 	}
 	return jobs.AssuranceAlertDeliveryWorker{}, false
+}
+
+func findProceduralRevalidationWorker(worker jobs.LoopWorker) (jobs.DerivedWorkWorker, bool) {
+	if derived, ok := worker.(jobs.DerivedWorkWorker); ok {
+		if _, ok := derived.Executor.(jobs.ProceduralRevalidationWorker); ok {
+			return derived, true
+		}
+	}
+	composite, ok := worker.(jobs.CompositeWorker)
+	if !ok {
+		return jobs.DerivedWorkWorker{}, false
+	}
+	for _, child := range composite.Workers {
+		if derived, ok := findProceduralRevalidationWorker(child); ok {
+			return derived, true
+		}
+	}
+	return jobs.DerivedWorkWorker{}, false
+}
+
+func findProceduralRevalidationRecovery(worker jobs.LoopWorker) (jobs.ProceduralRevalidationDispatchRecovery, bool) {
+	if recovery, ok := worker.(jobs.ProceduralRevalidationDispatchRecovery); ok {
+		return recovery, true
+	}
+	composite, ok := worker.(jobs.CompositeWorker)
+	if !ok {
+		return jobs.ProceduralRevalidationDispatchRecovery{}, false
+	}
+	for _, child := range composite.Workers {
+		if recovery, ok := findProceduralRevalidationRecovery(child); ok {
+			return recovery, true
+		}
+	}
+	return jobs.ProceduralRevalidationDispatchRecovery{}, false
 }
 
 func TestBuildSchedulerRuntimeAssemblesMaintenanceScheduler(t *testing.T) {

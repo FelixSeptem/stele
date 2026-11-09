@@ -38,6 +38,32 @@ func TestMemoryIntentWorkerSuppressesCorrectionWhenValidatorIsNotConfigured(t *t
 	}
 }
 
+func TestVerificationCorrectionWorkerSuppressesStaleOrDriftedAttributionWithoutRouting(t *testing.T) {
+	router := &intentRouterStub{}
+	record := workerRecord(MemoryIntentUpdate)
+	record.Verification = &VerificationAttribution{VerificationID: "verification-1", TargetMemoryID: record.TargetMemoryID, TargetVersion: record.TargetVersion, SourceWatermark: "watermark-1", PolicyVersion: "policy-v1"}
+	worker := MemoryIntentWorker{Router: router, VerificationValidator: verificationRejectingStub{}}
+	out, err := worker.Process(context.Background(), record)
+	if err != nil || out.Status != MemoryIntentStatusSuppressed || out.DiagnosticCategory != MemoryIntentDiagnosticEvidenceIncomplete || router.calls != 0 {
+		t.Fatalf("outcome=%+v err=%v calls=%d", out, err, router.calls)
+	}
+}
+
+func TestVerificationCorrectionWorkerRoutesAcceptedAttributionAsCandidateWithoutChangingTarget(t *testing.T) {
+	router := &intentRouterStub{}
+	record := workerRecord(MemoryIntentUpdate)
+	record.Verification = &VerificationAttribution{VerificationID: "verification-1", TargetMemoryID: record.TargetMemoryID, TargetVersion: record.TargetVersion, SourceWatermark: "watermark-1", PolicyVersion: "policy-v1"}
+	originalTarget, originalVersion := record.TargetMemoryID, record.TargetVersion
+	worker := MemoryIntentWorker{Router: router, VerificationValidator: verificationAcceptingStub{}}
+	out, err := worker.Process(context.Background(), record)
+	if err != nil || out.Status != MemoryIntentStatusCandidate || router.calls != 1 {
+		t.Fatalf("outcome=%+v err=%v calls=%d", out, err, router.calls)
+	}
+	if record.TargetMemoryID != originalTarget || record.TargetVersion != originalVersion {
+		t.Fatalf("worker overwrote canonical target: before=%s/%d after=%s/%d", originalTarget, originalVersion, record.TargetMemoryID, record.TargetVersion)
+	}
+}
+
 func TestMemoryIntentWorkerKeepsContradictionAndFeedbackOutOfActiveLifecycle(t *testing.T) {
 	for _, typ := range []MemoryIntentType{MemoryIntentContradiction, MemoryIntentFeedback} {
 		router := &intentRouterStub{active: true}
@@ -146,6 +172,18 @@ type correctionRejectingStub struct{}
 
 func (correctionRejectingStub) ValidateMemoryIntentCorrection(context.Context, MemoryIntentRecord) error {
 	return context.Canceled
+}
+
+type verificationRejectingStub struct{}
+
+func (verificationRejectingStub) ValidateMemoryIntentVerification(context.Context, MemoryIntentRecord) error {
+	return context.Canceled
+}
+
+type verificationAcceptingStub struct{}
+
+func (verificationAcceptingStub) ValidateMemoryIntentVerification(context.Context, MemoryIntentRecord) error {
+	return nil
 }
 
 type intentRouterStub struct {

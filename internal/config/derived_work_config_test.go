@@ -60,3 +60,36 @@ func TestLoadFromEnvRejectsUnsafeDerivedWorkQueueSettings(t *testing.T) {
 		})
 	}
 }
+
+func TestLoadFromEnvDefaultsProceduralRevalidationOffAndBoundsItsWorker(t *testing.T) {
+	t.Setenv("STELE_MODE", "worker")
+	t.Setenv("STELE_POSTGRES_DSN", "postgres://example")
+	cfg, err := LoadFromEnv()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cfg.ProceduralVerification.Enabled || cfg.ProceduralVerification.BatchSize <= 0 || cfg.ProceduralVerification.MaxAttempts <= 0 || cfg.ProceduralVerification.LeaseDuration <= 0 || cfg.ProceduralVerification.Retention <= 0 {
+		t.Fatalf("procedural verification defaults = %+v, want disabled bounded policy", cfg.ProceduralVerification)
+	}
+	if cfg.ProceduralVerification.PolicyVersion == "" {
+		t.Fatal("procedural verification defaults must bind a policy version")
+	}
+
+	t.Setenv("STELE_PROCEDURAL_VERIFICATION_BATCH_SIZE", "0")
+	if _, err := LoadFromEnv(); err == nil {
+		t.Fatal("LoadFromEnv() accepted an unsafe procedural verification batch size")
+	}
+}
+
+func TestLoadFromEnvParsesBoundedProceduralRevalidationPolicyVersion(t *testing.T) {
+	t.Setenv("STELE_MODE", "worker")
+	t.Setenv("STELE_POSTGRES_DSN", "postgres://example")
+	t.Setenv("STELE_PROCEDURAL_VERIFICATION_POLICY_VERSION", "operator-policy-v2")
+	cfg, err := LoadFromEnv()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cfg.ProceduralVerification.PolicyVersion != "operator-policy-v2" {
+		t.Fatalf("policy version = %q, want operator-policy-v2", cfg.ProceduralVerification.PolicyVersion)
+	}
+}

@@ -54,6 +54,7 @@ type Config struct {
 	MCP                                 MCPConfig
 	MemoryIntent                        MemoryIntentConfig
 	MemoryRepositoryImport              MemoryRepositoryImportConfig
+	ProceduralVerification              ProceduralVerificationConfig
 	DerivedWork                         workqueue.QueueConfig
 }
 
@@ -81,6 +82,37 @@ type MemoryIntentConfig struct {
 // canonical memory, and workers may continue draining accepted work.
 type MemoryRepositoryImportConfig struct {
 	Enabled bool
+}
+
+// ProceduralVerificationConfig bounds administrator-triggered evidence
+// revalidation. It defaults off: enabling it is an explicit per-deployment
+// maintenance decision and does not alter retrieval or Provider runtime paths.
+type ProceduralVerificationConfig struct {
+	Enabled       bool
+	PolicyVersion string
+	BatchSize     int
+	MaxAttempts   int
+	LeaseDuration time.Duration
+	Retention     time.Duration
+}
+
+func (c ProceduralVerificationConfig) Validate() error {
+	if strings.TrimSpace(c.PolicyVersion) == "" || len(c.PolicyVersion) > 128 {
+		return fmt.Errorf("procedural verification policy version is required and bounded")
+	}
+	if c.BatchSize <= 0 || c.BatchSize > 100 {
+		return fmt.Errorf("procedural verification batch size must be between 1 and 100")
+	}
+	if c.MaxAttempts <= 0 || c.MaxAttempts > 100 {
+		return fmt.Errorf("procedural verification max attempts must be between 1 and 100")
+	}
+	if c.LeaseDuration <= 0 || c.LeaseDuration > time.Hour {
+		return fmt.Errorf("procedural verification lease duration must be between zero and one hour")
+	}
+	if c.Retention <= 0 || c.Retention > 365*24*time.Hour {
+		return fmt.Errorf("procedural verification retention must be between zero and one year")
+	}
+	return nil
 }
 
 type ContextCalibrationConfig struct {
@@ -281,6 +313,10 @@ func LoadFromEnv() (Config, error) {
 		return Config{}, err
 	}
 	derivedWorkConfig, err := loadDerivedWorkConfig()
+	if err != nil {
+		return Config{}, err
+	}
+	proceduralVerificationConfig, err := loadProceduralVerificationConfig()
 	if err != nil {
 		return Config{}, err
 	}
@@ -587,6 +623,7 @@ func LoadFromEnv() (Config, error) {
 		ContextProjectionConsumptionEnabled: contextProjectionConsumptionEnabled,
 		MemoryIntent:                        MemoryIntentConfig{Enabled: loadBoolEnvWithDefault("STELE_MEMORY_INTENT_POLICY_ENABLED", true), PolicyVersion: intentPolicyVersion},
 		MemoryRepositoryImport:              MemoryRepositoryImportConfig{Enabled: loadBoolEnv("STELE_MEMORY_REPOSITORY_IMPORT_ENABLED")},
+		ProceduralVerification:              proceduralVerificationConfig,
 		QueryAnalysis:                       queryAnalysis,
 		GraphTraversal:                      graphTraversal,
 		ContextCalibration:                  contextCalibration,
@@ -695,6 +732,41 @@ func loadDerivedWorkConfig() (workqueue.QueueConfig, error) {
 	}
 	if err := config.Validate(); err != nil {
 		return workqueue.QueueConfig{}, fmt.Errorf("invalid derived work queue configuration: %w", err)
+	}
+	return config, nil
+}
+
+func loadProceduralVerificationConfig() (ProceduralVerificationConfig, error) {
+	policyVersion := strings.TrimSpace(os.Getenv("STELE_PROCEDURAL_VERIFICATION_POLICY_VERSION"))
+	if policyVersion == "" {
+		policyVersion = "procedural-verification-v1"
+	}
+	batchSize, err := loadIntWithDefault("STELE_PROCEDURAL_VERIFICATION_BATCH_SIZE", 10)
+	if err != nil {
+		return ProceduralVerificationConfig{}, err
+	}
+	maxAttempts, err := loadIntWithDefault("STELE_PROCEDURAL_VERIFICATION_MAX_ATTEMPTS", 3)
+	if err != nil {
+		return ProceduralVerificationConfig{}, err
+	}
+	leaseDuration, err := loadDurationWithDefault("STELE_PROCEDURAL_VERIFICATION_LEASE_DURATION", time.Minute)
+	if err != nil {
+		return ProceduralVerificationConfig{}, err
+	}
+	retention, err := loadDurationWithDefault("STELE_PROCEDURAL_VERIFICATION_RETENTION", 30*24*time.Hour)
+	if err != nil {
+		return ProceduralVerificationConfig{}, err
+	}
+	config := ProceduralVerificationConfig{
+		Enabled:       loadBoolEnv("STELE_PROCEDURAL_VERIFICATION_ENABLED"),
+		PolicyVersion: policyVersion,
+		BatchSize:     batchSize,
+		MaxAttempts:   maxAttempts,
+		LeaseDuration: leaseDuration,
+		Retention:     retention,
+	}
+	if err := config.Validate(); err != nil {
+		return ProceduralVerificationConfig{}, err
 	}
 	return config, nil
 }

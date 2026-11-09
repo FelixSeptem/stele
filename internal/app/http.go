@@ -52,58 +52,62 @@ type HTTPDependencies struct {
 	MemoryIntent                MemoryIntentAPI
 	MemoryIntentPolicy          memory.MemoryIntentPolicyGate
 	MemoryIntentRead            MemoryIntentReader
-	MemoryRepository            MemoryRepositoryAPI
-	ReflectionReviewAdmin       ReflectionReviewAPI
-	ReflectionRunRead           ReflectionRunReader
-	CompactionEvidenceRead      CompactionEvidenceReader
-	MemoryQuery                 MemoryQueryService
-	MemoryLifecycleAction       MemoryLifecycleActionService
-	MemoryManualMutation        ManualMemoryMutationService
-	EmbeddingAdminRead          EmbeddingAdminQueryService
-	MemorySearcher              retrieval.MemorySearcher
-	ContextAssembler            retrieval.ContextAssembler
-	GovernanceStatusRead        GovernanceStatusReader
-	GovernanceAdmin             GovernanceAdminService
-	DerivedInsightAdmin         DerivedInsightAdminService
-	GoalVisibilityAdmin         insights.GoalReviewReader
-	DerivedInsightReplayAdmin   DerivedInsightReplayAdminService
-	ActivationDecisionAdmin     ActivationDecisionAdminService
-	RetrievalIntegrityAdmin     RetrievalIntegrityAdminService
-	QualityAdmin                QualityAdminService
-	ScopeProofAdmin             ScopeProofAdminService
-	MemorySession               MemorySessionService
-	UsefulnessFeedback          UsefulnessFeedbackService
-	TaskEvaluations             TaskEvaluationService
-	RankingRollout              RankingRolloutAdminService
-	ReleaseEvidenceReconcile    ReleaseEvidenceReconciliationAdminService
-	AssuranceAdmin              AssuranceAdminService
-	ContextProjectionAdmin      ContextProjectionAdminService
-	Workflow                    WorkflowService
-	MemoryHistoryRead           MemoryHistoryReader
-	JobExecutionRead            JobExecutionReader
-	SchedulerRunHistoryRead     jobs.SchedulerRunHistoryReader
-	SchedulerRunActions         jobs.SchedulerRunAdminActions
-	DerivedQueueRead            DerivedQueueReader
-	Metrics                     MetricsRecorder
-	Logger                      *log.Logger
-	ProviderEnabled             bool
-	ProviderCapabilities        provider.CapabilityDocument
-	ProviderInitializer         *provider.RuntimeInitializer
-	ProviderBindings            provider.RuntimeBindingStore
-	ProviderAdapter             *provider.Adapter
-	ProviderReferences          provider.ReferenceStore
-	ProviderReadObserver        ProviderReadObserver
-	ProviderProjections         provider.ProjectionStore
-	ProviderCorrections         provider.CorrectionResolver
-	ProviderSynchronizer        *provider.Synchronizer
-	ProviderSchemaVersions      []string
-	ProviderContextReceipts     provider.ContextReceiptStore
-	ProviderContextTurns        provider.ContextTurnAuthorizer
-	ProviderContextAttributions provider.ContextTurnAttributionStore
-	ProviderContextContinuity   provider.ContextContinuityConfig
-	ProviderContextPolicy       func(context.Context, provider.RuntimeBinding) ([]byte, error)
-	ProviderLimits              provider.ProviderLimits
-	ReasoningCapabilities       reasoning.Capability
+	ProceduralVerificationAdmin ProceduralVerificationAdminAPI
+	// ProceduralVerificationPolicyVersion is server configuration, never a
+	// caller-selected assertion policy.
+	ProceduralVerificationPolicyVersion string
+	MemoryRepository                    MemoryRepositoryAPI
+	ReflectionReviewAdmin               ReflectionReviewAPI
+	ReflectionRunRead                   ReflectionRunReader
+	CompactionEvidenceRead              CompactionEvidenceReader
+	MemoryQuery                         MemoryQueryService
+	MemoryLifecycleAction               MemoryLifecycleActionService
+	MemoryManualMutation                ManualMemoryMutationService
+	EmbeddingAdminRead                  EmbeddingAdminQueryService
+	MemorySearcher                      retrieval.MemorySearcher
+	ContextAssembler                    retrieval.ContextAssembler
+	GovernanceStatusRead                GovernanceStatusReader
+	GovernanceAdmin                     GovernanceAdminService
+	DerivedInsightAdmin                 DerivedInsightAdminService
+	GoalVisibilityAdmin                 insights.GoalReviewReader
+	DerivedInsightReplayAdmin           DerivedInsightReplayAdminService
+	ActivationDecisionAdmin             ActivationDecisionAdminService
+	RetrievalIntegrityAdmin             RetrievalIntegrityAdminService
+	QualityAdmin                        QualityAdminService
+	ScopeProofAdmin                     ScopeProofAdminService
+	MemorySession                       MemorySessionService
+	UsefulnessFeedback                  UsefulnessFeedbackService
+	TaskEvaluations                     TaskEvaluationService
+	RankingRollout                      RankingRolloutAdminService
+	ReleaseEvidenceReconcile            ReleaseEvidenceReconciliationAdminService
+	AssuranceAdmin                      AssuranceAdminService
+	ContextProjectionAdmin              ContextProjectionAdminService
+	Workflow                            WorkflowService
+	MemoryHistoryRead                   MemoryHistoryReader
+	JobExecutionRead                    JobExecutionReader
+	SchedulerRunHistoryRead             jobs.SchedulerRunHistoryReader
+	SchedulerRunActions                 jobs.SchedulerRunAdminActions
+	DerivedQueueRead                    DerivedQueueReader
+	Metrics                             MetricsRecorder
+	Logger                              *log.Logger
+	ProviderEnabled                     bool
+	ProviderCapabilities                provider.CapabilityDocument
+	ProviderInitializer                 *provider.RuntimeInitializer
+	ProviderBindings                    provider.RuntimeBindingStore
+	ProviderAdapter                     *provider.Adapter
+	ProviderReferences                  provider.ReferenceStore
+	ProviderReadObserver                ProviderReadObserver
+	ProviderProjections                 provider.ProjectionStore
+	ProviderCorrections                 provider.CorrectionResolver
+	ProviderSynchronizer                *provider.Synchronizer
+	ProviderSchemaVersions              []string
+	ProviderContextReceipts             provider.ContextReceiptStore
+	ProviderContextTurns                provider.ContextTurnAuthorizer
+	ProviderContextAttributions         provider.ContextTurnAttributionStore
+	ProviderContextContinuity           provider.ContextContinuityConfig
+	ProviderContextPolicy               func(context.Context, provider.RuntimeBinding) ([]byte, error)
+	ProviderLimits                      provider.ProviderLimits
+	ReasoningCapabilities               reasoning.Capability
 }
 
 type ProviderReadObserver interface {
@@ -207,6 +211,19 @@ type MemoryIntentReader interface {
 
 type MemoryIntentHistoryReader interface {
 	ReadMemoryIntentHistory(context.Context, memory.Scope, string) (memory.MemoryIntentHistory, error)
+}
+
+// ProceduralVerificationAdminAPI is deliberately separate from ordinary
+// memory query and Provider contracts. Implementations must enforce exact
+// scope and lifecycle eligibility before returning any verification data.
+type ProceduralVerificationAdminAPI interface {
+	Record(context.Context, memory.ProceduralMemoryVerification) (memory.ProceduralMemoryVerification, error)
+	ReadProceduralMemoryVerification(context.Context, memory.Scope, string) (memory.ProceduralMemoryVerification, error)
+	ListProceduralMemoryVerificationHistory(context.Context, memory.Scope, string, int64, int) ([]memory.ProceduralMemoryVerification, error)
+	ReadProceduralVerificationLineage(context.Context, memory.Scope, string, int64) (memory.ProceduralVerificationLineage, error)
+	ReadProceduralRevalidationRun(context.Context, memory.Scope, string) (memory.ProceduralRevalidationRun, error)
+	Request(context.Context, memory.ProceduralRevalidationRequest) (memory.ProceduralRevalidationRun, error)
+	Submit(context.Context, memory.VerificationCorrectionRequest) (memory.MemoryIntentRecord, error)
 }
 
 type MemoryRepositoryAPI interface {
@@ -1220,6 +1237,47 @@ func NewHTTPHandler(deps HTTPDependencies) http.Handler {
 		),
 	)
 	mux.Handle("GET /v1/admin/memory-intents/{intent_id}/history", adminMemoryIntentHistory)
+
+	adminProceduralVerification := auth.APIKeyMiddleware(deps.AdminAPIKeys)(
+		auth.ScopeMiddleware()(
+			http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				handleAdminProceduralVerificationRecord(w, r, deps.ProceduralVerificationAdmin, deps.ProceduralVerificationPolicyVersion)
+			}),
+		),
+	)
+	mux.Handle("POST /v1/admin/procedural-memory-verifications", adminProceduralVerification)
+	adminProceduralVerificationDetail := auth.APIKeyMiddleware(deps.AdminAPIKeys)(
+		auth.ScopeMiddleware()(
+			http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				handleAdminProceduralVerificationDetail(w, r, deps.ProceduralVerificationAdmin)
+			}),
+		),
+	)
+	mux.Handle("GET /v1/admin/procedural-memory-verifications/{verification_id}", adminProceduralVerificationDetail)
+	adminProceduralVerificationHistory := auth.APIKeyMiddleware(deps.AdminAPIKeys)(
+		auth.ScopeMiddleware()(
+			http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				handleAdminProceduralVerificationHistory(w, r, deps.ProceduralVerificationAdmin)
+			}),
+		),
+	)
+	mux.Handle("GET /v1/admin/procedural-memory-verifications", adminProceduralVerificationHistory)
+	adminProceduralVerificationAction := auth.APIKeyMiddleware(deps.AdminAPIKeys)(
+		auth.ScopeMiddleware()(
+			http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				handleAdminProceduralVerificationAction(w, r, deps.ProceduralVerificationAdmin)
+			}),
+		),
+	)
+	mux.Handle("POST /v1/admin/procedural-memory-verifications/{verification_action}", adminProceduralVerificationAction)
+	adminProceduralRevalidationRunDetail := auth.APIKeyMiddleware(deps.AdminAPIKeys)(
+		auth.ScopeMiddleware()(
+			http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				handleAdminProceduralRevalidationRunDetail(w, r, deps.ProceduralVerificationAdmin)
+			}),
+		),
+	)
+	mux.Handle("GET /v1/admin/procedural-revalidation-runs/{run_id}", adminProceduralRevalidationRunDetail)
 
 	adminReflectionReview := auth.APIKeyMiddleware(deps.AdminAPIKeys)(
 		auth.ScopeMiddleware()(

@@ -15,6 +15,9 @@ func (r *Repository) CreateTaskEvaluation(ctx context.Context, evaluation memory
 	if err := evaluation.Validate(); err != nil {
 		return memory.TaskEvaluation{}, err
 	}
+	if err := r.validateProceduralVerificationTaskEvidence(ctx, evaluation); err != nil {
+		return memory.TaskEvaluation{}, err
+	}
 
 	tx, err := r.tx.BeginTx(ctx, pgx.TxOptions{})
 	if err != nil {
@@ -89,6 +92,22 @@ RETURNING id, tenant, project, namespace, objective, success_criteria, verdict, 
 	}
 
 	return created, nil
+}
+
+func (r *Repository) validateProceduralVerificationTaskEvidence(ctx context.Context, evaluation memory.TaskEvaluation) error {
+	for _, evidence := range evaluation.Evidence {
+		if evidence.Kind != memory.TaskEvidenceTargetProceduralVerification {
+			continue
+		}
+		record, err := r.ReadProceduralMemoryVerification(ctx, evaluation.Scope.Normalized(), strings.TrimSpace(evidence.ID))
+		if err != nil {
+			return err
+		}
+		if record.Scope.Normalized() != evaluation.Scope.Normalized() || strings.TrimSpace(record.ID) != strings.TrimSpace(evidence.ID) {
+			return memory.ErrNotFound
+		}
+	}
+	return nil
 }
 
 func (r *Repository) ReadTaskEvaluation(ctx context.Context, input memory.ReadTaskEvaluationInput) (memory.TaskEvaluation, error) {

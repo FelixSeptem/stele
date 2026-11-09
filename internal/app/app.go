@@ -109,6 +109,15 @@ type schedulerRuntime struct {
 	observer     telemetry.Observer
 }
 
+type proceduralVerificationTelemetryObserver interface {
+	RecordProceduralVerification(context.Context, telemetry.ProceduralVerificationEvent)
+}
+
+func asProceduralVerificationTelemetryObserver(observer telemetry.Observer) proceduralVerificationTelemetryObserver {
+	proceduralObserver, _ := observer.(proceduralVerificationTelemetryObserver)
+	return proceduralObserver
+}
+
 type postgresRuntimeStore interface {
 	bootstrapDB
 	queryRower
@@ -857,6 +866,22 @@ func buildAPIRuntime(ctx context.Context, cfg config.Config, deps apiRuntimeDepe
 	intentService := memory.MemoryIntentService{Processor: repo, Policy: intentPolicy, Now: time.Now}
 	httpDeps.MemoryIntent = intentService
 	httpDeps.MemoryIntentPolicy = intentPolicy
+	proceduralVerificationPolicy := memory.StaticProceduralVerificationPolicy{
+		Scope:   memory.Scope{Tenant: cfg.Auth.DefaultTenant, Project: cfg.Auth.DefaultProject, Namespace: cfg.Auth.DefaultNamespace},
+		Enabled: cfg.ProceduralVerification.Enabled, Version: proceduralVerificationPolicyVersion(cfg),
+	}
+	proceduralObserver := asProceduralVerificationTelemetryObserver(deps.observer)
+	proceduralRevalidationDispatcher := jobs.ProceduralRevalidationDispatcher{
+		Queue: derivedQueue, Policy: proceduralVerificationPolicy, Now: time.Now,
+		MaxAttempts: cfg.ProceduralVerification.MaxAttempts, Retention: cfg.ProceduralVerification.Retention, Observer: proceduralObserver,
+	}
+	httpDeps.ProceduralVerificationAdmin = proceduralVerificationAdminService{
+		verification: memory.ProceduralVerificationService{Store: repo, Targets: repo, Evidence: repo, Policy: proceduralVerificationPolicy, Observer: proceduralObserver},
+		revalidation: memory.ProceduralRevalidationService{Store: repo, Policy: proceduralVerificationPolicy, Dispatcher: proceduralRevalidationDispatcher, Now: time.Now, NewID: newID, MaxAttempts: cfg.ProceduralVerification.MaxAttempts, Observer: proceduralObserver},
+		correction:   memory.VerificationCorrectionAdmissionService{Reader: repo, Targets: repo, Evidence: repo, Policy: proceduralVerificationPolicy, Submitter: repo},
+		reader:       repo,
+	}
+	httpDeps.ProceduralVerificationPolicyVersion = proceduralVerificationPolicyVersion(cfg)
 	// Admission is intentionally opt-in. Disabling it removes only new
 	// registration/preview/submission admission; accepted durable work remains
 	// governed by the existing worker path.
@@ -989,7 +1014,10 @@ func buildAPIRuntime(ctx context.Context, cfg config.Config, deps apiRuntimeDepe
 		Now:   time.Now,
 		NewID: newQualityID,
 	})
-	httpDeps.TaskEvaluations = repo
+	httpDeps.TaskEvaluations = memory.NewTaskEvaluationService(memory.TaskEvaluationServiceOptions{
+		Store:                          repo,
+		ProceduralVerificationEvidence: repo,
+	})
 	httpDeps.Workflow = workflow.NewService(workflow.ServiceOptions{
 		Store:            repo,
 		EvidenceVerifier: repo,
@@ -1239,7 +1267,7 @@ func buildWorkerRuntime(ctx context.Context, cfg config.Config, deps workerRunti
 	intentExecution := jobs.MemoryIntentRiverExecution{
 		History: repo,
 		Worker: memory.MemoryIntentWorker{
-			Router: memoryIntentGovernanceRouter{repo: repo, now: now}, Validator: repo, CorrectionValidator: repo,
+			Router: memoryIntentGovernanceRouter{repo: repo, now: now}, Validator: repo, CorrectionValidator: repo, VerificationValidator: repo,
 		},
 		Recorder: repo,
 		Policy:   memory.StaticMemoryIntentPolicy{Scope: scope, PolicyVersion: cfg.MemoryIntent.PolicyVersion, Enabled: cfg.MemoryIntent.Enabled},
@@ -1263,6 +1291,30 @@ func buildWorkerRuntime(ctx context.Context, cfg config.Config, deps workerRunti
 		LeaseDuration: governanceWorkerLeaseDuration, RetryBackoff: cfg.Jobs.GovernanceRetryBackoff,
 		Now: now, Kind: &repositoryImportKind,
 	}
+	proceduralVerificationPolicy := memory.StaticProceduralVerificationPolicy{
+		Scope: scope, Enabled: cfg.ProceduralVerification.Enabled, Version: proceduralVerificationPolicyVersion(cfg),
+	}
+	proceduralObserver := asProceduralVerificationTelemetryObserver(deps.observer)
+	proceduralRevalidationDispatcher := jobs.ProceduralRevalidationDispatcher{
+		Queue: derivedQueue, Policy: proceduralVerificationPolicy, Now: now,
+		MaxAttempts: cfg.ProceduralVerification.MaxAttempts, Retention: cfg.ProceduralVerification.Retention, Observer: proceduralObserver,
+	}
+	proceduralRevalidationKind := workqueue.WorkKindProceduralRevalidation
+	proceduralRevalidationWorker := jobs.DerivedWorkWorker{
+		Store: repo,
+		Executor: jobs.ProceduralRevalidationWorker{
+			Store: repo, Targets: repo, Evidence: repo, Policy: proceduralVerificationPolicy,
+			WorkerID: "stele-procedural-revalidation-worker", LeaseDuration: cfg.ProceduralVerification.LeaseDuration,
+			Now: now, NewID: newID, Observer: proceduralObserver,
+		},
+		Scope: scope, WorkerID: "stele-procedural-revalidation-worker", BatchSize: cfg.ProceduralVerification.BatchSize,
+		LeaseDuration: cfg.ProceduralVerification.LeaseDuration, RetryBackoff: cfg.Jobs.GovernanceRetryBackoff,
+		Now: now, Kind: &proceduralRevalidationKind,
+	}
+	proceduralRevalidationRecovery := jobs.ProceduralRevalidationDispatchRecovery{
+		Store: repo, Dispatcher: proceduralRevalidationDispatcher, Scope: scope,
+		BatchSize: cfg.ProceduralVerification.BatchSize, Now: now, Observer: proceduralObserver,
+	}
 	workers := []jobs.LoopWorker{worker}
 	if err := scope.Validate(); err == nil {
 		workers = append(workers, repairWorker)
@@ -1270,6 +1322,9 @@ func buildWorkerRuntime(ctx context.Context, cfg config.Config, deps workerRunti
 		// Admission may be disabled after a deployment, but accepted plans must
 		// still drain through current governed intent policy.
 		workers = append(workers, repositoryImportWorker)
+		if cfg.ProceduralVerification.Enabled {
+			workers = append(workers, proceduralRevalidationWorker, proceduralRevalidationRecovery)
+		}
 	}
 	backgroundWorkers := []backgroundWorker{jobs.PollingWorker{
 		Worker:       jobs.CompositeWorker{Workers: workers},
@@ -1305,6 +1360,14 @@ func buildWorkerRuntime(ctx context.Context, cfg config.Config, deps workerRunti
 		},
 		observer: deps.observer,
 	}, nil
+}
+
+func proceduralVerificationPolicyVersion(cfg config.Config) string {
+	version := strings.TrimSpace(cfg.ProceduralVerification.PolicyVersion)
+	if version == "" {
+		return "procedural-verification-v1"
+	}
+	return version
 }
 
 func buildSchedulerRuntime(ctx context.Context, cfg config.Config, deps schedulerRuntimeDependencies) (schedulerRuntime, error) {

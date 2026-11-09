@@ -243,3 +243,25 @@ always a newly assembled authorized body, never a historical snapshot or cache
 response. Agent applications retain business authorization, tool use, write
 policy, task state and compilation commit authority; digest equality does not
 transfer any of those responsibilities.
+
+## Procedural verification and governed correction
+
+An administrator can append an **append-only verification ledger** record for
+one current active `procedural` memory version in an exact tenant, project, and
+namespace scope. The record retains bounded source/version references,
+disposition, policy and audit metadata. It is not a memory class, lifecycle
+transition, or source of direct mutation authority.
+
+Source drift and explicit review requests create bounded
+`procedural_revalidation` work. The worker re-resolves only recorded evidence;
+it can append `inconclusive` or `needs_revalidation`, but never infers support,
+authors a correction, or uses a model as verification authority. A refuted
+record with corrected content can submit a governed update intent with immutable
+verification attribution. The governing worker rechecks all eligibility before
+creating a candidate or successor and **does not overwrite canonical memory**.
+
+This API/worker/scheduler path remains privileged: public Provider, ordinary
+retrieval, and MCP public-runtime surfaces neither discover nor return these
+records. PostgreSQL remains the sole system of record; disabling the feature
+halts new admission and dispatch while preserving ledger, intent, and canonical
+history for audit.

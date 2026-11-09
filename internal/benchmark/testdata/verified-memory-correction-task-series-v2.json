@@ -1,0 +1,39 @@
+{
+  "manifest": {
+    "schema_version": "task-series-v2",
+    "metric_version": "task-series-metrics-v2",
+    "source_checksum": "312eb46803466ffd547e8ed0c4cfd30ac7291b9750d3932ef12ac34e4729fa39",
+    "qrels_checksum": "432ebc8d8131fd92c0e100d5a2d776651a7cedca013db9d7103120b83a8269f7",
+    "scope": {"tenant": "benchmark", "project": "verified-memory", "namespace": "ev1-ev2"},
+    "conditions": [
+      {
+        "id": "no_memory",
+        "baseline": true,
+        "stages": [
+          {"id": "observed_error", "query_id": "no-memory-observed", "scope": {"tenant": "benchmark", "project": "verified-memory", "namespace": "ev1-ev2"}, "verdict": "failed", "evidence": [{"reference": "no-memory-observed-evidence"}], "repeated_error": true, "maintenance_cost": 0},
+          {"id": "later", "query_id": "no-memory-later", "scope": {"tenant": "benchmark", "project": "verified-memory", "namespace": "ev1-ev2"}, "verdict": "failed", "evidence": [{"reference": "no-memory-later-evidence"}], "repeated_error": true, "maintenance_cost": 0}
+        ]
+      },
+      {
+        "id": "source_retrieval",
+        "stages": [
+          {"id": "observed_error", "query_id": "source-observed", "scope": {"tenant": "benchmark", "project": "verified-memory", "namespace": "ev1-ev2"}, "verdict": "failed", "evidence": [{"reference": "source-observed-evidence"}], "repeated_error": true, "maintenance_cost": 1},
+          {"id": "later", "query_id": "source-later", "scope": {"tenant": "benchmark", "project": "verified-memory", "namespace": "ev1-ev2"}, "verdict": "partial", "evidence": [{"reference": "source-later-evidence"}], "repeated_error": false, "maintenance_cost": 1}
+        ]
+      },
+      {
+        "id": "verified_corrected",
+        "stages": [
+          {"id": "observed_error", "query_id": "verified-observed", "scope": {"tenant": "benchmark", "project": "verified-memory", "namespace": "ev1-ev2"}, "verdict": "failed", "evidence": [{"reference": "verified-observed-evidence"}], "repeated_error": true, "maintenance_cost": 2},
+          {"id": "later", "query_id": "verified-later", "scope": {"tenant": "benchmark", "project": "verified-memory", "namespace": "ev1-ev2"}, "verdict": "succeeded", "evidence": [{"reference": "verified-later-evidence"}], "repeated_error": false, "maintenance_cost": 3}
+        ]
+      }
+    ]
+  },
+  "corpora": {
+    "no_memory": {"schema_version": "v1", "conversations": [], "events": [{"id": "no-memory-observed-evidence", "scope": {"tenant": "benchmark", "project": "verified-memory", "namespace": "ev1-ev2"}, "class": "episodic", "text": "opaque", "expected_state": "active"}, {"id": "no-memory-later-evidence", "scope": {"tenant": "benchmark", "project": "verified-memory", "namespace": "ev1-ev2"}, "class": "episodic", "text": "opaque", "expected_state": "active"}], "queries": [{"id": "no-memory-observed", "scope": {"tenant": "benchmark", "project": "verified-memory", "namespace": "ev1-ev2"}, "text": "opaque", "evidence_groups": [{"id": "observed", "evidence_ids": ["no-memory-observed-evidence"], "required": true}]}, {"id": "no-memory-later", "scope": {"tenant": "benchmark", "project": "verified-memory", "namespace": "ev1-ev2"}, "text": "opaque", "evidence_groups": [{"id": "later", "evidence_ids": ["no-memory-later-evidence"], "required": true}]}], "qrels": [{"query_id": "no-memory-observed", "evidence_id": "no-memory-observed-evidence", "grade": 1}, {"query_id": "no-memory-later", "evidence_id": "no-memory-later-evidence", "grade": 1}]},
+    "source_retrieval": {"schema_version": "v1", "conversations": [], "events": [{"id": "source-observed-evidence", "scope": {"tenant": "benchmark", "project": "verified-memory", "namespace": "ev1-ev2"}, "class": "episodic", "text": "opaque", "expected_state": "active"}, {"id": "source-later-evidence", "scope": {"tenant": "benchmark", "project": "verified-memory", "namespace": "ev1-ev2"}, "class": "episodic", "text": "opaque", "expected_state": "active"}], "queries": [{"id": "source-observed", "scope": {"tenant": "benchmark", "project": "verified-memory", "namespace": "ev1-ev2"}, "text": "opaque", "evidence_groups": [{"id": "observed", "evidence_ids": ["source-observed-evidence"], "required": true}]}, {"id": "source-later", "scope": {"tenant": "benchmark", "project": "verified-memory", "namespace": "ev1-ev2"}, "text": "opaque", "evidence_groups": [{"id": "later", "evidence_ids": ["source-later-evidence"], "required": true}]}], "qrels": [{"query_id": "source-observed", "evidence_id": "source-observed-evidence", "grade": 1}, {"query_id": "source-later", "evidence_id": "source-later-evidence", "grade": 1}]},
+    "verified_corrected": {"schema_version": "v1", "conversations": [], "events": [{"id": "verified-observed-evidence", "scope": {"tenant": "benchmark", "project": "verified-memory", "namespace": "ev1-ev2"}, "class": "episodic", "text": "opaque", "expected_state": "active"}, {"id": "verified-later-evidence", "scope": {"tenant": "benchmark", "project": "verified-memory", "namespace": "ev1-ev2"}, "class": "episodic", "text": "opaque", "expected_state": "active"}], "queries": [{"id": "verified-observed", "scope": {"tenant": "benchmark", "project": "verified-memory", "namespace": "ev1-ev2"}, "text": "opaque", "evidence_groups": [{"id": "observed", "evidence_ids": ["verified-observed-evidence"], "required": true}]}, {"id": "verified-later", "scope": {"tenant": "benchmark", "project": "verified-memory", "namespace": "ev1-ev2"}, "text": "opaque", "evidence_groups": [{"id": "later", "evidence_ids": ["verified-later-evidence"], "required": true}]}], "qrels": [{"query_id": "verified-observed", "evidence_id": "verified-observed-evidence", "grade": 1}, {"query_id": "verified-later", "evidence_id": "verified-later-evidence", "grade": 1}]}
+  },
+  "synthetic_fixture": true
+}

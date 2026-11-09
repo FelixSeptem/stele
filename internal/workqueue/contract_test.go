@@ -52,6 +52,19 @@ func TestDerivedWorkInputAcceptsMemoryRepositoryImport(t *testing.T) {
 	}
 }
 
+func TestDerivedWorkInputAcceptsProceduralRevalidationReferenceOnly(t *testing.T) {
+	input := DerivedWorkInput{
+		Scope:       memory.Scope{Tenant: "tenant-a", Project: "project-a", Namespace: "namespace-a"},
+		Kind:        WorkKindProceduralRevalidation,
+		Watermark:   "verification-watermark-1",
+		Idempotency: "run-identity-1",
+		Reference:   "00000000-0000-0000-0000-000000000201",
+	}
+	if err := input.Validate(); err != nil {
+		t.Fatalf("procedural revalidation run reference rejected: %v", err)
+	}
+}
+
 func TestDerivedWorkIdentityIsDeterministicAndScoped(t *testing.T) {
 	scope := memory.Scope{Tenant: "tenant-a", Project: "project-a", Namespace: "namespace-a"}
 	first, err := NewDerivedWorkIdentity(DerivedWorkInput{Scope: scope, Kind: WorkKindReflection, Watermark: "wm-1", Idempotency: "trigger-1", Reference: "run-1"})

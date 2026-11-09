@@ -1,0 +1,3 @@
+-- Rollback is policy-level: retain immutable verification history and durable
+-- runs so operators can audit an already-admitted correction. New binaries
+-- disable admission and dispatch instead of deleting or rewriting records.

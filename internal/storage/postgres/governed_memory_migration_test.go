@@ -49,3 +49,27 @@ func TestGovernedMemoryIntentTransitionMigrationIsAppendOnlyAndBounded(t *testin
 		if !strings.Contains(sql, fragment) { t.Errorf("transition migration missing %q", fragment) }
 	}
 }
+
+func TestVerificationIntentAttributionMigrationIsScopedAndAppendOnly(t *testing.T) {
+	contents, err := migrationFS.ReadFile("migrations/0045_verification_intent_attribution.up.sql")
+	if err != nil {
+		t.Fatal(err)
+	}
+	sql := string(contents)
+	for _, fragment := range []string{
+		"CREATE TABLE memory_intent_verification_attributions",
+		"verification_id uuid NOT NULL REFERENCES procedural_memory_verifications(id)",
+		"memory_intent_verification_attribution_scope_verification_idx",
+		"verify_memory_intent_verification_attribution_scope",
+		"i.intent_type = 'update'",
+		"v.disposition = 'refuted'",
+		"v.corrected_content IS NOT NULL",
+		"v.source_watermark = NEW.source_watermark",
+		"v.policy_version = NEW.policy_version",
+		"memory_intent_verification_attribution_append_only",
+	} {
+		if !strings.Contains(sql, fragment) {
+			t.Errorf("verification attribution migration missing %q", fragment)
+		}
+	}
+}

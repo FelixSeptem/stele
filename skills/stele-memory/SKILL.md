@@ -219,3 +219,21 @@ Review diagnostics and explicitly map each selected fact to a class and memory
 path before acknowledging plan and warning digests. Submission is governed
 asynchronous `remember` dispatch, not canonical overwrite: missing files never
 imply forget/delete and manifest placement never injects context.
+
+## Procedural verification boundary
+
+Procedural verification is an administrator-only maintenance workflow for a
+current active `procedural` memory version. An agent must not use Provider or MCP to create, inspect, revalidate, or correct a verification record: those
+surfaces intentionally have no verification-history or correction-discovery
+operation.
+
+When an explicitly authorized operator requests this maintenance, direct them
+to the served OpenAPI contract for
+`/v1/admin/procedural-memory-verifications` and require an administrator
+credential plus exact tenant, project, and namespace scope. The administrator
+records attributable bounded evidence; transcript/model output is never
+independent corroboration. Revalidation may append only a mechanical unresolved
+outcome. A refuted correction becomes an ordinary governed update intent and
+may later yield a successor, never an in-place canonical mutation. Do not treat
+its receipt, a task verdict, or a verification disposition as authority to
+execute tools, claim completion, or bypass lifecycle checks.

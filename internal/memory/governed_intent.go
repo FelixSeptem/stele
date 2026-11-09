@@ -129,6 +129,7 @@ type MemoryIntentRecord struct {
 	TargetInsightID    string
 	Evidence           []MemoryIntentEvidence
 	Correction         *CorrectionAttribution
+	Verification       *VerificationAttribution
 	OutcomeReference   string
 	RequestFingerprint string
 	PolicyVersion      string
@@ -172,6 +173,14 @@ type MemoryIntentTargetValidator interface {
 // from generic target validation so ordinary evidence cannot impersonate it.
 type MemoryIntentCorrectionValidator interface {
 	ValidateMemoryIntentCorrection(context.Context, MemoryIntentRecord) error
+}
+
+// MemoryIntentVerificationValidator re-resolves a verification-attributed
+// correction immediately before governed routing. It is separate from the
+// Provider correction validator because the two attestations have different
+// authorities and lifecycle/source checks.
+type MemoryIntentVerificationValidator interface {
+	ValidateMemoryIntentVerification(context.Context, MemoryIntentRecord) error
 }
 
 type MemoryIntentService struct {

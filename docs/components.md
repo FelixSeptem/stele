@@ -150,3 +150,23 @@ expired-only receipt cleanup. It does not delete active receipts and retained
 expired rows remain subject to capacity until cleanup. No component stores a
 context response as an implementation of comparison: compare reads current
 authorized data and returns a full fresh body.
+
+## Procedural verification maintenance
+
+`internal/memory` owns the closed procedural-verification disposition,
+evidence, attribution, and correction-admission contracts. It requires a
+current active procedural target and exact-scope eligible evidence. Its
+append-only ledger is not a parallel memory store: **PostgreSQL remains the system of record** and canonical versions continue through governed intents.
+
+`internal/storage/postgres` persists scoped verification rows, durable
+revalidation runs, and bounded verification-to-intent-to-successor lineage.
+`internal/jobs` dispatches and recovers `procedural_revalidation` work with
+lease, attempt, and retention bounds. That worker only records mechanical
+`inconclusive` or `needs_revalidation` outcomes when the recorded sources no
+longer settle the claim; it never promotes a procedure or writes a correction.
+
+`internal/app` and `openapi` publish the separate administrator-only HTTP
+surface. The API, worker, and scheduler compose the same policy, repository,
+dispatcher, telemetry, cleanup, and redacted inspection dependencies. Provider,
+ordinary retrieval, and MCP public-runtime components do not depend on this
+surface.

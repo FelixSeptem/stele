@@ -14,8 +14,8 @@ func TestMigrationManifestIsDeterministicAndChecksummed(t *testing.T) {
 	if err != nil {
 		t.Fatalf("MigrationManifest() second call error = %v", err)
 	}
-	if len(first) != 43 {
-		t.Fatalf("manifest length = %d, want 43: %+v", len(first), first)
+	if len(first) != 45 {
+		t.Fatalf("manifest length = %d, want 45: %+v", len(first), first)
 	}
 	if first[0] != second[0] {
 		t.Fatalf("manifest is not deterministic: first=%+v second=%+v", first[0], second[0])
@@ -136,6 +136,12 @@ func TestMigrationManifestIsDeterministicAndChecksummed(t *testing.T) {
 	}
 	if first[42].Version != 43 || first[42].Name != "0043_river_memory_intent_handoff.up.sql" {
 		t.Fatalf("manifest entry = %+v, want version 43 River memory-intent handoff", first[42])
+	}
+	if first[43].Version != 44 || first[43].Name != "0044_procedural_memory_verification.up.sql" {
+		t.Fatalf("manifest entry = %+v, want version 44 procedural memory verification", first[43])
+	}
+	if first[44].Version != 45 || first[44].Name != "0045_verification_intent_attribution.up.sql" {
+		t.Fatalf("manifest entry = %+v, want version 45 verification intent attribution", first[44])
 	}
 	if len(first[0].ChecksumSHA256) != 64 {
 		t.Fatalf("checksum length = %d, want 64", len(first[0].ChecksumSHA256))

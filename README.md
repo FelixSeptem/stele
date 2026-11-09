@@ -214,3 +214,19 @@ credentials before lookup. Source labels persist through governance and history;
 missing lineage is untrusted/restricted. Attested source data grants no instruction,
 tool, write or business-state authority. See the [disclosure/source guide](docs/context-disclosure-and-source-trust.md)
 for endpoint behavior, administration, versioning and upgrade/rollback.
+
+## Procedural verification maintenance
+
+Procedural verification maintenance is an **administrator-only** operational
+workflow for a current active `procedural` memory version. It records
+attributable, bounded evidence in an append-only ledger; ordinary retrieval,
+Provider context, and MCP public-runtime access do not expose verification
+history or correction discovery.
+
+A refuted verification may carry operator-supplied corrected content, but it
+enters the existing governed update path as an attributed intent. The receipt is
+not canonical promotion: workers recheck scope, target version, source
+eligibility, and policy before any candidate or successor is created. Stele
+does not overwrite canonical memory in place. Operators should use the
+[self-hosting guide](docs/self-hosting.md#procedural-verification-maintenance)
+for enablement, limits, rollback, and the owned-stack verifier.

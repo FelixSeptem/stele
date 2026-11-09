@@ -35,10 +35,11 @@ type MemoryIntentGovernanceRouter interface {
 }
 
 type MemoryIntentWorker struct {
-	Router              MemoryIntentGovernanceRouter
-	Validator           MemoryIntentTargetValidator
-	CorrectionValidator MemoryIntentCorrectionValidator
-	Now                 func() time.Time
+	Router                MemoryIntentGovernanceRouter
+	Validator             MemoryIntentTargetValidator
+	CorrectionValidator   MemoryIntentCorrectionValidator
+	VerificationValidator MemoryIntentVerificationValidator
+	Now                   func() time.Time
 }
 
 type MemoryIntentOutcomeRecorder interface {
@@ -104,6 +105,14 @@ func (w MemoryIntentWorker) Process(ctx context.Context, record MemoryIntentReco
 			return MemoryIntentOutcome{Status: MemoryIntentStatusSuppressed, DiagnosticCategory: MemoryIntentDiagnosticEvidenceIncomplete, OutcomeReference: record.ID}, nil
 		}
 		if err := w.CorrectionValidator.ValidateMemoryIntentCorrection(ctx, record); err != nil {
+			return MemoryIntentOutcome{Status: MemoryIntentStatusSuppressed, DiagnosticCategory: MemoryIntentDiagnosticEvidenceIncomplete, OutcomeReference: record.ID}, nil
+		}
+	}
+	if record.Verification != nil {
+		if w.VerificationValidator == nil {
+			return MemoryIntentOutcome{Status: MemoryIntentStatusSuppressed, DiagnosticCategory: MemoryIntentDiagnosticEvidenceIncomplete, OutcomeReference: record.ID}, nil
+		}
+		if err := w.VerificationValidator.ValidateMemoryIntentVerification(ctx, record); err != nil {
 			return MemoryIntentOutcome{Status: MemoryIntentStatusSuppressed, DiagnosticCategory: MemoryIntentDiagnosticEvidenceIncomplete, OutcomeReference: record.ID}, nil
 		}
 	}

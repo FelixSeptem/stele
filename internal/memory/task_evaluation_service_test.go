@@ -2,6 +2,7 @@ package memory
 
 import (
 	"context"
+	"errors"
 	"testing"
 	"time"
 )
@@ -50,13 +51,65 @@ func TestTaskEvaluationServiceSupersedeDelegatesToStore(t *testing.T) {
 	}
 }
 
+func TestProceduralVerificationTaskEvidenceRequiresSameScopeVerification(t *testing.T) {
+	scope := Scope{Tenant: "tenant-a", Project: "project-a", Namespace: "namespace-a"}
+	verification := ProceduralMemoryVerification{ID: "procedural-verification-1", Scope: scope}
+	store := &stubTaskEvaluationStore{}
+	reader := &stubProceduralVerificationEvidenceReader{record: verification}
+	service := NewTaskEvaluationService(TaskEvaluationServiceOptions{
+		Store:                          store,
+		ProceduralVerificationEvidence: reader,
+	})
+
+	evaluation := validTaskEvaluation()
+	evaluation.Evidence = []TaskEvidenceLink{{Kind: TaskEvidenceTargetProceduralVerification, ID: verification.ID}}
+	if _, err := service.CreateTaskEvaluation(context.Background(), evaluation); err != nil {
+		t.Fatalf("CreateTaskEvaluation() error = %v", err)
+	}
+	if reader.input.Scope != scope || reader.input.VerificationID != verification.ID {
+		t.Fatalf("verification read = %+v, want exact scope and id", reader.input)
+	}
+	createdCount := store.createCount
+
+	foreign := validTaskEvaluation()
+	foreign.Evidence = []TaskEvidenceLink{{Kind: TaskEvidenceTargetProceduralVerification, ID: "foreign-verification"}}
+	reader.err = ErrNotFound
+	if _, err := service.CreateTaskEvaluation(context.Background(), foreign); !errors.Is(err, ErrNotFound) {
+		t.Fatalf("foreign verification error = %v, want not found", err)
+	}
+	if store.createCount != createdCount {
+		t.Fatal("foreign verification must not be persisted as task evidence")
+	}
+}
+
 type stubTaskEvaluationStore struct {
 	created        TaskEvaluation
+	createCount    int
 	supersedeInput SupersedeTaskEvaluationInput
+}
+
+type proceduralVerificationEvidenceReadInput struct {
+	Scope          Scope
+	VerificationID string
+}
+
+type stubProceduralVerificationEvidenceReader struct {
+	record ProceduralMemoryVerification
+	err    error
+	input  proceduralVerificationEvidenceReadInput
+}
+
+func (s *stubProceduralVerificationEvidenceReader) ReadProceduralMemoryVerification(_ context.Context, scope Scope, verificationID string) (ProceduralMemoryVerification, error) {
+	s.input = proceduralVerificationEvidenceReadInput{Scope: scope, VerificationID: verificationID}
+	if s.err != nil {
+		return ProceduralMemoryVerification{}, s.err
+	}
+	return s.record, nil
 }
 
 func (s *stubTaskEvaluationStore) CreateTaskEvaluation(ctx context.Context, evaluation TaskEvaluation) (TaskEvaluation, error) {
 	s.created = evaluation
+	s.createCount++
 	return evaluation, nil
 }
 

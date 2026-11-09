@@ -3,6 +3,8 @@ package benchmark
 import (
 	"bytes"
 	"encoding/json"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 
@@ -317,6 +319,131 @@ func TestTaskSeriesManifestValidateRejectsUnsafeOrIncompatibleInput(t *testing.T
 				t.Fatalf("Validate() error = %v, want %q", err, tt.want)
 			}
 		})
+	}
+}
+
+func TestTaskSeriesV2SeparatesMissingRepeatedErrorAndMaintenanceObservations(t *testing.T) {
+	manifest := validTaskSeriesManifest()
+	manifest.SchemaVersion = TaskSeriesSchemaVersionV2
+	manifest.MetricVersion = TaskSeriesMetricVersionV2
+	no := false
+	yes := true
+	baselineMaintenance := int64(3)
+	correctedMaintenance := int64(5)
+	manifest.Conditions[0].Stages[0].RepeatedError = &no
+	manifest.Conditions[0].Stages[0].MaintenanceCost = &baselineMaintenance
+	manifest.Conditions[1].Stages[0].RepeatedError = &yes
+	manifest.Conditions[1].Stages[0].MaintenanceCost = &correctedMaintenance
+
+	report, err := EvaluateTaskSeries(manifest, taskSeriesObservationsForManifest(manifest))
+	if err != nil {
+		t.Fatalf("EvaluateTaskSeries() error = %v", err)
+	}
+	baseline, corrected := report.Conditions[0], report.Conditions[1]
+	if baseline.RepeatedErrorCoverage != 0.5 || baseline.RepeatedErrorRate == nil || *baseline.RepeatedErrorRate != 0 {
+		t.Fatalf("baseline repeated-error metrics = %#v, want half coverage and zero observed rate", baseline)
+	}
+	if corrected.RepeatedErrorCoverage != 0.5 || corrected.RepeatedErrorRate == nil || *corrected.RepeatedErrorRate != 1 {
+		t.Fatalf("corrected repeated-error metrics = %#v, want half coverage and one observed rate", corrected)
+	}
+	if baseline.MaintenanceCoverage != 0.5 || baseline.MaintenanceCostTotal != 3 || baseline.MaintenanceCostAverage == nil || *baseline.MaintenanceCostAverage != 3 {
+		t.Fatalf("baseline maintenance metrics = %#v", baseline)
+	}
+	if corrected.MaintenanceCoverage != 0.5 || corrected.MaintenanceCostTotal != 5 || corrected.MaintenanceCostAverage == nil || *corrected.MaintenanceCostAverage != 5 {
+		t.Fatalf("corrected maintenance metrics = %#v", corrected)
+	}
+	encoded, err := MarshalTaskSeriesReport(report)
+	if err != nil {
+		t.Fatalf("MarshalTaskSeriesReport() error = %v", err)
+	}
+	for _, forbidden := range []string{"stage-01", "evidence-stage-01", `"maintenance_cost":`} {
+		if bytes.Contains(encoded, []byte(forbidden)) {
+			t.Fatalf("v2 aggregate report leaked %q: %s", forbidden, encoded)
+		}
+	}
+}
+
+func TestTaskSeriesV1RejectsV2ObservationFields(t *testing.T) {
+	manifest := validTaskSeriesManifest()
+	repeated := true
+	manifest.Conditions[0].Stages[0].RepeatedError = &repeated
+	if err := manifest.Validate(); err == nil || !strings.Contains(err.Error(), "v2") {
+		t.Fatalf("Validate() error = %v, want v2 compatibility refusal", err)
+	}
+}
+
+func TestTaskSeriesV2LocksSourceAndRefusesUnknownFields(t *testing.T) {
+	manifest := validTaskSeriesManifest()
+	manifest.SchemaVersion = TaskSeriesSchemaVersionV2
+	manifest.MetricVersion = TaskSeriesMetricVersionV2
+	repeated := true
+	manifest.Conditions[1].Stages[0].RepeatedError = &repeated
+	bundle := TaskSeriesSourceBundle{Manifest: manifest, Corpora: validTaskSeriesCorpora(manifest), SyntheticFixture: true}
+	qrelChecksum, sourceChecksum, err := TaskSeriesSourceLocks(bundle)
+	if err != nil {
+		t.Fatal(err)
+	}
+	bundle.Manifest.QRELChecksum = qrelChecksum
+	bundle.Manifest.SourceChecksum = sourceChecksum
+	encoded, err := json.Marshal(bundle)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := LoadTaskSeriesSource(encoded); err != nil {
+		t.Fatalf("LoadTaskSeriesSource(v2) error = %v", err)
+	}
+
+	tampered := bytes.Replace(encoded, []byte(`"repeated_error":true`), []byte(`"repeated_error":false`), 1)
+	if _, err := LoadTaskSeriesSource(tampered); StatusOf(err) != StatusChecksumMismatch {
+		t.Fatalf("tampered v2 source status = %q, err = %v", StatusOf(err), err)
+	}
+	unknown := bytes.Replace(encoded, []byte(`"synthetic_fixture"`), []byte(`"unknown_v2_field":true,"synthetic_fixture"`), 1)
+	if _, err := LoadTaskSeriesSource(unknown); StatusOf(err) != StatusInvalidManifest {
+		t.Fatalf("unknown v2 field status = %q, err = %v", StatusOf(err), err)
+	}
+}
+
+func TestVerifiedMemoryCorrectionTaskSeries(t *testing.T) {
+	source, err := os.ReadFile(filepath.Join("testdata", "verified-memory-correction-task-series-v2.json"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	var unlocked TaskSeriesSourceBundle
+	if err := json.Unmarshal(source, &unlocked); err != nil {
+		t.Fatalf("decode synthetic fixture: %v", err)
+	}
+	qrelChecksum, sourceChecksum, err := TaskSeriesSourceLocks(unlocked)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if unlocked.Manifest.QRELChecksum != qrelChecksum || unlocked.Manifest.SourceChecksum != sourceChecksum {
+		t.Fatalf("fixture locks qrel=%s source=%s; want qrel=%s source=%s", unlocked.Manifest.QRELChecksum, unlocked.Manifest.SourceChecksum, qrelChecksum, sourceChecksum)
+	}
+	bundle, err := LoadTaskSeriesSource(source)
+	if err != nil {
+		t.Fatalf("LoadTaskSeriesSource() error = %v", err)
+	}
+	report, err := EvaluateTaskSeries(bundle.Manifest, taskSeriesObservationsForManifest(bundle.Manifest))
+	if err != nil {
+		t.Fatalf("EvaluateTaskSeries() error = %v", err)
+	}
+	if report.SchemaVersion != TaskSeriesSchemaVersionV2 || report.MetricVersion != TaskSeriesMetricVersionV2 || report.ComparisonSemantics != "observational" || len(report.Conditions) != 3 {
+		t.Fatalf("report = %#v, want v2 observational three-condition output", report)
+	}
+	if report.Conditions[0].Utility != 0 || report.Conditions[1].ObservedUtilityDifference != 0.25 || report.Conditions[2].ObservedUtilityDifference != 0.5 {
+		t.Fatalf("observational utility differences = %#v", report.Conditions)
+	}
+	if report.Conditions[0].RepeatedErrorRate == nil || *report.Conditions[0].RepeatedErrorRate != 1 || report.Conditions[2].RepeatedErrorRate == nil || *report.Conditions[2].RepeatedErrorRate != 0.5 || report.Conditions[2].MaintenanceCostAverage == nil || *report.Conditions[2].MaintenanceCostAverage != 2.5 {
+		t.Fatalf("repeated-error/maintenance observations = %#v", report.Conditions)
+	}
+	encoded, err := MarshalTaskSeriesReport(report)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, forbidden := range []string{"verified-later-evidence", "no_memory", "source_retrieval", "verified_corrected", `"maintenance_cost":`} {
+		if bytes.Contains(encoded, []byte(forbidden)) {
+			t.Fatalf("observational aggregate report leaked %q: %s", forbidden, encoded)
+		}
 	}
 }
 

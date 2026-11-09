@@ -138,6 +138,36 @@ func TestCorrectionAttributionJSONIsBoundedAndOmitsInternalBindingIdentity(t *te
 	}
 }
 
+func TestVerificationAttributedIntentIsSeparateFromProviderCorrectionAndBindsFingerprint(t *testing.T) {
+	input := governedInput()
+	input.Type = MemoryIntentUpdate
+	input.TargetMemoryID = "09f8bdb0-8aeb-4efd-a82a-8cf1b093997a"
+	input.TargetVersion = 2
+	attribution := VerificationAttribution{
+		VerificationID: "verification-1", TargetMemoryID: input.TargetMemoryID, TargetVersion: input.TargetVersion,
+		SourceWatermark: "watermark-1", PolicyVersion: "verification-policy-v1",
+	}
+	if err := attribution.Validate(); err != nil {
+		t.Fatal(err)
+	}
+	first, err := VerificationIntentFingerprint(input, attribution)
+	if err != nil {
+		t.Fatal(err)
+	}
+	changed := attribution
+	changed.SourceWatermark = "watermark-2"
+	second, err := VerificationIntentFingerprint(input, changed)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if first == second {
+		t.Fatal("verification source watermark must change attributed intent fingerprint")
+	}
+	if err := (VerificationAttribution{VerificationID: attribution.VerificationID, TargetMemoryID: attribution.TargetMemoryID, TargetVersion: 0, SourceWatermark: attribution.SourceWatermark, PolicyVersion: attribution.PolicyVersion}).Validate(); err == nil {
+		t.Fatal("zero verification target version accepted")
+	}
+}
+
 func TestMemoryIntentValidationRejectsForeignEvidenceAndIncompleteSpecialTypes(t *testing.T) {
 	input := governedInput()
 	input.Type = MemoryIntentContradiction

@@ -39,6 +39,63 @@ type CorrectionAttribution struct {
 	State          string `json:"state"`
 }
 
+// VerificationAttribution identifies the administrator-resolved procedural
+// verification that permits one governed update. It is deliberately distinct
+// from CorrectionAttribution: the latter is a closed Provider runtime-binding
+// contract, while this records immutable verification ledger state.
+//
+// It is not a field on MemoryIntentInput. Only verification-correction
+// admission may construct it after re-resolving the ledger, target, sources,
+// and exact-scope policy; generic callers cannot claim correction authority.
+type VerificationAttribution struct {
+	VerificationID  string `json:"verification_id"`
+	TargetMemoryID  string `json:"target_memory_id"`
+	TargetVersion   int64  `json:"target_version"`
+	SourceWatermark string `json:"source_watermark"`
+	PolicyVersion   string `json:"policy_version"`
+}
+
+func (a VerificationAttribution) Validate() error {
+	for name, value := range map[string]string{
+		"verification identity":         a.VerificationID,
+		"verification target memory":    a.TargetMemoryID,
+		"verification source watermark": a.SourceWatermark,
+		"verification policy version":   a.PolicyVersion,
+	} {
+		if !boundedCorrectionIdentity(value) {
+			return fmt.Errorf("%s is required and bounded", name)
+		}
+	}
+	if a.TargetVersion <= 0 {
+		return fmt.Errorf("verification target version must be greater than zero")
+	}
+	return nil
+}
+
+// VerificationIntentFingerprint binds the ordinary governed update replay
+// identity to one immutable verification target/source/policy tuple. A
+// changed verification, source watermark, or policy becomes a distinct intent
+// rather than silently replaying an earlier correction.
+func VerificationIntentFingerprint(input MemoryIntentInput, attribution VerificationAttribution) (string, error) {
+	if err := attribution.Validate(); err != nil {
+		return "", err
+	}
+	base, err := input.CanonicalFingerprint()
+	if err != nil {
+		return "", err
+	}
+	payload := struct {
+		IntentFingerprint string                  `json:"intent_fingerprint"`
+		Verification      VerificationAttribution `json:"verification"`
+	}{IntentFingerprint: base, Verification: attribution}
+	b, err := json.Marshal(payload)
+	if err != nil {
+		return "", fmt.Errorf("marshal verification intent fingerprint: %w", err)
+	}
+	digest := sha256.Sum256(b)
+	return hex.EncodeToString(digest[:]), nil
+}
+
 func (a CorrectionAttribution) Validate() error {
 	if parsed, err := uuid.Parse(strings.TrimSpace(a.ProjectionID)); err != nil || parsed == uuid.Nil {
 		return fmt.Errorf("correction projection identity is required")

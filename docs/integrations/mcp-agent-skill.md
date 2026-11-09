@@ -292,3 +292,18 @@ Memory repository import adds no MCP tool in v1. When enabled, it is strictly
 the reviewed HTTP snapshot protocol described in the
 [repository import guide](memory-repository-import.md); do not substitute Git,
 filesystem, URL, archive, or local-memory behavior.
+
+## Procedural verification maintenance
+
+Procedural verification maintenance is an administrator-only HTTP workflow,
+not an MCP tool. An operator who needs to record evidence, inspect redacted
+verification/revalidation status, or submit a refuted correction uses the
+documented `/v1/admin/procedural-memory-verifications` OpenAPI operations with
+an administrator credential and exact scope headers.
+
+The workflow is not available to public Provider credentials and MCP does not
+provide a fallback route. It preserves an append-only audit trail and passes a
+correction only to the existing governed update path; it never makes an MCP
+caller able to infer a result, create a canonical version directly, or disclose
+hidden evidence. See [self-hosting](../self-hosting.md#procedural-verification-maintenance)
+for feature enablement, bounds, verification, and rollback.

@@ -370,23 +370,24 @@ type TaskSummarySignal struct {
 }
 
 type TaskEvaluationReport struct {
-	Evaluation                   TaskEvaluation             `json:"evaluation"`
-	Summary                      TaskEvaluationSummary      `json:"summary"`
-	Evidence                     []TaskEvidenceLink         `json:"evidence,omitempty"`
-	LinkedSessionIDs             []string                   `json:"linked_session_ids,omitempty"`
-	LinkedTurnIDs                []string                   `json:"linked_turn_ids,omitempty"`
-	LinkedRawEventIDs            []string                   `json:"linked_raw_event_ids,omitempty"`
-	LinkedOutcomeEventIDs        []string                   `json:"linked_outcome_event_ids,omitempty"`
-	LinkedVerificationIDs        []string                   `json:"linked_verification_ids,omitempty"`
-	LinkedExpectedRecallIDs      []string                   `json:"linked_expected_recall_ids,omitempty"`
-	LinkedFeedbackIDs            []string                   `json:"linked_feedback_ids,omitempty"`
-	LinkedContextCitationIDs     []string                   `json:"linked_context_citation_ids,omitempty"`
-	LinkedDerivedInsightIDs      []string                   `json:"linked_derived_insight_ids,omitempty"`
-	LinkedMemoryIDs              []string                   `json:"linked_memory_ids,omitempty"`
-	LinkedQualityFindingIDs      []string                   `json:"linked_quality_finding_ids,omitempty"`
-	LinkedRepairPlanIDs          []string                   `json:"linked_repair_plan_ids,omitempty"`
-	MemoryContributionCategories []TaskContributionCategory `json:"memory_contribution_categories,omitempty"`
-	NextActions                  []string                   `json:"next_actions,omitempty"`
+	Evaluation                      TaskEvaluation             `json:"evaluation"`
+	Summary                         TaskEvaluationSummary      `json:"summary"`
+	Evidence                        []TaskEvidenceLink         `json:"evidence,omitempty"`
+	LinkedSessionIDs                []string                   `json:"linked_session_ids,omitempty"`
+	LinkedTurnIDs                   []string                   `json:"linked_turn_ids,omitempty"`
+	LinkedRawEventIDs               []string                   `json:"linked_raw_event_ids,omitempty"`
+	LinkedOutcomeEventIDs           []string                   `json:"linked_outcome_event_ids,omitempty"`
+	LinkedVerificationIDs           []string                   `json:"linked_verification_ids,omitempty"`
+	LinkedProceduralVerificationIDs []string                   `json:"linked_procedural_verification_ids,omitempty"`
+	LinkedExpectedRecallIDs         []string                   `json:"linked_expected_recall_ids,omitempty"`
+	LinkedFeedbackIDs               []string                   `json:"linked_feedback_ids,omitempty"`
+	LinkedContextCitationIDs        []string                   `json:"linked_context_citation_ids,omitempty"`
+	LinkedDerivedInsightIDs         []string                   `json:"linked_derived_insight_ids,omitempty"`
+	LinkedMemoryIDs                 []string                   `json:"linked_memory_ids,omitempty"`
+	LinkedQualityFindingIDs         []string                   `json:"linked_quality_finding_ids,omitempty"`
+	LinkedRepairPlanIDs             []string                   `json:"linked_repair_plan_ids,omitempty"`
+	MemoryContributionCategories    []TaskContributionCategory `json:"memory_contribution_categories,omitempty"`
+	NextActions                     []string                   `json:"next_actions,omitempty"`
 }
 
 func BuildTaskEvaluationReport(evaluation TaskEvaluation, summary TaskEvaluationSummary) TaskEvaluationReport {
@@ -403,6 +404,7 @@ func BuildTaskEvaluationReport(evaluation TaskEvaluation, summary TaskEvaluation
 	report.LinkedRawEventIDs = taskEvidenceIDs(report.Evidence, TaskEvidenceTargetRawEvent)
 	report.LinkedOutcomeEventIDs = taskEvidenceIDs(report.Evidence, TaskEvidenceTargetOutcomeEvent)
 	report.LinkedVerificationIDs = taskEvidenceIDs(report.Evidence, TaskEvidenceTargetVerification)
+	report.LinkedProceduralVerificationIDs = taskEvidenceIDs(report.Evidence, TaskEvidenceTargetProceduralVerification)
 	report.LinkedExpectedRecallIDs = taskEvidenceIDs(report.Evidence, TaskEvidenceTargetExpectedRecall)
 	report.LinkedFeedbackIDs = taskEvidenceIDs(report.Evidence, TaskEvidenceTargetUsefulnessFeedback)
 	report.LinkedContextCitationIDs = taskEvidenceIDs(report.Evidence, TaskEvidenceTargetContextCitation)

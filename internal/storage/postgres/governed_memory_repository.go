@@ -188,6 +188,11 @@ ORDER BY i.created_at DESC,i.id DESC LIMIT $5`
 			}
 			item.Correction = &attribution
 		}
+		item, err = r.readMemoryIntentVerification(ctx, item)
+		if err != nil {
+			rows.Close()
+			return nil, err
+		}
 		items = append(items, item)
 	}
 	rowsErr := rows.Err()
@@ -286,7 +291,11 @@ WHERE id::text = $1 AND tenant = $2 AND project = $3 AND namespace = $4`
 	if err != nil {
 		return record, err
 	}
-	return r.readMemoryIntentCorrection(ctx, record)
+	record, err = r.readMemoryIntentCorrection(ctx, record)
+	if err != nil {
+		return record, err
+	}
+	return r.readMemoryIntentVerification(ctx, record)
 }
 
 func (r *Repository) readMemoryIntentCorrection(ctx context.Context, record memory.MemoryIntentRecord) (memory.MemoryIntentRecord, error) {
@@ -305,6 +314,31 @@ WHERE intent_id=$1::uuid AND tenant=$2 AND project=$3 AND namespace=$4`, record.
 	}
 	attribution.State = "verified"
 	record.Correction = &attribution
+	return record, nil
+}
+
+// readMemoryIntentVerification restores the immutable, exact-scope
+// verification attribution alongside a governed intent. It is deliberately
+// independent from Provider correction attribution: either association may be
+// absent, but an incomplete stored verification association is never exposed
+// as a partially trusted record to the worker.
+func (r *Repository) readMemoryIntentVerification(ctx context.Context, record memory.MemoryIntentRecord) (memory.MemoryIntentRecord, error) {
+	var attribution memory.VerificationAttribution
+	err := r.queryer(ctx).QueryRow(ctx, `SELECT verification_id::text,target_memory_id::text,target_version,source_watermark,policy_version
+FROM memory_intent_verification_attributions
+WHERE intent_id=$1::uuid AND tenant=$2 AND project=$3 AND namespace=$4`, record.ID, record.Scope.Tenant, record.Scope.Project, record.Scope.Namespace).
+		Scan(&attribution.VerificationID, &attribution.TargetMemoryID, &attribution.TargetVersion, &attribution.SourceWatermark, &attribution.PolicyVersion)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return record, nil
+	}
+	if err != nil {
+		return record, fmt.Errorf("read verification attribution: %w", err)
+	}
+	if err := attribution.Validate(); err != nil || record.Type != memory.MemoryIntentUpdate ||
+		record.TargetMemoryID != attribution.TargetMemoryID || record.TargetVersion != attribution.TargetVersion {
+		return record, fmt.Errorf("invalid verification attribution in scoped intent read")
+	}
+	record.Verification = &attribution
 	return record, nil
 }
 
