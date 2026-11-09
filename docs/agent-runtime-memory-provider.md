@@ -617,3 +617,18 @@ creates a governed successor asynchronously, and rolls candidate/version,
 intent transition, and River completion back together on retryable failure.
 Disabling the capability stops new requests; migrations and accepted audit
 history are retained during rollback.
+
+## Procedural verification boundary
+
+Procedural verification is administrator-only maintenance for an active
+procedural-memory version. It does not add a Provider route, capability, field,
+or discovery mechanism. Provider responses never contain verification history,
+revalidation state, corrected verification payloads, or a route that could be
+used to probe their existence.
+
+An authorized operator may use the separately documented admin API to append
+attributable verification evidence or route a refuted correction to a governed
+intent. That is not a Provider correction and it does not let a public runtime
+perform semantic verification, bypass exact scope, mutate canonical memory, or
+claim task success. Treat any Provider denial as final; do not switch to MCP,
+another credential, or local storage as a fallback.

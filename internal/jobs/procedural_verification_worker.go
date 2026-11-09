@@ -2,11 +2,13 @@ package jobs
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"strings"
 	"time"
 
 	"github.com/FelixSeptem/stele/internal/memory"
+	"github.com/FelixSeptem/stele/internal/telemetry"
 	"github.com/FelixSeptem/stele/internal/workqueue"
 )
 
@@ -18,6 +20,7 @@ type ProceduralRevalidationStore interface {
 	ReadProceduralMemoryVerification(context.Context, memory.Scope, string) (memory.ProceduralMemoryVerification, error)
 	AppendProceduralMemoryVerification(context.Context, memory.ProceduralMemoryVerification) (memory.ProceduralMemoryVerification, error)
 	CompleteProceduralRevalidationRun(context.Context, memory.CompleteProceduralRevalidationRunInput) error
+	ExhaustProceduralRevalidationRun(context.Context, memory.ExhaustProceduralRevalidationRunInput) error
 }
 
 // ProceduralRevalidationWorker is a DerivedWorkExecutor. It can only record
@@ -32,6 +35,9 @@ type ProceduralRevalidationWorker struct {
 	LeaseDuration time.Duration
 	Now           func() time.Time
 	NewID         func() string
+	Observer      interface {
+		RecordProceduralVerification(context.Context, telemetry.ProceduralVerificationEvent)
+	}
 }
 
 func (w ProceduralRevalidationWorker) ExecuteDerivedWork(ctx context.Context, item workqueue.DerivedWorkItem) (int64, string, error) {
@@ -79,8 +85,10 @@ func (w ProceduralRevalidationWorker) ExecuteDerivedWork(ctx context.Context, it
 	// verification without appending a result whose DB target guard would fail.
 	if err := w.Targets.ValidateProceduralVerificationTarget(ctx, verification); err != nil {
 		if completeErr := w.Store.CompleteProceduralRevalidationRun(ctx, memory.CompleteProceduralRevalidationRunInput{Scope: item.Scope, RunID: run.ID, WorkerID: run.LeaseOwner, Status: memory.ProceduralRevalidationRunStatusFailed, TerminalVerificationID: verification.ID, CompletedAt: now}); completeErr != nil {
+			w.recordRevalidationTelemetry(ctx, run, "failed", "dependency")
 			return 0, "", fmt.Errorf("complete unavailable procedural revalidation run: %w", completeErr)
 		}
+		w.recordRevalidationTelemetry(ctx, run, "failed", "target_ineligible")
 		return 1, verification.ID, nil
 	}
 	disposition := memory.ProceduralVerificationDispositionInconclusive
@@ -118,5 +126,62 @@ func (w ProceduralRevalidationWorker) ExecuteDerivedWork(ctx context.Context, it
 	if err := w.Store.CompleteProceduralRevalidationRun(ctx, memory.CompleteProceduralRevalidationRunInput{Scope: item.Scope, RunID: run.ID, WorkerID: run.LeaseOwner, Status: memory.ProceduralRevalidationRunStatusCompleted, TerminalVerificationID: stored.ID, CompletedAt: now}); err != nil {
 		return 0, "", fmt.Errorf("complete procedural revalidation run: %w", err)
 	}
+	w.recordRevalidationTelemetry(ctx, run, string(disposition), "none")
 	return 1, stored.ID, nil
+}
+
+func (w ProceduralRevalidationWorker) recordRevalidationTelemetry(ctx context.Context, run memory.ProceduralRevalidationRun, result, failureCategory string) {
+	if w.Observer == nil {
+		return
+	}
+	disposition := "none"
+	if result == string(memory.ProceduralVerificationDispositionInconclusive) || result == string(memory.ProceduralVerificationDispositionNeedsRevalidation) {
+		disposition = result
+	}
+	w.Observer.RecordProceduralVerification(ctx, telemetry.ProceduralVerificationEvent{
+		Operation: "revalidate", Result: result, Disposition: disposition, Trigger: string(run.Trigger), Queue: "durable", Recovery: "none", FailureCategory: failureCategory,
+	})
+}
+
+// HandleDerivedWorkExhaustion implements DerivedWorkExhaustionHandler. The
+// shared queue worker has already made the delivery terminal; this method
+// settles the matching child run only if this worker still owns its durable
+// lease. A lease lost to restart/recovery is benign because its owner or the
+// recovery path is responsible for the run.
+func (w ProceduralRevalidationWorker) HandleDerivedWorkExhaustion(ctx context.Context, item workqueue.DerivedWorkItem) error {
+	if w.Store == nil || strings.TrimSpace(w.WorkerID) == "" {
+		return fmt.Errorf("procedural revalidation worker is not configured")
+	}
+	if item.Kind != workqueue.WorkKindProceduralRevalidation {
+		return fmt.Errorf("procedural revalidation worker cannot exhaust %q", item.Kind)
+	}
+	if err := item.Scope.Validate(); err != nil || strings.TrimSpace(item.Reference) == "" {
+		return fmt.Errorf("procedural revalidation work item is invalid")
+	}
+	now := time.Now().UTC()
+	if w.Now != nil {
+		now = w.Now().UTC()
+	}
+	err := w.Store.ExhaustProceduralRevalidationRun(ctx, memory.ExhaustProceduralRevalidationRunInput{
+		Scope: item.Scope, RunID: item.Reference, WorkerID: w.WorkerID, ExhaustedAt: now,
+	})
+	if errors.Is(err, memory.ErrProceduralRevalidationLeaseLost) {
+		w.recordExhaustionTelemetry(ctx, "completed", "lease_lost")
+		return nil
+	}
+	if err != nil {
+		w.recordExhaustionTelemetry(ctx, "failed", "dependency")
+		return fmt.Errorf("exhaust procedural revalidation run: %w", err)
+	}
+	w.recordExhaustionTelemetry(ctx, "exhausted", "none")
+	return nil
+}
+
+func (w ProceduralRevalidationWorker) recordExhaustionTelemetry(ctx context.Context, result, failureCategory string) {
+	if w.Observer == nil {
+		return
+	}
+	w.Observer.RecordProceduralVerification(ctx, telemetry.ProceduralVerificationEvent{
+		Operation: "exhaust", Result: result, Disposition: "none", Trigger: "none", Queue: "durable", Recovery: "exhausted", FailureCategory: failureCategory,
+	})
 }

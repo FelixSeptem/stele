@@ -347,19 +347,20 @@ func EventRequestFingerprint(input IngestEventInput) (string, error) {
 type TaskEvidenceTargetKind string
 
 const (
-	TaskEvidenceTargetSession            TaskEvidenceTargetKind = "session"
-	TaskEvidenceTargetTurn               TaskEvidenceTargetKind = "turn"
-	TaskEvidenceTargetRawEvent           TaskEvidenceTargetKind = "raw_event"
-	TaskEvidenceTargetOutcomeEvent       TaskEvidenceTargetKind = "outcome_event"
-	TaskEvidenceTargetVerification       TaskEvidenceTargetKind = "verification"
-	TaskEvidenceTargetExpectedRecall     TaskEvidenceTargetKind = "expected_recall"
-	TaskEvidenceTargetUsefulnessFeedback TaskEvidenceTargetKind = "usefulness_feedback"
-	TaskEvidenceTargetContextCitation    TaskEvidenceTargetKind = "context_citation"
-	TaskEvidenceTargetDerivedInsight     TaskEvidenceTargetKind = "derived_insight"
-	TaskEvidenceTargetMemory             TaskEvidenceTargetKind = "memory"
-	TaskEvidenceTargetQualityFinding     TaskEvidenceTargetKind = "quality_finding"
-	TaskEvidenceTargetRepairPlan         TaskEvidenceTargetKind = "repair_plan"
-	TaskEvidenceTargetOpaque             TaskEvidenceTargetKind = "opaque"
+	TaskEvidenceTargetSession                TaskEvidenceTargetKind = "session"
+	TaskEvidenceTargetTurn                   TaskEvidenceTargetKind = "turn"
+	TaskEvidenceTargetRawEvent               TaskEvidenceTargetKind = "raw_event"
+	TaskEvidenceTargetOutcomeEvent           TaskEvidenceTargetKind = "outcome_event"
+	TaskEvidenceTargetVerification           TaskEvidenceTargetKind = "verification"
+	TaskEvidenceTargetProceduralVerification TaskEvidenceTargetKind = "procedural_verification"
+	TaskEvidenceTargetExpectedRecall         TaskEvidenceTargetKind = "expected_recall"
+	TaskEvidenceTargetUsefulnessFeedback     TaskEvidenceTargetKind = "usefulness_feedback"
+	TaskEvidenceTargetContextCitation        TaskEvidenceTargetKind = "context_citation"
+	TaskEvidenceTargetDerivedInsight         TaskEvidenceTargetKind = "derived_insight"
+	TaskEvidenceTargetMemory                 TaskEvidenceTargetKind = "memory"
+	TaskEvidenceTargetQualityFinding         TaskEvidenceTargetKind = "quality_finding"
+	TaskEvidenceTargetRepairPlan             TaskEvidenceTargetKind = "repair_plan"
+	TaskEvidenceTargetOpaque                 TaskEvidenceTargetKind = "opaque"
 )
 
 func (k TaskEvidenceTargetKind) Valid() bool {
@@ -369,6 +370,7 @@ func (k TaskEvidenceTargetKind) Valid() bool {
 		TaskEvidenceTargetRawEvent,
 		TaskEvidenceTargetOutcomeEvent,
 		TaskEvidenceTargetVerification,
+		TaskEvidenceTargetProceduralVerification,
 		TaskEvidenceTargetExpectedRecall,
 		TaskEvidenceTargetUsefulnessFeedback,
 		TaskEvidenceTargetContextCitation,

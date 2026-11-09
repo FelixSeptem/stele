@@ -61,7 +61,7 @@ func TestProceduralVerificationRepositoryReadIsExactScope(t *testing.T) {
 	}
 }
 
-func TestProceduralVerificationRepositoryClaimsExpiredRevalidationRun(t *testing.T) {
+func TestProceduralRevalidationRepositoryRecoversExpiredLease(t *testing.T) {
 	mock, err := pgxmock.NewPool()
 	if err != nil {
 		t.Fatal(err)
@@ -84,7 +84,7 @@ func TestProceduralVerificationRepositoryClaimsExpiredRevalidationRun(t *testing
 	}
 }
 
-func TestProceduralVerificationRepositoryClaimsReferencedPendingRunWithLeaseOwnership(t *testing.T) {
+func TestProceduralRevalidationRepositoryClaimsScopedPendingRunWithLeaseOwnership(t *testing.T) {
 	mock, err := pgxmock.NewPool()
 	if err != nil {
 		t.Fatal(err)
@@ -107,7 +107,7 @@ func TestProceduralVerificationRepositoryClaimsReferencedPendingRunWithLeaseOwne
 	}
 }
 
-func TestProceduralVerificationRepositoryCreatesRevalidationRunByScopedWorkIdentity(t *testing.T) {
+func TestProceduralRevalidationRepositoryCoalescesScopedWorkIdentity(t *testing.T) {
 	mock, err := pgxmock.NewPool()
 	if err != nil {
 		t.Fatal(err)
@@ -115,25 +115,26 @@ func TestProceduralVerificationRepositoryCreatesRevalidationRunByScopedWorkIdent
 	defer mock.Close()
 	now := time.Date(2026, time.November, 8, 1, 0, 0, 0, time.UTC)
 	run := proceduralRevalidationRun(now)
+	const existingID = "00000000-0000-0000-0000-000000000299"
 	mock.ExpectQuery("INSERT INTO procedural_memory_revalidation_runs").WithArgs(
 		run.ID, run.Scope.Tenant, run.Scope.Project, run.Scope.Namespace, run.VerificationID,
 		run.MemoryID, run.TargetVersion, run.SourceWatermark, run.Trigger, run.WorkIdentity,
 		run.Status, run.MaxAttempts, run.NextAttemptAt, run.CreatedAt, run.UpdatedAt,
-	).WillReturnRows(proceduralRevalidationRunRows(now, run.Scope))
+	).WillReturnRows(proceduralRevalidationRunRowsWithID(now, run.Scope, existingID))
 
 	stored, err := NewRepository(mock).CreateProceduralRevalidationRun(context.Background(), run)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if stored.ID != run.ID || stored.WorkIdentity != run.WorkIdentity || stored.Scope != run.Scope {
-		t.Fatalf("stored = %+v, want %+v", stored, run)
+	if stored.ID != existingID || stored.WorkIdentity != run.WorkIdentity || stored.Scope != run.Scope {
+		t.Fatalf("stored = %+v, want existing durable work identity %+v", stored, run)
 	}
 	if err := mock.ExpectationsWereMet(); err != nil {
 		t.Fatal(err)
 	}
 }
 
-func TestProceduralVerificationRepositoryCompletesOnlyOwnedRun(t *testing.T) {
+func TestProceduralRevalidationRepositoryRejectsCompletionWithoutLeaseOwnership(t *testing.T) {
 	mock, err := pgxmock.NewPool()
 	if err != nil {
 		t.Fatal(err)
@@ -152,6 +153,29 @@ func TestProceduralVerificationRepositoryCompletesOnlyOwnedRun(t *testing.T) {
 	})
 	if !errors.Is(err, memory.ErrProceduralRevalidationLeaseLost) {
 		t.Fatalf("complete error = %v, want lease lost", err)
+	}
+	if err := mock.ExpectationsWereMet(); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestProceduralRevalidationRepositoryExhaustsOwnedRunningRun(t *testing.T) {
+	mock, err := pgxmock.NewPool()
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer mock.Close()
+	now := time.Date(2026, time.November, 8, 1, 0, 0, 0, time.UTC)
+	scope := memory.Scope{Tenant: "tenant-a", Project: "project-a", Namespace: "namespace-a"}
+	mock.ExpectExec("UPDATE procedural_memory_revalidation_runs").WithArgs(
+		scope.Tenant, scope.Project, scope.Namespace, "00000000-0000-0000-0000-000000000201", "worker-a", now,
+	).WillReturnResult(pgconn.NewCommandTag("UPDATE 1"))
+
+	err = NewRepository(mock).ExhaustProceduralRevalidationRun(context.Background(), memory.ExhaustProceduralRevalidationRunInput{
+		Scope: scope, RunID: "00000000-0000-0000-0000-000000000201", WorkerID: "worker-a", ExhaustedAt: now,
+	})
+	if err != nil {
+		t.Fatal(err)
 	}
 	if err := mock.ExpectationsWereMet(); err != nil {
 		t.Fatal(err)
@@ -207,7 +231,60 @@ func TestProceduralVerificationRepositoryResolvesCurrentTargetAndTypedEvidence(t
 	}
 }
 
-func TestProceduralVerificationRepositoryReadsRevalidationRunInExactScope(t *testing.T) {
+func TestVerificationCorrectionWorkerRechecksAttributionInExactScope(t *testing.T) {
+	mock, err := pgxmock.NewPool()
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer mock.Close()
+	scope := memory.Scope{Tenant: "tenant-a", Project: "project-a", Namespace: "namespace-a"}
+	record := memory.MemoryIntentRecord{
+		ID: "00000000-0000-0000-0000-000000000401", Scope: scope, Type: memory.MemoryIntentUpdate,
+		TargetMemoryID: "00000000-0000-0000-0000-000000000102", TargetVersion: 3, Content: "corrected procedure",
+		Verification: &memory.VerificationAttribution{VerificationID: "00000000-0000-0000-0000-000000000101", TargetMemoryID: "00000000-0000-0000-0000-000000000102", TargetVersion: 3, SourceWatermark: "watermark-1", PolicyVersion: "policy-v1"},
+	}
+	mock.ExpectQuery("FROM memory_intent_verification_attributions").WithArgs(record.ID, scope.Tenant, scope.Project, scope.Namespace, record.Verification.VerificationID, record.TargetMemoryID, record.TargetVersion, record.Verification.SourceWatermark, record.Verification.PolicyVersion).
+		WillReturnRows(pgxmock.NewRows([]string{"eligible"}).AddRow(true))
+	verification := postgresProceduralVerification()
+	verification.Disposition = memory.ProceduralVerificationDispositionRefuted
+	verification.CorrectedContent = record.Content
+	mock.ExpectQuery("FROM procedural_memory_verifications").WithArgs(scope.Tenant, scope.Project, scope.Namespace, record.Verification.VerificationID).
+		WillReturnRows(proceduralVerificationRows(verification, strings.Repeat("a", 64)))
+	mock.ExpectQuery("FROM canonical_memories m").WithArgs(scope.Tenant, scope.Project, scope.Namespace, record.TargetMemoryID, record.TargetVersion).
+		WillReturnRows(pgxmock.NewRows([]string{"eligible"}).AddRow(true))
+	mock.ExpectQuery("FROM raw_events").WithArgs(scope.Tenant, scope.Project, scope.Namespace, verification.Evidence[0].ID).
+		WillReturnRows(pgxmock.NewRows([]string{"eligible"}).AddRow(true))
+	if err := NewRepository(mock).ValidateMemoryIntentVerification(context.Background(), record); err != nil {
+		t.Fatal(err)
+	}
+	if err := mock.ExpectationsWereMet(); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestVerificationCorrectionWorkerRejectsTargetConflictBeforeCanonicalMutation(t *testing.T) {
+	mock, err := pgxmock.NewPool()
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer mock.Close()
+	scope := memory.Scope{Tenant: "tenant-a", Project: "project-a", Namespace: "namespace-a"}
+	record := memory.MemoryIntentRecord{
+		ID: "00000000-0000-0000-0000-000000000401", Scope: scope, Type: memory.MemoryIntentUpdate,
+		TargetMemoryID: "00000000-0000-0000-0000-000000000102", TargetVersion: 3,
+		Verification: &memory.VerificationAttribution{VerificationID: "00000000-0000-0000-0000-000000000101", TargetMemoryID: "00000000-0000-0000-0000-000000000102", TargetVersion: 3, SourceWatermark: "watermark-1", PolicyVersion: "policy-v1"},
+	}
+	mock.ExpectQuery("FROM memory_intent_verification_attributions").WithArgs(record.ID, scope.Tenant, scope.Project, scope.Namespace, record.Verification.VerificationID, record.TargetMemoryID, record.TargetVersion, record.Verification.SourceWatermark, record.Verification.PolicyVersion).
+		WillReturnRows(pgxmock.NewRows([]string{"eligible"}).AddRow(false))
+	if err := NewRepository(mock).ValidateMemoryIntentVerification(context.Background(), record); !errors.Is(err, memory.ErrNotFound) {
+		t.Fatalf("ValidateMemoryIntentVerification() error = %v, want lifecycle-safe conflict refusal", err)
+	}
+	if err := mock.ExpectationsWereMet(); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestProceduralRevalidationRepositoryReadsRunInExactScope(t *testing.T) {
 	mock, err := pgxmock.NewPool()
 	if err != nil {
 		t.Fatal(err)
@@ -230,7 +307,30 @@ func TestProceduralVerificationRepositoryReadsRevalidationRunInExactScope(t *tes
 	}
 }
 
-func TestProceduralVerificationRepositoryReadsAdminLineageWithinOneTargetScope(t *testing.T) {
+func TestProceduralRevalidationRepositoryListsOnlyPendingRunsForRestartRecovery(t *testing.T) {
+	mock, err := pgxmock.NewPool()
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer mock.Close()
+	now := time.Date(2026, time.November, 8, 1, 0, 0, 0, time.UTC)
+	scope := memory.Scope{Tenant: "tenant-a", Project: "project-a", Namespace: "namespace-a"}
+	mock.ExpectQuery("FROM procedural_memory_revalidation_runs").WithArgs(scope.Tenant, scope.Project, scope.Namespace, now, 10).
+		WillReturnRows(proceduralPendingRevalidationRunRows(now, scope))
+
+	runs, err := NewRepository(mock).ListPendingProceduralRevalidationRuns(context.Background(), memory.ListPendingProceduralRevalidationRunsInput{Scope: scope, Now: now, Limit: 10})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(runs) != 1 || runs[0].Status != memory.ProceduralRevalidationRunStatusPending || runs[0].Scope != scope {
+		t.Fatalf("pending runs = %+v", runs)
+	}
+	if err := mock.ExpectationsWereMet(); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestVerificationCorrectionWorkerPersistsBoundedIntentCandidateSuccessorLineage(t *testing.T) {
 	mock, err := pgxmock.NewPool()
 	if err != nil {
 		t.Fatal(err)
@@ -246,13 +346,46 @@ func TestProceduralVerificationRepositoryReadsAdminLineageWithinOneTargetScope(t
 		WillReturnRows(proceduralVerificationRows(record, fingerprint))
 	mock.ExpectQuery("FROM procedural_memory_revalidation_runs").WithArgs(record.Scope.Tenant, record.Scope.Project, record.Scope.Namespace, record.MemoryID, record.TargetVersion, 100).
 		WillReturnRows(proceduralRevalidationRunRows(now, record.Scope))
+	mock.ExpectQuery("FROM memory_intent_verification_attributions").WithArgs(record.Scope.Tenant, record.Scope.Project, record.Scope.Namespace, record.MemoryID, record.TargetVersion, 100).
+		WillReturnRows(pgxmock.NewRows([]string{"verification_id", "intent_id", "status", "candidate_id", "successor_memory_id", "successor_version"}).
+			AddRow(record.ID, "00000000-0000-0000-0000-000000000401", memory.MemoryIntentStatusActive, "00000000-0000-0000-0000-000000000501", record.MemoryID, int64(4)))
 
 	lineage, err := NewRepository(mock).ReadProceduralVerificationLineage(context.Background(), record.Scope, record.MemoryID, record.TargetVersion)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(lineage.Verifications) != 1 || len(lineage.Runs) != 1 || lineage.Verifications[0].ID != record.ID {
+	if len(lineage.Verifications) != 1 || len(lineage.Runs) != 1 || len(lineage.Intents) != 1 || lineage.Verifications[0].ID != record.ID {
 		t.Fatalf("lineage = %+v", lineage)
+	}
+	if link := lineage.Intents[0]; link.VerificationID != record.ID || link.IntentID != "00000000-0000-0000-0000-000000000401" || link.CandidateID == "" || link.SuccessorVersion != 4 {
+		t.Fatalf("lineage intent link = %+v, want bounded verification-to-successor chain", link)
+	}
+	if err := mock.ExpectationsWereMet(); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestProceduralVerificationHistoryRedactsForeignIntentCandidateAndSuccessorLinks(t *testing.T) {
+	mock, err := pgxmock.NewPool()
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer mock.Close()
+	record := postgresProceduralVerification()
+	foreign := memory.Scope{Tenant: "tenant-b", Project: record.Scope.Project, Namespace: record.Scope.Namespace}
+	mock.ExpectQuery("FROM procedural_memory_verifications").WithArgs(foreign.Tenant, foreign.Project, foreign.Namespace, record.MemoryID, record.TargetVersion, 100).
+		WillReturnRows(pgxmock.NewRows([]string{"id", "tenant", "project", "namespace", "memory_id", "target_version", "fingerprint", "claim_fingerprint", "applicability_fingerprint", "disposition", "evidence", "source_watermark", "policy_version", "actor", "reason", "corrected_content", "created_at"}))
+	mock.ExpectQuery("FROM procedural_memory_revalidation_runs").WithArgs(foreign.Tenant, foreign.Project, foreign.Namespace, record.MemoryID, record.TargetVersion, 100).
+		WillReturnRows(pgxmock.NewRows([]string{"id", "tenant", "project", "namespace", "verification_id", "memory_id", "target_version", "source_watermark", "trigger", "work_identity", "status", "attempt_count", "max_attempts", "lease_owner", "lease_expires_at", "next_attempt_at", "terminal_verification_id", "failure_category", "created_at", "updated_at", "terminal_at"}))
+	mock.ExpectQuery("FROM memory_intent_verification_attributions").WithArgs(foreign.Tenant, foreign.Project, foreign.Namespace, record.MemoryID, record.TargetVersion, 100).
+		WillReturnRows(pgxmock.NewRows([]string{"verification_id", "intent_id", "status", "candidate_id", "successor_memory_id", "successor_version"}))
+
+	lineage, err := NewRepository(mock).ReadProceduralVerificationLineage(context.Background(), foreign, record.MemoryID, record.TargetVersion)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(lineage.Verifications) != 0 || len(lineage.Runs) != 0 || len(lineage.Intents) != 0 {
+		t.Fatalf("foreign lineage = %+v, want redacted empty lineage", lineage)
 	}
 	if err := mock.ExpectationsWereMet(); err != nil {
 		t.Fatal(err)
@@ -277,8 +410,17 @@ func proceduralVerificationRows(record memory.ProceduralMemoryVerification, fing
 }
 
 func proceduralRevalidationRunRows(now time.Time, scope memory.Scope) *pgxmock.Rows {
+	return proceduralRevalidationRunRowsWithID(now, scope, "00000000-0000-0000-0000-000000000201")
+}
+
+func proceduralRevalidationRunRowsWithID(now time.Time, scope memory.Scope, id string) *pgxmock.Rows {
 	return pgxmock.NewRows([]string{"id", "tenant", "project", "namespace", "verification_id", "memory_id", "target_version", "source_watermark", "trigger", "work_identity", "status", "attempt_count", "max_attempts", "lease_owner", "lease_expires_at", "next_attempt_at", "terminal_verification_id", "failure_category", "created_at", "updated_at", "terminal_at"}).
-		AddRow("00000000-0000-0000-0000-000000000201", scope.Tenant, scope.Project, scope.Namespace, "00000000-0000-0000-0000-000000000101", "00000000-0000-0000-0000-000000000102", 3, "watermark-1", memory.ProceduralRevalidationTriggerAdministrator, "work-1", memory.ProceduralRevalidationRunStatusRunning, 2, 3, "worker-b", now.Add(time.Minute), now, nil, nil, now.Add(-time.Hour), now, nil)
+		AddRow(id, scope.Tenant, scope.Project, scope.Namespace, "00000000-0000-0000-0000-000000000101", "00000000-0000-0000-0000-000000000102", 3, "watermark-1", memory.ProceduralRevalidationTriggerAdministrator, "work-1", memory.ProceduralRevalidationRunStatusRunning, 2, 3, "worker-b", now.Add(time.Minute), now, nil, nil, now.Add(-time.Hour), now, nil)
+}
+
+func proceduralPendingRevalidationRunRows(now time.Time, scope memory.Scope) *pgxmock.Rows {
+	return pgxmock.NewRows([]string{"id", "tenant", "project", "namespace", "verification_id", "memory_id", "target_version", "source_watermark", "trigger", "work_identity", "status", "attempt_count", "max_attempts", "lease_owner", "lease_expires_at", "next_attempt_at", "terminal_verification_id", "failure_category", "created_at", "updated_at", "terminal_at"}).
+		AddRow("00000000-0000-0000-0000-000000000201", scope.Tenant, scope.Project, scope.Namespace, "00000000-0000-0000-0000-000000000101", "00000000-0000-0000-0000-000000000102", 3, "watermark-1", memory.ProceduralRevalidationTriggerAdministrator, "work-1", memory.ProceduralRevalidationRunStatusPending, 0, 3, nil, nil, now, nil, nil, now.Add(-time.Hour), now, nil)
 }
 
 func proceduralRevalidationRun(now time.Time) memory.ProceduralRevalidationRun {

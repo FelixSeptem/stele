@@ -2,10 +2,12 @@ package postgres
 
 import (
 	"context"
+	"errors"
 	"testing"
 	"time"
 
 	"github.com/FelixSeptem/stele/internal/memory"
+	"github.com/jackc/pgx/v5"
 	pgxmock "github.com/pashagolub/pgxmock/v4"
 )
 
@@ -94,6 +96,33 @@ func TestRepositorySupersedeTaskEvaluationWritesAuditRecord(t *testing.T) {
 		t.Fatalf("SupersedeTaskEvaluation() error = %v", err)
 	}
 
+	if err := mock.ExpectationsWereMet(); err != nil {
+		t.Fatalf("ExpectationsWereMet() error = %v", err)
+	}
+}
+
+func TestProceduralVerificationTaskEvidenceRepositoryRejectsForeignRecord(t *testing.T) {
+	mock, err := pgxmock.NewPool()
+	if err != nil {
+		t.Fatalf("pgxmock.NewPool() error = %v", err)
+	}
+	defer mock.Close()
+
+	scope := memory.Scope{Tenant: "tenant-a", Project: "project-a", Namespace: "namespace-a"}
+	now := time.Date(2026, 11, 8, 9, 0, 0, 0, time.UTC)
+	evaluation := memory.TaskEvaluation{
+		ID: "task_eval_procedural", Scope: scope, Objective: "check evidence boundary", SuccessCriteria: []string{"preserve scope"},
+		Verdict:  memory.TaskEvaluationVerdictInconclusive,
+		Evidence: []memory.TaskEvidenceLink{{Kind: memory.TaskEvidenceTargetProceduralVerification, ID: "6a7c22a2-5ca1-43b1-a4ea-1cf1e6d43f8c"}},
+		Actor:    "operator-a", Reason: "external task observation", CreatedAt: now, UpdatedAt: now,
+	}
+	mock.ExpectQuery("SELECT id::text").
+		WithArgs(scope.Tenant, scope.Project, scope.Namespace, evaluation.Evidence[0].ID).
+		WillReturnError(pgx.ErrNoRows)
+
+	if _, err := NewRepository(mock).CreateTaskEvaluation(context.Background(), evaluation); !errors.Is(err, memory.ErrNotFound) {
+		t.Fatalf("CreateTaskEvaluation() error = %v, want exact-scope not found", err)
+	}
 	if err := mock.ExpectationsWereMet(); err != nil {
 		t.Fatalf("ExpectationsWereMet() error = %v", err)
 	}

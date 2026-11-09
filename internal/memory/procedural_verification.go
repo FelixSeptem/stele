@@ -10,6 +10,8 @@ import (
 	"sort"
 	"strings"
 	"time"
+
+	"github.com/FelixSeptem/stele/internal/telemetry"
 	"unicode/utf8"
 )
 
@@ -242,6 +244,10 @@ type ProceduralVerificationService struct {
 	Store    ProceduralVerificationStore
 	Targets  ProceduralVerificationTargetResolver
 	Evidence ProceduralVerificationEvidenceResolver
+	Policy   ProceduralVerificationPolicy
+	Observer interface {
+		RecordProceduralVerification(context.Context, telemetry.ProceduralVerificationEvent)
+	}
 }
 
 // ProceduralVerificationLineage is the bounded admin audit projection. It is
@@ -254,6 +260,20 @@ type ProceduralVerificationLineage struct {
 	TargetVersion int64
 	Verifications []ProceduralMemoryVerification
 	Runs          []ProceduralRevalidationRun
+	Intents       []ProceduralVerificationIntentLink
+}
+
+// ProceduralVerificationIntentLink is a bounded, identifier-only audit edge
+// from immutable evidence through governed work. It deliberately omits intent
+// content, candidate content, and provenance payloads; those are not needed
+// to follow correction history and must not become a new disclosure surface.
+type ProceduralVerificationIntentLink struct {
+	VerificationID    string
+	IntentID          string
+	Status            MemoryIntentStatus
+	CandidateID       string
+	SuccessorMemoryID string
+	SuccessorVersion  int64
 }
 
 func (l ProceduralVerificationLineage) Validate() error {
@@ -266,7 +286,7 @@ func (l ProceduralVerificationLineage) Validate() error {
 	if l.TargetVersion <= 0 {
 		return fmt.Errorf("procedural verification lineage target version must be greater than zero")
 	}
-	if len(l.Verifications) > 100 || len(l.Runs) > 100 {
+	if len(l.Verifications) > 100 || len(l.Runs) > 100 || len(l.Intents) > 100 {
 		return fmt.Errorf("procedural verification lineage exceeds bounded history")
 	}
 	for index, verification := range l.Verifications {
@@ -284,17 +304,49 @@ func (l ProceduralVerificationLineage) Validate() error {
 			return fmt.Errorf("procedural verification lineage run %d has mismatched scope or target", index)
 		}
 	}
+	for index, link := range l.Intents {
+		if err := boundedRequiredText("procedural verification lineage intent verification id", link.VerificationID, ProceduralVerificationMaxIDBytes); err != nil {
+			return fmt.Errorf("procedural verification lineage intent %d: %w", index, err)
+		}
+		if err := boundedRequiredText("procedural verification lineage intent id", link.IntentID, ProceduralVerificationMaxIDBytes); err != nil {
+			return fmt.Errorf("procedural verification lineage intent %d: %w", index, err)
+		}
+		if !link.Status.Valid() {
+			return fmt.Errorf("procedural verification lineage intent %d has invalid status", index)
+		}
+		if link.CandidateID != "" && len(link.CandidateID) > ProceduralVerificationMaxIDBytes {
+			return fmt.Errorf("procedural verification lineage intent %d candidate id exceeds bound", index)
+		}
+		if link.SuccessorMemoryID != "" && len(link.SuccessorMemoryID) > ProceduralVerificationMaxIDBytes {
+			return fmt.Errorf("procedural verification lineage intent %d successor memory id exceeds bound", index)
+		}
+		if link.SuccessorVersion < 0 || (link.SuccessorMemoryID == "" && link.SuccessorVersion != 0) {
+			return fmt.Errorf("procedural verification lineage intent %d has invalid successor", index)
+		}
+	}
 	return nil
 }
 
 func (s ProceduralVerificationService) Record(ctx context.Context, record ProceduralMemoryVerification) (ProceduralMemoryVerification, error) {
 	if err := record.Validate(); err != nil {
+		s.recordTelemetry(ctx, "denied", "none", "validation")
 		return ProceduralMemoryVerification{}, err
 	}
-	if s.Store == nil || s.Targets == nil || s.Evidence == nil {
+	if s.Store == nil || s.Targets == nil || s.Evidence == nil || s.Policy == nil {
+		s.recordTelemetry(ctx, "failed", "none", "dependency")
 		return ProceduralMemoryVerification{}, fmt.Errorf("procedural verification service is not configured")
 	}
+	decision, err := s.Policy.EvaluateProceduralVerification(ctx, record.Scope)
+	if err != nil {
+		s.recordTelemetry(ctx, "failed", "none", "dependency")
+		return ProceduralMemoryVerification{}, fmt.Errorf("evaluate procedural verification policy: %w", err)
+	}
+	if !decision.Enabled {
+		s.recordTelemetry(ctx, "disabled", "none", "policy_disabled")
+		return ProceduralMemoryVerification{}, fmt.Errorf("procedural verification policy is disabled")
+	}
 	if err := s.Targets.ValidateProceduralVerificationTarget(ctx, record); err != nil {
+		s.recordTelemetry(ctx, "denied", "none", "target_ineligible")
 		return ProceduralMemoryVerification{}, fmt.Errorf("validate procedural verification target: %w", err)
 	}
 	for index, evidence := range record.Evidence {
@@ -302,14 +354,26 @@ func (s ProceduralVerificationService) Record(ctx context.Context, record Proced
 			evidence.Scope = record.Scope.Normalized()
 		}
 		if err := s.Evidence.ValidateProceduralVerificationEvidence(ctx, record.Scope, evidence); err != nil {
+			s.recordTelemetry(ctx, "denied", "none", "source_ineligible")
 			return ProceduralMemoryVerification{}, fmt.Errorf("validate procedural verification evidence %d: %w", index, err)
 		}
 	}
 	stored, err := s.Store.AppendProceduralMemoryVerification(ctx, record)
 	if err != nil {
+		s.recordTelemetry(ctx, "failed", "none", "dependency")
 		return ProceduralMemoryVerification{}, fmt.Errorf("append procedural verification: %w", err)
 	}
+	s.recordTelemetry(ctx, "accepted", string(stored.Disposition), "none")
 	return stored, nil
+}
+
+func (s ProceduralVerificationService) recordTelemetry(ctx context.Context, result, disposition, failureCategory string) {
+	if s.Observer == nil {
+		return
+	}
+	s.Observer.RecordProceduralVerification(ctx, telemetry.ProceduralVerificationEvent{
+		Operation: "record", Result: result, Disposition: disposition, Trigger: "administrator", Queue: "none", Recovery: "none", FailureCategory: failureCategory,
+	})
 }
 
 // ProceduralRevalidationTrigger identifies why a previously recorded
@@ -385,12 +449,220 @@ type ProceduralRevalidationRun struct {
 	UpdatedAt              time.Time                       `json:"updated_at,omitempty"`
 }
 
+// ProceduralRevalidationRequest is an administrator or eligible maintenance
+// signal asking to revisit one already-recorded verification. It contains no
+// claim or evidence content: the service re-reads the exact immutable ledger
+// record, and workers later re-resolve only its cited sources.
+type ProceduralRevalidationRequest struct {
+	Scope          Scope
+	VerificationID string
+	Trigger        ProceduralRevalidationTrigger
+	Actor          string
+	Reason         string
+}
+
+func (r ProceduralRevalidationRequest) Validate() error {
+	if err := r.Scope.Validate(); err != nil {
+		return fmt.Errorf("revalidation request scope: %w", err)
+	}
+	if err := boundedRequiredText("revalidation verification id", r.VerificationID, ProceduralVerificationMaxIDBytes); err != nil {
+		return err
+	}
+	if !r.Trigger.Valid() {
+		return fmt.Errorf("revalidation request trigger %q is invalid", r.Trigger)
+	}
+	if err := boundedRequiredText("revalidation actor", r.Actor, ProceduralVerificationMaxActorBytes); err != nil {
+		return err
+	}
+	if err := boundedRequiredText("revalidation reason", r.Reason, ProceduralVerificationMaxReasonBytes); err != nil {
+		return err
+	}
+	return nil
+}
+
+// ProceduralRevalidationDispatch is the narrow handoff to a derived-work
+// adapter. It purposely carries only durable references and queue identity,
+// never evidence, claim, correction, actor, or reason content.
+type ProceduralRevalidationDispatch struct {
+	Scope     Scope
+	RunID     string
+	Watermark string
+	Identity  string
+}
+
+func (d ProceduralRevalidationDispatch) Validate() error {
+	if err := d.Scope.Validate(); err != nil {
+		return fmt.Errorf("revalidation dispatch scope: %w", err)
+	}
+	for name, value := range map[string]string{
+		"revalidation dispatch run id":    d.RunID,
+		"revalidation dispatch watermark": d.Watermark,
+		"revalidation dispatch identity":  d.Identity,
+	} {
+		if err := boundedRequiredText(name, value, ProceduralVerificationMaxIDBytes); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+// ProceduralRevalidationRequestStore joins the immutable ledger read and
+// durable, idempotent run creation without exposing a generic mutation API.
+type ProceduralRevalidationRequestStore interface {
+	ReadProceduralMemoryVerification(context.Context, Scope, string) (ProceduralMemoryVerification, error)
+	CreateProceduralRevalidationRun(context.Context, ProceduralRevalidationRun) (ProceduralRevalidationRun, error)
+}
+
+// ProceduralRevalidationDispatchSink is implemented at the jobs boundary.
+// Defining it here keeps the memory domain independent from queue and runtime
+// packages, so neither admission nor tests introduce an import cycle.
+type ProceduralRevalidationDispatchSink interface {
+	DispatchProceduralRevalidation(context.Context, ProceduralRevalidationDispatch) error
+}
+
+// ProceduralRevalidationService records a bounded, replay-safe work request.
+// It never selects evidence, invokes a model, or decides truth. If durable
+// creation succeeds but dispatch fails, the pending run is intentionally
+// retained for the bounded scheduler/recovery path rather than being silently
+// discarded.
+type ProceduralRevalidationService struct {
+	Store       ProceduralRevalidationRequestStore
+	Policy      ProceduralVerificationPolicy
+	Dispatcher  ProceduralRevalidationDispatchSink
+	Now         func() time.Time
+	NewID       func() string
+	MaxAttempts int
+	Observer    interface {
+		RecordProceduralVerification(context.Context, telemetry.ProceduralVerificationEvent)
+	}
+}
+
+func (s ProceduralRevalidationService) Request(ctx context.Context, request ProceduralRevalidationRequest) (ProceduralRevalidationRun, error) {
+	if err := request.Validate(); err != nil {
+		s.recordTelemetry(ctx, request.Trigger, "denied", "none", "validation")
+		return ProceduralRevalidationRun{}, err
+	}
+	if s.Policy == nil {
+		s.recordTelemetry(ctx, request.Trigger, "failed", "none", "dependency")
+		return ProceduralRevalidationRun{}, fmt.Errorf("procedural revalidation policy is not configured")
+	}
+	decision, err := s.Policy.EvaluateProceduralVerification(ctx, request.Scope)
+	if err != nil {
+		s.recordTelemetry(ctx, request.Trigger, "failed", "none", "dependency")
+		return ProceduralRevalidationRun{}, fmt.Errorf("evaluate procedural revalidation policy: %w", err)
+	}
+	if !decision.Enabled {
+		s.recordTelemetry(ctx, request.Trigger, "disabled", "none", "policy_disabled")
+		return ProceduralRevalidationRun{}, fmt.Errorf("procedural verification policy is disabled")
+	}
+	if s.Store == nil || s.Dispatcher == nil || s.NewID == nil {
+		s.recordTelemetry(ctx, request.Trigger, "failed", "none", "dependency")
+		return ProceduralRevalidationRun{}, fmt.Errorf("procedural revalidation service is not configured")
+	}
+	verification, err := s.Store.ReadProceduralMemoryVerification(ctx, request.Scope, request.VerificationID)
+	if err != nil {
+		s.recordTelemetry(ctx, request.Trigger, "failed", "none", "dependency")
+		return ProceduralRevalidationRun{}, fmt.Errorf("read procedural verification for revalidation: %w", err)
+	}
+	if err := verification.Validate(); err != nil {
+		s.recordTelemetry(ctx, request.Trigger, "denied", "none", "target_ineligible")
+		return ProceduralRevalidationRun{}, fmt.Errorf("stored procedural verification is invalid: %w", err)
+	}
+	if verification.Scope.Normalized() != request.Scope.Normalized() {
+		s.recordTelemetry(ctx, request.Trigger, "denied", "none", "scope_denied")
+		return ProceduralRevalidationRun{}, ErrNotFound
+	}
+	now := time.Now().UTC()
+	if s.Now != nil {
+		now = s.Now().UTC()
+	}
+	maxAttempts := s.MaxAttempts
+	if maxAttempts <= 0 {
+		maxAttempts = 3
+	}
+	run := ProceduralRevalidationRun{
+		ID:              strings.TrimSpace(s.NewID()),
+		Scope:           request.Scope.Normalized(),
+		VerificationID:  verification.ID,
+		MemoryID:        verification.MemoryID,
+		TargetVersion:   verification.TargetVersion,
+		SourceWatermark: verification.SourceWatermark,
+		Trigger:         request.Trigger,
+		WorkIdentity: proceduralRevalidationWorkIdentity(
+			request.Scope, verification.ID, verification.TargetVersion, verification.SourceWatermark, request.Trigger,
+		),
+		Status:        ProceduralRevalidationRunStatusPending,
+		MaxAttempts:   maxAttempts,
+		NextAttemptAt: now,
+		CreatedAt:     now,
+		UpdatedAt:     now,
+	}
+	if err := run.Validate(); err != nil {
+		s.recordTelemetry(ctx, request.Trigger, "denied", "none", "validation")
+		return ProceduralRevalidationRun{}, fmt.Errorf("construct procedural revalidation run: %w", err)
+	}
+	stored, err := s.Store.CreateProceduralRevalidationRun(ctx, run)
+	if err != nil {
+		s.recordTelemetry(ctx, request.Trigger, "failed", "none", "dependency")
+		return ProceduralRevalidationRun{}, fmt.Errorf("create procedural revalidation run: %w", err)
+	}
+	if err := s.Dispatcher.DispatchProceduralRevalidation(ctx, ProceduralRevalidationDispatch{
+		Scope: stored.Scope, RunID: stored.ID, Watermark: stored.SourceWatermark, Identity: stored.WorkIdentity,
+	}); err != nil {
+		s.recordTelemetry(ctx, request.Trigger, "failed", "durable", "dependency")
+		return ProceduralRevalidationRun{}, fmt.Errorf("dispatch procedural revalidation run: %w", err)
+	}
+	s.recordTelemetry(ctx, stored.Trigger, "accepted", "durable", "none")
+	return stored, nil
+}
+
+func (s ProceduralRevalidationService) recordTelemetry(ctx context.Context, trigger ProceduralRevalidationTrigger, result, queue, failureCategory string) {
+	if s.Observer == nil {
+		return
+	}
+	s.Observer.RecordProceduralVerification(ctx, telemetry.ProceduralVerificationEvent{
+		Operation: "request", Result: result, Disposition: "none", Trigger: string(trigger), Queue: queue, Recovery: "none", FailureCategory: failureCategory,
+	})
+}
+
+func proceduralRevalidationWorkIdentity(scope Scope, verificationID string, targetVersion int64, sourceWatermark string, trigger ProceduralRevalidationTrigger) string {
+	scope = scope.Normalized()
+	material := strings.Join([]string{
+		scope.Tenant, scope.Project, scope.Namespace, strings.TrimSpace(verificationID),
+		fmt.Sprintf("%d", targetVersion), strings.TrimSpace(sourceWatermark), string(trigger),
+	}, "\x00")
+	digest := sha256.Sum256([]byte(material))
+	return hex.EncodeToString(digest[:])
+}
+
 type ClaimProceduralRevalidationRunsInput struct {
 	Scope         Scope
 	WorkerID      string
 	Now           time.Time
 	LeaseDuration time.Duration
 	Limit         int
+}
+
+// ListPendingProceduralRevalidationRunsInput is used by the dispatch recovery
+// job. It intentionally observes only durable pending runs; queue delivery is
+// idempotent through the run's work identity and does not claim the child run.
+type ListPendingProceduralRevalidationRunsInput struct {
+	Scope Scope
+	Now   time.Time
+	Limit int
+}
+
+func (i ListPendingProceduralRevalidationRunsInput) Validate() error {
+	if err := i.Scope.Validate(); err != nil {
+		return err
+	}
+	if i.Now.IsZero() {
+		return fmt.Errorf("pending revalidation list time is required")
+	}
+	if i.Limit <= 0 || i.Limit > ProceduralVerificationMaxEvidence {
+		return fmt.Errorf("pending revalidation list limit must be between one and %d", ProceduralVerificationMaxEvidence)
+	}
+	return nil
 }
 
 // ClaimProceduralRevalidationRunInput binds derived queue delivery to the
@@ -427,6 +699,33 @@ type CompleteProceduralRevalidationRunInput struct {
 	Status                 ProceduralRevalidationRunStatus
 	TerminalVerificationID string
 	CompletedAt            time.Time
+}
+
+// ExhaustProceduralRevalidationRunInput settles a durable run after its
+// corresponding derived-work delivery has consumed its bounded retry budget.
+// The repository derives the original verification link itself so a queue
+// caller can never forge a terminal evidence reference.
+type ExhaustProceduralRevalidationRunInput struct {
+	Scope       Scope
+	RunID       string
+	WorkerID    string
+	ExhaustedAt time.Time
+}
+
+func (i ExhaustProceduralRevalidationRunInput) Validate() error {
+	if err := i.Scope.Validate(); err != nil {
+		return err
+	}
+	if err := boundedRequiredText("revalidation run id", i.RunID, ProceduralVerificationMaxIDBytes); err != nil {
+		return err
+	}
+	if err := boundedRequiredText("revalidation worker id", i.WorkerID, ProceduralVerificationMaxIDBytes); err != nil {
+		return err
+	}
+	if i.ExhaustedAt.IsZero() {
+		return fmt.Errorf("revalidation exhaustion time is required")
+	}
+	return nil
 }
 
 func (i CompleteProceduralRevalidationRunInput) Validate() error {

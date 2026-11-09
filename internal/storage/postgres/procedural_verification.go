@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"strings"
 
 	"github.com/FelixSeptem/stele/internal/memory"
 	"github.com/jackc/pgx/v5"
@@ -134,6 +135,64 @@ func (r *Repository) ValidateProceduralVerificationEvidence(ctx context.Context,
 	return nil
 }
 
+// ValidateMemoryIntentVerification rechecks the immutable link immediately
+// before governed routing. The query requires the persisted attribution, its
+// refuted/correctable verification source, and the target's active current
+// procedural version to still agree in one exact scope. It deliberately
+// returns a generic unavailable error so callers cannot distinguish a foreign
+// record, hidden target, stale version, or changed attribution.
+func (r *Repository) ValidateMemoryIntentVerification(ctx context.Context, record memory.MemoryIntentRecord) error {
+	if record.Verification == nil || record.Verification.Validate() != nil || record.Type != memory.MemoryIntentUpdate || strings.TrimSpace(record.ID) == "" {
+		return memory.ErrNotFound
+	}
+	a := record.Verification
+	if record.Scope.Validate() != nil || record.TargetMemoryID != a.TargetMemoryID || record.TargetVersion != a.TargetVersion {
+		return memory.ErrNotFound
+	}
+	const query = `
+SELECT EXISTS(
+    SELECT 1
+    FROM memory_intent_verification_attributions a
+    JOIN procedural_memory_verifications v ON v.id = a.verification_id
+      AND v.tenant = a.tenant AND v.project = a.project AND v.namespace = a.namespace
+    JOIN canonical_memories m ON m.id = v.memory_id
+      AND m.tenant = a.tenant AND m.project = a.project AND m.namespace = a.namespace
+    WHERE a.intent_id = $1::uuid
+      AND a.tenant = $2 AND a.project = $3 AND a.namespace = $4
+      AND a.verification_id = $5::uuid
+      AND a.target_memory_id = $6::uuid AND a.target_version = $7
+      AND a.source_watermark = $8 AND a.policy_version = $9
+      AND v.memory_id = a.target_memory_id AND v.target_version = a.target_version
+      AND v.disposition = 'refuted' AND v.corrected_content IS NOT NULL
+      AND m.class = 'procedural' AND m.state = 'active'
+      AND a.target_version = (SELECT max(current_v.version) FROM memory_versions current_v WHERE current_v.memory_id = m.id)
+)
+`
+	var eligible bool
+	if err := r.queryer(ctx).QueryRow(ctx, query, record.ID, record.Scope.Tenant, record.Scope.Project, record.Scope.Namespace,
+		a.VerificationID, record.TargetMemoryID, record.TargetVersion, a.SourceWatermark, a.PolicyVersion,
+	).Scan(&eligible); err != nil || !eligible {
+		return memory.ErrNotFound
+	}
+	verification, err := r.ReadProceduralMemoryVerification(ctx, record.Scope, a.VerificationID)
+	if err != nil || verification.MemoryID != record.TargetMemoryID || verification.TargetVersion != record.TargetVersion ||
+		verification.Disposition != memory.ProceduralVerificationDispositionRefuted || verification.SourceWatermark != a.SourceWatermark || verification.PolicyVersion != a.PolicyVersion {
+		return memory.ErrNotFound
+	}
+	if err := r.ValidateProceduralVerificationTarget(ctx, verification); err != nil {
+		return memory.ErrNotFound
+	}
+	for _, evidence := range verification.Evidence {
+		if evidence.Scope == (memory.Scope{}) {
+			evidence.Scope = verification.Scope.Normalized()
+		}
+		if err := r.ValidateProceduralVerificationEvidence(ctx, record.Scope, evidence); err != nil {
+			return memory.ErrNotFound
+		}
+	}
+	return nil
+}
+
 func (r *Repository) ReadProceduralMemoryVerification(ctx context.Context, scope memory.Scope, id string) (memory.ProceduralMemoryVerification, error) {
 	if err := scope.Validate(); err != nil {
 		return memory.ProceduralMemoryVerification{}, err
@@ -234,6 +293,50 @@ LIMIT $6
 	if err := rows.Err(); err != nil {
 		return memory.ProceduralVerificationLineage{}, fmt.Errorf("iterate procedural revalidation lineage: %w", err)
 	}
+	const intentQuery = `
+WITH attributed AS (
+    SELECT a.verification_id::text, i.id::text AS intent_id, i.status,
+      COALESCE((SELECT t.work_reference FROM memory_intent_transitions t
+        WHERE t.intent_id = i.id AND t.tenant = i.tenant AND t.project = i.project AND t.namespace = i.namespace
+          AND t.work_reference IS NOT NULL
+        ORDER BY t.sequence DESC LIMIT 1), '') AS candidate_id
+    FROM memory_intent_verification_attributions a
+    JOIN memory_intents i ON i.id = a.intent_id
+      AND i.tenant = a.tenant AND i.project = a.project AND i.namespace = a.namespace
+    WHERE a.tenant = $1 AND a.project = $2 AND a.namespace = $3
+      AND a.target_memory_id = $4::uuid AND a.target_version = $5
+    ORDER BY i.created_at DESC, i.id DESC
+    LIMIT $6
+)
+SELECT a.verification_id, a.intent_id, a.status, a.candidate_id,
+  COALESCE(successor.memory_id, ''), COALESCE(successor.version, 0)
+FROM attributed a
+LEFT JOIN LATERAL (
+  SELECT p.memory_id::text AS memory_id, v.version
+  FROM provenance_links p
+  JOIN memory_versions v ON v.memory_id = p.memory_id AND v.modified_by::text = a.candidate_id
+  WHERE p.tenant = $1 AND p.project = $2 AND p.namespace = $3
+    AND p.candidate_memory_id::text = a.candidate_id AND p.memory_id IS NOT NULL
+  ORDER BY p.created_at DESC, p.id DESC, v.version DESC
+  LIMIT 1
+) successor ON true
+ORDER BY a.intent_id DESC
+`
+	intentRows, err := r.queryer(ctx).Query(ctx, intentQuery, scope.Tenant, scope.Project, scope.Namespace, memoryID, targetVersion, 100)
+	if err != nil {
+		return memory.ProceduralVerificationLineage{}, fmt.Errorf("read procedural verification intent lineage: %w", err)
+	}
+	defer intentRows.Close()
+	for intentRows.Next() {
+		var link memory.ProceduralVerificationIntentLink
+		if err := intentRows.Scan(&link.VerificationID, &link.IntentID, &link.Status, &link.CandidateID, &link.SuccessorMemoryID, &link.SuccessorVersion); err != nil {
+			return memory.ProceduralVerificationLineage{}, fmt.Errorf("scan procedural verification intent lineage: %w", err)
+		}
+		lineage.Intents = append(lineage.Intents, link)
+	}
+	if err := intentRows.Err(); err != nil {
+		return memory.ProceduralVerificationLineage{}, fmt.Errorf("iterate procedural verification intent lineage: %w", err)
+	}
 	if err := lineage.Validate(); err != nil {
 		return memory.ProceduralVerificationLineage{}, err
 	}
@@ -253,6 +356,45 @@ WHERE tenant = $1 AND project = $2 AND namespace = $3 AND fingerprint = $4
 		return memory.ProceduralMemoryVerification{}, fmt.Errorf("read replayed procedural verification: %w", err)
 	}
 	return record, nil
+}
+
+// ListPendingProceduralRevalidationRuns returns exact-scope durable runs that
+// have not yet been claimed. It is intentionally non-mutating so the dispatch
+// recovery job can safely redeliver the same idempotent queue identity after a
+// buffer loss or process restart.
+func (r *Repository) ListPendingProceduralRevalidationRuns(ctx context.Context, input memory.ListPendingProceduralRevalidationRunsInput) ([]memory.ProceduralRevalidationRun, error) {
+	if err := input.Validate(); err != nil {
+		return nil, err
+	}
+	const query = `
+SELECT id::text, tenant, project, namespace, verification_id::text,
+    memory_id::text, target_version, source_watermark, trigger, work_identity,
+    status, attempt_count, max_attempts, lease_owner, lease_expires_at,
+    next_attempt_at, terminal_verification_id::text, failure_category,
+    created_at, updated_at, terminal_at
+FROM procedural_memory_revalidation_runs
+WHERE tenant = $1 AND project = $2 AND namespace = $3
+  AND status = 'pending' AND next_attempt_at <= $4
+ORDER BY next_attempt_at ASC, created_at ASC, id ASC
+LIMIT $5
+`
+	rows, err := r.queryer(ctx).Query(ctx, query, input.Scope.Tenant, input.Scope.Project, input.Scope.Namespace, input.Now.UTC(), input.Limit)
+	if err != nil {
+		return nil, fmt.Errorf("list pending procedural revalidation runs: %w", err)
+	}
+	defer rows.Close()
+	runs := make([]memory.ProceduralRevalidationRun, 0, input.Limit)
+	for rows.Next() {
+		run, err := scanProceduralRevalidationRun(rows)
+		if err != nil {
+			return nil, fmt.Errorf("scan pending procedural revalidation run: %w", err)
+		}
+		runs = append(runs, run)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("iterate pending procedural revalidation runs: %w", err)
+	}
+	return runs, nil
 }
 
 // ClaimProceduralRevalidationRuns atomically claims pending work or work whose
@@ -424,7 +566,38 @@ WHERE tenant = $1 AND project = $2 AND namespace = $3 AND id = $4::uuid
 	return nil
 }
 
+// ExhaustProceduralRevalidationRun settles a child revalidation run after the
+// common derived-work queue exhausted delivery retries. The terminal evidence
+// reference is copied from the run's original verification in SQL so callers
+// cannot supply an unrelated or cross-scope verification ID.
+func (r *Repository) ExhaustProceduralRevalidationRun(ctx context.Context, input memory.ExhaustProceduralRevalidationRunInput) error {
+	if err := input.Validate(); err != nil {
+		return err
+	}
+	const query = `
+UPDATE procedural_memory_revalidation_runs
+SET status = 'exhausted', terminal_verification_id = verification_id,
+    failure_category = 'derived_work_exhausted', terminal_at = $6,
+    updated_at = $6, lease_owner = NULL, lease_expires_at = NULL
+WHERE tenant = $1 AND project = $2 AND namespace = $3 AND id = $4::uuid
+  AND lease_owner = $5 AND status = 'running'
+`
+	tag, err := r.queryer(ctx).Exec(ctx, query,
+		input.Scope.Tenant, input.Scope.Project, input.Scope.Namespace,
+		input.RunID, input.WorkerID, input.ExhaustedAt.UTC(),
+	)
+	if err != nil {
+		return fmt.Errorf("exhaust procedural revalidation run: %w", err)
+	}
+	if tag.RowsAffected() == 0 {
+		return memory.ErrProceduralRevalidationLeaseLost
+	}
+	return nil
+}
+
 type proceduralVerificationScanner interface{ Scan(...any) error }
+
+var _ memory.MemoryIntentVerificationValidator = (*Repository)(nil)
 
 func scanProceduralMemoryVerification(scanner proceduralVerificationScanner) (memory.ProceduralMemoryVerification, error) {
 	var record memory.ProceduralMemoryVerification

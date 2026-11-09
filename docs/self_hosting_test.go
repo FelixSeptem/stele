@@ -410,6 +410,79 @@ func TestProductVerificationEntryPointDocumentsPrerequisiteAndOwnershipGuards(t 
 	}
 }
 
+func TestProceduralVerificationOwnedStackScriptCreatesDatabaseAfterSQLReadiness(t *testing.T) {
+	contentBytes, err := os.ReadFile("../scripts/stele-procedural-verification-verify.ps1")
+	if err != nil {
+		t.Fatalf("read procedural verification owned-stack script: %v", err)
+	}
+	content := string(contentBytes)
+	for _, want := range []string{
+		"SELECT pg_postmaster_start_time()",
+		"$previousPostmasterStart",
+		"$postgresReady",
+		"createdb -U stele --maintenance-db=postgres stele",
+		"psql -U stele -d stele -At -c \"CREATE EXTENSION IF NOT EXISTS vector",
+	} {
+		if !strings.Contains(content, want) {
+			t.Fatalf("procedural verification owned-stack script missing %q", want)
+		}
+	}
+	if strings.Contains(content, "pg_isready -U stele -d stele") {
+		t.Fatal("procedural verification owned-stack script must use a SQL readiness check, not pg_isready for a possibly absent database")
+	}
+}
+
+func TestProceduralVerificationOperationsAreDocumentedAsAdminOnly(t *testing.T) {
+	checks := map[string][]string{
+		"../README.md": {
+			"Procedural verification maintenance",
+			"administrator-only",
+			"governed update",
+		},
+		"architecture.md": {
+			"Procedural verification and governed correction",
+			"append-only verification ledger",
+			"does not overwrite canonical memory",
+		},
+		"components.md": {
+			"Procedural verification maintenance",
+			"procedural_revalidation",
+			"PostgreSQL remains the system of record",
+		},
+		"self-hosting.md": {
+			"Procedural verification maintenance",
+			"STELE_PROCEDURAL_VERIFICATION_ENABLED",
+			"STELE_PROCEDURAL_VERIFICATION_MAX_ATTEMPTS",
+			"stele-procedural-verification-verify.ps1",
+			"Rollback",
+		},
+		"integrations/mcp-agent-skill.md": {
+			"Procedural verification maintenance",
+			"not an MCP tool",
+			"not available to public Provider credentials",
+		},
+		"agent-runtime-memory-provider.md": {
+			"Procedural verification is administrator-only",
+			"does not add a Provider route",
+		},
+		"../skills/stele-memory/SKILL.md": {
+			"Procedural verification is an administrator-only maintenance workflow",
+			"must not use Provider or MCP",
+		},
+	}
+	for path, required := range checks {
+		content, err := os.ReadFile(path)
+		if err != nil {
+			t.Fatalf("read %s: %v", path, err)
+		}
+		for _, want := range required {
+			if !strings.Contains(string(content), want) {
+				t.Errorf("%s missing procedural-verification operations guidance %q", path, want)
+			}
+		}
+	}
+}
+
 func TestSelfHostingDocsIncludeFirstTenMinutesOwnedPath(t *testing.T) {
 	contentBytes, err := os.ReadFile("self-hosting.md")
 	if err != nil {

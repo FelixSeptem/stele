@@ -53,7 +53,10 @@ func TestProceduralVerificationPostgresReplayScopeAndLeaseRecovery(t *testing.T)
 		Actor:       "integration-admin", Reason: "fixture verification", PolicyVersion: "policy-v1", SourceWatermark: "watermark-1", CreatedAt: now,
 	}
 	repo := NewRepository(pool)
-	service := memory.ProceduralVerificationService{Store: repo, Targets: repo, Evidence: repo}
+	service := memory.ProceduralVerificationService{
+		Store: repo, Targets: repo, Evidence: repo,
+		Policy: memory.StaticProceduralVerificationPolicy{Scope: scope, Enabled: true, Version: record.PolicyVersion},
+	}
 	first, err := service.Record(ctx, record)
 	if err != nil {
 		t.Fatal(err)

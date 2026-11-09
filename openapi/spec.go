@@ -6580,6 +6580,7 @@ components:
         - raw_event
         - outcome_event
         - verification
+        - procedural_verification
         - expected_recall
         - usefulness_feedback
         - context_citation
@@ -9347,8 +9348,8 @@ components:
             $ref: '#/components/schemas/RankingRolloutPolicy'
 `
 	spec = strings.Replace(spec, "components:\n", disclosurePaths+"components:\n", 1)
-	spec = strings.Replace(spec, "  /v1/memory-intents:\n", memoryRepositoryPaths+"  /v1/memory-intents:\n", 1)
+	spec = strings.Replace(spec, "  /v1/memory-intents:\n", memoryRepositoryPaths+proceduralVerificationPaths+"  /v1/memory-intents:\n", 1)
 	spec = strings.Replace(spec, "  /v1/provider/intents:\n", providerCorrectionPaths+"  /v1/provider/intents:\n", 1)
 	spec = strings.Replace(spec, "  /v1/provider/context:\n", providerReferencePaths+providerProjectionPaths()+"  /v1/provider/context:\n", 1)
-	return strings.Replace(spec+memoryRepositorySchemas+providerContextSchemas+providerReferenceSchemas+providerProjectionSchemas+providerCorrectionSchemas+disclosureSchemas, "  /mcp:\n", "  "+mcpPath+":\n", 1)
+	return strings.Replace(spec+memoryRepositorySchemas+proceduralVerificationSchemas+providerContextSchemas+providerReferenceSchemas+providerProjectionSchemas+providerCorrectionSchemas+disclosureSchemas, "  /mcp:\n", "  "+mcpPath+":\n", 1)
 }

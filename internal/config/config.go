@@ -89,6 +89,7 @@ type MemoryRepositoryImportConfig struct {
 // maintenance decision and does not alter retrieval or Provider runtime paths.
 type ProceduralVerificationConfig struct {
 	Enabled       bool
+	PolicyVersion string
 	BatchSize     int
 	MaxAttempts   int
 	LeaseDuration time.Duration
@@ -96,6 +97,9 @@ type ProceduralVerificationConfig struct {
 }
 
 func (c ProceduralVerificationConfig) Validate() error {
+	if strings.TrimSpace(c.PolicyVersion) == "" || len(c.PolicyVersion) > 128 {
+		return fmt.Errorf("procedural verification policy version is required and bounded")
+	}
 	if c.BatchSize <= 0 || c.BatchSize > 100 {
 		return fmt.Errorf("procedural verification batch size must be between 1 and 100")
 	}
@@ -733,6 +737,10 @@ func loadDerivedWorkConfig() (workqueue.QueueConfig, error) {
 }
 
 func loadProceduralVerificationConfig() (ProceduralVerificationConfig, error) {
+	policyVersion := strings.TrimSpace(os.Getenv("STELE_PROCEDURAL_VERIFICATION_POLICY_VERSION"))
+	if policyVersion == "" {
+		policyVersion = "procedural-verification-v1"
+	}
 	batchSize, err := loadIntWithDefault("STELE_PROCEDURAL_VERIFICATION_BATCH_SIZE", 10)
 	if err != nil {
 		return ProceduralVerificationConfig{}, err
@@ -751,6 +759,7 @@ func loadProceduralVerificationConfig() (ProceduralVerificationConfig, error) {
 	}
 	config := ProceduralVerificationConfig{
 		Enabled:       loadBoolEnv("STELE_PROCEDURAL_VERIFICATION_ENABLED"),
+		PolicyVersion: policyVersion,
 		BatchSize:     batchSize,
 		MaxAttempts:   maxAttempts,
 		LeaseDuration: leaseDuration,

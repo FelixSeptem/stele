@@ -15,16 +15,25 @@ type TaskEvaluationStore interface {
 	SummarizeTaskEvaluations(ctx context.Context, input SummarizeTaskEvaluationsInput) (TaskEvaluationSummary, error)
 }
 
+// ProceduralVerificationEvidenceReader resolves the immutable verification
+// record through its existing exact-scope access boundary. Task verdicts only
+// cite the record; they cannot use it to mutate verification or memory state.
+type ProceduralVerificationEvidenceReader interface {
+	ReadProceduralMemoryVerification(ctx context.Context, scope Scope, verificationID string) (ProceduralMemoryVerification, error)
+}
+
 type TaskEvaluationServiceOptions struct {
-	Store TaskEvaluationStore
-	Now   func() time.Time
-	NewID func(prefix string) string
+	Store                          TaskEvaluationStore
+	ProceduralVerificationEvidence ProceduralVerificationEvidenceReader
+	Now                            func() time.Time
+	NewID                          func(prefix string) string
 }
 
 type TaskEvaluationService struct {
-	store TaskEvaluationStore
-	now   func() time.Time
-	newID func(prefix string) string
+	store                          TaskEvaluationStore
+	proceduralVerificationEvidence ProceduralVerificationEvidenceReader
+	now                            func() time.Time
+	newID                          func(prefix string) string
 }
 
 func NewTaskEvaluationService(options TaskEvaluationServiceOptions) *TaskEvaluationService {
@@ -39,9 +48,10 @@ func NewTaskEvaluationService(options TaskEvaluationServiceOptions) *TaskEvaluat
 		}
 	}
 	return &TaskEvaluationService{
-		store: options.Store,
-		now:   now,
-		newID: newID,
+		store:                          options.Store,
+		proceduralVerificationEvidence: options.ProceduralVerificationEvidence,
+		now:                            now,
+		newID:                          newID,
 	}
 }
 
@@ -52,6 +62,9 @@ func (s *TaskEvaluationService) CreateTaskEvaluation(ctx context.Context, input 
 	if s.store == nil {
 		return TaskEvaluation{}, fmt.Errorf("task evaluation store is not configured")
 	}
+	if err := s.validateProceduralVerificationEvidence(ctx, input); err != nil {
+		return TaskEvaluation{}, err
+	}
 	now := s.now().UTC()
 	if strings.TrimSpace(input.ID) == "" {
 		input.ID = s.newID("task_eval")
@@ -60,6 +73,25 @@ func (s *TaskEvaluationService) CreateTaskEvaluation(ctx context.Context, input 
 	input.CreatedAt = now
 	input.UpdatedAt = now
 	return s.store.CreateTaskEvaluation(ctx, input)
+}
+
+func (s *TaskEvaluationService) validateProceduralVerificationEvidence(ctx context.Context, evaluation TaskEvaluation) error {
+	for _, evidence := range evaluation.Evidence {
+		if evidence.Kind != TaskEvidenceTargetProceduralVerification {
+			continue
+		}
+		if s.proceduralVerificationEvidence == nil {
+			return fmt.Errorf("procedural verification evidence reader is not configured")
+		}
+		record, err := s.proceduralVerificationEvidence.ReadProceduralMemoryVerification(ctx, evaluation.Scope.Normalized(), strings.TrimSpace(evidence.ID))
+		if err != nil {
+			return err
+		}
+		if record.Scope.Normalized() != evaluation.Scope.Normalized() || strings.TrimSpace(record.ID) != strings.TrimSpace(evidence.ID) {
+			return ErrNotFound
+		}
+	}
+	return nil
 }
 
 func (s *TaskEvaluationService) ReadTaskEvaluation(ctx context.Context, input ReadTaskEvaluationInput) (TaskEvaluation, error) {

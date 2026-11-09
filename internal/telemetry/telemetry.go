@@ -87,6 +87,19 @@ type DerivedWorkEvent struct {
 	SLO       string
 }
 
+// ProceduralVerificationEvent records only low-cardinality maintenance
+// categories. Scope, verification/run identifiers, claim/evidence content,
+// actor, reason, source watermark, and raw errors are intentionally absent.
+type ProceduralVerificationEvent struct {
+	Operation       string
+	Result          string
+	Disposition     string
+	Trigger         string
+	Queue           string
+	Recovery        string
+	FailureCategory string
+}
+
 func LogSchedulerRunLifecycle(logger *log.Logger, event SchedulerRunEvent) {
 	if logger == nil {
 		return

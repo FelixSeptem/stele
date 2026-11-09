@@ -2796,3 +2796,40 @@ and freshness categories. Detail pages use an opaque cursor and exact scope
 predicates; foreign scopes reveal neither queue existence nor counts. Retry
 exhaustion is terminal until an authorized recovery action explicitly requeues
 the work.
+
+## Procedural verification maintenance
+
+Procedural verification maintenance is disabled by default. It is an
+administrator-only, exact-scope workflow for recording attributable checks of a
+current active procedural-memory version, inspecting redacted history, queuing
+bounded revalidation, and handing a refuted correction to the existing governed
+update pipeline. It does not add Provider, ordinary retrieval, or MCP public
+runtime access, and it never directly updates a canonical memory version.
+
+Enable it only after migration and administrator-grant readiness have been
+verified in every `api`, `worker`, and `scheduler` deployment mode:
+
+| Variable | Default | Meaning |
+| --- | --- | --- |
+| `STELE_PROCEDURAL_VERIFICATION_ENABLED` | `false` | Enables admission, dispatch, privileged inspection, and correction handoff for configured scopes. |
+| `STELE_PROCEDURAL_VERIFICATION_POLICY_VERSION` | `procedural-verification-v1` | Server-selected policy identity recorded with immutable assertions. |
+| `STELE_PROCEDURAL_VERIFICATION_BATCH_SIZE` | `10` | Maximum bounded revalidation runs claimed by one poll. |
+| `STELE_PROCEDURAL_VERIFICATION_MAX_ATTEMPTS` | `3` | Maximum durable revalidation attempts before terminal settlement. |
+| `STELE_PROCEDURAL_VERIFICATION_LEASE_DURATION` | `1m` | Lease duration for one revalidation worker claim. |
+| `STELE_PROCEDURAL_VERIFICATION_RETENTION` | `720h` | Retention bound used by cleanup; it does not rewrite canonical history. |
+
+Use `/v1/admin/procedural-memory-verifications` and its documented OpenAPI
+actions with a durable administrator key plus all exact-scope headers. Default
+receipts are redacted: do not place raw evidence, corrected content, worker
+lease identity, or scope data in dashboards or metric labels. Transcript/model
+assertions are provenance, not independent corroboration; task outcomes are
+observational evidence, not mutation authority.
+
+Run `pwsh -NoProfile -File scripts/stele-procedural-verification-verify.ps1`
+against an owned Docker PostgreSQL + pgvector dependency before enablement. The
+script emits only a bounded phase/status report and removes its random-named
+container. **Rollback** by setting
+`STELE_PROCEDURAL_VERIFICATION_ENABLED=false` in all modes and draining current
+workers; retain the immutable verification, run, intent, candidate, successor,
+and canonical history. Do not down-migrate, delete evidence, or rewrite memory
+versions as rollback.

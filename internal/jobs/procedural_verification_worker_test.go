@@ -8,12 +8,14 @@ import (
 	"time"
 
 	"github.com/FelixSeptem/stele/internal/memory"
+	"github.com/FelixSeptem/stele/internal/telemetry"
 	"github.com/FelixSeptem/stele/internal/workqueue"
 )
 
 func TestProceduralRevalidationWorkerAppendsNeedsRevalidationForEvidenceDrift(t *testing.T) {
 	store := &proceduralRevalidationWorkerStoreStub{run: workerRevalidationRun(), verification: workerVerification()}
-	worker := ProceduralRevalidationWorker{Store: store, Targets: proceduralTargetResolver{}, Evidence: proceduralEvidenceResolver{err: errors.New("source drift")}, Policy: workerPolicy(true), WorkerID: "revalidation-worker", Now: func() time.Time { return time.Date(2026, time.November, 8, 2, 0, 0, 0, time.UTC) }, NewID: func() string { return "verification-drift" }}
+	observer := telemetry.NewMetricsObserver()
+	worker := ProceduralRevalidationWorker{Store: store, Targets: proceduralTargetResolver{}, Evidence: proceduralEvidenceResolver{err: errors.New("source drift")}, Policy: workerPolicy(true), WorkerID: "revalidation-worker", Observer: observer, Now: func() time.Time { return time.Date(2026, time.November, 8, 2, 0, 0, 0, time.UTC) }, NewID: func() string { return "verification-drift" }}
 	_, evidence, err := worker.ExecuteDerivedWork(context.Background(), workerDerivedItem())
 	if err != nil {
 		t.Fatal(err)
@@ -23,6 +25,9 @@ func TestProceduralRevalidationWorkerAppendsNeedsRevalidationForEvidenceDrift(t 
 	}
 	if len(store.completed) != 1 || store.completed[0].Status != memory.ProceduralRevalidationRunStatusCompleted {
 		t.Fatalf("completed = %+v", store.completed)
+	}
+	if !strings.Contains(observer.RenderPrometheus(), `disposition="needs_revalidation"`) {
+		t.Fatalf("worker did not emit bounded revalidation metric: %s", observer.RenderPrometheus())
 	}
 }
 
@@ -35,6 +40,31 @@ func TestProceduralRevalidationWorkerAppendsInconclusiveWhenEvidenceRemainsEligi
 	}
 	if len(store.appended) != 1 || store.appended[0].Disposition != memory.ProceduralVerificationDispositionInconclusive {
 		t.Fatalf("appended = %+v", store.appended)
+	}
+}
+
+func TestProceduralRevalidationWorkerSettlesStaleTargetWithoutAppendingInference(t *testing.T) {
+	store := &proceduralRevalidationWorkerStoreStub{run: workerRevalidationRun(), verification: workerVerification()}
+	observer := telemetry.NewMetricsObserver()
+	worker := ProceduralRevalidationWorker{
+		Store: store, Targets: proceduralTargetResolver{err: errors.New("target no longer current")}, Evidence: proceduralEvidenceResolver{}, Policy: workerPolicy(true),
+		WorkerID: "revalidation-worker", Now: func() time.Time { return time.Date(2026, time.November, 8, 2, 0, 0, 0, time.UTC) }, NewID: func() string { return "must-not-append" }, Observer: observer,
+	}
+	processed, evidence, err := worker.ExecuteDerivedWork(context.Background(), workerDerivedItem())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if processed != 1 || evidence != "verification-1" || len(store.appended) != 0 {
+		t.Fatalf("stale target processed=%d evidence=%q appended=%+v, want settled without inferred result", processed, evidence, store.appended)
+	}
+	if len(store.completed) != 1 || store.completed[0].Status != memory.ProceduralRevalidationRunStatusFailed || store.completed[0].TerminalVerificationID != "verification-1" {
+		t.Fatalf("stale target completion=%+v, want failed original verification terminal", store.completed)
+	}
+	metrics := observer.RenderPrometheus()
+	for _, want := range []string{`operation="revalidate"`, `result="failed"`, `failure_category="target_ineligible"`} {
+		if !strings.Contains(metrics, want) {
+			t.Fatalf("stale target telemetry missing %s:\n%s", want, metrics)
+		}
 	}
 }
 
@@ -62,6 +92,27 @@ func TestProceduralRevalidationWorkerRejectsDisabledPolicyBeforeRunClaim(t *test
 	}
 }
 
+func TestProceduralRevalidationWorkerSettlesOwnedRunWhenDerivedWorkExhausts(t *testing.T) {
+	store := &proceduralRevalidationWorkerStoreStub{run: workerRevalidationRun(), verification: workerVerification()}
+	observer := telemetry.NewMetricsObserver()
+	worker := ProceduralRevalidationWorker{
+		Store: store, Targets: proceduralTargetResolver{}, Evidence: proceduralEvidenceResolver{}, Policy: workerPolicy(true), WorkerID: "revalidation-worker",
+		Now: func() time.Time { return time.Date(2026, time.November, 8, 2, 0, 0, 0, time.UTC) }, Observer: observer,
+	}
+	if err := worker.HandleDerivedWorkExhaustion(context.Background(), workerDerivedItem()); err != nil {
+		t.Fatal(err)
+	}
+	if len(store.exhausted) != 1 || store.exhausted[0].RunID != "run-1" || store.exhausted[0].WorkerID != "revalidation-worker" {
+		t.Fatalf("exhausted runs = %+v", store.exhausted)
+	}
+	metrics := observer.RenderPrometheus()
+	for _, want := range []string{`operation="exhaust"`, `result="exhausted"`, `recovery="exhausted"`} {
+		if !strings.Contains(metrics, want) {
+			t.Fatalf("exhaustion telemetry missing %s:\n%s", want, metrics)
+		}
+	}
+}
+
 func workerDerivedItem() workqueue.DerivedWorkItem {
 	return workqueue.DerivedWorkItem{ID: "work-1", DerivedWorkIdentity: workqueue.DerivedWorkIdentity{Scope: memory.Scope{Tenant: "tenant-a", Project: "project-a", Namespace: "namespace-a"}}, Kind: workqueue.WorkKindProceduralRevalidation, Reference: "run-1", Watermark: "watermark-1"}
 }
@@ -83,6 +134,7 @@ type proceduralRevalidationWorkerStoreStub struct {
 	verification memory.ProceduralMemoryVerification
 	appended     []memory.ProceduralMemoryVerification
 	completed    []memory.CompleteProceduralRevalidationRunInput
+	exhausted    []memory.ExhaustProceduralRevalidationRunInput
 	readRuns     int
 	claimed      []memory.ClaimProceduralRevalidationRunInput
 }
@@ -103,6 +155,10 @@ func (s *proceduralRevalidationWorkerStoreStub) AppendProceduralMemoryVerificati
 }
 func (s *proceduralRevalidationWorkerStoreStub) CompleteProceduralRevalidationRun(_ context.Context, input memory.CompleteProceduralRevalidationRunInput) error {
 	s.completed = append(s.completed, input)
+	return nil
+}
+func (s *proceduralRevalidationWorkerStoreStub) ExhaustProceduralRevalidationRun(_ context.Context, input memory.ExhaustProceduralRevalidationRunInput) error {
+	s.exhausted = append(s.exhausted, input)
 	return nil
 }
 

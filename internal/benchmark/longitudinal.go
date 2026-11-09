@@ -12,13 +12,21 @@ import (
 )
 
 const (
-	TaskSeriesSchemaVersion = "task-series-v1"
-	TaskSeriesMetricVersion = "task-series-metrics-v1"
+	TaskSeriesSchemaVersionV1 = "task-series-v1"
+	TaskSeriesSchemaVersionV2 = "task-series-v2"
+	TaskSeriesMetricVersionV1 = "task-series-metrics-v1"
+	TaskSeriesMetricVersionV2 = "task-series-metrics-v2"
+
+	// TaskSeriesSchemaVersion and TaskSeriesMetricVersion retain the original
+	// v1 defaults for callers that create the legacy locked fixture shape.
+	TaskSeriesSchemaVersion = TaskSeriesSchemaVersionV1
+	TaskSeriesMetricVersion = TaskSeriesMetricVersionV1
 
 	maxTaskSeriesConditions         = 32
 	maxTaskSeriesStagesPerCondition = 1024
 	maxTaskSeriesIdentifierLength   = 128
 	maxTaskSeriesEvidencePerStage   = 64
+	maxTaskSeriesMaintenanceCost    = 1_000_000
 	maxTaskSeriesSourceBytes        = 64 * 1024 * 1024
 )
 
@@ -59,12 +67,14 @@ type TaskSeriesEvidence struct {
 }
 
 type TaskSeriesStage struct {
-	ID         string               `json:"id"`
-	QueryID    string               `json:"query_id"`
-	Scope      memory.Scope         `json:"scope"`
-	Verdict    TaskSeriesVerdict    `json:"verdict"`
-	Superseded bool                 `json:"superseded,omitempty"`
-	Evidence   []TaskSeriesEvidence `json:"evidence"`
+	ID              string               `json:"id"`
+	QueryID         string               `json:"query_id"`
+	Scope           memory.Scope         `json:"scope"`
+	Verdict         TaskSeriesVerdict    `json:"verdict"`
+	Superseded      bool                 `json:"superseded,omitempty"`
+	Evidence        []TaskSeriesEvidence `json:"evidence"`
+	RepeatedError   *bool                `json:"repeated_error,omitempty"`
+	MaintenanceCost *int64               `json:"maintenance_cost,omitempty"`
 }
 
 type TaskSeriesCondition struct {
@@ -211,11 +221,19 @@ type TaskSeriesStageObservation struct {
 type TaskSeriesObservations map[string]map[string]TaskSeriesStageObservation
 
 func (m TaskSeriesManifest) Validate() error {
-	if m.SchemaVersion != TaskSeriesSchemaVersion {
+	v2 := false
+	switch m.SchemaVersion {
+	case TaskSeriesSchemaVersionV1:
+		if m.MetricVersion != TaskSeriesMetricVersionV1 {
+			return fmt.Errorf("unsupported task-series metric version %q", m.MetricVersion)
+		}
+	case TaskSeriesSchemaVersionV2:
+		if m.MetricVersion != TaskSeriesMetricVersionV2 {
+			return fmt.Errorf("unsupported task-series metric version %q", m.MetricVersion)
+		}
+		v2 = true
+	default:
 		return fmt.Errorf("unsupported task-series schema %q", m.SchemaVersion)
-	}
-	if m.MetricVersion != TaskSeriesMetricVersion {
-		return fmt.Errorf("unsupported task-series metric version %q", m.MetricVersion)
 	}
 	if !sha256Pattern.MatchString(m.SourceChecksum) {
 		return fmt.Errorf("source checksum must be a 64-character hexadecimal digest")
@@ -250,7 +268,7 @@ func (m TaskSeriesManifest) Validate() error {
 		stageIDs := make([]string, 0, len(condition.Stages))
 		seenStages := make(map[string]struct{}, len(condition.Stages))
 		for _, stage := range condition.Stages {
-			if err := validateTaskSeriesStage(m.Scope, stage); err != nil {
+			if err := validateTaskSeriesStage(m.Scope, stage, v2); err != nil {
 				return fmt.Errorf("condition %q: %w", condition.ID, err)
 			}
 			if _, exists := seenStages[stage.ID]; exists {
@@ -273,7 +291,7 @@ func (m TaskSeriesManifest) Validate() error {
 	return nil
 }
 
-func validateTaskSeriesStage(scope memory.Scope, stage TaskSeriesStage) error {
+func validateTaskSeriesStage(scope memory.Scope, stage TaskSeriesStage, v2 bool) error {
 	if err := validateTaskSeriesIdentifier("stage", stage.ID); err != nil {
 		return err
 	}
@@ -288,6 +306,12 @@ func validateTaskSeriesStage(scope memory.Scope, stage TaskSeriesStage) error {
 	}
 	if !stage.Verdict.Valid() {
 		return fmt.Errorf("stage %q verdict %q is invalid", stage.ID, stage.Verdict)
+	}
+	if !v2 && (stage.RepeatedError != nil || stage.MaintenanceCost != nil) {
+		return fmt.Errorf("stage %q v2 observations require task-series-v2", stage.ID)
+	}
+	if stage.MaintenanceCost != nil && (*stage.MaintenanceCost < 0 || *stage.MaintenanceCost > maxTaskSeriesMaintenanceCost) {
+		return fmt.Errorf("stage %q maintenance cost is out of bounds", stage.ID)
 	}
 	if len(stage.Evidence) > maxTaskSeriesEvidencePerStage {
 		return fmt.Errorf("stage %q must contain at most %d evidence entries", stage.ID, maxTaskSeriesEvidencePerStage)
@@ -410,22 +434,30 @@ const (
 )
 
 type TaskSeriesConditionReport struct {
-	ConditionIndex            int     `json:"condition_index"`
-	Baseline                  bool    `json:"-"`
-	ReferenceCondition        bool    `json:"reference_condition"`
-	StageCount                int     `json:"stage_count"`
-	EvaluatedStages           int     `json:"evaluated_stages"`
-	InconclusiveStages        int     `json:"inconclusive_stages"`
-	SupersededStages          int     `json:"superseded_stages"`
-	EvidenceStages            int     `json:"evidence_stages"`
-	Utility                   float64 `json:"utility"`
-	ObservedUtilityDifference float64 `json:"observed_utility_difference"`
-	StaleStages               int     `json:"stale_stages"`
-	NoisyStages               int     `json:"noisy_stages"`
-	ProvenanceCoverage        float64 `json:"provenance_coverage"`
-	EvidenceCount             int     `json:"evidence_count"`
-	VerifiedProvenanceCount   int     `json:"verified_provenance_count"`
-	SafetyFailures            int     `json:"safety_failures"`
+	ConditionIndex              int      `json:"condition_index"`
+	Baseline                    bool     `json:"-"`
+	ReferenceCondition          bool     `json:"reference_condition"`
+	StageCount                  int      `json:"stage_count"`
+	EvaluatedStages             int      `json:"evaluated_stages"`
+	InconclusiveStages          int      `json:"inconclusive_stages"`
+	SupersededStages            int      `json:"superseded_stages"`
+	EvidenceStages              int      `json:"evidence_stages"`
+	Utility                     float64  `json:"utility"`
+	ObservedUtilityDifference   float64  `json:"observed_utility_difference"`
+	StaleStages                 int      `json:"stale_stages"`
+	NoisyStages                 int      `json:"noisy_stages"`
+	ProvenanceCoverage          float64  `json:"provenance_coverage"`
+	EvidenceCount               int      `json:"evidence_count"`
+	VerifiedProvenanceCount     int      `json:"verified_provenance_count"`
+	SafetyFailures              int      `json:"safety_failures"`
+	RepeatedErrorObservedStages int      `json:"repeated_error_observed_stages,omitempty"`
+	RepeatedErrorStages         int      `json:"repeated_error_stages,omitempty"`
+	RepeatedErrorCoverage       float64  `json:"repeated_error_coverage,omitempty"`
+	RepeatedErrorRate           *float64 `json:"repeated_error_rate,omitempty"`
+	MaintenanceObservedStages   int      `json:"maintenance_observed_stages,omitempty"`
+	MaintenanceCoverage         float64  `json:"maintenance_coverage,omitempty"`
+	MaintenanceCostTotal        int64    `json:"maintenance_cost_total,omitempty"`
+	MaintenanceCostAverage      *float64 `json:"maintenance_cost_average,omitempty"`
 }
 
 type TaskSeriesReport struct {
@@ -466,6 +498,7 @@ func EvaluateTaskSeries(manifest TaskSeriesManifest, observations TaskSeriesObse
 		Conditions:          make([]TaskSeriesConditionReport, 0, len(manifest.Conditions)),
 	}
 	baselineUtility := 0.0
+	v2 := manifest.SchemaVersion == TaskSeriesSchemaVersionV2
 	for conditionIndex, condition := range manifest.Conditions {
 		conditionReport := TaskSeriesConditionReport{ConditionIndex: conditionIndex, Baseline: condition.Baseline, ReferenceCondition: condition.Baseline, StageCount: len(condition.Stages)}
 		utilityTotal := 0.0
@@ -479,6 +512,18 @@ func EvaluateTaskSeries(manifest TaskSeriesManifest, observations TaskSeriesObse
 			} else {
 				conditionReport.EvaluatedStages++
 				utilityTotal += taskSeriesUtility(stage.Verdict)
+			}
+			if v2 {
+				if stage.RepeatedError != nil {
+					conditionReport.RepeatedErrorObservedStages++
+					if *stage.RepeatedError {
+						conditionReport.RepeatedErrorStages++
+					}
+				}
+				if stage.MaintenanceCost != nil {
+					conditionReport.MaintenanceObservedStages++
+					conditionReport.MaintenanceCostTotal += *stage.MaintenanceCost
+				}
 			}
 			stageObservation := observations[condition.ID][stage.ID]
 			labels := taskSeriesEvidenceLabels(stage.Evidence)
@@ -514,6 +559,18 @@ func EvaluateTaskSeries(manifest TaskSeriesManifest, observations TaskSeriesObse
 		}
 		if conditionReport.EvaluatedStages > 0 {
 			conditionReport.Utility = utilityTotal / float64(conditionReport.EvaluatedStages)
+			if v2 {
+				conditionReport.RepeatedErrorCoverage = float64(conditionReport.RepeatedErrorObservedStages) / float64(conditionReport.EvaluatedStages)
+				conditionReport.MaintenanceCoverage = float64(conditionReport.MaintenanceObservedStages) / float64(conditionReport.EvaluatedStages)
+			}
+		}
+		if conditionReport.RepeatedErrorObservedStages > 0 {
+			rate := float64(conditionReport.RepeatedErrorStages) / float64(conditionReport.RepeatedErrorObservedStages)
+			conditionReport.RepeatedErrorRate = &rate
+		}
+		if conditionReport.MaintenanceObservedStages > 0 {
+			average := float64(conditionReport.MaintenanceCostTotal) / float64(conditionReport.MaintenanceObservedStages)
+			conditionReport.MaintenanceCostAverage = &average
 		}
 		if conditionReport.EvidenceCount > 0 {
 			conditionReport.ProvenanceCoverage = float64(conditionReport.VerifiedProvenanceCount) / float64(conditionReport.EvidenceCount)
@@ -572,7 +629,9 @@ func validateTaskSeriesObservations(manifest TaskSeriesManifest, observations Ta
 }
 
 func MarshalTaskSeriesReport(report TaskSeriesReport) ([]byte, error) {
-	if report.SchemaVersion != TaskSeriesSchemaVersion || report.MetricVersion != TaskSeriesMetricVersion {
+	v2 := report.SchemaVersion == TaskSeriesSchemaVersionV2 && report.MetricVersion == TaskSeriesMetricVersionV2
+	v1 := report.SchemaVersion == TaskSeriesSchemaVersionV1 && report.MetricVersion == TaskSeriesMetricVersionV1
+	if !v1 && !v2 {
 		return nil, fmt.Errorf("unsupported task-series report version")
 	}
 	if !sha256Pattern.MatchString(report.SourceChecksum) || !sha256Pattern.MatchString(report.QRELChecksum) {
@@ -603,6 +662,18 @@ func MarshalTaskSeriesReport(report TaskSeriesReport) ([]byte, error) {
 		}
 		if condition.ProvenanceCoverage < 0 || condition.ProvenanceCoverage > 1 || condition.Utility < 0 || condition.Utility > 1 {
 			return nil, fmt.Errorf("task-series report metrics are out of range")
+		}
+		if condition.RepeatedErrorCoverage < 0 || condition.RepeatedErrorCoverage > 1 || condition.MaintenanceCoverage < 0 || condition.MaintenanceCoverage > 1 || condition.RepeatedErrorObservedStages < 0 || condition.RepeatedErrorStages < 0 || condition.RepeatedErrorStages > condition.RepeatedErrorObservedStages || condition.MaintenanceObservedStages < 0 || condition.MaintenanceCostTotal < 0 {
+			return nil, fmt.Errorf("task-series v2 metrics are out of range")
+		}
+		if condition.RepeatedErrorRate != nil && (*condition.RepeatedErrorRate < 0 || *condition.RepeatedErrorRate > 1) {
+			return nil, fmt.Errorf("task-series repeated-error rate is out of range")
+		}
+		if condition.MaintenanceCostAverage != nil && *condition.MaintenanceCostAverage < 0 {
+			return nil, fmt.Errorf("task-series maintenance average is out of range")
+		}
+		if !v2 && (condition.RepeatedErrorObservedStages != 0 || condition.RepeatedErrorStages != 0 || condition.RepeatedErrorCoverage != 0 || condition.RepeatedErrorRate != nil || condition.MaintenanceObservedStages != 0 || condition.MaintenanceCoverage != 0 || condition.MaintenanceCostTotal != 0 || condition.MaintenanceCostAverage != nil) {
+			return nil, fmt.Errorf("task-series-v1 report must not include v2 metrics")
 		}
 	}
 	if referenceCount != 1 {

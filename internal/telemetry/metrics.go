@@ -308,6 +308,33 @@ func (o *MetricsObserver) RecordDerivedWork(ctx context.Context, event DerivedWo
 	}, 1)
 }
 
+// RecordProceduralVerification emits bounded admission, revalidation, queue,
+// and recovery outcomes without making maintenance telemetry an audit or
+// discovery surface.
+func (o *MetricsObserver) RecordProceduralVerification(ctx context.Context, event ProceduralVerificationEvent) {
+	if o == nil {
+		return
+	}
+	o.addCounter("stele_procedural_verification_total", map[string]string{
+		"operation":        boundedProceduralVerificationLabel(event.Operation, "record", "request", "dispatch", "revalidate", "recover", "exhaust", "inspect"),
+		"result":           boundedProceduralVerificationLabel(event.Result, "accepted", "replayed", "completed", "inconclusive", "needs_revalidation", "disabled", "denied", "failed", "exhausted"),
+		"disposition":      boundedProceduralVerificationLabel(event.Disposition, "supported", "refuted", "inconclusive", "needs_revalidation", "none"),
+		"trigger":          boundedProceduralVerificationLabel(event.Trigger, "administrator", "source_drift", "correction_signal", "stale_feedback", "needs_review_feedback", "none"),
+		"queue":            boundedProceduralVerificationLabel(event.Queue, "buffered", "durable", "recovery", "none"),
+		"recovery":         boundedProceduralVerificationLabel(event.Recovery, "none", "redelivered", "reclaimed", "exhausted"),
+		"failure_category": boundedProceduralVerificationLabel(event.FailureCategory, "none", "validation", "policy_disabled", "scope_denied", "target_ineligible", "source_ineligible", "lease_lost", "dependency", "unknown"),
+	}, 1)
+}
+
+func boundedProceduralVerificationLabel(value string, allowed ...string) string {
+	for _, candidate := range allowed {
+		if value == candidate {
+			return candidate
+		}
+	}
+	return "unknown"
+}
+
 func boundedDerivedWorkLabel(value string, allowed ...string) string {
 	for _, candidate := range allowed {
 		if value == candidate {
@@ -1125,6 +1152,7 @@ func (o *MetricsObserver) RenderPrometheus() string {
 	writeMetricFamilyHeader(&builder, "stele_operational_proofs_total", "counter", "Operational proof outcomes by bounded categories.")
 	writeMetricFamilyHeader(&builder, "stele_readiness_reports_total", "counter", "Readiness report outcomes by bounded categories.")
 	writeMetricFamilyHeader(&builder, "stele_recovery_verifications_total", "counter", "Recovery verification outcomes by bounded categories.")
+	writeMetricFamilyHeader(&builder, "stele_procedural_verification_total", "counter", "Procedural verification and revalidation maintenance outcomes by bounded categories.")
 	writeMetricFamilyHeader(&builder, "stele_workflow_lifecycle_total", "counter", "Integration workflow lifecycle events by bounded categories.")
 
 	writeMetricMap(&builder, o.counters)
