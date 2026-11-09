@@ -37,4 +37,4 @@
 - [x] 6.1 Run focused domain, storage, app, jobs, benchmark, OpenAPI, documentation, and owned-stack verification; record bounded evidence and verify all task checkboxes correspond to passing behavior.
 - [x] 6.2 Run `go test ./... -count=1`, `go test -race ./...`, `go vet ./...`, `openspec validate verified-memory-correction-loop --strict`, and `openspec validate --all --strict`; resolve any regression before marking the change complete.
 - [x] 6.3 Archive the completed OpenSpec change with `pwsh -File scripts/openspec-archive-seq.ps1 -ChangeName "verified-memory-correction-loop"`; verify the numbered archive, regenerated index, synchronized specs, and no active change remain.
-- [ ] 6.4 Commit the verified implementation and archive, merge the feature branch into current `main`, push `main`, and verify local/remote commit identity plus clean worktrees before starting the next roadmap proposal.
+- [x] 6.4 Commit the verified implementation and archive, merge the feature branch into current `main`, push `main`, and verify local/remote commit identity plus clean worktrees before starting the next roadmap proposal.
