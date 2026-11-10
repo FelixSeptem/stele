@@ -13,4 +13,4 @@
 
 - [x] 3.1 Review the implementation, run focused/full/race/vet/docs and strict OpenSpec checks, and record bounded owned-stack evidence before completion. Local implementation review and regression verification are recorded; an independent reviewer did not return a final status during this delivery run.
 - [x] 3.2 Archive via `scripts/openspec-archive-seq.ps1 -ChangeName evidence-gated-resident-context-evaluation`; verify synchronized specs, numbered index and no active change. Archived as 082 and both delta specifications were synchronized.
-- [ ] 3.3 Commit the verified implementation/archive, merge into main, push, verify remote identity and clean worktrees, then record delivery audit.
+- [x] 3.3 Commit `7c259eebfee134858ce5009831c9a128f1221532`, fast-forward merge into `main`, push, and verify `origin/main` resolves to the implementation commit. Worktree audit was clean; see the delivery verification below.
