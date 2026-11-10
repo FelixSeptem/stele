@@ -1,0 +1,78 @@
+{
+  "schema_version": "representation-fixture-v1",
+  "source_checksum": "54abfdf4800bcc3dd1824a60c3b5d7d9a8e48abcafc647f6107aa719a14cf299",
+  "qrels_checksum": "658657e24059ef43505347884330deb491977ec113f4923623a33115660e84a0",
+  "cases": [
+    {
+      "id": "exact",
+      "family": "exact_facts",
+      "candidate": "exact-excerpt-with-search-v1",
+      "scope": {"tenant": "benchmark", "project": "benchmark-representations", "namespace": "ev3"},
+      "critical_alias": "exact-source",
+      "query": "exactfact",
+      "sources": [
+        {"alias":"exact-source","event_type":"fixture","content":"exactfact Build=731 requires port=8443.","class":"episodic","state":"active"},
+        {"alias":"exact-hidden","event_type":"fixture","content":"exactfact Build=000.","class":"episodic","state":"suppressed"},
+        {"alias":"exact-forgotten","event_type":"fixture","content":"exactfact port=1111.","class":"episodic","state":"forgotten"},
+        {"alias":"exact-deleted","event_type":"fixture","content":"exactfact port=2222.","class":"episodic","state":"deleted"}
+      ],
+      "critical_facts": [{"Alias":"exact-source","Value":"Build=731"},{"Alias":"exact-source","Value":"port=8443"}],
+      "excluded_source_aliases": ["exact-hidden","exact-forgotten","exact-deleted"],
+      "required_source_aliases": ["exact-source"],
+      "baseline_limits": {"max_candidates": 4, "max_characters": 256, "max_tokens": 64, "max_latency_ms": 100},
+      "candidate_limits": {"max_candidates": 4, "max_characters": 256, "max_tokens": 64, "max_latency_ms": 100}
+    },
+    {
+      "id": "cross",
+      "family": "cross_document",
+      "candidate": "topic-projection-with-search-v1",
+      "scope": {"tenant": "benchmark", "project": "benchmark-representations", "namespace": "ev3"},
+      "critical_alias": "cross-source",
+      "query": "crosslink",
+      "sources": [
+        {"alias":"cross-source","event_type":"fixture","content":"crosslink Project Orion uses port=8443.","class":"episodic","state":"active"},
+        {"alias":"cross-other","event_type":"fixture","content":"crosslink Project Orion timeout=17s.","class":"episodic","state":"active"},
+        {"alias":"cross-hidden","event_type":"fixture","content":"crosslink timeout=90s.","class":"episodic","state":"suppressed"}
+      ],
+      "critical_facts": [{"Alias":"cross-source","Value":"port=8443"},{"Alias":"cross-other","Value":"timeout=17s"}],
+      "excluded_source_aliases": ["cross-hidden"],
+      "required_source_aliases": ["cross-source", "cross-other"],
+      "baseline_limits": {"max_candidates": 4, "max_characters": 256, "max_tokens": 64, "max_latency_ms": 100},
+      "candidate_limits": {"max_candidates": 4, "max_characters": 256, "max_tokens": 64, "max_latency_ms": 100}
+    },
+    {
+      "id": "profile",
+      "family": "profile_preference",
+      "candidate": "topic-projection-with-search-v1",
+      "scope": {"tenant": "benchmark", "project": "benchmark-representations", "namespace": "ev3"},
+      "critical_alias": "profile-source",
+      "query": "profilehint",
+      "sources": [
+        {"alias":"profile-source","event_type":"fixture","content":"profilehint Preferred locale=zh-CN.","class":"profile","state":"active"},
+        {"alias":"profile-hidden","event_type":"fixture","content":"profilehint locale=en-US.","class":"profile","state":"suppressed"}
+      ],
+      "critical_facts": [{"Alias":"profile-source","Value":"locale=zh-CN"}],
+      "excluded_source_aliases": ["profile-hidden"],
+      "required_source_aliases": ["profile-source"],
+      "baseline_limits": {"max_candidates": 4, "max_characters": 256, "max_tokens": 64, "max_latency_ms": 100},
+      "candidate_limits": {"max_candidates": 4, "max_characters": 256, "max_tokens": 64, "max_latency_ms": 100}
+    },
+    {
+      "id": "procedure",
+      "family": "procedural_lesson",
+      "candidate": "hierarchical-search-v1",
+      "scope": {"tenant": "benchmark", "project": "benchmark-representations", "namespace": "ev3"},
+      "critical_alias": "procedure-source",
+      "query": "procedurehint",
+      "sources": [
+        {"alias":"procedure-source","event_type":"fixture","content":"procedurehint After error=E42 retry=3 with backoff=250ms.","class":"procedural","state":"active"},
+        {"alias":"procedure-hidden","event_type":"fixture","content":"procedurehint retry=99.","class":"procedural","state":"suppressed"}
+      ],
+      "critical_facts": [{"Alias":"procedure-source","Value":"retry=3"},{"Alias":"procedure-source","Value":"backoff=250ms"}],
+      "excluded_source_aliases": ["procedure-hidden"],
+      "required_source_aliases": ["procedure-source"],
+      "baseline_limits": {"max_candidates": 4, "max_characters": 256, "max_tokens": 64, "max_latency_ms": 100},
+      "candidate_limits": {"max_candidates": 4, "max_characters": 256, "max_tokens": 64, "max_latency_ms": 100}
+    }
+  ]
+}

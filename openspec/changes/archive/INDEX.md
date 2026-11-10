@@ -1,6 +1,6 @@
 # Archive Index
 
-Updated: 2026-11-09 21:35:32
+Updated: 2026-11-10 23:16:16
 
 - 001 -> bootstrap-foundation-and-event-ingestion
 - 002 -> governance-pipeline-and-memory-consolidation
@@ -82,3 +82,4 @@ Updated: 2026-11-09 21:35:32
 - 078 -> longitudinal-agent-task-memory-evaluation
 - 079 -> bfcl-v4-memory-provider-conformance
 - 080 -> verified-memory-correction-loop
+- 081 -> task-appropriate-representation-evaluation

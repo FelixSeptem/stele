@@ -95,6 +95,36 @@ and rollback record bounded redacted lifecycle outcomes and return selection to
 the previously approved baseline without rewriting canonical memory or source
 records. Metrics and logs expose only fixed categories and duration/age buckets.
 
+### Task-appropriate representation prerequisite
+
+An opt-in release policy can require four compatible task-family representation
+reports before a future scoped rollout review. The report set must cover exact
+facts, cross-document evidence, profile preferences, and procedural lessons;
+each report must remain `shadow`, preserve `flat-fusion-v1` as its selected
+strategy, retain authorized source search, preserve every critical fact and
+source/citation, use a deterministic replay identity, be fresh inside the
+release-evidence window, and have no failure or rollback requirement. Their
+scope hash, source/qrel checksums, watermark, and renderer identity must agree.
+
+Every report must include measured baseline metrics, matching policy/fixture
+versions and limits, actual owned-stack retrieval and tested baseline rollback.
+Reports expire for release use 24 hours after evaluation; future timestamps are
+invalid. Persisted expiry is an additional bound: ordinary report reads omit
+expired rows, and a release envelope cannot extend a row's retention deadline.
+The release identity binds the sorted representation run identities and the
+release source watermark must match theirs. Refreshing an outer envelope does
+not refresh the underlying evidence. The report itself remains non-activating.
+
+This prerequisite records only a bounded eligible flag and count in the release
+evidence report. It does not serialize representation reports or their raw
+inputs, select a candidate, create an activation API, or alter ordinary
+retrieval. Missing, duplicate, stale, foreign, incompatible, unsafe, or
+incomplete evidence produces the stable
+`RETRIEVAL_RELEASE_EVIDENCE_REPRESENTATION_REQUIRED` non-pass category.
+Externally supplied utility, repeated-error, and maintenance observations stay
+separate and cannot independently authorize a release or support a causal
+claim.
+
 ## Redacted trajectory and information integrity
 
 Evaluation and shadow runs may attach bounded retrieval trajectory aggregates

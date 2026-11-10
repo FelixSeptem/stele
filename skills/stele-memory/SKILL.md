@@ -9,6 +9,18 @@ Stele owns durable memory, retrieval and context selection in PostgreSQL. The
 agent owns instructions, business roles, tools, writes, compiler submission and
 task completion. Choose the access path from the configured principal role.
 
+## Retrieval representation boundary
+
+Do not request or assume task-specific retrieval representation selection from
+Provider, MCP, or native user-facing calls. Exact excerpts, topic projections,
+and hierarchical evidence are evaluated internally only, retain authorized
+source search, and leave `flat-fusion-v1` selected for ordinary retrieval. A
+shadow/release-evidence observation is not a causal task conclusion, an
+activation grant, or authority to change scope, lifecycle, citation, ranking,
+or canonical memory. Operators run the owned verifier documented in
+`docs/retrieval-progressive-context-experiments.md`; public agents continue to
+use the published Provider contract unchanged.
+
 ## Public runtime workflow
 
 1. Require operator-provisioned exact tenant, project and namespace grants with
@@ -221,6 +233,14 @@ asynchronous `remember` dispatch, not canonical overwrite: missing files never
 imply forget/delete and manifest placement never injects context.
 
 ## Procedural verification boundary
+
+Representation evaluation is maintainer-owned and shadow-only. Its source-locked
+baseline/candidate replay and real PostgreSQL/pgvector verifier produce bounded
+observational evidence, not permission to select a production strategy. Missing
+external task or cost observations remain inconclusive. Release review requires
+matching identities, tested baseline rollback, evidence younger than 24 hours
+and an expiry no later than the persisted report's retention deadline. Keep
+ordinary `flat-fusion-v1` behavior until a separate activation is authorized.
 
 Procedural verification is an administrator-only maintenance workflow for a
 current active `procedural` memory version. An agent must not use Provider or MCP to create, inspect, revalidate, or correct a verification record: those

@@ -48,6 +48,14 @@ safe not-found or denied outcomes without confirming foreign records.
 Retrieval output is evidence for an agent response. It is not canonical memory
 and must not be written back unchanged as if it were a new fact.
 
+`internal/retrieval` also owns evaluation-only comparison of task-appropriate
+derived representations: exact excerpts plus search, topic projections plus
+search, and hierarchical/parent-first evidence plus search. The internal
+evaluator and `internal/storage/postgres` representation-report repository
+accept only redacted aggregate, exact-scope records. They do not register a
+Provider, MCP, ordinary retrieval, or HTTP route; `flat-fusion-v1` remains the
+ordinary selected strategy. See [retrieval representation experiments](retrieval-progressive-context-experiments.md).
+
 For public `context-budget-v1`, retrieval owns optional final-projection admission
 inside existing context selection. `internal/provider` costs the authorized
 mode-specific item DTO, resolves independent caller/server item/content/body/

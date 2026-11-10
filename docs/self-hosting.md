@@ -441,6 +441,45 @@ only expired derived report artifacts and emits bounded cleanup telemetry; it
 never deletes or rewrites canonical source memory. Disable collection or report
 comparison to roll back. Existing reports remain inspectable until expiry.
 
+### Task-appropriate representation evaluation
+
+Representation evaluation is a maintainer-owned offline/shadow diagnostic, not
+a deployment switch. It compares checksum-locked exact excerpts, topic
+projections, and hierarchical evidence only for the four declared task
+families, always alongside authorized source search and under equal fixed
+candidate, character, token, and latency limits. There is no environment
+variable, Provider capability, MCP tool, OpenAPI route, or ordinary request
+parameter that enables a candidate. Production requests remain on
+`flat-fusion-v1`.
+
+Use the disposable owned-stack verifier only from a checkout with Docker
+available:
+
+```powershell
+pwsh -NoProfile -File scripts/stele-representation-evaluation-verify.ps1
+```
+
+It creates a random-owned PostgreSQL + pgvector container, never adopts
+`STELE_POSTGRES_DSN`, emits at most a bounded redacted JSON report, and removes
+only its own container. A missing source-search companion, scope/lifecycle or
+freshness failure, lost protected fact, broken reference, limit breach,
+nondeterministic replay, persistence/restart failure, or cleanup failure is a
+non-pass and keeps the baseline. Expiry cleanup removes only derived report
+rows; it cannot modify canonical memory. A later release review can consume
+fresh compatible evidence as one prerequisite, but activation requires a
+separate authorized change and remains outside this evaluator.
+
+The verifier seeds canonical versions and provenance, installs actual pgvector
+revisions, materializes and reads existing projections, and executes both
+conditions plus repeated candidate and baseline rollback queries. It retains
+four aggregate reports through a real PostgreSQL container restart and compares
+their checksum and canonical version history before scoped expiry cleanup.
+Fault injection for source drift is rolled back and cannot invalidate retained
+passing evidence. The random published host port is rediscovered after restart.
+Reports cover a fixed synthetic corpus; missing external task verdicts and
+maintenance observations remain inconclusive. Release evidence must be less
+than 24 hours old and cannot outlive its persisted expiry.
+
 ## Principal Bootstrap And Scoped Access
 
 Protected requests are authenticated against PostgreSQL-backed principals. Every

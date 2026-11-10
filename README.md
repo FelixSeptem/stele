@@ -19,6 +19,8 @@ and namespace.
 - Optional OpenAPI-backed provider and MCP adapters.
 - PostgreSQL-backed operational history, conformance, assurance, and recovery
   evidence.
+- Offline/shadow-only retrieval-representation comparisons that retain source
+  search and cannot alter ordinary retrieval.
 
 ## Architecture at a glance
 
@@ -181,6 +183,18 @@ The public runtime uses Provider operations instead.
 
 See [Best practices](docs/best-practices.md) for practical workflows and
 recovery guidance.
+
+## Retrieval representation evaluation
+
+Stele can compare an exact excerpt, topic projection, or hierarchical evidence
+representation against `flat-fusion-v1` for maintenance evaluation. This is an
+internal, checksum-locked offline/shadow workflow: it keeps authorized source
+search, PostgreSQL source records, lifecycle filtering, and exact
+tenant/project/namespace scope intact. It adds no public API, Provider
+capability, MCP tool, automatic selector, or default change. Read
+[retrieval representation experiments](docs/retrieval-progressive-context-experiments.md)
+and the [retrieval release gate](docs/retrieval-release-gate.md) for the task
+families, evidence limits, redaction, rollback, and owned-stack verifier.
 
 Strict Provider consumers that need session/turn proof may require the
 `context-turn-binding-v1` capability, create a Provider turn, and send its

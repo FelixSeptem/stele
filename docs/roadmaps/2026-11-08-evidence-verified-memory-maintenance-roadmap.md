@@ -2,10 +2,11 @@
 
 ## Status and purpose
 
-Research captured on 2026-11-08. All workstreams below are **candidate follow-up
-work, pending an OpenSpec proposal and implementation evidence**. This document
-records research conclusions for future prioritization; it does not change a
-public contract, enable a rollout, or mark a capability as delivered.
+Research captured on 2026-11-08; delivery status reconciled on 2026-11-10.
+This document records the research, implementation sequence and remaining
+evidence requirements. The status table distinguishes archived service work
+from candidate follow-ups; an archived evaluator does not authorize rollout
+or establish general task benefit.
 
 The reference is Anthropic's [The components of agent memory](https://www.anthropic.com/research/components-of-agent-memory),
 published 2026-11-06. This roadmap extends the
@@ -63,9 +64,9 @@ and archives before opening each proposal to avoid duplicating delivered work.
 
 | Track | Priority and dependency | Proposed outcome | Current status |
 | --- | --- | --- | --- |
-| EV1: Verification evidence | First; EV5 fixtures begin here | Distinguish claim verification from provenance, confidence, and lifecycle | Candidate; not implemented by this roadmap |
-| EV2: Targeted correction loop | After EV1, evaluated with EV5 | Governed, bounded revalidation and versioned correction | Candidate; not implemented by this roadmap |
-| EV3: Task-appropriate representations | After EV2 has evaluation evidence | Compare exact excerpts, topic projections, and hierarchical retrieval | Candidate; existing experiments remain gated |
+| EV1: Verification evidence | First; EV5 fixtures begin here | Distinguish claim verification from provenance, confidence, and lifecycle | Delivered bounded slice in [080](../../openspec/changes/archive/080-verified-memory-correction-loop/proposal.md); administrator maintenance only |
+| EV2: Targeted correction loop | After EV1, evaluated with EV5 | Governed, bounded revalidation and versioned correction | Delivered bounded slice in [080](../../openspec/changes/archive/080-verified-memory-correction-loop/proposal.md); unresolved evidence and governed successor versions remain explicit |
+| EV3: Task-appropriate representations | After EV2 has evaluation evidence | Compare exact excerpts, topic projections, and hierarchical retrieval | Delivered evaluator in [081](../../openspec/changes/archive/081-task-appropriate-representation-evaluation/proposal.md), with [verification](../../openspec/changes/archive/081-task-appropriate-representation-evaluation/verification.md); candidates remain shadow-only |
 | EV4: Small resident context | After EV1; prioritize after EV2/EV3 evidence | Evidence-based promotion and demotion within existing context budgets | Candidate; existing defaults remain authoritative |
 | EV5: Longitudinal benefit evaluation | Starts with EV1 and accompanies every track | Measure future utility, repeated errors, harm, and cost | Candidate extension of existing evaluator |
 
@@ -127,6 +128,15 @@ reasoning boundary. Stele does not assume ownership of an agent's task loop,
 business success criteria, or tool execution.
 
 ### EV3: Representations selected for the task
+
+The implementation supplies a source-locked four-family replay with actual flat
+baseline, repeated candidate and baseline rollback conditions. It measures exact
+fact values, versions, citations, valid time, combined search/representation
+budgets and separate external observations; hashes bind actual evidence as well
+as aggregates. The owned PostgreSQL + pgvector harness checks materialized
+projections, production retrieval, source-version drift, restart persistence and
+scoped expiry cleanup. This is a fixed synthetic service-conformance corpus;
+broader task utility and maintenance benefit still require external observations.
 
 Extend the existing progressive-context experiments with task families: exact
 terms and numbers use source excerpts; cross-document questions use topic

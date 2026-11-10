@@ -1471,9 +1471,10 @@ This section captures external reference findings that should inform post-v1 pla
 The [evidence-verified memory maintenance roadmap](2026-11-08-evidence-verified-memory-maintenance-roadmap.md)
 captures the review of Anthropic's
 [The components of agent memory](https://www.anthropic.com/research/components-of-agent-memory)
-(published 2026-11-06). Research is complete; the follow-up tracks are candidates
-pending OpenSpec proposals and implementation evidence, not delivered behavior
-or permission to activate existing experiments.
+(published 2026-11-06). Research is complete. The bounded EV1/EV2 slice is
+archived as `080-verified-memory-correction-loop`; EV3 evaluation is archived as
+`081-task-appropriate-representation-evaluation`. The linked roadmap records delivery and remaining evidence
+requirements. These changes do not authorize experimental activation.
 
 Recommended sequence: EV1 verification evidence, then EV2 targeted background
 correction, followed by EV3 task-appropriate representations and EV4 resident

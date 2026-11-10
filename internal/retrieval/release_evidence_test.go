@@ -3,12 +3,144 @@ package retrieval
 import (
 	"context"
 	"encoding/json"
+	"reflect"
 	"strings"
 	"testing"
 	"time"
 
 	"github.com/FelixSeptem/stele/internal/memory"
 )
+
+func TestEvaluationReleasePolicyExposesRepresentationEvidenceRequirement(t *testing.T) {
+	field, ok := reflect.TypeOf(EvaluationReleasePolicy{}).FieldByName("RequireRepresentationEvidence")
+	if !ok || field.Type.Kind() != reflect.Bool {
+		t.Fatal("representation evidence must be an opt-in boolean release prerequisite")
+	}
+}
+
+func TestRepresentationReleaseEvidenceMissingIsHardNonPass(t *testing.T) {
+	in := validReleaseEvidenceInput(t)
+	in.Policy.RequireRepresentationEvidence = true
+	in.SourceWatermark = "source-watermark-v1"
+	in.EvidenceExpiresAt = in.EvaluatedAt.Add(time.Hour)
+	in.DeterministicReplay = true
+
+	report, err := EvaluateReleaseEvidence(in)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if report.ReleaseEligible || report.Verdict != ReleaseEvidenceRejected || !containsString(report.FailureCategories, "RETRIEVAL_RELEASE_EVIDENCE_REPRESENTATION_REQUIRED") {
+		t.Fatalf("missing representation evidence must be rejected: %+v", report)
+	}
+}
+
+func TestRepresentationReleaseEvidenceIsPrerequisiteOnly(t *testing.T) {
+	in := validReleaseEvidenceInput(t)
+	in.Policy.RequireRepresentationEvidence = true
+	in.SourceWatermark = "watermark-v1"
+	in.EvidenceExpiresAt = in.EvaluatedAt.Add(time.Hour)
+	in.DeterministicReplay = true
+	in.RepresentationReports = validRepresentationReleaseReports(t, in.Scope, in.EvaluatedAt)
+
+	report, err := EvaluateReleaseEvidence(in)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !report.RepresentationEvidenceEligible || report.RepresentationEvidenceCount != 4 {
+		t.Fatalf("complete shadow evidence was not recognized: %+v", report)
+	}
+	for _, representation := range in.RepresentationReports {
+		if representation.SelectedStrategy != ParentFirstFlatStrategy || representation.ActivationEligible || representation.Mode != RepresentationEvaluationModeShadow {
+			t.Fatalf("representation evidence must remain shadow-only: %+v", representation)
+		}
+	}
+	payload, err := MarshalReleaseEvidenceReport(report)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(string(payload), "representation-fixture-v1") || strings.Contains(string(payload), "watermark-v1") {
+		t.Fatalf("release report leaked representation evidence material: %s", payload)
+	}
+}
+
+func TestRepresentationReleaseEvidenceFailsClosedForUnsafeReports(t *testing.T) {
+	scope := memory.Scope{Tenant: "t", Project: "p", Namespace: "n"}
+	now := time.Date(2026, 9, 15, 12, 0, 0, 0, time.UTC)
+	for _, test := range []struct {
+		name   string
+		mutate func([]RepresentationEvaluationReport)
+	}{
+		{name: "missing family", mutate: func(reports []RepresentationEvaluationReport) { reports[3].Family = reports[2].Family }},
+		{name: "foreign scope", mutate: func(reports []RepresentationEvaluationReport) {
+			reports[0].ScopeHash = "scope:" + strings.Repeat("0", 64)
+		}},
+		{name: "source search missing", mutate: func(reports []RepresentationEvaluationReport) { reports[0].SourceSearchRetained = false }},
+		{name: "protected fact loss", mutate: func(reports []RepresentationEvaluationReport) { reports[0].CriticalFactRetention = .5 }},
+		{name: "rollback required", mutate: func(reports []RepresentationEvaluationReport) { reports[0].RollbackRequired = true }},
+		{name: "future timestamp", mutate: func(reports []RepresentationEvaluationReport) { reports[0].EvaluatedAt = now.Add(time.Minute) }},
+		{name: "incompatible watermark", mutate: func(reports []RepresentationEvaluationReport) { reports[0].SourceWatermark = "watermark-v2" }},
+		{name: "stale report with refreshed envelope", mutate: func(reports []RepresentationEvaluationReport) {
+			for i := range reports {
+				reports[i].EvaluatedAt = now.Add(-48 * time.Hour)
+				reports[i].RunIdentity = representationRunIdentity(reports[i], reports[i].EvaluatedAt)
+			}
+		}},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			reports := validRepresentationReleaseReports(t, scope, now)
+			test.mutate(reports)
+			if err := ValidateRepresentationReleaseEvidence(scope, reports, now, now.Add(time.Hour)); err == nil {
+				t.Fatal("unsafe representation evidence was accepted")
+			}
+		})
+	}
+}
+
+func TestRepresentationReleaseBindsWatermarkAndEvidenceToHandoff(t *testing.T) {
+	in := validReleaseEvidenceInput(t)
+	in.Policy.RequireRepresentationEvidence = true
+	in.RepresentationReports = validRepresentationReleaseReports(t, in.Scope, in.EvaluatedAt)
+	in.SourceWatermark = "different-source-watermark"
+	in.EvidenceExpiresAt = in.EvaluatedAt.Add(time.Hour)
+	r, err := EvaluateReleaseEvidence(in)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if r.RepresentationEvidenceEligible {
+		t.Fatal("report watermark was not bound to release watermark")
+	}
+}
+
+func TestRepresentationReleaseRejectsSyntheticEvidenceDespiteOwnedDSN(t *testing.T) {
+	in := validReleaseEvidenceInput(t)
+	in.Policy.RequireRepresentationEvidence = true
+	in.SourceWatermark = "watermark-v1"
+	in.EvidenceExpiresAt = in.EvaluatedAt.Add(time.Hour)
+	for _, test := range []struct {
+		family    RepresentationTaskFamily
+		candidate RepresentationCandidate
+	}{
+		{RepresentationTaskFamilyExactFacts, RepresentationCandidateExactExcerptWithSearch},
+		{RepresentationTaskFamilyCrossDocument, RepresentationCandidateTopicProjectionWithSearch},
+		{RepresentationTaskFamilyProfilePreference, RepresentationCandidateTopicProjectionWithSearch},
+		{RepresentationTaskFamilyProceduralLesson, RepresentationCandidateHierarchicalWithSearch},
+	} {
+		input := validRepresentationEvaluationInput(in.Scope)
+		input.Family, input.Policy.Candidate, input.EvaluatedAt = test.family, test.candidate, in.EvaluatedAt
+		report, err := EvaluateRepresentation(input)
+		if err != nil {
+			t.Fatal(err)
+		}
+		in.RepresentationReports = append(in.RepresentationReports, report)
+	}
+	r, err := EvaluateReleaseEvidence(in)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if r.RepresentationEvidenceEligible {
+		t.Fatal("synthetic evidence accepted because release DSN was configured")
+	}
+}
 
 func TestRunOwnedReleaseEvidenceNeverFallsBackToRuntimeDSN(t *testing.T) {
 	in := validReleaseEvidenceInput(t)
@@ -206,6 +338,51 @@ func validReleaseEvidenceInput(t *testing.T) ReleaseEvidenceInput {
 	candidate := baseline
 	policy := EvaluationReleasePolicy{Version: "policy-v1", ProtectedCutoffs: []int{1}, MaxP95LatencyMS: 100, Prerequisites: EvaluationPrerequisites{RequireRealStack: true, RequireOwnedDSN: true}, Rollback: EvaluationRollbackContract{Enabled: true, Strategy: "flat-v1"}}
 	return ReleaseEvidenceInput{Scope: memory.Scope{Tenant: "t", Project: "p", Namespace: "n"}, ProviderProfile: "canonical-v1", Policy: policy, Baseline: baseline, Candidate: candidate, Progressive: ProgressiveContextEvaluationReport{BaselineIdentity: "baseline-v1", Levels: []ProgressiveContextLevelReport{{Identity: "short-v1", Eligible: true}, {Identity: "medium-v1", Eligible: true}, {Identity: "canonical-v1", Eligible: true}}}, ParentFirst: ParentFirstEvaluationReport{StrategyIdentity: "parent-first-v1", Mode: ParentFirstModeShadow, Eligible: true}, Prerequisites: ReleaseEvidencePrerequisites{EvaluationDSN: "postgres://owned/eval", PostgreSQLReady: true, PGVectorReady: true, FixtureCompatible: true, ProjectionFresh: true, RollbackTested: true}, EvaluatedAt: now}
+}
+
+func validRepresentationReleaseReports(t *testing.T, scope memory.Scope, evaluatedAt time.Time) []RepresentationEvaluationReport {
+	t.Helper()
+	cases := []struct {
+		family    RepresentationTaskFamily
+		candidate RepresentationCandidate
+	}{
+		{RepresentationTaskFamilyExactFacts, RepresentationCandidateExactExcerptWithSearch},
+		{RepresentationTaskFamilyCrossDocument, RepresentationCandidateTopicProjectionWithSearch},
+		{RepresentationTaskFamilyProfilePreference, RepresentationCandidateTopicProjectionWithSearch},
+		{RepresentationTaskFamilyProceduralLesson, RepresentationCandidateHierarchicalWithSearch},
+	}
+	reports := make([]RepresentationEvaluationReport, 0, len(cases))
+	for _, test := range cases {
+		in := validRepresentationEvaluationInput(scope)
+		in.RealStack, in.RollbackTested = true, true
+		in.Family = test.family
+		in.Policy.Candidate = test.candidate
+		in.EvaluatedAt = evaluatedAt.Add(-time.Minute)
+		report, err := EvaluateRepresentation(in)
+		if err != nil {
+			t.Fatal(err)
+		}
+		reports = append(reports, report)
+	}
+	return reports
+}
+
+func TestRepresentationReleaseEvidenceHonorsPersistedExpiry(t *testing.T) {
+	scope := memory.Scope{Tenant: "t", Project: "p", Namespace: "n"}
+	now := time.Date(2026, 11, 10, 12, 0, 0, 0, time.UTC)
+	reports := validRepresentationReleaseReports(t, scope, now)
+	persistedExpiry := now.Add(time.Minute)
+	reports[0].PersistenceExpiresAt = &persistedExpiry
+	if err := ValidateRepresentationReleaseEvidence(scope, reports, now, now.Add(2*time.Minute)); err == nil {
+		t.Fatal("caller extended evidence validity beyond persisted expiry")
+	}
+	if err := ValidateRepresentationReleaseEvidence(scope, reports, now, persistedExpiry); err != nil {
+		t.Fatal(err)
+	}
+	persistedExpiry = now
+	if err := ValidateRepresentationReleaseEvidence(scope, reports, now, now.Add(time.Minute)); err == nil {
+		t.Fatal("expired persisted evidence accepted")
+	}
 }
 
 func containsString(values []string, want string) bool {

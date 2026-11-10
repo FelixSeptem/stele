@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"net/url"
 	"os"
+	"sort"
 	"strings"
 	"time"
 
@@ -28,6 +29,7 @@ const (
 	ReleaseEvidenceSemanticHitRequired      = "RETRIEVAL_RELEASE_EVIDENCE_SEMANTIC_HIT_REQUIRED"
 	ReleaseEvidenceTrajectoryRequired       = "RETRIEVAL_RELEASE_EVIDENCE_TRAJECTORY_REQUIRED"
 	ReleaseEvidenceResourceFailure          = "RETRIEVAL_RELEASE_EVIDENCE_RESOURCE_FAILURE"
+	ReleaseEvidenceRepresentationRequired   = "RETRIEVAL_RELEASE_EVIDENCE_REPRESENTATION_REQUIRED"
 )
 
 // ReleaseEvidenceOperationalCategory is the bounded vocabulary shared by
@@ -236,23 +238,24 @@ func (p ReleaseEvidencePrerequisites) Validate() error {
 }
 
 type ReleaseEvidenceInput struct {
-	Scope                memory.Scope
-	ProviderProfile      string
-	Policy               EvaluationReleasePolicy
-	Baseline             EvaluationReport
-	Candidate            EvaluationReport
-	Progressive          ProgressiveContextEvaluationReport
-	ParentFirst          ParentFirstEvaluationReport
-	Prerequisites        ReleaseEvidencePrerequisites
-	Integrity            *evaluation.IntegrityReport
-	EvaluatedAt          time.Time
-	SourceWatermark      string
-	EvidenceExpiresAt    time.Time
-	DeterministicReplay  bool
-	SemanticHitProven    bool
-	TrajectoryCompatible bool
-	ResourceWithinBounds bool
-	Experiment           *ProgressiveExperimentReport
+	Scope                 memory.Scope
+	ProviderProfile       string
+	Policy                EvaluationReleasePolicy
+	Baseline              EvaluationReport
+	Candidate             EvaluationReport
+	Progressive           ProgressiveContextEvaluationReport
+	ParentFirst           ParentFirstEvaluationReport
+	Prerequisites         ReleaseEvidencePrerequisites
+	Integrity             *evaluation.IntegrityReport
+	EvaluatedAt           time.Time
+	SourceWatermark       string
+	EvidenceExpiresAt     time.Time
+	DeterministicReplay   bool
+	SemanticHitProven     bool
+	TrajectoryCompatible  bool
+	ResourceWithinBounds  bool
+	Experiment            *ProgressiveExperimentReport
+	RepresentationReports []RepresentationEvaluationReport
 }
 
 func ValidateProgressiveExperimentEvidence(scope memory.Scope, report *ProgressiveExperimentReport) error {
@@ -275,31 +278,32 @@ func ValidateProgressiveExperimentEvidence(scope memory.Scope, report *Progressi
 // release-evidence runner. DSNs are consumed for validation only and are never
 // copied into the resulting report.
 type ReleaseEvidenceRunRequest struct {
-	Scope                memory.Scope
-	EvaluationDSN        string
-	RuntimeDSN           string
-	OwnershipMarker      bool
-	TargetDistinct       bool
-	ProviderProfile      string
-	Policy               EvaluationReleasePolicy
-	Baseline             EvaluationReport
-	Candidate            EvaluationReport
-	Progressive          ProgressiveContextEvaluationReport
-	ParentFirst          ParentFirstEvaluationReport
-	PostgreSQLReady      bool
-	PGVectorReady        bool
-	FixtureCompatible    bool
-	ProjectionFresh      bool
-	RollbackTested       bool
-	Integrity            *evaluation.IntegrityReport
-	EvaluatedAt          time.Time
-	SourceWatermark      string
-	EvidenceExpiresAt    time.Time
-	DeterministicReplay  bool
-	SemanticHitProven    bool
-	TrajectoryCompatible bool
-	ResourceWithinBounds bool
-	Experiment           *ProgressiveExperimentReport
+	Scope                 memory.Scope
+	EvaluationDSN         string
+	RuntimeDSN            string
+	OwnershipMarker       bool
+	TargetDistinct        bool
+	ProviderProfile       string
+	Policy                EvaluationReleasePolicy
+	Baseline              EvaluationReport
+	Candidate             EvaluationReport
+	Progressive           ProgressiveContextEvaluationReport
+	ParentFirst           ParentFirstEvaluationReport
+	PostgreSQLReady       bool
+	PGVectorReady         bool
+	FixtureCompatible     bool
+	ProjectionFresh       bool
+	RollbackTested        bool
+	Integrity             *evaluation.IntegrityReport
+	EvaluatedAt           time.Time
+	SourceWatermark       string
+	EvidenceExpiresAt     time.Time
+	DeterministicReplay   bool
+	SemanticHitProven     bool
+	TrajectoryCompatible  bool
+	ResourceWithinBounds  bool
+	Experiment            *ProgressiveExperimentReport
+	RepresentationReports []RepresentationEvaluationReport
 }
 
 // RunOwnedReleaseEvidence evaluates one exact scope using explicitly owned
@@ -331,8 +335,9 @@ func RunOwnedReleaseEvidence(_ context.Context, req ReleaseEvidenceRunRequest) (
 		SourceWatermark: req.SourceWatermark, EvidenceExpiresAt: req.EvidenceExpiresAt,
 		DeterministicReplay: req.DeterministicReplay,
 		SemanticHitProven:   req.SemanticHitProven, TrajectoryCompatible: req.TrajectoryCompatible,
-		ResourceWithinBounds: req.ResourceWithinBounds,
-		Experiment:           req.Experiment,
+		ResourceWithinBounds:  req.ResourceWithinBounds,
+		Experiment:            req.Experiment,
+		RepresentationReports: req.RepresentationReports,
 		Prerequisites: ReleaseEvidencePrerequisites{EvaluationDSN: req.EvaluationDSN, RuntimeDSN: req.RuntimeDSN,
 			OwnershipMarker: req.OwnershipMarker, TargetDistinct: req.TargetDistinct,
 			PostgreSQLReady: req.PostgreSQLReady, PGVectorReady: req.PGVectorReady,
@@ -343,31 +348,33 @@ func RunOwnedReleaseEvidence(_ context.Context, req ReleaseEvidenceRunRequest) (
 }
 
 type ReleaseEvidenceReport struct {
-	RunIdentity         string                            `json:"run_identity"`
-	ProviderProfile     string                            `json:"provider_profile"`
-	PolicyVersion       string                            `json:"policy_version"`
-	FixtureVersion      string                            `json:"fixture_version,omitempty"`
-	ScopeHash           string                            `json:"scope_hash"`
-	SourceWatermarkHash string                            `json:"source_watermark_hash,omitempty"`
-	EvidenceFreshness   ReleaseEvidenceFreshness          `json:"evidence_freshness"`
-	EvidenceExpiresAt   time.Time                         `json:"evidence_expires_at,omitempty"`
-	DeterministicReplay bool                              `json:"deterministic_replay"`
-	RollbackTested      bool                              `json:"rollback_tested"`
-	Verdict             ReleaseEvidenceVerdict            `json:"verdict"`
-	ReleaseEligible     bool                              `json:"release_eligible"`
-	RealStack           bool                              `json:"real_stack"`
-	FailureCategories   []string                          `json:"failure_categories,omitempty"`
-	ProgressiveLevels   int                               `json:"progressive_levels"`
-	ProgressiveEligible int                               `json:"progressive_eligible"`
-	ParentFirstEligible bool                              `json:"parent_first_eligible"`
-	QualityEligible     bool                              `json:"quality_eligible"`
-	ProgressiveFailures []string                          `json:"progressive_failures,omitempty"`
-	ParentFirstFailures []string                          `json:"parent_first_failures,omitempty"`
-	IntegrityEligible   bool                              `json:"integrity_eligible"`
-	IntegrityFailures   []string                          `json:"integrity_failures,omitempty"`
-	GeneratedAt         time.Time                         `json:"generated_at"`
-	OperationalOutcome  ReleaseEvidenceOperationalOutcome `json:"operational_outcome,omitempty"`
-	Attestation         *ReleaseEvidenceAttestation       `json:"attestation,omitempty"`
+	RunIdentity                    string                            `json:"run_identity"`
+	ProviderProfile                string                            `json:"provider_profile"`
+	PolicyVersion                  string                            `json:"policy_version"`
+	FixtureVersion                 string                            `json:"fixture_version,omitempty"`
+	ScopeHash                      string                            `json:"scope_hash"`
+	SourceWatermarkHash            string                            `json:"source_watermark_hash,omitempty"`
+	EvidenceFreshness              ReleaseEvidenceFreshness          `json:"evidence_freshness"`
+	EvidenceExpiresAt              time.Time                         `json:"evidence_expires_at,omitempty"`
+	DeterministicReplay            bool                              `json:"deterministic_replay"`
+	RollbackTested                 bool                              `json:"rollback_tested"`
+	Verdict                        ReleaseEvidenceVerdict            `json:"verdict"`
+	ReleaseEligible                bool                              `json:"release_eligible"`
+	RealStack                      bool                              `json:"real_stack"`
+	FailureCategories              []string                          `json:"failure_categories,omitempty"`
+	ProgressiveLevels              int                               `json:"progressive_levels"`
+	ProgressiveEligible            int                               `json:"progressive_eligible"`
+	ParentFirstEligible            bool                              `json:"parent_first_eligible"`
+	QualityEligible                bool                              `json:"quality_eligible"`
+	ProgressiveFailures            []string                          `json:"progressive_failures,omitempty"`
+	ParentFirstFailures            []string                          `json:"parent_first_failures,omitempty"`
+	IntegrityEligible              bool                              `json:"integrity_eligible"`
+	IntegrityFailures              []string                          `json:"integrity_failures,omitempty"`
+	GeneratedAt                    time.Time                         `json:"generated_at"`
+	OperationalOutcome             ReleaseEvidenceOperationalOutcome `json:"operational_outcome,omitempty"`
+	Attestation                    *ReleaseEvidenceAttestation       `json:"attestation,omitempty"`
+	RepresentationEvidenceEligible bool                              `json:"representation_evidence_eligible,omitempty"`
+	RepresentationEvidenceCount    int                               `json:"representation_evidence_count,omitempty"`
 }
 
 // MarshalReleaseEvidenceReport is the redacted report boundary. The report
@@ -393,6 +400,9 @@ func MarshalReleaseEvidenceReport(report ReleaseEvidenceReport) ([]byte, error) 
 	if report.ProgressiveLevels < 0 || report.ProgressiveEligible < 0 || report.ProgressiveEligible > report.ProgressiveLevels {
 		return nil, fmt.Errorf("progressive counts are invalid")
 	}
+	if report.RepresentationEvidenceCount < 0 || report.RepresentationEvidenceCount > 4 || (report.RepresentationEvidenceEligible && report.RepresentationEvidenceCount != 4) {
+		return nil, fmt.Errorf("representation evidence counts are invalid")
+	}
 	outcome := report.OperationalOutcome
 	outcome.Normalize()
 	if report.OperationalOutcome.State != "" && outcome != report.OperationalOutcome {
@@ -409,6 +419,54 @@ func RenderReleaseEvidenceSummary(report ReleaseEvidenceReport) string {
 		status = "release eligible"
 	}
 	return fmt.Sprintf("retrieval release evidence: %s (run=%s, verdict=%s, freshness=%s, replay=%t, rollback=%t, progressive=%d/%d, parent_first=%t, real_stack=%t, operational_state=%s, cleanup=%s)", status, report.RunIdentity, report.Verdict, report.EvidenceFreshness, report.DeterministicReplay, report.RollbackTested, report.ProgressiveEligible, report.ProgressiveLevels, report.ParentFirstEligible, report.RealStack, report.OperationalOutcome.State, report.OperationalOutcome.Cleanup)
+}
+
+// ValidateRepresentationReleaseEvidence verifies the aggregate-only EV3
+// evidence required by a future release review. It is deliberately a one-way
+// prerequisite: valid reports do not select a candidate or activate a
+// retrieval strategy.
+func ValidateRepresentationReleaseEvidence(scope memory.Scope, reports []RepresentationEvaluationReport, now, expiresAt time.Time) error {
+	if err := scope.Validate(); err != nil {
+		return err
+	}
+	if len(reports) != 4 || expiresAt.IsZero() || !now.UTC().Before(expiresAt.UTC()) {
+		return fmt.Errorf("representation evidence is incomplete or stale")
+	}
+	wantScope := scopeHash(scope)
+	families := map[RepresentationTaskFamily]struct{}{}
+	var sourceChecksum, qrelChecksum, watermark, renderer, policyVersion, fixtureVersion string
+	var limits RepresentationEvaluationLimits
+	for _, report := range reports {
+		if report.PersistenceExpiresAt != nil && (!now.UTC().Before(report.PersistenceExpiresAt.UTC()) || expiresAt.UTC().After(report.PersistenceExpiresAt.UTC())) {
+			return fmt.Errorf("representation persisted evidence is expired or validity was extended")
+		}
+		if _, err := MarshalRepresentationEvaluationReport(report); err != nil {
+			return fmt.Errorf("representation report is invalid")
+		}
+		if !report.RealStack || !report.RollbackTested || report.ScopeHash != wantScope || report.Baseline != ParentFirstFlatStrategy || report.Mode != RepresentationEvaluationModeShadow ||
+			report.SelectedStrategy != ParentFirstFlatStrategy || report.ActivationEligible || !report.Comparable || report.Verdict != RepresentationEvaluationShadow ||
+			report.RollbackRequired || len(report.Failures) != 0 || !report.SourceSearchRetained || report.CriticalFactRetention != 1 ||
+			report.SourceCoverage != 1 || report.CitationCoverage != 1 || report.BrokenReferenceCount != 0 || !representationCandidateCompatible(report.Family, report.Candidate) ||
+			report.EvaluatedAt.After(now.UTC()) || !now.UTC().Before(report.EvaluatedAt.Add(24*time.Hour)) {
+			return fmt.Errorf("representation report is unsafe")
+		}
+		if _, exists := families[report.Family]; exists {
+			return fmt.Errorf("representation task family is duplicated")
+		}
+		families[report.Family] = struct{}{}
+		if sourceChecksum == "" {
+			sourceChecksum, qrelChecksum, watermark, renderer = report.SourceChecksum, report.QRELChecksum, report.SourceWatermark, report.RendererVersion
+			policyVersion, fixtureVersion, limits = report.PolicyVersion, report.FixtureVersion, report.Limits
+		} else if report.SourceChecksum != sourceChecksum || report.QRELChecksum != qrelChecksum || report.SourceWatermark != watermark || report.RendererVersion != renderer || report.PolicyVersion != policyVersion || report.FixtureVersion != fixtureVersion || report.Limits != limits {
+			return fmt.Errorf("representation report identities are incompatible")
+		}
+	}
+	for _, family := range []RepresentationTaskFamily{RepresentationTaskFamilyExactFacts, RepresentationTaskFamilyCrossDocument, RepresentationTaskFamilyProfilePreference, RepresentationTaskFamilyProceduralLesson} {
+		if _, ok := families[family]; !ok {
+			return fmt.Errorf("representation task family is missing")
+		}
+	}
+	return nil
 }
 
 func EvaluateReleaseEvidence(in ReleaseEvidenceInput) (ReleaseEvidenceReport, error) {
@@ -465,6 +523,17 @@ func EvaluateReleaseEvidence(in ReleaseEvidenceInput) (ReleaseEvidenceReport, er
 		r.Verdict = ReleaseEvidenceRejected
 		r.FailureCategories = []string{ReleaseEvidenceStaleCategory}
 		return r, nil
+	}
+	if in.Policy.RequireRepresentationEvidence {
+		err := ValidateRepresentationReleaseEvidence(in.Scope, in.RepresentationReports, now, in.EvidenceExpiresAt)
+		if err != nil || in.SourceWatermark == "" || in.RepresentationReports[0].SourceWatermark != in.SourceWatermark {
+			r.ReleaseEligible = false
+			r.Verdict = ReleaseEvidenceRejected
+			r.FailureCategories = appendUniqueCategory(r.FailureCategories, ReleaseEvidenceRepresentationRequired)
+			return r, nil
+		}
+		r.RepresentationEvidenceEligible = true
+		r.RepresentationEvidenceCount = len(in.RepresentationReports)
 	}
 	if in.Policy.RequireFreshEvidence && strings.TrimSpace(in.SourceWatermark) == "" {
 		r.EvidenceFreshness = ReleaseEvidenceUnknown
@@ -540,6 +609,14 @@ func EvaluateReleaseEvidence(in ReleaseEvidenceInput) (ReleaseEvidenceReport, er
 			RollbackVerdict: ReleaseEvidenceRollbackPassed, Freshness: ReleaseEvidenceFresh,
 			IssuedAt: r.GeneratedAt, ExpiresAt: r.EvidenceExpiresAt,
 		}
+		if in.Policy.RequireRepresentationEvidence {
+			for _, report := range in.RepresentationReports {
+				expires := report.EvaluatedAt.Add(24 * time.Hour)
+				if expires.Before(r.Attestation.ExpiresAt) {
+					r.Attestation.ExpiresAt = expires
+				}
+			}
+		}
 	}
 	return r, nil
 }
@@ -608,6 +685,15 @@ func releaseEvidenceIdentity(in ReleaseEvidenceInput, scopeHash, watermarkHash s
 		in.Candidate.Metadata.CompatibleEmbeddingRevision, in.Candidate.Metadata.AnalysisVersion,
 		in.Progressive.BaselineIdentity, in.ParentFirst.StrategyIdentity,
 		evaluatedAt.UTC().Format(time.RFC3339Nano),
+	}
+	if in.Policy.RequireRepresentationEvidence {
+		identities := make([]string, 0, len(in.RepresentationReports))
+		for _, report := range in.RepresentationReports {
+			identities = append(identities, report.RunIdentity)
+		}
+		sort.Strings(identities)
+		parts = append(parts, "representation-evidence-required")
+		parts = append(parts, identities...)
 	}
 	return fmt.Sprintf("run:%x", stableHash(strings.Join(parts, "\x00")))
 }

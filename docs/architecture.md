@@ -158,6 +158,22 @@ queue during this bounded cutover.
 pgvector is an indexed retrieval capability, not a second source of truth.
 PostgreSQL full-text search remains available for lexical-only deployments.
 
+### Derived representation evaluation
+
+Exact excerpts, topic projections, and parent-first/hierarchical evidence can
+be compared as derived retrieval representations. The comparison is constrained
+to the exact scope, source watermark, lifecycle-visible source records, equal
+budgets, and a repository-owned checksum-locked fixture. It always retains the
+authorized source-search channel; no projection, graph, wiki, or document store
+becomes authoritative. The evaluator emits only bounded aggregate evidence and
+persists it as an append-only PostgreSQL-derived report with retention cleanup.
+
+This evaluation is offline or shadow-only. `flat-fusion-v1` remains selected
+for ordinary search and context assembly, and the HTTP, Provider, and MCP
+surfaces do not expose a selector or report route. A future release review may
+consume fresh compatible aggregate evidence as one prerequisite, but this does
+not authorize activation or make an observational task difference causal.
+
 ## Governance boundaries
 
 Memory classes remain explicit: `profile`, `episodic`, `procedural`, `summary`,

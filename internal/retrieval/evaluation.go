@@ -509,6 +509,7 @@ type EvaluationReleasePolicy struct {
 	RequireSemanticHit            bool                           `json:"require_semantic_hit,omitempty"`
 	RequireTrajectoryIntegrity    bool                           `json:"require_trajectory_integrity,omitempty"`
 	RequireResourceBudget         bool                           `json:"require_resource_budget,omitempty"`
+	RequireRepresentationEvidence bool                           `json:"require_representation_evidence,omitempty"`
 }
 
 type EvaluationPlannerReleasePolicy struct {
