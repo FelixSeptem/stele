@@ -67,7 +67,7 @@ and archives before opening each proposal to avoid duplicating delivered work.
 | EV1: Verification evidence | First; EV5 fixtures begin here | Distinguish claim verification from provenance, confidence, and lifecycle | Delivered bounded slice in [080](../../openspec/changes/archive/080-verified-memory-correction-loop/proposal.md); administrator maintenance only |
 | EV2: Targeted correction loop | After EV1, evaluated with EV5 | Governed, bounded revalidation and versioned correction | Delivered bounded slice in [080](../../openspec/changes/archive/080-verified-memory-correction-loop/proposal.md); unresolved evidence and governed successor versions remain explicit |
 | EV3: Task-appropriate representations | After EV2 has evaluation evidence | Compare exact excerpts, topic projections, and hierarchical retrieval | Delivered evaluator in [081](../../openspec/changes/archive/081-task-appropriate-representation-evaluation/proposal.md), with [verification](../../openspec/changes/archive/081-task-appropriate-representation-evaluation/verification.md); candidates remain shadow-only |
-| EV4: Small resident context | After EV1; prioritize after EV2/EV3 evidence | Evidence-based promotion and demotion within existing context budgets | Candidate; existing defaults remain authoritative |
+| EV4: Small resident context | After EV1; prioritize after EV2/EV3 evidence | Evidence-based promotion and demotion within existing context budgets | Delivered bounded offline/shadow evaluator in [082](../../openspec/changes/archive/082-evidence-gated-resident-context-evaluation/proposal.md), with [verification](../../openspec/changes/archive/082-evidence-gated-resident-context-evaluation/verification.md); existing defaults remain authoritative; no independent review sign-off or task-benefit claim |
 | EV5: Longitudinal benefit evaluation | Starts with EV1 and accompanies every track | Measure future utility, repeated errors, harm, and cost | Candidate extension of existing evaluator |
 
 ### EV1: Verification evidence for procedural memories and lessons
@@ -162,6 +162,21 @@ Acceptance evidence:
   and separately authorized activation pass; retain a tested baseline rollback.
 
 ### EV4: Promotion and demotion of resident context
+
+The archived bounded evaluator evaluates existing profile materialization against
+a candidate with exact source-version/content support and later held-out
+utility. Default limits are independently 8 items, 4096 UTF-8 content bytes,
+1024 whitespace tokens and 16 citations in each condition. Popularity has no
+influence. Omission/demotion retains source history and on-demand access;
+disablement returns the baseline plan. Reports bind actual source/output
+hashes and keep external outcomes separate; missing outcomes stay inconclusive.
+The owned PostgreSQL/pgvector verifier targets synthetic service conformance,
+source drift, persistence and restart. There is no live placement capability,
+public contract change or migration; broader utility and rollout remain future
+evidence requirements. The owned-stack run is synthetic conformance only and
+external outcomes remain inconclusive. Independent review did not return a
+final sign-off during delivery. See [archive 082](../../openspec/changes/archive/082-evidence-gated-resident-context-evaluation/verification.md)
+and [context projections](../context-projections.md#evidence-gated-resident-context-evaluation).
 
 Evaluate stability, verification, applicability, and demonstrated utility as
 promotion signals within existing projection policies. Keep the resident layer

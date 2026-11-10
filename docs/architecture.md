@@ -174,6 +174,17 @@ surfaces do not expose a selector or report route. A future release review may
 consume fresh compatible aggregate evidence as one prerequisite, but this does
 not authorize activation or make an observational task difference causal.
 
+Resident-context evaluation reuses the `always_visible` profile materializer
+and existing PostgreSQL source/projection storage. It compares confidence/size
+placement against a candidate requiring attributable version/content-bound
+support plus later held-out utility. Popularity has no selection authority.
+Both conditions enforce equal independent item/content-byte/whitespace-token/
+citation caps. Plans stay private to the internal evaluator; redacted reports
+bind actual source and output hashes, while externally observed outcomes remain
+separate. No report table, new store, migration, live policy worker, public
+selector, or default change is introduced. See [context projections](context-projections.md#evidence-gated-resident-context-evaluation)
+for evidence bounds and baseline rollback.
+
 ## Governance boundaries
 
 Memory classes remain explicit: `profile`, `episodic`, `procedural`, `summary`,

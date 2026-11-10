@@ -1,6 +1,6 @@
 # Archive Index
 
-Updated: 2026-11-10 23:16:16
+Updated: 2026-11-11 00:43:44
 
 - 001 -> bootstrap-foundation-and-event-ingestion
 - 002 -> governance-pipeline-and-memory-consolidation
@@ -83,3 +83,4 @@ Updated: 2026-11-10 23:16:16
 - 079 -> bfcl-v4-memory-provider-conformance
 - 080 -> verified-memory-correction-loop
 - 081 -> task-appropriate-representation-evaluation
+- 082 -> evidence-gated-resident-context-evaluation

@@ -196,6 +196,13 @@ capability, MCP tool, automatic selector, or default change. Read
 and the [retrieval release gate](docs/retrieval-release-gate.md) for the task
 families, evidence limits, redaction, rollback, and owned-stack verifier.
 
+An internal [resident-context evaluation](docs/context-projections.md#evidence-gated-resident-context-evaluation)
+also compares the existing profile placement policy with version-bound support
+and later utility observations under equal independent budgets. It proposes
+promotion/demotion without activating a policy or changing public contracts.
+Missing task/cost observations remain inconclusive; the Docker verifier checks
+synthetic service conformance, source lineage, persistence, and baseline rollback.
+
 Strict Provider consumers that need session/turn proof may require the
 `context-turn-binding-v1` capability, create a Provider turn, and send its
 optional `turn_id` with context. Stele verifies the same full runtime binding,

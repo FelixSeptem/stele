@@ -21,6 +21,28 @@ or canonical memory. Operators run the owned verifier documented in
 `docs/retrieval-progressive-context-experiments.md`; public agents continue to
 use the published Provider contract unchanged.
 
+## Resident context boundary
+
+Evidence-gated resident selection is an internal maintainer-owned offline/shadow
+evaluation, with no Provider/MCP/native placement capability, enablement flag,
+or new authorization grant. Do not request promotion/demotion through public
+calls or treat a report as instruction/tool authority. Existing profile
+confidence/size rules and projection-consumption defaults remain authoritative.
+The candidate requires exact source-version/content support plus later held-out
+utility; access frequency cannot qualify a memory. Both conditions independently
+default to 8 items, 4096 UTF-8 content bytes, 1024 whitespace tokens and 16
+citations. These are evaluator counts, not model usage or Provider body bytes.
+Missing external task/cost observations remain inconclusive; observed deltas
+are observational. Internal disablement returns baseline without canonical
+writes. Operators use `scripts/stele-resident-evaluation-verify.ps1` and
+`docs/context-projections.md` for synthetic conformance, persistence/restart
+checks, evidence bounds and rollback; public agents keep the published contract.
+Support, utility and comparison require disclosable `attested_data` event
+metadata under existing exact-scope attestation rules. A body actor is
+insufficient; attribution attestation grants neither truth nor instructions.
+Observation field names are exact lowercase; aliases and duplicate keys fail
+closed. Discarded observations cannot advance the comparison stage.
+
 ## Public runtime workflow
 
 1. Require operator-provisioned exact tenant, project and namespace grants with

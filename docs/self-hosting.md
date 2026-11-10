@@ -480,6 +480,40 @@ Reports cover a fixed synthetic corpus; missing external task verdicts and
 maintenance observations remain inconclusive. Release evidence must be less
 than 24 hours old and cannot outlive its persisted expiry.
 
+### Evidence-gated resident context evaluation
+
+This maintainer-only offline/shadow diagnostic compares the existing profile
+confidence/size placement policy with version-bound support and later held-out
+utility. Run it from a checkout with Docker available:
+
+```powershell
+pwsh -NoProfile -File scripts/stele-resident-evaluation-verify.ps1
+```
+
+The verifier owns a disposable PostgreSQL + pgvector container and emits a
+bounded redacted local report. It does not adopt an operator database. It checks
+actual persisted canonical versions, source metadata and projection references,
+changed-source exclusion/demotion, baseline rollback and projection/source
+history across a real database restart, then removes its own container.
+Missing Docker/database prerequisites or failed persistence, restart or cleanup
+checks are non-passes. Keep unrelated containers and durable operator data.
+
+Default evaluator caps are 8 items, 4096 UTF-8 content bytes, 1024 whitespace
+tokens, and 16 citations independently for each condition; Provider limits and
+client model-token accounting retain their existing meaning. Ineligible or
+insufficiently supported items remain on demand. Source and immutable-version
+metadata must both authorize disclosure; legacy restricted metadata cannot be
+silently treated as public to complete an experiment. See [context projections](context-projections.md#evidence-gated-resident-context-evaluation)
+for exact observation bounds and qualifying kinds.
+
+There is no public route, request/response change, new authorization role,
+runtime enablement flag or migration. Stopping the evaluation leaves ordinary
+placement in effect; internal disablement returns the tested baseline plan.
+A passing synthetic conformance report demonstrates bounded service behavior,
+not general task benefit. Missing external task/cost observations remain
+inconclusive, observed differences are observational, and live activation
+requires a separate authorized proposal and release evidence.
+
 ## Principal Bootstrap And Scoped Access
 
 Protected requests are authenticated against PostgreSQL-backed principals. Every

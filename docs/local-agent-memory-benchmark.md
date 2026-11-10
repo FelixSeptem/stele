@@ -244,6 +244,26 @@ evidence. A non-synthetic completion report must also contain
 report can be used as acceptance evidence. No public API or production retrieval
 policy is changed.
 
+## Resident-context comparison observations
+
+The internal resident evaluator complements task-series replay by comparing
+the existing profile placement policy with an evidence-filtered candidate. Its
+support/utility observations bind an exact source version and content hash;
+later condition observations must bind the actual source/output digests and
+occur after selection and all support/utility stages. Selection utility cannot
+be recycled as the comparison outcome. Qualifying support remains an external
+observation, not service-discovered truth or procedural verification authority.
+
+Task success, repeated errors, stale-evidence harm, maintenance cost, tool calls
+and model tokens are independently supplied. Missing fields remain unobserved;
+observed false/zero values are retained. Only mutually observed fields produce
+candidate-minus-baseline deltas. Without both task verdicts, status stays
+`inconclusive`; even complete pairs are labeled `observational`, with no causal
+or activation claim. The owned verifier described in [self-hosting](self-hosting.md#evidence-gated-resident-context-evaluation)
+checks synthetic service conformance and durable projection lineage. It does
+not replace non-synthetic longitudinal evidence, controlled repeated trials,
+latency gates, or independent isolation/lifecycle/disclosure/rollback checks.
+
 ## Troubleshooting
 
 | Status | Meaning | Action |

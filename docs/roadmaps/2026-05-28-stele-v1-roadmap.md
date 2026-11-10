@@ -1473,12 +1473,14 @@ captures the review of Anthropic's
 [The components of agent memory](https://www.anthropic.com/research/components-of-agent-memory)
 (published 2026-11-06). Research is complete. The bounded EV1/EV2 slice is
 archived as `080-verified-memory-correction-loop`; EV3 evaluation is archived as
-`081-task-appropriate-representation-evaluation`. The linked roadmap records delivery and remaining evidence
-requirements. These changes do not authorize experimental activation.
+`081-task-appropriate-representation-evaluation`; EV4 is archived as
+`082-evidence-gated-resident-context-evaluation`. The linked roadmap records
+delivery and remaining evidence requirements. These changes do not authorize
+experimental activation or claim longitudinal task benefit.
 
 Recommended sequence: EV1 verification evidence, then EV2 targeted background
 correction, followed by EV3 task-appropriate representations and EV4 resident
-context promotion/demotion. EV5 longitudinal evaluation starts with EV1 and
+context promotion/demotion (both evaluators remain shadow-only). EV5 longitudinal evaluation starts with EV1 and
 accompanies every track. These local identifiers do not replace the global
 priority order or reopen archived P2/P5/P6, RQ, or Provider foundations.
 
