@@ -84,3 +84,12 @@ pushed. Post-merge `go test ./... -count=1 -timeout 15m`, the documentation
 check, and strict full OpenSpec validation (95 passed, zero failed) succeeded.
 The pushed `origin/main` resolved to the same commit. The main worktree was
 clean after push; other pre-existing worktrees were left untouched.
+
+Subsequent focused independent review by `ev4_review` confirmed all three
+reported defects resolved: attested event attribution, canonical JSON field
+names and validated-only comparison stage advancement. It independently ran
+`go test ./internal/retrieval -run Resident -count=1` and `git diff --check`
+successfully, confirmed temporal validity and pointer copying remained intact,
+and reported no remaining blocker within this follow-up scope. This later
+result supersedes the pending-review status above; it does not establish
+general task benefit or authorize activation.
