@@ -18,4 +18,12 @@
 - [x] 4.1 Update README, benchmark/self-hosting guides, agent skill and roadmaps for shapes, validation/errors, authorization, defaults, v2 denominator compatibility and v3 limits; verify documentation tests and CLI legacy/v3 coverage.
 - [x] 4.2 Obtain independent review, resolve findings, run focused/full/race/vet/docs and strict OpenSpec checks, and record owned-stack evidence in `verification.md`.
 - [x] 4.3 Archive with `scripts/openspec-archive-seq.ps1 -ChangeName locked-longitudinal-memory-evaluation`; verify synchronized specifications, numbered index and no active change.
-- [ ] 4.4 Commit, merge into main, test merged state, push, verify remote identity and clean worktrees, and publish the delivery audit.
+- [x] 4.4 Commit, merge into main, test merged state, push, verify remote identity and clean worktrees, and publish the delivery audit.
+
+Delivery verification: implementation commit `931b51b721f0e770f40d4be25dcad16d5d2ddee6`
+was fast-forwarded into `main` and pushed; the remote resolves to the same
+commit. Post-merge build, vet, full test, documentation test, strict OpenSpec
+validation and whitespace checks passed. All seven `feat/*` refs were restored
+from reflogs after the local loose-ref issue at commit time; every worktree is
+clean. See `verification.md` for the bounded owned-stack evidence and the
+PowerShell host limitation.

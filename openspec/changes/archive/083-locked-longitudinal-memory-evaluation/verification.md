@@ -100,5 +100,17 @@ The archive numbering script was used for sequence/index normalization; the
 `openspec archive` step itself ran from Bash because this session's PowerShell
 host blocks native commands.
 
-Commit, merge, push and post-merge verification are recorded in the archived
-`tasks.md` entry 4.4.
+Implementation commit `931b51b721f0e770f40d4be25dcad16d5d2ddee6` was
+fast-forwarded into `main` and pushed; `git ls-remote origin refs/heads/main`
+resolves to the same commit. Post-merge `go build ./...`, `go vet ./...`,
+`go test ./... -count=1 -timeout 15m` (26 packages), the documentation test,
+`git diff --check` and `openspec validate --all --strict` (95 passed, 0 failed)
+succeeded. `openspec list` reports no active change and the main worktree is
+clean.
+
+The feature worktree is clean. At commit time this machine dropped all loose
+`refs/heads/feat/*` files (a known local Git issue), leaving worktree HEADs
+unborn even though the commit object and its reflog were intact. All seven
+branch refs were restored from their per-worktree reflogs before the merge;
+`git worktree list` then reported the expected commits. No uncommitted work in
+other worktrees was touched.
