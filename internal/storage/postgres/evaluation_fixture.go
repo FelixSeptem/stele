@@ -177,12 +177,14 @@ func (s *EvaluationFixtureSeeder) SeedBatch(ctx context.Context, fixture retriev
 		batchSize = 1000
 	}
 	type item struct {
-		alias       retrieval.EvaluationSeededAlias
-		source      retrieval.EvaluationSource
-		scope       memory.Scope
-		createdAt   time.Time
-		key         string
-		candidateID string
+		alias          retrieval.EvaluationSeededAlias
+		source         retrieval.EvaluationSource
+		scope          memory.Scope
+		createdAt      time.Time
+		key            string
+		candidateID    string
+		sourceMetadata []byte
+		version        int64
 	}
 	items := make([]item, 0)
 	seed := retrieval.EvaluationFixtureSeed{FixtureVersion: fixture.Version, Aliases: make([]retrieval.EvaluationSeededAlias, 0)}
@@ -212,7 +214,19 @@ func (s *EvaluationFixtureSeeder) SeedBatch(ctx context.Context, fixture retriev
 			alias := retrieval.EvaluationSeededAlias{CaseID: currentCase.ID, Alias: source.Alias, Scope: currentCase.Scope, MemoryID: evaluationFixtureID(key + ":memory"), RawEventID: evaluationFixtureID(key + ":raw-event"), State: state, FactCluster: source.FactCluster}
 			seen[source.Alias] = alias
 			seed.Aliases = append(seed.Aliases, alias)
-			items = append(items, item{alias: alias, source: source, scope: currentCase.Scope, createdAt: createdAt, key: key, candidateID: evaluationFixtureID(key + ":candidate")})
+			version := int64(1)
+			if source.SourceVersion > 0 {
+				version = source.SourceVersion
+			}
+			var snapshot []byte
+			if source.SourceMetadata != nil {
+				encoded, encodeErr := json.Marshal(source.SourceMetadata)
+				if encodeErr != nil {
+					return retrieval.EvaluationFixtureSeed{}, fmt.Errorf("marshal evaluation source snapshot: %w", encodeErr)
+				}
+				snapshot = encoded
+			}
+			items = append(items, item{alias: alias, source: source, scope: currentCase.Scope, createdAt: createdAt, key: key, candidateID: evaluationFixtureID(key + ":candidate"), sourceMetadata: snapshot, version: version})
 		}
 	}
 	tx, err := s.repository.tx.BeginTx(ctx, pgx.TxOptions{})
@@ -231,7 +245,13 @@ func (s *EvaluationFixtureSeeder) SeedBatch(ctx context.Context, fixture retriev
 			if marshalErr != nil {
 				return retrieval.EvaluationFixtureSeed{}, fmt.Errorf("marshal evaluation metadata: %w", marshalErr)
 			}
-			batch.Queue(`INSERT INTO raw_events (id,tenant,project,namespace,event_type,content,metadata,source_timestamp,created_at) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9) ON CONFLICT (id) DO NOTHING`, current.alias.RawEventID, current.scope.Tenant, current.scope.Project, current.scope.Namespace, current.source.EventType, current.source.Content, metadata, nullableTime(current.source.SourceTimestamp), current.createdAt)
+			// Explicit snapshots are bound at INSERT because the database makes
+			// source_metadata immutable and derives child rows from the raw event.
+			if current.sourceMetadata != nil {
+				batch.Queue(`INSERT INTO raw_events (id,tenant,project,namespace,event_type,content,metadata,source_timestamp,created_at,source_metadata) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10) ON CONFLICT (id) DO NOTHING`, current.alias.RawEventID, current.scope.Tenant, current.scope.Project, current.scope.Namespace, current.source.EventType, current.source.Content, metadata, nullableTime(current.source.SourceTimestamp), current.createdAt, current.sourceMetadata)
+			} else {
+				batch.Queue(`INSERT INTO raw_events (id,tenant,project,namespace,event_type,content,metadata,source_timestamp,created_at) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9) ON CONFLICT (id) DO NOTHING`, current.alias.RawEventID, current.scope.Tenant, current.scope.Project, current.scope.Namespace, current.source.EventType, current.source.Content, metadata, nullableTime(current.source.SourceTimestamp), current.createdAt)
+			}
 		}
 		for _, current := range items[start:end] {
 			class := current.source.Class
@@ -245,10 +265,16 @@ func (s *EvaluationFixtureSeeder) SeedBatch(ctx context.Context, fixture retriev
 			if class == "" {
 				class = memory.MemoryClassEpisodic
 			}
-			batch.Queue(`INSERT INTO canonical_memories (id,tenant,project,namespace,class,state,retention_class,content,search_text,created_at,updated_at,temporal_fact_id,ingested_at,valid_from,valid_to,validity_source) VALUES ($1,$2,$3,$4,$5,'active',$6,$7,to_tsvector('simple',$7),$8,$8,$9,$8,$8,NULL,$10) ON CONFLICT (id) DO NOTHING`, current.alias.MemoryID, current.scope.Tenant, current.scope.Project, current.scope.Namespace, class, policy.RetentionClassPermanent, current.source.Content, current.createdAt, current.alias.MemoryID, string(memory.TemporalValiditySourceLegacyCompatible))
+			// The version-insert trigger copies canonical source_metadata; both
+			// rows must therefore carry the same declared snapshot at INSERT.
+			if current.sourceMetadata != nil {
+				batch.Queue(`INSERT INTO canonical_memories (id,tenant,project,namespace,class,state,retention_class,content,search_text,created_at,updated_at,temporal_fact_id,ingested_at,valid_from,valid_to,validity_source,source_metadata) VALUES ($1,$2,$3,$4,$5,'active',$6,$7,to_tsvector('simple',$7),$8,$8,$9,$8,$8,NULL,$10,$11) ON CONFLICT (id) DO NOTHING`, current.alias.MemoryID, current.scope.Tenant, current.scope.Project, current.scope.Namespace, class, policy.RetentionClassPermanent, current.source.Content, current.createdAt, current.alias.MemoryID, string(memory.TemporalValiditySourceLegacyCompatible), current.sourceMetadata)
+			} else {
+				batch.Queue(`INSERT INTO canonical_memories (id,tenant,project,namespace,class,state,retention_class,content,search_text,created_at,updated_at,temporal_fact_id,ingested_at,valid_from,valid_to,validity_source) VALUES ($1,$2,$3,$4,$5,'active',$6,$7,to_tsvector('simple',$7),$8,$8,$9,$8,$8,NULL,$10) ON CONFLICT (id) DO NOTHING`, current.alias.MemoryID, current.scope.Tenant, current.scope.Project, current.scope.Namespace, class, policy.RetentionClassPermanent, current.source.Content, current.createdAt, current.alias.MemoryID, string(memory.TemporalValiditySourceLegacyCompatible))
+			}
 		}
 		for _, current := range items[start:end] {
-			batch.Queue(`INSERT INTO memory_versions (id,memory_id,version,state,content,created_at,modified_by,temporal_fact_id,ingested_at,valid_from,valid_to,validity_source) VALUES ($1,$2,1,'active',$3,$4,$5,$6,$4,$4,NULL,$7) ON CONFLICT (id) DO NOTHING`, evaluationFixtureID(current.key+":version"), current.alias.MemoryID, current.source.Content, current.createdAt, current.candidateID, current.alias.MemoryID, string(memory.TemporalValiditySourceLegacyCompatible))
+			batch.Queue(`INSERT INTO memory_versions (id,memory_id,version,state,content,created_at,modified_by,temporal_fact_id,ingested_at,valid_from,valid_to,validity_source) VALUES ($1,$2,$3,'active',$4,$5,$6,$7,$5,$5,NULL,$8) ON CONFLICT (id) DO NOTHING`, evaluationFixtureID(current.key+":version"), current.alias.MemoryID, current.version, current.source.Content, current.createdAt, current.candidateID, current.alias.MemoryID, string(memory.TemporalValiditySourceLegacyCompatible))
 		}
 		for _, current := range items[start:end] {
 			batch.Queue(`INSERT INTO provenance_links (id,raw_event_id,tenant,project,namespace,operation,actor,source_context,created_at) VALUES ($1,$2,$3,$4,$5,'evaluation_fixture_ingest','retrieval-evaluation-fixture','{}'::jsonb,$6) ON CONFLICT (id) DO NOTHING`, evaluationFixtureID(current.key+":event-provenance"), current.alias.RawEventID, current.scope.Tenant, current.scope.Project, current.scope.Namespace, current.createdAt)
@@ -339,7 +365,16 @@ func (s *EvaluationFixtureSeeder) Seed(ctx context.Context, fixture retrieval.Ev
 func (s *EvaluationFixtureSeeder) seedSource(ctx context.Context, fixtureVersion string, item retrieval.EvaluationCase, source retrieval.EvaluationSource, caseIndex, sourceIndex int) (retrieval.EvaluationSeededAlias, error) {
 	createdAt := evaluationFixtureTimestamp(source.SourceTimestamp, caseIndex, sourceIndex)
 	key := evaluationFixtureRecordKey(fixtureVersion, item, source)
+	sourceMetadata := memory.SourceMetadata{}
+	if source.SourceMetadata != nil {
+		sourceMetadata = *source.SourceMetadata
+	}
+	version := int64(1)
+	if source.SourceVersion > 0 {
+		version = source.SourceVersion
+	}
 	event, err := s.repository.IngestEvent(ctx, memory.IngestEventInput{
+		SourceMetadata:  sourceMetadata,
 		Scope:           item.Scope,
 		EventType:       source.EventType,
 		Content:         source.Content,
@@ -392,7 +427,7 @@ func (s *EvaluationFixtureSeeder) seedSource(ctx context.Context, fixtureVersion
 		Candidate: candidate,
 		MemoryID:  evaluationFixtureID(key + ":memory"),
 		VersionID: evaluationFixtureID(key + ":version"),
-		Version:   1,
+		Version:   version,
 		CreatedAt: createdAt,
 	})
 	if err != nil {

@@ -1,6 +1,6 @@
 # Archive Index
 
-Updated: 2026-11-11 00:43:44
+Updated: 2026-11-11 21:44:10
 
 - 001 -> bootstrap-foundation-and-event-ingestion
 - 002 -> governance-pipeline-and-memory-consolidation
@@ -84,3 +84,4 @@ Updated: 2026-11-11 00:43:44
 - 080 -> verified-memory-correction-loop
 - 081 -> task-appropriate-representation-evaluation
 - 082 -> evidence-gated-resident-context-evaluation
+- 083 -> locked-longitudinal-memory-evaluation

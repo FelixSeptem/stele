@@ -21,6 +21,9 @@ func RunTaskSeriesPostgres(ctx context.Context, dsn string, manifest TaskSeriesM
 			return TaskSeriesReport{}, &StatusError{Status: StatusPrerequisiteMissing, Message: "non-synthetic task-series source requires a runnable dataset manifest", Cause: err}
 		}
 	}
+	if manifest.SchemaVersion == TaskSeriesSchemaVersionV3 {
+		return runTaskSeriesV3Postgres(ctx, dsn, manifest, corpora, baseScope, datasetManifest, syntheticFixture)
+	}
 	observations := TaskSeriesObservations{}
 	var runtime PostgresRuntimeIdentity
 	conditionCorpusChecksums := make([]string, 0, len(manifest.Conditions))

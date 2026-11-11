@@ -24,6 +24,7 @@ const (
 	evaluationFixtureMaxEvidenceGroups  = 16
 	evaluationFixtureMaxExcludedAliases = 100
 	evaluationFixtureMaxSourceBytes     = 64 * 1024
+	evaluationFixtureMaxSourceVersion   = int64(1) << 31
 )
 
 // EvaluationCase defines one scoped retrieval assertion. Evidence aliases are stable
@@ -86,6 +87,12 @@ type EvaluationSource struct {
 	ParentMemoryID    string             `json:"parent_memory_id,omitempty"`
 	EmbeddingRevision string             `json:"embedding_revision,omitempty"`
 	SourceTimestamp   time.Time          `json:"source_timestamp,omitempty"`
+	// SourceMetadata binds an immutable disclosable snapshot at insertion time;
+	// fixtures that omit it keep the restrictive database default. SourceVersion
+	// binds the appended immutable version instead of the default first version.
+	// Snapshots cannot be changed by a later UPDATE: PostgreSQL rejects it.
+	SourceMetadata *memory.SourceMetadata `json:"source_metadata,omitempty"`
+	SourceVersion  int64                  `json:"source_version,omitempty"`
 }
 
 // EvaluationRankingMetadata identifies an evaluation report without exposing
@@ -956,6 +963,14 @@ func (c EvaluationCase) validate() error {
 		}
 		if !evaluationMemoryStateValid(source.State) {
 			return fmt.Errorf("invalid source memory state")
+		}
+		if source.SourceMetadata != nil {
+			if err := source.SourceMetadata.Validate(); err != nil || !source.SourceMetadata.Disclosable() {
+				return fmt.Errorf("explicit source metadata must be a valid disclosable snapshot")
+			}
+		}
+		if source.SourceVersion < 0 || source.SourceVersion > evaluationFixtureMaxSourceVersion {
+			return fmt.Errorf("explicit source version exceeds the safe bound")
 		}
 	}
 

@@ -116,6 +116,36 @@ func TestRunBenchmarkTaskSeriesLockPrintsQRELAndSourceChecksums(t *testing.T) {
 	}
 }
 
+func TestRunBenchmarkTaskSeriesLocksV3AndLegacyFixtures(t *testing.T) {
+	fixtures := map[string]string{
+		"locked_v3": filepath.Join("..", "..", "internal", "benchmark", "testdata", "locked-longitudinal-task-series-v3.json"),
+		"legacy_v2": filepath.Join("..", "..", "internal", "benchmark", "testdata", "verified-memory-correction-task-series-v2.json"),
+	}
+	for name, path := range fixtures {
+		t.Run(name, func(t *testing.T) {
+			encoded, err := os.ReadFile(path)
+			if err != nil {
+				t.Fatal(err)
+			}
+			var bundle benchmark.TaskSeriesSourceBundle
+			if err := json.Unmarshal(encoded, &bundle); err != nil {
+				t.Fatal(err)
+			}
+			var stdout, stderr bytes.Buffer
+			if err := runBenchmark([]string{"lock-task-series", "--source", path}, &stdout, &stderr); err != nil {
+				t.Fatal(err)
+			}
+			var locks map[string]string
+			if err := json.Unmarshal(stdout.Bytes(), &locks); err != nil {
+				t.Fatal(err)
+			}
+			if locks["qrels_checksum"] != bundle.Manifest.QRELChecksum || locks["source_checksum"] != bundle.Manifest.SourceChecksum {
+				t.Fatalf("CLI locks changed for %s: %s", name, stdout.String())
+			}
+		})
+	}
+}
+
 func TestRunBenchmarkFetchUsesExplicitManifestAndLocalSource(t *testing.T) {
 	data := []byte(`{"samples":[]}`)
 	digest := sha256.Sum256(data)

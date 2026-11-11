@@ -514,6 +514,41 @@ not general task benefit. Missing external task/cost observations remain
 inconclusive, observed differences are observational, and live activation
 requires a separate authorized proposal and release evidence.
 
+### Locked longitudinal v3 staged replay
+
+The maintainer-owned `task-series-v3` evaluator extends the existing offline
+longitudinal runner with five locked conditions, stage-visible source windows
+and separate cost/gate observations. It is not a deployment switch: no public
+route, request/response field, Provider capability, MCP tool, new authorization
+role, runtime flag, database migration or dependency is added. Ordinary
+retrieval keeps `flat-fusion-v1` and existing v1/v2 bundle defaults.
+
+Run the disposable owned verifier from a checkout with Docker available:
+
+```powershell
+pwsh -NoProfile -File scripts/stele-longitudinal-v3-verify.ps1 -Diagnostic
+```
+
+The harness creates a random-owned PostgreSQL + pgvector container, seeds each
+stage in its own exact scope, checks physical future/withdrawn evidence
+exclusion, disclosure/lifecycle/scope and citation lineage, enforces the equal
+independent item/byte/token/citation budgets, measures service latency, and
+replays the no-memory baseline after all candidate conditions. It restarts the
+container, rediscovers the newly assigned ephemeral host port, repeats the
+replay, compares redacted input identities and removes only its own container
+and volumes. A missing verdict, cost observation, gate, restart replay or
+cleanup check is a non-pass; no partial quality pass is emitted.
+
+The five-condition locked synthetic fixture is
+`internal/benchmark/testdata/locked-longitudinal-task-series-v3.json`; both
+checksums are recomputed with `benchmark lock-task-series` after any manifest
+or corpus edit. External model/tool observations and task verdicts remain
+independently supplied; missing values stay inconclusive and observed
+differences remain observational. This is synthetic service conformance only:
+it establishes neither longitudinal task benefit nor rollout authority. See
+[local agent memory benchmark](local-agent-memory-benchmark.md#locked-v3-staged-replay)
+for exact shapes, validation, limits, defaults and compatibility notes.
+
 ## Principal Bootstrap And Scoped Access
 
 Protected requests are authenticated against PostgreSQL-backed principals. Every

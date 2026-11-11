@@ -1,0 +1,686 @@
+{
+  "manifest": {
+    "schema_version": "task-series-v3",
+    "metric_version": "task-series-metrics-v3",
+    "source_checksum": "4ce37921908e2df08dd8d8a59bb15bf199f5d7bcfdf572dbc09ae1b79cd77fcf",
+    "qrels_checksum": "b7dafeccd7f09cbf0ac0232ea5dd1a8bd8e0af51439b27075b00af4a3cc94f34",
+    "scope": {
+      "tenant": "benchmark",
+      "project": "ev5",
+      "namespace": "locked"
+    },
+    "conditions": [
+      {
+        "id": "no_memory",
+        "baseline": true,
+        "stages": [
+          {
+            "id": "first",
+            "query_id": "query-first",
+            "scope": {
+              "tenant": "benchmark",
+              "project": "ev5",
+              "namespace": "locked"
+            },
+            "verdict": "inconclusive",
+            "evidence": null
+          },
+          {
+            "id": "later",
+            "query_id": "query-later",
+            "scope": {
+              "tenant": "benchmark",
+              "project": "ev5",
+              "namespace": "locked"
+            },
+            "verdict": "inconclusive",
+            "evidence": null,
+            "held_out": true
+          }
+        ],
+        "role": "no_memory"
+      },
+      {
+        "id": "source_records",
+        "stages": [
+          {
+            "id": "first",
+            "query_id": "query-first",
+            "scope": {
+              "tenant": "benchmark",
+              "project": "ev5",
+              "namespace": "locked"
+            },
+            "verdict": "inconclusive",
+            "evidence": [
+              {
+                "reference": "prior"
+              }
+            ]
+          },
+          {
+            "id": "later",
+            "query_id": "query-later",
+            "scope": {
+              "tenant": "benchmark",
+              "project": "ev5",
+              "namespace": "locked"
+            },
+            "verdict": "inconclusive",
+            "evidence": [
+              {
+                "reference": "corrected"
+              }
+            ],
+            "held_out": true
+          }
+        ],
+        "role": "source_records",
+        "sources": [
+          {
+            "reference": "prior",
+            "source_version": 1,
+            "content_digest": "50d87aa5256b42b11de47e3c956465ee2112ac023227a7b629323ca56e0833e9",
+            "available_stage": 1,
+            "withdrawn_stage": 2,
+            "metadata": {
+              "version": "source-metadata-v1",
+              "trust": "attested_data",
+              "classification": "low"
+            }
+          },
+          {
+            "reference": "corrected",
+            "source_version": 2,
+            "content_digest": "d537660a6f5f0e5e2e9db0b48d0e072848ca8c368c439c92180d5d5cdb968440",
+            "available_stage": 2,
+            "metadata": {
+              "version": "source-metadata-v1",
+              "trust": "attested_data",
+              "classification": "low"
+            }
+          }
+        ]
+      },
+      {
+        "id": "organized",
+        "stages": [
+          {
+            "id": "first",
+            "query_id": "query-first",
+            "scope": {
+              "tenant": "benchmark",
+              "project": "ev5",
+              "namespace": "locked"
+            },
+            "verdict": "inconclusive",
+            "evidence": [
+              {
+                "reference": "prior"
+              }
+            ]
+          },
+          {
+            "id": "later",
+            "query_id": "query-later",
+            "scope": {
+              "tenant": "benchmark",
+              "project": "ev5",
+              "namespace": "locked"
+            },
+            "verdict": "inconclusive",
+            "evidence": [
+              {
+                "reference": "corrected"
+              }
+            ],
+            "held_out": true
+          }
+        ],
+        "role": "organized",
+        "sources": [
+          {
+            "reference": "prior",
+            "source_version": 1,
+            "content_digest": "50d87aa5256b42b11de47e3c956465ee2112ac023227a7b629323ca56e0833e9",
+            "available_stage": 1,
+            "withdrawn_stage": 2,
+            "metadata": {
+              "version": "source-metadata-v1",
+              "trust": "attested_data",
+              "classification": "low"
+            }
+          },
+          {
+            "reference": "corrected",
+            "source_version": 2,
+            "content_digest": "d537660a6f5f0e5e2e9db0b48d0e072848ca8c368c439c92180d5d5cdb968440",
+            "available_stage": 2,
+            "metadata": {
+              "version": "source-metadata-v1",
+              "trust": "attested_data",
+              "classification": "low"
+            }
+          }
+        ]
+      },
+      {
+        "id": "verified_corrected",
+        "stages": [
+          {
+            "id": "first",
+            "query_id": "query-first",
+            "scope": {
+              "tenant": "benchmark",
+              "project": "ev5",
+              "namespace": "locked"
+            },
+            "verdict": "inconclusive",
+            "evidence": [
+              {
+                "reference": "prior"
+              }
+            ]
+          },
+          {
+            "id": "later",
+            "query_id": "query-later",
+            "scope": {
+              "tenant": "benchmark",
+              "project": "ev5",
+              "namespace": "locked"
+            },
+            "verdict": "inconclusive",
+            "evidence": [
+              {
+                "reference": "corrected"
+              }
+            ],
+            "held_out": true
+          }
+        ],
+        "role": "verified_corrected",
+        "sources": [
+          {
+            "reference": "prior",
+            "source_version": 1,
+            "content_digest": "50d87aa5256b42b11de47e3c956465ee2112ac023227a7b629323ca56e0833e9",
+            "available_stage": 1,
+            "withdrawn_stage": 2,
+            "metadata": {
+              "version": "source-metadata-v1",
+              "trust": "attested_data",
+              "classification": "low"
+            }
+          },
+          {
+            "reference": "corrected",
+            "source_version": 2,
+            "content_digest": "d537660a6f5f0e5e2e9db0b48d0e072848ca8c368c439c92180d5d5cdb968440",
+            "available_stage": 2,
+            "metadata": {
+              "version": "source-metadata-v1",
+              "trust": "attested_data",
+              "classification": "low"
+            }
+          }
+        ]
+      },
+      {
+        "id": "resident",
+        "stages": [
+          {
+            "id": "first",
+            "query_id": "query-first",
+            "scope": {
+              "tenant": "benchmark",
+              "project": "ev5",
+              "namespace": "locked"
+            },
+            "verdict": "inconclusive",
+            "evidence": [
+              {
+                "reference": "prior"
+              }
+            ]
+          },
+          {
+            "id": "later",
+            "query_id": "query-later",
+            "scope": {
+              "tenant": "benchmark",
+              "project": "ev5",
+              "namespace": "locked"
+            },
+            "verdict": "inconclusive",
+            "evidence": [
+              {
+                "reference": "corrected"
+              }
+            ],
+            "held_out": true
+          }
+        ],
+        "role": "resident",
+        "sources": [
+          {
+            "reference": "prior",
+            "source_version": 1,
+            "content_digest": "50d87aa5256b42b11de47e3c956465ee2112ac023227a7b629323ca56e0833e9",
+            "available_stage": 1,
+            "withdrawn_stage": 2,
+            "metadata": {
+              "version": "source-metadata-v1",
+              "trust": "attested_data",
+              "classification": "low"
+            }
+          },
+          {
+            "reference": "corrected",
+            "source_version": 2,
+            "content_digest": "d537660a6f5f0e5e2e9db0b48d0e072848ca8c368c439c92180d5d5cdb968440",
+            "available_stage": 2,
+            "metadata": {
+              "version": "source-metadata-v1",
+              "trust": "attested_data",
+              "classification": "low"
+            }
+          }
+        ]
+      }
+    ],
+    "experiment": {
+      "model_digest": "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
+      "runtime_digest": "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
+      "criteria_digest": "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
+      "seeds": [
+        7
+      ],
+      "limits": {
+        "max_items": 8,
+        "max_content_bytes": 4096,
+        "max_tokens": 1024,
+        "max_citations": 16,
+        "max_latency_ms": 60000
+      }
+    }
+  },
+  "dataset_manifest": {
+    "schema_version": "",
+    "name": "",
+    "version": "",
+    "license": "",
+    "upstream_url": "",
+    "upstream_revision": "",
+    "sha256": "",
+    "source_path": "",
+    "conversion_version": "",
+    "redistribution": "",
+    "support": "",
+    "splits": null,
+    "embedding": {
+      "name": "",
+      "dimensions": 0,
+      "normalization": ""
+    }
+  },
+  "corpora": {
+    "no_memory": {
+      "schema_version": "v1",
+      "conversations": null,
+      "events": null,
+      "queries": [
+        {
+          "id": "query-first",
+          "scope": {
+            "tenant": "benchmark",
+            "project": "ev5",
+            "namespace": "locked"
+          },
+          "session_id": "series",
+          "text": "memory rule"
+        },
+        {
+          "id": "query-later",
+          "scope": {
+            "tenant": "benchmark",
+            "project": "ev5",
+            "namespace": "locked"
+          },
+          "session_id": "series",
+          "text": "memory rule"
+        }
+      ],
+      "qrels": null
+    },
+    "organized": {
+      "schema_version": "v1",
+      "conversations": null,
+      "events": [
+        {
+          "id": "prior",
+          "scope": {
+            "tenant": "benchmark",
+            "project": "ev5",
+            "namespace": "locked"
+          },
+          "session_id": "series",
+          "class": "profile",
+          "text": "memory rule value 999",
+          "expected_state": "active"
+        },
+        {
+          "id": "corrected",
+          "scope": {
+            "tenant": "benchmark",
+            "project": "ev5",
+            "namespace": "locked"
+          },
+          "session_id": "series",
+          "class": "profile",
+          "text": "memory rule value 47",
+          "expected_state": "active"
+        }
+      ],
+      "queries": [
+        {
+          "id": "query-first",
+          "scope": {
+            "tenant": "benchmark",
+            "project": "ev5",
+            "namespace": "locked"
+          },
+          "session_id": "series",
+          "text": "memory rule",
+          "evidence_groups": [
+            {
+              "id": "expected",
+              "evidence_ids": [
+                "prior"
+              ],
+              "required": true
+            }
+          ]
+        },
+        {
+          "id": "query-later",
+          "scope": {
+            "tenant": "benchmark",
+            "project": "ev5",
+            "namespace": "locked"
+          },
+          "session_id": "series",
+          "text": "memory rule",
+          "evidence_groups": [
+            {
+              "id": "expected",
+              "evidence_ids": [
+                "corrected"
+              ],
+              "required": true
+            }
+          ]
+        }
+      ],
+      "qrels": [
+        {
+          "query_id": "query-first",
+          "evidence_id": "prior",
+          "grade": 1
+        },
+        {
+          "query_id": "query-later",
+          "evidence_id": "corrected",
+          "grade": 1
+        }
+      ]
+    },
+    "resident": {
+      "schema_version": "v1",
+      "conversations": null,
+      "events": [
+        {
+          "id": "prior",
+          "scope": {
+            "tenant": "benchmark",
+            "project": "ev5",
+            "namespace": "locked"
+          },
+          "session_id": "series",
+          "class": "profile",
+          "text": "memory rule value 999",
+          "expected_state": "active"
+        },
+        {
+          "id": "corrected",
+          "scope": {
+            "tenant": "benchmark",
+            "project": "ev5",
+            "namespace": "locked"
+          },
+          "session_id": "series",
+          "class": "profile",
+          "text": "memory rule value 47",
+          "expected_state": "active"
+        }
+      ],
+      "queries": [
+        {
+          "id": "query-first",
+          "scope": {
+            "tenant": "benchmark",
+            "project": "ev5",
+            "namespace": "locked"
+          },
+          "session_id": "series",
+          "text": "memory rule",
+          "evidence_groups": [
+            {
+              "id": "expected",
+              "evidence_ids": [
+                "prior"
+              ],
+              "required": true
+            }
+          ]
+        },
+        {
+          "id": "query-later",
+          "scope": {
+            "tenant": "benchmark",
+            "project": "ev5",
+            "namespace": "locked"
+          },
+          "session_id": "series",
+          "text": "memory rule",
+          "evidence_groups": [
+            {
+              "id": "expected",
+              "evidence_ids": [
+                "corrected"
+              ],
+              "required": true
+            }
+          ]
+        }
+      ],
+      "qrels": [
+        {
+          "query_id": "query-first",
+          "evidence_id": "prior",
+          "grade": 1
+        },
+        {
+          "query_id": "query-later",
+          "evidence_id": "corrected",
+          "grade": 1
+        }
+      ]
+    },
+    "source_records": {
+      "schema_version": "v1",
+      "conversations": null,
+      "events": [
+        {
+          "id": "prior",
+          "scope": {
+            "tenant": "benchmark",
+            "project": "ev5",
+            "namespace": "locked"
+          },
+          "session_id": "series",
+          "class": "profile",
+          "text": "memory rule value 999",
+          "expected_state": "active"
+        },
+        {
+          "id": "corrected",
+          "scope": {
+            "tenant": "benchmark",
+            "project": "ev5",
+            "namespace": "locked"
+          },
+          "session_id": "series",
+          "class": "profile",
+          "text": "memory rule value 47",
+          "expected_state": "active"
+        }
+      ],
+      "queries": [
+        {
+          "id": "query-first",
+          "scope": {
+            "tenant": "benchmark",
+            "project": "ev5",
+            "namespace": "locked"
+          },
+          "session_id": "series",
+          "text": "memory rule",
+          "evidence_groups": [
+            {
+              "id": "expected",
+              "evidence_ids": [
+                "prior"
+              ],
+              "required": true
+            }
+          ]
+        },
+        {
+          "id": "query-later",
+          "scope": {
+            "tenant": "benchmark",
+            "project": "ev5",
+            "namespace": "locked"
+          },
+          "session_id": "series",
+          "text": "memory rule",
+          "evidence_groups": [
+            {
+              "id": "expected",
+              "evidence_ids": [
+                "corrected"
+              ],
+              "required": true
+            }
+          ]
+        }
+      ],
+      "qrels": [
+        {
+          "query_id": "query-first",
+          "evidence_id": "prior",
+          "grade": 1
+        },
+        {
+          "query_id": "query-later",
+          "evidence_id": "corrected",
+          "grade": 1
+        }
+      ]
+    },
+    "verified_corrected": {
+      "schema_version": "v1",
+      "conversations": null,
+      "events": [
+        {
+          "id": "prior",
+          "scope": {
+            "tenant": "benchmark",
+            "project": "ev5",
+            "namespace": "locked"
+          },
+          "session_id": "series",
+          "class": "profile",
+          "text": "memory rule value 999",
+          "expected_state": "active"
+        },
+        {
+          "id": "corrected",
+          "scope": {
+            "tenant": "benchmark",
+            "project": "ev5",
+            "namespace": "locked"
+          },
+          "session_id": "series",
+          "class": "profile",
+          "text": "memory rule value 47",
+          "expected_state": "active"
+        }
+      ],
+      "queries": [
+        {
+          "id": "query-first",
+          "scope": {
+            "tenant": "benchmark",
+            "project": "ev5",
+            "namespace": "locked"
+          },
+          "session_id": "series",
+          "text": "memory rule",
+          "evidence_groups": [
+            {
+              "id": "expected",
+              "evidence_ids": [
+                "prior"
+              ],
+              "required": true
+            }
+          ]
+        },
+        {
+          "id": "query-later",
+          "scope": {
+            "tenant": "benchmark",
+            "project": "ev5",
+            "namespace": "locked"
+          },
+          "session_id": "series",
+          "text": "memory rule",
+          "evidence_groups": [
+            {
+              "id": "expected",
+              "evidence_ids": [
+                "corrected"
+              ],
+              "required": true
+            }
+          ]
+        }
+      ],
+      "qrels": [
+        {
+          "query_id": "query-first",
+          "evidence_id": "prior",
+          "grade": 1
+        },
+        {
+          "query_id": "query-later",
+          "evidence_id": "corrected",
+          "grade": 1
+        }
+      ]
+    }
+  },
+  "synthetic_fixture": true
+}

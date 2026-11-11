@@ -212,6 +212,16 @@ turns are denied without existence disclosure; the field never widens memory
 selection or disclosure and provides no role, token, snapshot, or business
 state authority.
 
+A locked [longitudinal v3 staged replay](docs/local-agent-memory-benchmark.md#locked-v3-staged-replay)
+adds an opt-in offline task-series contract with five explicitly declared
+conditions, stage-visible source snapshots, equal independent budgets, and
+separate external cost and hard-gate observations. It is maintainer-owned,
+synthetic-only unless an authorized harness supplies real outcomes, and changes
+no public API, authorization or production retrieval default. Existing v1/v2
+bundles keep their locks and defaults; only the v2 coverage denominator is
+corrected to non-superseded stages. Missing observations stay inconclusive and
+condition differences remain observational.
+
 ## Contributing documentation and MCP guidance
 
 When changing an MCP tool, its descriptor, annotation, request shape, or safety

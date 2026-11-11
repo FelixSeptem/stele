@@ -2,7 +2,7 @@
 
 ## Status and purpose
 
-Research captured on 2026-11-08; delivery status reconciled on 2026-11-10.
+Research captured on 2026-11-08; delivery status reconciled on 2026-11-11.
 This document records the research, implementation sequence and remaining
 evidence requirements. The status table distinguishes archived service work
 from candidate follow-ups; an archived evaluator does not authorize rollout
@@ -68,7 +68,7 @@ and archives before opening each proposal to avoid duplicating delivered work.
 | EV2: Targeted correction loop | After EV1, evaluated with EV5 | Governed, bounded revalidation and versioned correction | Delivered bounded slice in [080](../../openspec/changes/archive/080-verified-memory-correction-loop/proposal.md); unresolved evidence and governed successor versions remain explicit |
 | EV3: Task-appropriate representations | After EV2 has evaluation evidence | Compare exact excerpts, topic projections, and hierarchical retrieval | Delivered evaluator in [081](../../openspec/changes/archive/081-task-appropriate-representation-evaluation/proposal.md), with [verification](../../openspec/changes/archive/081-task-appropriate-representation-evaluation/verification.md); candidates remain shadow-only |
 | EV4: Small resident context | After EV1; prioritize after EV2/EV3 evidence | Evidence-based promotion and demotion within existing context budgets | Delivered bounded offline/shadow evaluator in [082](../../openspec/changes/archive/082-evidence-gated-resident-context-evaluation/proposal.md), with [verification](../../openspec/changes/archive/082-evidence-gated-resident-context-evaluation/verification.md) and focused independent follow-up review; existing defaults remain authoritative; no task-benefit claim |
-| EV5: Longitudinal benefit evaluation | Starts with EV1 and accompanies every track | Measure future utility, repeated errors, harm, and cost | Candidate extension of existing evaluator |
+| EV5: Longitudinal benefit evaluation | Starts with EV1 and accompanies every track | Measure future utility, repeated errors, harm, and cost | Delivered locked offline evaluator in [083](../../openspec/changes/archive/083-locked-longitudinal-memory-evaluation/proposal.md); externally judged task benefit remains unmeasured |
 
 ### EV1: Verification evidence for procedural memories and lessons
 
@@ -222,6 +222,12 @@ Acceptance evidence:
 - Isolation, lifecycle, disclosure, latency, and rollback failures remain
   independent release blockers regardless of utility gains. Generated answers
   or LLM judges do not replace deterministic service safety checks.
+
+The delivered v3 evaluator locks five conditions, stage-visible source
+  windows, independent observations and separate hard gates behind an opt-in
+  internal schema. It replays against owned PostgreSQL scopes and keeps
+  synthetic outcomes inconclusive. It is service-conformance evidence, not
+  measured future-task benefit, and it authorizes no retrieval activation.
 
 ## Proposal and maintenance gates
 

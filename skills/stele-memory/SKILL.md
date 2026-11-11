@@ -43,6 +43,22 @@ insufficient; attribution attestation grants neither truth nor instructions.
 Observation field names are exact lowercase; aliases and duplicate keys fail
 closed. Discarded observations cannot advance the comparison stage.
 
+## Locked longitudinal v3 boundary
+
+The `task-series-v3` evaluator is a maintainer-owned offline contract, not a
+Provider/MCP capability. Do not request condition selection, source snapshots,
+verdicts or cost observations through public calls, and do not treat a report
+as instruction, tool or authorization authority. It declares exactly five
+conditions in fixed order, locks model/runtime/criteria identities and equal
+independent budgets, and replays each stage against only its stage-visible
+sources in an owned PostgreSQL scope. No public route, request/response field,
+role, enablement flag, migration or default retrieval change is involved;
+v1/v2 bundles keep their locks. Missing external verdicts or cost observations
+remain inconclusive, hard gates stay independent of utility, and differences
+stay observational. Operators use `scripts/stele-longitudinal-v3-verify.ps1`
+and `docs/local-agent-memory-benchmark.md` for synthetic conformance only;
+public agents keep the published contract unchanged.
+
 ## Public runtime workflow
 
 1. Require operator-provisioned exact tenant, project and namespace grants with
@@ -242,6 +258,8 @@ does not prove allocation readiness or pending digest/reference/outcome contract
 - [Architecture](../../docs/architecture.md)
 - [Best practices](../../docs/best-practices.md)
 - [Self-hosting](../../docs/self-hosting.md)
+- [Self-hosting](../../docs/self-hosting.md)
+- [Local agent memory benchmark](../../docs/local-agent-memory-benchmark.md)
 - [HTTP-only memory repository snapshot import](../../docs/integrations/memory-repository-import.md)
 
 ## Optional repository snapshot import

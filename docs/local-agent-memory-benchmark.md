@@ -244,6 +244,68 @@ evidence. A non-synthetic completion report must also contain
 report can be used as acceptance evidence. No public API or production retrieval
 policy is changed.
 
+## Locked v3 staged replay
+
+`task-series-v3` / `task-series-metrics-v3` is an opt-in, maintainer-owned
+offline extension of the longitudinal evaluator. It declares exactly five
+ordered conditions (`no_memory`, `source_records`, `organized`,
+`verified_corrected`, `resident`) with identical stages and held-out flags, plus
+SHA-256 model/runtime/criteria identities, 1-32 distinct nonnegative seeds and
+equal independent item/UTF-8-byte/whitespace-token/citation budgets (ranges
+1-64, 1-65536, 1-16384, 1-64, and a 1-60000 ms latency bound). These are local
+experiment locks, not attestations or acceptance thresholds; external criteria
+must define task and cost acceptance before data collection.
+
+Each condition declares at most 64 source windows binding reference, immutable
+positive source version, SHA-256 literal content, disclosable metadata, first
+available stage and optional first withdrawn stage. The runner physically seeds
+only stage-visible events, qrels and query annotations into a fresh owned
+PostgreSQL scope; conversations are rejected. Disclosure, lifecycle, exact
+scope, citation lineage and all four budgets are checked against returned rows.
+A later baseline replay compares redacted evidence identities. Canonical JSON
+keys are enforced; duplicate keys, aliases, future/withdrawn evidence, missing
+identities, restricted metadata or v3 fields on v1/v2 bundles fail closed with
+bounded `invalid_manifest` / `checksum_mismatch` errors. The no-memory condition
+has no sources, qrels or expected evidence. At most 64 stages and 64 sources
+per condition are allowed, so at most 320 stage searches plus 64 baseline
+replays run.
+
+The locked synthetic fixture is
+`internal/benchmark/testdata/locked-longitudinal-task-series-v3.json`.
+Recompute both locks with `benchmark lock-task-series` whenever the manifest or
+corpora change; v1/v2 fixtures keep their existing checksums and defaults, and
+only the documented v2 denominator correction changes their reports:
+repeated-error and maintenance coverage now divide by non-superseded stages
+(including inconclusive utility stages), so coverage cannot exceed one.
+Regenerate old v2 report artifacts instead of comparing them with the former
+denominator. V3 is selected only by schema/metric identity; no migration,
+database schema change, public route, authorization role or production
+retrieval policy is involved. Rollback is stopping the offline run or using a
+v1/v2 bundle.
+
+V3 reports keep model-token and tool-call observations separate from utility,
+repeated errors and maintenance, with independent observed counts, totals,
+nullable averages and coverage. Measured service latency, scope/lifecycle/
+disclosure eligibility, future-evidence exclusion and tested baseline replay
+are independent gates. Missing observations or gates are inconclusive, never a
+zero observation or a pass; utility improvement cannot override a failed gate.
+Serialized v3 reports expose experiment/input/observation digests, gate counts
+and bounded aggregates only. Reports never carry IDs, query/content text,
+actors, scopes or raw criteria. Use the disposable owned verifier from a
+checkout with Docker available:
+
+```powershell
+pwsh -NoProfile -File scripts/stele-longitudinal-v3-verify.ps1 -Diagnostic
+```
+
+It creates a random-owned PostgreSQL + pgvector container, replays all five
+conditions and the baseline, restarts the container (rebinding its ephemeral
+host port), repeats the replay, verifies exact owned row/container cleanup and
+emits a bounded synthetic-conformance report. It never adopts an operator DSN.
+Synthetic input stays labeled and external outcomes remain inconclusive: this
+demonstrates neither general task benefit nor causal improvement and authorizes
+no activation.
+
 ## Resident-context comparison observations
 
 The internal resident evaluator complements task-series replay by comparing

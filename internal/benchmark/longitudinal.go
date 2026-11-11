@@ -75,12 +75,17 @@ type TaskSeriesStage struct {
 	Evidence        []TaskSeriesEvidence `json:"evidence"`
 	RepeatedError   *bool                `json:"repeated_error,omitempty"`
 	MaintenanceCost *int64               `json:"maintenance_cost,omitempty"`
+	HeldOut         bool                 `json:"held_out,omitempty"`
+	ModelTokens     *int64               `json:"model_tokens,omitempty"`
+	ToolCalls       *int64               `json:"tool_calls,omitempty"`
 }
 
 type TaskSeriesCondition struct {
-	ID       string            `json:"id"`
-	Baseline bool              `json:"baseline,omitempty"`
-	Stages   []TaskSeriesStage `json:"stages"`
+	ID       string                   `json:"id"`
+	Baseline bool                     `json:"baseline,omitempty"`
+	Stages   []TaskSeriesStage        `json:"stages"`
+	Role     string                   `json:"role,omitempty"`
+	Sources  []TaskSeriesSourceWindow `json:"sources,omitempty"`
 }
 
 // TaskSeriesManifest is a local, checksum-locked evaluation input. Its
@@ -92,6 +97,7 @@ type TaskSeriesManifest struct {
 	QRELChecksum   string                `json:"qrels_checksum"`
 	Scope          memory.Scope          `json:"scope"`
 	Conditions     []TaskSeriesCondition `json:"conditions"`
+	Experiment     *TaskSeriesExperiment `json:"experiment,omitempty"`
 }
 
 type TaskSeriesSourceBundle struct {
@@ -128,6 +134,13 @@ func loadTaskSeriesSourceBytes(source []byte) (TaskSeriesSourceBundle, error) {
 	}
 	if err := ensureJSONEOF(decoder); err != nil {
 		return TaskSeriesSourceBundle{}, &StatusError{Status: StatusInvalidManifest, Message: "decode task-series source", Cause: err}
+	}
+	if bundle.Manifest.SchemaVersion == TaskSeriesSchemaVersionV3 {
+		if err := validateTaskSeriesV3JSON(source); err != nil {
+			return TaskSeriesSourceBundle{}, &StatusError{Status: StatusInvalidManifest, Message: "decode task-series v3 source", Cause: err}
+		}
+	} else if err := rejectLegacyTaskSeriesV3Fields(source); err != nil {
+		return TaskSeriesSourceBundle{}, &StatusError{Status: StatusInvalidManifest, Message: "decode legacy task-series source", Cause: err}
 	}
 	checksum, err := TaskSeriesSourceChecksum(bundle)
 	if err != nil {
@@ -214,8 +227,12 @@ type TaskSeriesObservedEvidence struct {
 }
 
 type TaskSeriesStageObservation struct {
-	Evidence       []TaskSeriesObservedEvidence
-	SafetyFailures int
+	Evidence        []TaskSeriesObservedEvidence
+	SafetyFailures  int
+	LatencyMicros   *int64
+	DisclosureSafe  *bool
+	StageVisible    *bool
+	RollbackMatched *bool
 }
 
 type TaskSeriesObservations map[string]map[string]TaskSeriesStageObservation
@@ -230,6 +247,11 @@ func (m TaskSeriesManifest) Validate() error {
 	case TaskSeriesSchemaVersionV2:
 		if m.MetricVersion != TaskSeriesMetricVersionV2 {
 			return fmt.Errorf("unsupported task-series metric version %q", m.MetricVersion)
+		}
+		v2 = true
+	case TaskSeriesSchemaVersionV3:
+		if m.MetricVersion != TaskSeriesMetricVersionV3 {
+			return fmt.Errorf("unsupported task-series metric version")
 		}
 		v2 = true
 	default:
@@ -268,6 +290,9 @@ func (m TaskSeriesManifest) Validate() error {
 		stageIDs := make([]string, 0, len(condition.Stages))
 		seenStages := make(map[string]struct{}, len(condition.Stages))
 		for _, stage := range condition.Stages {
+			if m.SchemaVersion == TaskSeriesSchemaVersionV3 && stage.Verdict == "" {
+				stage.Verdict = TaskSeriesVerdictInconclusive
+			}
 			if err := validateTaskSeriesStage(m.Scope, stage, v2); err != nil {
 				return fmt.Errorf("condition %q: %w", condition.ID, err)
 			}
@@ -288,7 +313,7 @@ func (m TaskSeriesManifest) Validate() error {
 	if baselineCount != 1 {
 		return fmt.Errorf("task-series requires exactly one baseline condition")
 	}
-	return nil
+	return validateTaskSeriesExtension(m)
 }
 
 func validateTaskSeriesStage(scope memory.Scope, stage TaskSeriesStage, v2 bool) error {
@@ -423,6 +448,9 @@ func ValidateTaskSeriesCorpora(manifest TaskSeriesManifest, corpora map[string]N
 	if !strings.EqualFold(qrelChecksum, manifest.QRELChecksum) {
 		return &StatusError{Status: StatusChecksumMismatch, Message: "task-series qrel checksum does not match its lock"}
 	}
+	if manifest.SchemaVersion == TaskSeriesSchemaVersionV3 {
+		return validateTaskSeriesV3Corpora(manifest, corpora)
+	}
 	return nil
 }
 
@@ -434,30 +462,31 @@ const (
 )
 
 type TaskSeriesConditionReport struct {
-	ConditionIndex              int      `json:"condition_index"`
-	Baseline                    bool     `json:"-"`
-	ReferenceCondition          bool     `json:"reference_condition"`
-	StageCount                  int      `json:"stage_count"`
-	EvaluatedStages             int      `json:"evaluated_stages"`
-	InconclusiveStages          int      `json:"inconclusive_stages"`
-	SupersededStages            int      `json:"superseded_stages"`
-	EvidenceStages              int      `json:"evidence_stages"`
-	Utility                     float64  `json:"utility"`
-	ObservedUtilityDifference   float64  `json:"observed_utility_difference"`
-	StaleStages                 int      `json:"stale_stages"`
-	NoisyStages                 int      `json:"noisy_stages"`
-	ProvenanceCoverage          float64  `json:"provenance_coverage"`
-	EvidenceCount               int      `json:"evidence_count"`
-	VerifiedProvenanceCount     int      `json:"verified_provenance_count"`
-	SafetyFailures              int      `json:"safety_failures"`
-	RepeatedErrorObservedStages int      `json:"repeated_error_observed_stages,omitempty"`
-	RepeatedErrorStages         int      `json:"repeated_error_stages,omitempty"`
-	RepeatedErrorCoverage       float64  `json:"repeated_error_coverage,omitempty"`
-	RepeatedErrorRate           *float64 `json:"repeated_error_rate,omitempty"`
-	MaintenanceObservedStages   int      `json:"maintenance_observed_stages,omitempty"`
-	MaintenanceCoverage         float64  `json:"maintenance_coverage,omitempty"`
-	MaintenanceCostTotal        int64    `json:"maintenance_cost_total,omitempty"`
-	MaintenanceCostAverage      *float64 `json:"maintenance_cost_average,omitempty"`
+	ConditionIndex              int                          `json:"condition_index"`
+	Baseline                    bool                         `json:"-"`
+	ReferenceCondition          bool                         `json:"reference_condition"`
+	StageCount                  int                          `json:"stage_count"`
+	EvaluatedStages             int                          `json:"evaluated_stages"`
+	InconclusiveStages          int                          `json:"inconclusive_stages"`
+	SupersededStages            int                          `json:"superseded_stages"`
+	EvidenceStages              int                          `json:"evidence_stages"`
+	Utility                     float64                      `json:"utility"`
+	ObservedUtilityDifference   float64                      `json:"observed_utility_difference"`
+	StaleStages                 int                          `json:"stale_stages"`
+	NoisyStages                 int                          `json:"noisy_stages"`
+	ProvenanceCoverage          float64                      `json:"provenance_coverage"`
+	EvidenceCount               int                          `json:"evidence_count"`
+	VerifiedProvenanceCount     int                          `json:"verified_provenance_count"`
+	SafetyFailures              int                          `json:"safety_failures"`
+	RepeatedErrorObservedStages int                          `json:"repeated_error_observed_stages,omitempty"`
+	RepeatedErrorStages         int                          `json:"repeated_error_stages,omitempty"`
+	RepeatedErrorCoverage       float64                      `json:"repeated_error_coverage,omitempty"`
+	RepeatedErrorRate           *float64                     `json:"repeated_error_rate,omitempty"`
+	MaintenanceObservedStages   int                          `json:"maintenance_observed_stages,omitempty"`
+	MaintenanceCoverage         float64                      `json:"maintenance_coverage,omitempty"`
+	MaintenanceCostTotal        int64                        `json:"maintenance_cost_total,omitempty"`
+	MaintenanceCostAverage      *float64                     `json:"maintenance_cost_average,omitempty"`
+	V3                          *TaskSeriesV3ConditionReport `json:"v3,omitempty"`
 }
 
 type TaskSeriesReport struct {
@@ -477,6 +506,7 @@ type TaskSeriesReport struct {
 	SafetyStatus        TaskSeriesSafetyStatus      `json:"safety_status"`
 	CleanupVerified     bool                        `json:"cleanup_verified"`
 	Conditions          []TaskSeriesConditionReport `json:"conditions"`
+	V3                  *TaskSeriesV3Report         `json:"v3,omitempty"`
 }
 
 func EvaluateTaskSeries(manifest TaskSeriesManifest, observations TaskSeriesObservations) (TaskSeriesReport, error) {
@@ -498,7 +528,8 @@ func EvaluateTaskSeries(manifest TaskSeriesManifest, observations TaskSeriesObse
 		Conditions:          make([]TaskSeriesConditionReport, 0, len(manifest.Conditions)),
 	}
 	baselineUtility := 0.0
-	v2 := manifest.SchemaVersion == TaskSeriesSchemaVersionV2
+	v3 := manifest.SchemaVersion == TaskSeriesSchemaVersionV3
+	v2 := manifest.SchemaVersion == TaskSeriesSchemaVersionV2 || v3
 	for conditionIndex, condition := range manifest.Conditions {
 		conditionReport := TaskSeriesConditionReport{ConditionIndex: conditionIndex, Baseline: condition.Baseline, ReferenceCondition: condition.Baseline, StageCount: len(condition.Stages)}
 		utilityTotal := 0.0
@@ -506,6 +537,9 @@ func EvaluateTaskSeries(manifest TaskSeriesManifest, observations TaskSeriesObse
 			if stage.Superseded {
 				conditionReport.SupersededStages++
 				continue
+			}
+			if v3 && stage.Verdict == "" {
+				stage.Verdict = TaskSeriesVerdictInconclusive
 			}
 			if stage.Verdict == TaskSeriesVerdictInconclusive {
 				conditionReport.InconclusiveStages++
@@ -559,10 +593,10 @@ func EvaluateTaskSeries(manifest TaskSeriesManifest, observations TaskSeriesObse
 		}
 		if conditionReport.EvaluatedStages > 0 {
 			conditionReport.Utility = utilityTotal / float64(conditionReport.EvaluatedStages)
-			if v2 {
-				conditionReport.RepeatedErrorCoverage = float64(conditionReport.RepeatedErrorObservedStages) / float64(conditionReport.EvaluatedStages)
-				conditionReport.MaintenanceCoverage = float64(conditionReport.MaintenanceObservedStages) / float64(conditionReport.EvaluatedStages)
-			}
+		}
+		if currentStages := conditionReport.StageCount - conditionReport.SupersededStages; v2 && currentStages > 0 {
+			conditionReport.RepeatedErrorCoverage = float64(conditionReport.RepeatedErrorObservedStages) / float64(currentStages)
+			conditionReport.MaintenanceCoverage = float64(conditionReport.MaintenanceObservedStages) / float64(currentStages)
 		}
 		if conditionReport.RepeatedErrorObservedStages > 0 {
 			rate := float64(conditionReport.RepeatedErrorStages) / float64(conditionReport.RepeatedErrorObservedStages)
@@ -585,11 +619,25 @@ func EvaluateTaskSeries(manifest TaskSeriesManifest, observations TaskSeriesObse
 		if condition.Baseline {
 			baselineUtility = conditionReport.Utility
 		}
+		if v3 {
+			conditionReport.V3 = evaluateTaskSeriesV3Condition(condition, observations[condition.ID], conditionReport.StageCount-conditionReport.SupersededStages, manifest.Experiment.Limits)
+		}
 		report.Conditions = append(report.Conditions, conditionReport)
 	}
 	for index := range report.Conditions {
 		if !report.Conditions[index].Baseline {
 			report.Conditions[index].ObservedUtilityDifference = report.Conditions[index].Utility - baselineUtility
+		}
+	}
+	if v3 {
+		report.V3 = evaluateTaskSeriesV3Report(manifest, observations)
+		if !report.V3.ComparisonComplete || report.V3.GateStatus != "passed" {
+			report.Status = StatusQualityGateFailed
+		}
+		if !report.V3.ComparisonComplete {
+			for i := range report.Conditions {
+				report.Conditions[i].ObservedUtilityDifference = 0
+			}
 		}
 	}
 	return report, nil
@@ -622,6 +670,21 @@ func validateTaskSeriesObservations(manifest TaskSeriesManifest, observations Ta
 					return fmt.Errorf("task-series contains duplicate observed evidence")
 				}
 				seen[evidence.Reference] = struct{}{}
+				if manifest.SchemaVersion == TaskSeriesSchemaVersionV3 {
+					visible := false
+					for n, s := range condition.Stages {
+						if s.ID == stage.ID {
+							for _, w := range condition.Sources {
+								if w.Reference == evidence.Reference && w.visible(n+1) {
+									visible = true
+								}
+							}
+						}
+					}
+					if !visible {
+						return fmt.Errorf("task-series observed future or withdrawn evidence")
+					}
+				}
 			}
 		}
 	}
@@ -629,7 +692,8 @@ func validateTaskSeriesObservations(manifest TaskSeriesManifest, observations Ta
 }
 
 func MarshalTaskSeriesReport(report TaskSeriesReport) ([]byte, error) {
-	v2 := report.SchemaVersion == TaskSeriesSchemaVersionV2 && report.MetricVersion == TaskSeriesMetricVersionV2
+	v3 := report.SchemaVersion == TaskSeriesSchemaVersionV3 && report.MetricVersion == TaskSeriesMetricVersionV3
+	v2 := (report.SchemaVersion == TaskSeriesSchemaVersionV2 && report.MetricVersion == TaskSeriesMetricVersionV2) || v3
 	v1 := report.SchemaVersion == TaskSeriesSchemaVersionV1 && report.MetricVersion == TaskSeriesMetricVersionV1
 	if !v1 && !v2 {
 		return nil, fmt.Errorf("unsupported task-series report version")
@@ -678,6 +742,9 @@ func MarshalTaskSeriesReport(report TaskSeriesReport) ([]byte, error) {
 	}
 	if referenceCount != 1 {
 		return nil, fmt.Errorf("task-series report requires exactly one reference condition")
+	}
+	if err := validateTaskSeriesV3Report(report, v3); err != nil {
+		return nil, err
 	}
 	return json.Marshal(report)
 }
