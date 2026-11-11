@@ -102,13 +102,16 @@ host blocks native commands.
 
 Implementation commit `931b51b721f0e770f40d4be25dcad16d5d2ddee6` was
 fast-forwarded into `main` and pushed; `git ls-remote origin refs/heads/main`
-resolves to the same commit. Post-merge `go build ./...`, `go vet ./...`,
+resolved to that same commit at the delivery checkpoint. A following
+delivery-audit commit is now the remote head, with the implementation commit
+as its parent. Post-merge `go build ./...`, `go vet ./...`,
 `go test ./... -count=1 -timeout 15m` (26 packages), the documentation test,
 `git diff --check` and `openspec validate --all --strict` (95 passed, 0 failed)
 succeeded. `openspec list` reports no active change and the main worktree is
 clean.
 
-The feature worktree is clean. At commit time this machine dropped all loose
+The feature worktree is clean; other worktrees retain only their pre-existing
+uncommitted work. At commit time this machine dropped all loose
 `refs/heads/feat/*` files (a known local Git issue), leaving worktree HEADs
 unborn even though the commit object and its reflog were intact. All seven
 branch refs were restored from their per-worktree reflogs before the merge;

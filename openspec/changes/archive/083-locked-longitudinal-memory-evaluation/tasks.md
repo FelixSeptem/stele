@@ -22,8 +22,10 @@
 
 Delivery verification: implementation commit `931b51b721f0e770f40d4be25dcad16d5d2ddee6`
 was fast-forwarded into `main` and pushed; the remote resolves to the same
-commit. Post-merge build, vet, full test, documentation test, strict OpenSpec
+commit at the merge checkpoint, followed by a later delivery-audit commit.
+Post-merge build, vet, full test, documentation test, strict OpenSpec
 validation and whitespace checks passed. All seven `feat/*` refs were restored
-from reflogs after the local loose-ref issue at commit time; every worktree is
-clean. See `verification.md` for the bounded owned-stack evidence and the
-PowerShell host limitation.
+from reflogs after the local loose-ref issue at commit time; the feature
+worktree is clean and other worktrees retain only their pre-existing
+uncommitted work. See `verification.md` for the bounded owned-stack evidence
+and the PowerShell host limitation.
