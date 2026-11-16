@@ -1,105 +1,49 @@
-# Progressive Context and Hierarchical Retrieval Experiments
+# 渐进上下文与分层检索实验
 
-Stele evaluates progressive context and parent-first retrieval as derived,
-versioned experiments over the existing PostgreSQL and pgvector retrieval
-path. The experiment vocabulary is:
+Stele 将渐进上下文与父级优先检索视为派生的、带版本的实验，构建在现有 PostgreSQL 与 pgvector 检索路径之上。实验词汇为：
 
-- L0: a short retrieval projection for coarse recall.
-- L1: a medium session or context overview for planning and reranking.
-- L2: canonical or chunk evidence for detail and citations.
+- L0：用于粗粒度召回的短检索投影。
+- L1：用于规划与重排的中等会话或上下文概览。
+- L2：用于细节与引用的规范或分块证据。
 
-Every level is bound to a policy and renderer identity, an exact scope, a
-source watermark, a freshness window, a budget, and a deterministic rebuild
-identity. These artifacts are derived evidence. They never become canonical
-memory and never replace the source lifecycle or provenance records.
+每个层级都绑定到策略与渲染器标识、确切作用域、源水位、新鲜度窗口、预算以及确定性重建标识。这些产物是派生证据。它们绝不成为规范记忆，也绝不替代源生命周期或来源记录。
 
-## Execution Boundary
+## 执行边界
 
-Progressive levels and parent-first expansion run in `offline` or `shadow` mode.
-The stable `flat-fusion-v1` strategy remains the selected strategy for ordinary
-retrieval and context assembly. Shadow output is available only to authorized
-evaluation or diagnostic callers and is omitted from ordinary public responses.
+渐进层级与父级优先扩展以 `offline` 或 `shadow` 模式运行。稳定的 `flat-fusion-v1` 策略仍是普通检索与上下文装配的选定策略。影子输出只对授权的评估或诊断调用方可用，并且会从普通公开响应中省略。
 
-## Task-appropriate representation comparison
+## 任务适配的表示对比
 
-The EV3 evaluator compares the stable baseline with one compatible derived
-representation under equal, declared limits. It has four repository-owned task
-families:
+EV3 评估器在相等且已声明的限制下，将稳定基线与一个兼容的派生表示进行比较。它包含四个仓库自有的任务族：
 
-| Task family | Candidate representation | Companion channel |
+| 任务族 | 候选表示 | 配套通道 |
 | --- | --- | --- |
-| Exact terms and numbers | `exact-excerpt-with-search-v1` | Authorized source search |
-| Cross-document evidence | `topic-projection-with-search-v1` or `hierarchical-search-v1` | Authorized source search |
-| Profile preference | `topic-projection-with-search-v1` | Authorized source search |
-| Evidence-backed procedural lesson | `hierarchical-search-v1` | Authorized source search |
+| 精确词项与数字 | `exact-excerpt-with-search-v1` | 授权的源搜索 |
+| 跨文档证据 | `topic-projection-with-search-v1` 或 `hierarchical-search-v1` | 授权的源搜索 |
+| Profile 偏好 | `topic-projection-with-search-v1` | 授权的源搜索 |
+| 有证据支撑的 procedural 经验 | `hierarchical-search-v1` | 授权的源搜索 |
 
-Fixtures lock source and qrel checksums, exact scope, required and excluded
-evidence, source watermark, renderer identity, candidate identity, and equal
-candidate/character/token/latency limits. The comparison fails closed on a
-foreign or lifecycle-hidden source, stale/incompatible identity, missing source
-search, lost critical fact, broken citation, over-budget work, or
-nondeterministic replay. Aggregate utility, repeated-error, or maintenance
-observations are externally supplied and observational only: they cannot offset
-a hard failure or establish that a representation caused an outcome.
+夹具锁定源与 qrel 校验和、确切作用域、必需与排除证据、源水位、渲染器标识、候选标识，以及相等的候选/字符/token/延迟限制。对比在以下情况下失败即关闭：外部或隐藏生命周期的源、过期/不兼容的标识、缺失源搜索、丢失关键事实、引用破损、超预算工作量或非确定性回放。聚合效用、重复错误或维护观察由外部提供，且仅为观察性质：它们不能抵消硬失败，也不能证明某个表示导致了某个结果。
 
-Both baseline and candidate must satisfy these gates. Every returned citation
-must resolve; a valid sibling citation cannot hide a broken target. Derived
-evidence uses the same fixed-clock current-valid-time predicate as source
-retrieval, including exclusive `valid_to` and future `valid_from` rejection.
+基线与候选都必须满足这些门禁。每个返回的引用都必须可解析；一个有效的同级引用不能掩盖破损的目标。派生证据与源检索使用相同的固定时钟当前有效时间谓词，包括拒绝独占的 `valid_to` 与未来的 `valid_from`。
 
-Reports contain task-family and bounded aggregate metrics only: fact/source/
-citation retention, count and size limits, latency, stale/noisy and
-broken-reference counts, maintenance-observation coverage, and rollback state.
-They exclude task/query/answer/source text, aliases, scope values, raw IDs,
-raw scores, credentials, provider payloads, and per-stage costs. The PostgreSQL
-report repository is append-only except scoped expiry cleanup; PostgreSQL stays
-the only system of record.
+报告只包含任务族与有界的聚合指标：事实/来源/引用保留、数量与大小限制、延迟、过期/噪声与破损引用计数、维护观察覆盖以及回滚状态。它们排除任务/查询/答案/源文本、别名、作用域值、原始 ID、原始得分、凭据、提供方载荷与分阶段成本。PostgreSQL 报告仓库除作用域过期清理外为仅追加；PostgreSQL 仍是唯一记录系统。
 
-The locked fixture includes source content, queries, exact critical values and
-excluded lifecycle records. Replay validates both checksums even when the
-caller bypasses the JSON loader. Each case executes the flat baseline, the
-candidate twice, and the flat baseline again for rollback. Returned literal
-excerpts, canonical versions and resolvable citations determine retention;
-item counts cannot establish that a number survived. Candidate fact coverage
-is measured on its representation, so companion search cannot hide a lost fact.
-Search and representation sizes both count toward the candidate's limits.
+锁定夹具包含源内容、查询、确切的关键值与被排除的生命周期记录。即使调用方绕过 JSON 加载器，回放也会校验两个校验和。每个用例执行扁平基线、候选两次，然后再次执行扁平基线以验证回滚。返回的字面摘录、规范版本与可解析引用决定保留；条目计数不能证明某个数字得以保留。候选事实覆盖在其表示上度量，因此配套搜索不能掩盖丢失的事实。搜索与表示的大小都计入候选的限制。
 
-Reports preserve baseline metrics and candidate-minus-baseline deltas. Explicit
-task success/failure, repeated errors and maintenance cost remain separate from
-coverage; absent observations and their deltas stay inconclusive. Token counts
-use whitespace-separated fields for this fixture and are not model usage.
-Measured latency is observational and excluded only from replay equivalence;
-the report hash still binds the measured value. The owned corpus is synthetic
-and narrow: executing it on real PostgreSQL proves service behavior, not a
-general task benefit or a causal model improvement.
+报告保留基线指标与候选减基线的差值。显式的任务成功/失败、重复错误与维护成本与覆盖分开；缺失的观察及其差值保持不确定。此夹具中的 token 计数使用以空白分隔的字段，并非模型用量。实测延迟是观察性质的，仅在回放等价性中被排除；报告哈希仍然绑定该实测值。自有语料是合成且狭窄的：在真实 PostgreSQL 上执行它证明的是服务行为，而不是普遍的任务收益或因果性的模型改进。
 
-Parent-first planning selects a validated parent projection or chunk, then
-expands only children or adjacent chunks whose source version, lifecycle,
-tenant, project, namespace, session, and temporal validity can be proven. The
-plan stops when candidate, depth, token/character, or latency limits are
-reached. A stale, hidden, foreign, missing-lineage, or over-budget item fails
-closed and does not trigger a broader lookup.
+父级优先规划选择一个通过校验的父投影或分块，然后只扩展其源版本、生命周期、租户、项目、命名空间、会话与时间有效性可被证明的子级或相邻分块。当达到候选、深度、token/字符或延迟限制时，规划停止。过期、隐藏、外部、缺失谱系或超预算的条目会失败即关闭，并且不会触发更宽泛的查找。
 
-## Evidence and Rollback
+## 证据与回滚
 
-An experiment report contains only bounded identities, aggregate counts,
-freshness, citation coverage, budget outcomes, fallback categories, and rollback
-state. It excludes queries, prompts, source text, raw scores, provider payloads,
-DSNs, credentials, scope values, and memory identifiers. Reports are stored as
-append-only derived records with bounded expiration and exact-scope predicates.
+实验报告只包含有界标识、聚合计数、新鲜度、引用覆盖、预算结果、回退类别与回滚状态。它排除查询、提示、源文本、原始得分、提供方载荷、DSN、凭据、作用域值与记忆标识符。报告以仅追加的派生记录存储，并带有有界过期与精确作用域谓词。
 
-Quality improvement cannot override an isolation, lifecycle, freshness,
-integrity, deterministic replay, latency, or rollback failure. A non-pass run
-falls back to the stable baseline and is not activation-consumable. Activation,
-when considered in a later change, requires the existing retrieval release
-evidence handoff and an independently authorized rollout policy.
+质量改进不能覆盖隔离、生命周期、新鲜度、完整性、确定性回放、延迟或回滚失败。非通过运行会回退到稳定基线，并且不可用于激活。当在后续变更中考虑激活时，需要现有的检索发布证据交接以及独立授权的发布策略。
 
-## Verification
+## 验证
 
-Focused checks cover deterministic level identities, hidden/foreign/stale
-evidence, bounded parent-first expansion, redacted reports, exact-scope
-repository reads, expiration cleanup, migration ordering, and low-cardinality
-telemetry. The full verification gate is:
+聚焦检查覆盖确定性层级标识、隐藏/外部/过期证据、有界父级优先扩展、脱敏报告、精确作用域仓库读取、过期清理、迁移顺序以及低基数遥测。完整验证门禁是：
 
 ```powershell
 go test ./... -count=1
@@ -108,13 +52,10 @@ go vet ./...
 openspec validate --all --strict
 ```
 
-For the owned PostgreSQL + pgvector replay, run:
+对于自有的 PostgreSQL + pgvector 回放，运行：
 
 ```powershell
 pwsh -NoProfile -File scripts/stele-representation-evaluation-verify.ps1
 ```
 
-The verifier starts and removes only its randomly named disposable container,
-uses an explicit owned DSN rather than a runtime DSN, and emits a bounded JSON
-report. It verifies all four task families, restart/replay persistence, source
-search retention, rejection paths, expiry cleanup, and baseline rollback.
+校验器只启动并移除其随机命名的可丢弃容器，使用明确自有的 DSN 而非运行时 DSN，并输出有界的 JSON 报告。它验证全部四个任务族、重启/回放持久性、源搜索保留、拒绝路径、过期清理与基线回滚。

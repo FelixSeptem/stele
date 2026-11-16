@@ -24,7 +24,7 @@ func TestPublicDocumentationPortalHasAuthorityMap(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	for _, want := range []string{"OpenAPI", "Provider", "MCP", "Self-hosting", "OpenSpec", "authoritative"} {
+	for _, want := range []string{"OpenAPI", "Provider", "MCP", "自托管", "OpenSpec", "权威"} {
 		if !strings.Contains(string(data), want) {
 			t.Fatalf("portal missing %q", want)
 		}

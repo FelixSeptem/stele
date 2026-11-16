@@ -1,67 +1,38 @@
-# Migration implementation notes
+# 迁移实现说明
 
-This note records the implementation decision required by the
-`product-ready-self-hosting-foundation` change before migration production code
-is introduced.
+本说明记录在引入迁移生产代码之前，`product-ready-self-hosting-foundation` 变更所要求的实现决策。
 
-## Current bootstrap inventory
+## 当前引导清单
 
-- `internal/storage/postgres/migrations.go` embeds `migrations/*.sql` and
-  exposes `BaseSchemaSQL`, which currently reads the aggregate
-  `0001_base_schema.up.sql` file.
-- `internal/storage/postgres/bootstrap.go` exposes `BootstrapDatabase`; it
-  opens one transaction, splits the aggregate SQL on semicolons, executes each
-  statement, and commits the transaction.
-- `internal/app/app.go` invokes `BootstrapDatabase` from the API, worker, and
-  scheduler PostgreSQL startup paths.
-- `internal/benchmark/longmemeval_postgres.go` also invokes the bootstrap path
-  for its local benchmark database.
-- `internal/storage/postgres/migrations/0001_base_schema.up.sql` is the
-  supported schema snapshot. It creates the `vector` extension and the current
-  raw-event, canonical-memory, provenance, workflow, assurance, and related
-  tables and indexes.
-- `internal/storage/postgres/bootstrap_test.go` currently verifies aggregate
-  SQL execution with pgxmock, but does not verify ordered versions, pending
-  migrations, dirty state, divergence, or concurrent startup.
+- `internal/storage/postgres/migrations.go` 嵌入 `migrations/*.sql` 并暴露 `BaseSchemaSQL`，它目前读取聚合的 `0001_base_schema.up.sql` 文件。
+- `internal/storage/postgres/bootstrap.go` 暴露 `BootstrapDatabase`；它开启一个事务，按分号拆分聚合 SQL，执行每条语句，并提交事务。
+- `internal/app/app.go` 从 API、worker 和 scheduler 的 PostgreSQL 启动路径调用 `BootstrapDatabase`。
+- `internal/benchmark/longmemeval_postgres.go` 还为其本地基准数据库调用引导路径。
+- `internal/storage/postgres/migrations/0001_base_schema.up.sql` 是受支持的 schema 快照。它创建 `vector` 扩展以及当前的原始事件、规范记忆、来源、工作流、保障及相关表和索引。
+- `internal/storage/postgres/bootstrap_test.go` 目前使用 pgxmock 验证聚合 SQL 执行，但不验证有序版本、待处理迁移、脏状态（dirty state）、分叉或并发启动。
 
-## Library evaluation
+## 库评估
 
-### Selected library: `golang-migrate/migrate/v4` `v4.19.1`
+### 选定库：`golang-migrate/migrate/v4` `v4.19.1`
 
-The module already carries `github.com/golang-migrate/migrate/v4` at
-`v4.19.1`. It will be promoted from an indirect to a direct dependency when
-the migration runner is implemented.
+该模块已在 `v4.19.1` 携带 `github.com/golang-migrate/migrate/v4`。当迁移运行器实现后，它将从间接依赖提升为直接依赖。
 
-Reasons for selection:
+选择理由：
 
-- mature PostgreSQL support and broad production adoption;
-- explicit versioned migration model with ordered `up`/`down` assets;
-- PostgreSQL source driver with database-resident migration metadata and dirty
-  version reporting;
-- PostgreSQL advisory-lock serialization for concurrent migrators;
-- `io/fs` source support, allowing immutable migrations to remain embedded in
-  the service binary without adding an external migration file dependency;
-- clear forward migration, force/recovery, and no-change semantics that can be
-  mapped to Stele's bounded status categories;
-- permissive open-source licensing compatible with this repository.
+- 成熟的 PostgreSQL 支持与广泛的生产采用；
+- 显式的版本化迁移模型，具有有序的 `up`/`down` 资产；
+- PostgreSQL 源驱动，具备数据库驻留的迁移元数据和脏状态（dirty）版本报告；
+- 针对并发迁移者的 PostgreSQL 咨询锁串行化；
+- `io/fs` 源支持，使不可变迁移可以继续嵌入服务二进制，而无需外部迁移文件依赖；
+- 清晰的前向迁移、强制/恢复和无变更语义，可映射到 Stele 的有界状态类别；
+- 与本仓库兼容的宽松开源许可。
 
-### Alternatives considered
+### 考虑的替代方案
 
-- `pressly/goose`: mature and supports embedded migrations, but would require a
-  new migration abstraction and does not reuse the dependency already present
-  in the module.
-- `go-jet/jet`/`tern`: useful PostgreSQL tooling, but less aligned with the
-  existing Go migration dependency and would add a different operational model.
-- A repository-local runner over `CREATE TABLE IF NOT EXISTS`: rejected because
-  it cannot represent ordered upgrades, dirty state, divergence, or safe
-  concurrent startup.
+- `pressly/goose`：成熟且支持嵌入式迁移，但需要新的迁移抽象，且不会复用模块中已有的依赖。
+- `go-jet/jet`/`tern`：有用的 PostgreSQL 工具，但与现有 Go 迁移依赖不太一致，且会引入不同的运维模型。
+- 基于 `CREATE TABLE IF NOT EXISTS` 的仓库本地运行器：被拒绝，因为它无法表示有序升级、脏状态、分叉或安全的并发启动。
 
-## Constraints for the implementation
+## 实现约束
 
-The runner must use immutable numbered SQL assets, a database-resident ledger,
-PostgreSQL-owned serialization, and forward-only execution. Runtime modes and
-the standalone CLI must share the same runner, lock, and status reader. A dirty,
-divergent, incompatible, or partially applied state must fail closed; automatic
-down migration is not permitted. The current aggregate schema is the source
-for the immutable initial migration and must not remain a mutable startup
-replay mechanism.
+运行器必须使用不可变的编号 SQL 资产、数据库驻留账本、PostgreSQL 拥有的串行化以及仅前向执行。运行时模式和独立 CLI 必须共享同一个运行器、锁和状态读取器。脏状态、分叉、不兼容或部分应用的状态必须失败即关闭；不允许自动 down 迁移。当前聚合 schema 是不可变初始迁移的来源，且不得继续作为可变启动重放机制。

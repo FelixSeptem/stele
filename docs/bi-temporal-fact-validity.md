@@ -1,65 +1,31 @@
-# Bi-temporal fact validity
+# 双时态事实有效性
 
-Stele keeps two independent clocks for factual canonical memory versions:
+Stele 为事实性规范记忆版本保留两个独立时钟：
 
-- **Recorded time** is when Stele ingested or wrote the version. Existing
-  `time_from` and `time_to` search fields keep this recorded/update-time
-  meaning.
-- **Valid time** is the interval in which the fact was true. Factual
-  `profile`, `episodic`, and `procedural` versions use the half-open interval
-  `[valid_from, valid_to)`; a null `valid_to` is open-ended.
+- **记录时间**是 Stele 摄取或写入该版本的时间。现有的 `time_from` 和 `time_to` 搜索字段保留这种记录/更新时间含义。
+- **有效时间**是该事实为真的区间。事实性的 `profile`、`episodic` 和 `procedural` 版本使用半开区间 `[valid_from, valid_to)`；`valid_to` 为 null 表示无限期。
 
-This distinction is append-only. A correction appends a successor version and
-an auditable correction-ledger record; it never overwrites a previous canonical
-version, raw event, provenance record, chunk, embedding, or projection.
+这种区分是仅追加（append-only）的。更正会追加一个后继版本和一条可审计的更正账本记录；它从不覆盖先前的规范版本、原始事件、来源记录、分块、嵌入或投影。
 
-## Search and lifecycle semantics
+## 检索与生命周期语义
 
-Ordinary search is a current-fact read. Before lexical, semantic, relation, or
-chunk candidates are fused, Stele requires exact `tenant`, `project`, and
-`namespace` scope, ordinary lifecycle visibility, and validity at one captured
-request evaluation instant. An expired, conflicting, suppressed, forgotten, or
-deleted version is not eligible merely because it has a stronger similarity
-score.
+普通检索是当前事实读取。在词法、语义、关系或分块候选被融合之前，Stele 要求精确的 `tenant`、`project` 和 `namespace` 作用域、普通生命周期可见性，以及在某个已捕获的请求评估时刻的有效性。一个过期、冲突、被抑制、被遗忘或已删除的版本，不会仅仅因为相似度分数更高而符合条件。
 
-Historical selection is explicit:
+历史选择是显式的：
 
-- `as_of` selects a version valid at one RFC 3339 instant.
-- `valid_from` and `valid_to` together select versions overlapping that
-  half-open interval.
+- `as_of` 选取在某个 RFC 3339 时刻有效的版本。
+- `valid_from` 与 `valid_to` 一起选取与该半开区间重叠的版本。
 
-`as_of` is mutually exclusive with the interval pair, and a partial or invalid
-interval is rejected. These valid-time selectors do not reinterpret
-`time_from` or `time_to`. Historical retrieval stays exact-scope, lifecycle
-safe, bounded by the normal retrieval envelope, and requires the authorized
-temporal plan/rollout path; it never silently broadens an ordinary request.
+`as_of` 与区间对互斥，部分或无效区间会被拒绝。这些有效时间选择器不会重新解释 `time_from` 或 `time_to`。历史检索保持精确作用域、生命周期安全，受普通检索信封约束，并且需要经授权的时间计划/上线路径；它从不静默扩大普通请求。
 
-## History, provenance, and derived evidence
+## 历史、来源与派生的证据
 
-Privileged history and provenance views identify the selected version's
-temporal fact identity, recorded time, valid bounds, validity source, and
-append-only correction lineage. Ordinary results expose only the stable public
-response shape and bounded temporal selection summary; they do not echo a
-caller-supplied instant, hidden version identity, raw interval detail, or
-internal diagnostic.
+特权历史与来源视图会标识所选版本的时间事实身份、记录时间、有效边界、有效性来源以及仅追加的更正谱系。普通结果只暴露稳定的公开响应形状和有界的时间选择摘要；它们不会回显调用方提供的时刻、隐藏的版本身份、原始区间细节或内部诊断。
 
-Relations, chunks, embeddings, citations, and context projections retain the
-immutable source-version and validity snapshot used to derive them. A
-successor creates new derived lineage; historical materialization that is
-missing yields a bounded channel omission or baseline fallback, never a
-substitution from another version or scope.
+关系、分块、嵌入、引用和上下文投影会保留用于派生它们的不可变源版本与有效性快照。后继会创建新的派生谱系；缺失的历史物化会产生有界通道省略或基线回退，绝不会用另一个版本或作用域替代。
 
-## Legacy compatibility and rollout
+## 旧版兼容与上线
 
-Migration `0014_bi_temporal_fact_validity` treats legacy rows as
-`legacy_current_compatible`: their recorded creation time becomes `ingested_at`
-and `valid_from`, and open-ended `valid_to` preserves current retrieval.
-Stele does not invent historical truth before that compatibility interpretation.
+迁移 `0014_bi_temporal_fact_validity` 将旧版行视为 `legacy_current_compatible`：其记录的创建时间成为 `ingested_at` 和 `valid_from`，而无限期的 `valid_to` 保持当前检索。Stele 不会在该兼容解释之前虚构历史真相。
 
-Temporal behavior begins in diagnostics/shadow. Promotion to
-`active_for_scope` requires compatible, explicitly owned PostgreSQL + pgvector
-evidence proving no stale-fact win, validity ambiguity, provenance mismatch,
-hidden-version leak, scope leak, or resource overflow. Missing owned-DSN
-evidence is a stable non-pass. Disabling the temporal policy returns the
-approved current baseline without deleting history; the operational procedure
-is documented in [Bi-temporal migration, recovery, and rollback](bi-temporal-migration-and-rollback.md).
+时间行为从诊断/shadow 开始。提升为 `active_for_scope` 需要兼容的、明确拥有的 PostgreSQL + pgvector 证据，证明没有过期事实胜出、有效性歧义、来源不匹配、隐藏版本泄漏、作用域泄漏或资源溢出。缺少自有 DSN 证据是稳定的非通过。禁用时间策略会返回已批准的当前基线而不删除历史；操作流程记录在[双时态迁移、恢复与回滚](bi-temporal-migration-and-rollback.md)。

@@ -1,42 +1,24 @@
-# Local Agent Memory Benchmark
+# 本地 agent 记忆基准
 
-Stele's benchmark suite evaluates retrieval evidence, not generated answers. It is designed to run on a developer machine with local data and without a required public service, remote embedding API, or LLM judge.
+Stele 的基准套件评估检索证据，而不是生成的答案。它被设计为在开发者机器上使用本地数据运行，并且不需要公共服务、远程嵌入 API 或 LLM 裁判。
 
-## Dataset policy
+## 数据集策略
 
-The repository contains only a synthetic, repository-owned LoCoMo-shaped smoke fixture. Its manifest checksum is calculated over canonical LF text so Git checkout line endings do not change smoke verification. It does not redistribute the LoCoMo, LongMemEval, Multi-Session Chat, PersonaChat, HotpotQA, TimeQA, or BEIR full corpora.
+仓库只包含一个合成的、仓库自有的 LoCoMo 形态冒烟夹具。其清单校验和基于规范的 LF 文本计算，因此 Git 检出的行尾不会改变冒烟验证结果。它不分发 LoCoMo、LongMemEval、Multi-Session Chat、PersonaChat、HotpotQA、TimeQA 或 BEIR 的完整语料。
 
-## Benchmark expansion tracks
+## 基准扩展轨道
 
-The local runner keeps benchmark families separate. `memory` covers LoCoMo and
-LongMemEval retrieval, `provider_contract` replays BFCL-shaped memory operations,
-`specialized_retrieval` covers profile, temporal, and multi-hop fixtures,
-`generic_retrieval` is reserved for C-MTEB/MTEB/BEIR strategy comparisons, and
-`stress` reports controlled long-context or multimodal degradation. Family labels
-are part of every manifest/report and results from different families are not
-aggregated into one quality score.
+本地运行器将基准族分开维护。`memory` 覆盖 LoCoMo 与 LongMemEval 检索，`provider_contract` 回放 BFCL 形态的记忆操作，`specialized_retrieval` 覆盖 profile、时间与多跳夹具，`generic_retrieval` 保留用于 C-MTEB/MTEB/BEIR 策略对比，`stress` 报告受控的长上下文或多模态退化。族标签是每份清单/报告的一部分，来自不同族的结果不会被聚合为单一质量分。
 
-The default remains offline. Prepare restricted datasets in a local cache with a
-checksum-locked manifest, then use `benchmark fetch`, `benchmark normalize`, and
-`benchmark run`. No command silently downloads a model or substitutes another
-dataset. `benchmark contract --fixture <path>`, `benchmark bfcl-v4 --source
-<path> --tenant <tenant> --project <project> --namespace <namespace>`,
-`benchmark specialized`, and `benchmark stress` provide offline checks for the
-expansion tracks. Use `benchmark clean --dataset <name> --version <version>
---run-id <id>` to remove run-scoped artifacts while retaining reports by
-default.
+默认保持离线。将受限数据集准备到本地缓存中，并附带校验和锁定的清单，然后使用 `benchmark fetch`、`benchmark normalize` 与 `benchmark run`。任何命令都不会静默下载模型或替换为其他数据集。`benchmark contract --fixture <path>`、`benchmark bfcl-v4 --source <path> --tenant <tenant> --project <project> --namespace <namespace>`、`benchmark specialized` 与 `benchmark stress` 为扩展轨道提供离线检查。使用 `benchmark clean --dataset <name> --version <version> --run-id <id>` 删除运行作用域产物，同时默认保留报告。
 
-For reproducibility, retain the manifest SHA256, upstream revision, conversion
-version, normalized checksum, qrels checksum, embedding and strategy profiles,
-PostgreSQL/pgvector versions, run scope, and report path together. Missing or
-drifting inputs are prerequisite failures; the runner never repairs them with an
-implicit download. Restricted source files stay outside Git under the cache.
+为可复现性，请将清单 SHA256、上游修订、转换版本、归一化校验和、qrels 校验和、嵌入与策略配置、PostgreSQL/pgvector 版本、运行作用域与报告路径一起保留。缺失或漂移的输入属于前置条件失败；运行器绝不会通过隐式下载来修复它们。受限源文件保留在 Git 之外的缓存中。
 
-Before fetching a full external dataset, review its current license and upstream terms. Create a manifest that locks the dataset name, version, upstream URL, upstream revision, SHA256, conversion version, split, and embedding profile. Keep the downloaded files under a local cache; do not add them to Git unless redistribution is explicitly permitted.
+在获取完整外部数据集之前，请审阅其当前许可证与上游条款。创建清单，锁定数据集名称、版本、上游 URL、上游修订、SHA256、转换版本、划分与嵌入配置。将下载的文件保存在本地缓存下；除非明确允许再分发，否则不要将其加入 Git。
 
-## Local cache
+## 本地缓存
 
-Set these variables for a local full run:
+为本地完整运行设置以下变量：
 
 ```powershell
 $env:STELE_BENCHMARK_DATA_DIR = "D:\stele-benchmark-data"
@@ -45,7 +27,7 @@ $env:STELE_BENCHMARK_DATA_VERSION = "<locked-version>"
 $env:STELE_BENCHMARK_OFFLINE = "true"
 ```
 
-The deterministic cache layout is:
+确定性缓存布局为：
 
 ```text
 <data-dir>/<dataset>/<version>/
@@ -55,11 +37,11 @@ The deterministic cache layout is:
   reports/
 ```
 
-`fetch` is the only operation allowed to use an explicitly enabled network connection. It must verify the manifest SHA256 before replacing raw data. `run` is offline by default and never downloads data, models, vectors, or judges implicitly.
+`fetch` 是唯一允许使用显式启用的网络连接的操作。它必须在替换原始数据之前校验清单 SHA256。`run` 默认离线，并且绝不会隐式下载数据、模型、向量或裁判。
 
-## Smoke verification
+## 冒烟验证
 
-The repository-owned smoke check requires no PostgreSQL, model download, or network request:
+仓库自有的冒烟检查不需要 PostgreSQL、模型下载或网络请求：
 
 ```powershell
 $env:STELE_BENCHMARK_DATA_DIR = "$PWD\.tmp\benchmark"
@@ -67,40 +49,27 @@ go run ./cmd/stele benchmark list
 go run ./cmd/stele benchmark run-smoke
 ```
 
-`run-smoke` writes a JSON report to the local cache. It records the dataset version and checksum, mode, offline status, query metrics, latency, and safety failures. The fixture's candidate generator is intentionally deterministic; it verifies the adapter, cache, qrels, report and safety contracts, not real retrieval quality.
+`run-smoke` 将 JSON 报告写入本地缓存。它记录数据集版本与校验和、模式、离线状态、查询指标、延迟与安全失败。夹具的候选生成器有意保持确定性；它验证适配器、缓存、qrels、报告与安全契约，而不是真实检索质量。
 
-## Embedding profiles
+## 嵌入配置
 
-Semantic and hybrid modes require an explicit local model or pre-cached vector profile. Lock model name, revision, dimensions, normalization and vector source in the manifest. A dimension or profile mismatch fails admission with `prerequisite_missing`.
+语义与混合模式需要一个明确的本地模型或预缓存向量配置。在清单中锁定模型名称、修订、维度、归一化与向量源。维度或配置不匹配会以 `prerequisite_missing` 拒绝准入。
 
-Lexical-only smoke is allowed only when explicitly selected. The runner does not silently turn a semantic or hybrid run into lexical mode.
+仅在显式选择时才允许仅词法冒烟。运行器不会静默地将语义或混合运行变成词法模式。
 
-## Run modes
+## 运行模式
 
-- `smoke`: repository-owned bounded fixture; suitable for CI and installation verification.
-- `local-full`: full locally cached dataset and vectors; no network fallback.
-- `reproducible-extended`: full data plus locked model/profile, strategy/chunk settings, qrels and random seed metadata.
+- `smoke`：仓库自有的有界夹具；适用于 CI 与安装验证。
+- `local-full`：完整的本地缓存数据集与向量；没有网络回退。
+- `reproducible-extended`：完整数据加上锁定的模型/配置、策略/分块设置、qrels 与随机种子元数据。
 
-## BFCL V4 Provider-contract conformance
+## BFCL V4 Provider 契约一致性
 
-`benchmark bfcl-v4` evaluates a locally supplied, checksum-locked BFCL V4
-memory-source envelope for one of `memory_kv`, `memory_rec_sum`, or
-`memory_vector`. The envelope carries a license-reviewed local extraction of
-the upstream source together with its raw-source digest, upstream revision,
-conversion version, prerequisite/snapshot digests, and the normalized operation
-records that Stele can evaluate. Keep the raw upstream source outside Git.
+`benchmark bfcl-v4` 针对 `memory_kv`、`memory_rec_sum` 或 `memory_vector` 之一，评估本地提供的、校验和锁定的 BFCL V4 记忆源信封。该信封携带经许可证审阅的上游源本地提取，以及其原始源摘要、上游修订、转换版本、前置条件/快照摘要，以及 Stele 可评估的归一化操作记录。请将原始上游源保留在 Git 之外。
 
-The command validates Provider-contract compatibility only. It does not invoke
-a model or BFCL agent harness, call remote tools, execute the upstream judge,
-or produce an official BFCL score. Unsupported operations and incomplete
-prerequisite state remain explicit nonpassing coverage outcomes; they are never
-silently mapped to another operation. Source-provided fields cannot widen the
-declared project/tenant/namespace scope or override lifecycle refusal rules.
-The exact scope is supplied independently through the command flags and every
-source case must match it exactly.
+该命令只校验 Provider 契约兼容性。它不会调用模型或 BFCL agent harness，不会调用远程工具，不会执行上游裁判，也不会产生官方 BFCL 分数。不受支持的操作与不完整的前置状态仍是显式的非通过覆盖结果；它们绝不会被静默映射到另一个操作。源提供的字段不能扩大声明的项目/租户/命名空间作用域或覆盖生命周期拒绝规则。确切作用域通过命令标志独立提供，并且每个源用例都必须与之完全匹配。
 
-Prepare the envelope with an empty `source_checksum`, then calculate its
-canonical lock and insert the returned value before running conformance:
+使用空的 `source_checksum` 准备信封，然后计算其规范锁定，并在运行一致性检查之前插入返回值：
 
 ```powershell
 go run ./cmd/stele benchmark lock-bfcl-v4 `
@@ -113,7 +82,7 @@ go run ./cmd/stele benchmark bfcl-v4 `
   --namespace local
 ```
 
-The local envelope shape is intentionally narrow:
+本地信封形态有意保持狭窄：
 
 ```json
 {
@@ -139,23 +108,13 @@ The local envelope shape is intentionally narrow:
 }
 ```
 
-The emitted report retains family identity, source revision/digests,
-prerequisite digest, aggregate supported/unsupported/incomplete coverage,
-contract metrics, status, and cleanup verification. It deliberately omits raw
-source records, scopes, memory identifiers, hidden candidates, and individual
-operation identities. A retained non-synthetic, license-reviewed local source
-run is required before using this track as external-input evidence; repository
-tests verify only the adapter and safety contract.
+生成的报告保留族标识、源修订/摘要、前置条件摘要、聚合的受支持/不受支持/不完整覆盖、契约指标、状态与清理验证。它有意省略原始源记录、作用域、记忆标识符、隐藏候选与单个操作标识。在将该轨道用作外部输入证据之前，需要一次保留的、非合成的、经许可证审阅的本地源运行；仓库测试只验证适配器与安全契约。
 
-## Experimental adapters and operations
+## 实验性适配器与操作
 
-LongMemEval `s` is runnable when its local manifest and raw/normalized cache
-are present. The adapter accepts the cleaned ModelScope haystack format and
-preserves question date, question type, answer session IDs, abstention,
-update/conflict state, and source-session provenance. `m` and `oracle` remain
-explicitly selected subsets; omitting `--subset` does not silently choose one.
+当本地清单与原始/归一化缓存存在时，LongMemEval `s` 可运行。适配器接受清理后的 ModelScope haystack 格式，并保留问题日期、问题类型、答案会话 ID、弃答、更新/冲突状态与源会话来源。`m` 与 `oracle` 仍是显式选择的子集；省略 `--subset` 不会静默选择其一。
 
-Example using the locked local cache:
+使用锁定本地缓存的示例：
 
 ```powershell
 $env:STELE_POSTGRES_DSN = "postgres://stele:stele@127.0.0.1:55432/stele?sslmode=disable"
@@ -168,61 +127,28 @@ go run ./cmd/stele benchmark run `
   --subset s
 ```
 
-The command is offline after normalization and writes a run-scoped
-`reports/<run-id>/retrieval.json` artifact. A successful real run records
-`synthetic_fixture: false`, PostgreSQL/pgvector identity, normalized and qrels
-checksums, scope, safety outcomes, and artifact paths. The benchmark-owned
-database scope is cleaned after replay; retained report and manifest files are
-not deleted by default.
+该命令在归一化之后离线，并写入一个运行作用域的 `reports/<run-id>/retrieval.json` 产物。成功的真实运行会记录 `synthetic_fixture: false`、PostgreSQL/pgvector 标识、归一化与 qrels 校验和、作用域、安全结果与产物路径。基准自有的数据库作用域在回放后清理；保留下来的报告与清单文件默认不被删除。
 
-Before importing a large local corpus, run a capacity preflight and choose an
-explicit event batch size. A refusal is reported as `capacity_refused` with a
-bounded diagnostic; no PostgreSQL import is attempted. Run-scoped normalized
-and embedding artifacts can be removed with `CleanupBenchmarkRun`, while
-retaining report artifacts for audit.
+在导入大型本地语料之前，先运行容量预检并选择显式的事件批大小。拒绝会以 `capacity_refused` 与有界诊断报告；不会尝试任何 PostgreSQL 导入。运行作用域的归一化与嵌入产物可以用 `CleanupBenchmarkRun` 删除，同时保留报告产物以供审计。
 
-The CI smoke workflow uses only the checked-in fixture. It does not download
-external corpora, models, vectors, or judges and does not require PostgreSQL.
+CI 冒烟工作流只使用已签入的夹具。它不会下载外部语料、模型、向量或裁判，也不需要 PostgreSQL。
 
-## Longitudinal task-series evaluation
+<a id="longitudinal-task-series-evaluation"></a>
+## 纵向任务序列评估
 
-The longitudinal evaluator compares at least two explicitly declared memory
-conditions over the same ordered task stages. Each stage supplies an externally
-judged `succeeded`, `partial`, `failed`, or `inconclusive` verdict; Stele never
-infers an outcome. `inconclusive` is excluded from utility denominators and
-makes the series incomplete. Utility uses the locked metric mapping
-`succeeded=1`, `partial=0.5`, `failed=0`. Stale/noisy harm counts only annotated
-evidence aliases that were actually returned by retrieval. Provenance coverage
-counts only returned aliases with verified citations, exact scope and visible
-lifecycle. Scope/lifecycle failures independently fail the safety gate even
-when task utility is higher. Condition differences are observational, not
-causal claims.
+纵向评估器在相同的有序任务阶段上比较至少两个显式声明的记忆条件。每个阶段提供一个外部判定的 `succeeded`、`partial`、`failed` 或 `inconclusive` 判定；Stele 绝不推断结果。`inconclusive` 被排除在效用分母之外，并使该序列不完整。效用使用锁定的指标映射 `succeeded=1`、`partial=0.5`、`failed=0`。过期/噪声伤害只统计检索实际返回的带注释证据别名。来源覆盖只统计具有已校验引用、确切作用域与可见生命周期的已返回别名。作用域/生命周期失败会独立地使安全门禁失败，即使任务效用更高。条件差异是观察性的，不是因果主张。
 
-Prepare a local JSON source bundle with `manifest` and `corpora` fields. The
-manifest contains `schema_version`, `metric_version`, exact `scope`, one
-`baseline: true` condition plus comparison conditions, ordered `stages`, each
-stage's `query_id`, exact `scope`, external `verdict`, and `evidence` aliases
-with optional `stale` / `noisy` labels. Each condition's normalized corpus must
-contain exactly those queries; declared evidence aliases must be active,
-same-scope events linked to that query by qrels. `synthetic_fixture` identifies
-whether the source is synthetic. Keep task content and source corpora local;
-the retained aggregate report excludes task/query text, scopes, aliases,
-identifiers and candidate details.
+准备一个包含 `manifest` 与 `corpora` 字段的本地 JSON 源包。清单包含 `schema_version`、`metric_version`、确切 `scope`、一个 `baseline: true` 条件加上对比条件、有序的 `stages`、每个阶段的 `query_id`、确切 `scope`、外部 `verdict`，以及带可选 `stale` / `noisy` 标签的 `evidence` 别名。每个条件的归一化语料必须恰好包含这些查询；声明的证据别名必须是由 qrels 关联到该查询的活动、同作用域事件。`synthetic_fixture` 标识源是否为合成。请将任务内容与源语料保存在本地；保留的聚合报告排除任务/查询文本、作用域、别名、标识符与候选细节。
 
-For `synthetic_fixture: false`, the bundle also requires a runnable
-`dataset_manifest` with the upstream URL and revision, license, raw-source
-SHA-256, conversion version, split identity, and runnable support declaration.
-The runner records only its digest/name/version in the aggregate report. A
-non-synthetic claim without this provenance lock is refused.
+对于 `synthetic_fixture: false`，源包还需要一个可运行的 `dataset_manifest`，包含上游 URL 与修订、许可证、原始源 SHA-256、转换版本、划分标识与可运行支持声明。运行器只在聚合报告中记录其摘要/名称/版本。没有该来源锁定的非合成声明会被拒绝。
 
-First compute the deterministic source and qrel locks:
+首先计算确定性的源与 qrel 锁定：
 
 ```powershell
 go run ./cmd/stele benchmark lock-task-series --source D:\stele-benchmark-data\task-series\bundle.json
 ```
 
-Insert the returned `qrels_checksum` and `source_checksum` into the bundle's
-manifest, then run against an isolated PostgreSQL + pgvector database:
+将返回的 `qrels_checksum` 与 `source_checksum` 插入源包的清单，然后针对隔离的 PostgreSQL + pgvector 数据库运行：
 
 ```powershell
 $env:STELE_POSTGRES_DSN = "postgres://stele:stele@127.0.0.1:55432/stele?sslmode=disable"
@@ -234,138 +160,59 @@ go run ./cmd/stele benchmark run-task-series `
   --namespace local
 ```
 
-The command has no network fallback, requires an exact-scope source bundle and
-PostgreSQL DSN, runs each condition in a separate benchmark-owned scope through
-the normal fixture seeder and retrieval replay path, and writes a mode-0600
-aggregate report. `synthetic_fixture: true`, incomplete outcomes, checksum
-mismatch, or any safety failure cannot satisfy longitudinal completion
-evidence. A non-synthetic completion report must also contain
-`cleanup_verified: true`; a cleanup failure is a failed run and no retained
-report can be used as acceptance evidence. No public API or production retrieval
-policy is changed.
+该命令没有网络回退，要求确切作用域的源包与 PostgreSQL DSN，通过常规夹具播种器与检索回放路径在每个基准自有作用域中分别运行每个条件，并写入权限为 0600 的聚合报告。`synthetic_fixture: true`、不完整结果、校验和不匹配或任何安全失败都无法满足纵向完成证据。非合成完成报告还必须包含 `cleanup_verified: true`；清理失败即为运行失败，任何保留的报告都不能用作验收证据。不改变任何公开 API 或生产检索策略。
 
-## Locked v3 staged replay
+<a id="locked-v3-staged-replay"></a>
+## 锁定的 v3 分阶段回放
 
-`task-series-v3` / `task-series-metrics-v3` is an opt-in, maintainer-owned
-offline extension of the longitudinal evaluator. It declares exactly five
-ordered conditions (`no_memory`, `source_records`, `organized`,
-`verified_corrected`, `resident`) with identical stages and held-out flags, plus
-SHA-256 model/runtime/criteria identities, 1-32 distinct nonnegative seeds and
-equal independent item/UTF-8-byte/whitespace-token/citation budgets (ranges
-1-64, 1-65536, 1-16384, 1-64, and a 1-60000 ms latency bound). These are local
-experiment locks, not attestations or acceptance thresholds; external criteria
-must define task and cost acceptance before data collection.
+`task-series-v3` / `task-series-metrics-v3` 是纵向评估器的可选择加入、维护者自有的离线扩展。它声明恰好五个有序条件（`no_memory`、`source_records`、`organized`、`verified_corrected`、`resident`），阶段与留出标志相同，外加 SHA-256 的模型/运行时间/判据标识、1-32 个不同的非负种子，以及相等的独立条目/UTF-8 字节/空白 token/引用预算（范围 1-64、1-65536、1-16384、1-64，以及 1-60000 ms 的延迟上限）。这些是本地实验锁定，不是证明或验收阈值；外部判据必须在数据收集之前定义任务与成本验收。
 
-Each condition declares at most 64 source windows binding reference, immutable
-positive source version, SHA-256 literal content, disclosable metadata, first
-available stage and optional first withdrawn stage. The runner physically seeds
-only stage-visible events, qrels and query annotations into a fresh owned
-PostgreSQL scope; conversations are rejected. Disclosure, lifecycle, exact
-scope, citation lineage and all four budgets are checked against returned rows.
-A later baseline replay compares redacted evidence identities. Canonical JSON
-keys are enforced; duplicate keys, aliases, future/withdrawn evidence, missing
-identities, restricted metadata or v3 fields on v1/v2 bundles fail closed with
-bounded `invalid_manifest` / `checksum_mismatch` errors. The no-memory condition
-has no sources, qrels or expected evidence. At most 64 stages and 64 sources
-per condition are allowed, so at most 320 stage searches plus 64 baseline
-replays run.
+每个条件最多声明 64 个源窗口，绑定参考、不可变的正面源版本、SHA-256 字面内容、可披露元数据、首个可用阶段与可选的首个撤回阶段。运行器只将阶段可见的事件、qrels 与查询注释物理播种到全新的自有 PostgreSQL 作用域中；对话会被拒绝。披露、生命周期、确切作用域、引用谱系与全部四个预算都会针对返回的行进行检查。后续的基线回放会对比脱敏的证据标识。强制使用规范 JSON 键；重复键、别名、未来/已撤回证据、缺失标识、受限元数据或 v1/v2 源包上的 v3 字段会以有界的 `invalid_manifest` / `checksum_mismatch` 错误失败即关闭。无记忆条件没有源、qrels 或预期证据。每个条件最多允许 64 个阶段与 64 个源，因此最多运行 320 次阶段搜索加 64 次基线回放。
 
-The locked synthetic fixture is
-`internal/benchmark/testdata/locked-longitudinal-task-series-v3.json`.
-Recompute both locks with `benchmark lock-task-series` whenever the manifest or
-corpora change; v1/v2 fixtures keep their existing checksums and defaults, and
-only the documented v2 denominator correction changes their reports:
-repeated-error and maintenance coverage now divide by non-superseded stages
-(including inconclusive utility stages), so coverage cannot exceed one.
-Regenerate old v2 report artifacts instead of comparing them with the former
-denominator. V3 is selected only by schema/metric identity; no migration,
-database schema change, public route, authorization role or production
-retrieval policy is involved. Rollback is stopping the offline run or using a
-v1/v2 bundle.
+锁定的合成夹具是 `internal/benchmark/testdata/locked-longitudinal-task-series-v3.json`。每当清单或语料发生变化时，用 `benchmark lock-task-series` 重新计算两个锁定；v1/v2 夹具保留其现有校验和与默认值，只有已记录的 v2 分母更正会改变其报告：重复错误与维护覆盖现在除以未被取代的阶段（包括 inconclusive 效用阶段），因此覆盖不能超过 1。请重新生成旧的 v2 报告产物，而不是将其与旧分母比较。V3 仅由 schema/指标标识选择；不涉及迁移、数据库 schema 变更、公开路由、授权角色或生产检索策略。回滚就是停止离线运行或改用 v1/v2 源包。
 
-V3 reports keep model-token and tool-call observations separate from utility,
-repeated errors and maintenance, with independent observed counts, totals,
-nullable averages and coverage. Measured service latency, scope/lifecycle/
-disclosure eligibility, future-evidence exclusion and tested baseline replay
-are independent gates. Missing observations or gates are inconclusive, never a
-zero observation or a pass; utility improvement cannot override a failed gate.
-Serialized v3 reports expose experiment/input/observation digests, gate counts
-and bounded aggregates only. Reports never carry IDs, query/content text,
-actors, scopes or raw criteria. Use the disposable owned verifier from a
-checkout with Docker available:
+V3 报告将模型 token 与工具调用观察同效用、重复错误和维护分开，具有独立的已观察计数、总量、可空平均值与覆盖。实测服务延迟、作用域/生命周期/披露资格、未来证据排除与经过测试的基线回放都是独立门禁。缺失的观察或门禁是不确定的，绝不是零观察或通过；效用提升不能覆盖失败的门禁。序列化的 v3 报告只暴露实验/输入/观察摘要、门禁计数与有界聚合。报告绝不携带 ID、查询/内容文本、执行者、作用域或原始判据。在有 Docker 的检出中运行可丢弃的自有校验器：
 
 ```powershell
 pwsh -NoProfile -File scripts/stele-longitudinal-v3-verify.ps1 -Diagnostic
 ```
 
-It creates a random-owned PostgreSQL + pgvector container, replays all five
-conditions and the baseline, restarts the container (rebinding its ephemeral
-host port), repeats the replay, verifies exact owned row/container cleanup and
-emits a bounded synthetic-conformance report. It never adopts an operator DSN.
-Synthetic input stays labeled and external outcomes remain inconclusive: this
-demonstrates neither general task benefit nor causal improvement and authorizes
-no activation.
+它会创建一个随机自有的 PostgreSQL + pgvector 容器，回放全部五个条件与基线，重启容器（重新绑定其临时宿主端口），重复回放，验证确切的自有行/容器清理，并输出有界的合成一致性报告。它绝不采用运维 DSN。合成输入保持标注状态，外部结果保持不确定：这既不表明普遍任务收益，也不表明因果改进，并且不授权任何激活。
 
-## Resident-context comparison observations
+## 常驻上下文对比观察
 
-The internal resident evaluator complements task-series replay by comparing
-the existing profile placement policy with an evidence-filtered candidate. Its
-support/utility observations bind an exact source version and content hash;
-later condition observations must bind the actual source/output digests and
-occur after selection and all support/utility stages. Selection utility cannot
-be recycled as the comparison outcome. Qualifying support remains an external
-observation, not service-discovered truth or procedural verification authority.
+内部常驻评估器通过将现有 profile 放置策略与一个证据过滤候选进行比较，来补充任务序列回放。其支持/效用观察绑定确切的源版本与内容哈希；后续条件观察必须绑定实际的源/输出摘要，并发生在选择以及所有支持/效用阶段之后。选择效用不能作为对比结果复用。合格的支持仍是外部观察，而不是服务发现的真相或程序性验证权威。
 
-Task success, repeated errors, stale-evidence harm, maintenance cost, tool calls
-and model tokens are independently supplied. Missing fields remain unobserved;
-observed false/zero values are retained. Only mutually observed fields produce
-candidate-minus-baseline deltas. Without both task verdicts, status stays
-`inconclusive`; even complete pairs are labeled `observational`, with no causal
-or activation claim. The owned verifier described in [self-hosting](self-hosting.md#evidence-gated-resident-context-evaluation)
-checks synthetic service conformance and durable projection lineage. It does
-not replace non-synthetic longitudinal evidence, controlled repeated trials,
-latency gates, or independent isolation/lifecycle/disclosure/rollback checks.
+任务成功、重复错误、过期证据伤害、维护成本、工具调用与模型 token 都由外部提供。缺失字段保持未观察；观察到的 false/零值会被保留。只有相互观察到的字段才会产生候选减基线的差值。没有两个任务判定时，状态保持 `inconclusive`；即使完整的配对也被标注为 `observational`，不含因果或激活主张。在 [self-hosting](self-hosting.md#evidence-gated-resident-context-evaluation) 中描述的自有校验器检查合成服务一致性与持久投影谱系。它不能替代非合成的纵向证据、受控重复试验、延迟门禁，或独立的隔离/生命周期/披露/回滚检查。
 
-## Troubleshooting
+## 故障排查
 
-| Status | Meaning | Action |
+| 状态 | 含义 | 操作 |
 | --- | --- | --- |
-| `prerequisite_missing` | Local dataset, normalized split, vectors or model profile is absent. | Prepare the artifact locally; do not expect automatic download. |
-| `checksum_mismatch` | Raw data or normalized metadata does not match the lock. | Remove only the affected cache version and fetch/normalize again from the verified source. |
-| `invalid_manifest` | Version, license, provenance, split or embedding profile is incomplete. | Fix and re-lock the manifest before running. |
-| safety failure | A forbidden, cross-scope or non-active memory was returned. | Treat the run as non-releasable and inspect scope/lifecycle filters. |
-| quality gate failure | Metrics regressed without a safety violation. | Compare the report using the same corpus, qrels and embedding profile before changing ranking or chunking policy. |
-| `capacity_refused` | The local event/query/byte budget is too small for the selected corpus. | Increase the explicit local budget or choose a bounded split/batch; do not bypass the refusal by importing into a production scope. |
-| task-series `checksum_mismatch` | The source bundle or its condition qrels changed after locking. | Re-review the external outcomes and normalized corpora, then recompute both locks. |
-| task-series incomplete | A condition has inconclusive or superseded stages without current externally judged coverage. | Supply compatible external outcomes for every ordered stage; do not infer missing verdicts. |
+| `prerequisite_missing` | 本地数据集、归一化划分、向量或模型配置缺失。 | 在本地准备该产物；不要期望自动下载。 |
+| `checksum_mismatch` | 原始数据或归一化元数据与锁定不匹配。 | 只删除受影响的缓存版本，并从已验证源重新 fetch/normalize。 |
+| `invalid_manifest` | 版本、许可证、来源、划分或嵌入配置不完整。 | 在运行前修复并重新锁定清单。 |
+| 安全失败 | 返回了被禁止、跨作用域或非活动的记忆。 | 将该运行视为不可发布，并检查作用域/生命周期过滤器。 |
+| 质量门禁失败 | 指标回退但没有安全违规。 | 在更改排名或分块策略之前，使用相同的语料、qrels 与嵌入配置比较报告。 |
+| `capacity_refused` | 本地事件/查询/字节预算对所选语料过小。 | 增加显式本地预算或选择有界的划分/批次；不要通过导入生产作用域来绕过拒绝。 |
+| task-series `checksum_mismatch` | 源包或其条件 qrels 在锁定之后发生变化。 | 重新审阅外部结果与归一化语料，然后重新计算两个锁定。 |
+| task-series 不完整 | 某条件存在不确定或已被取代的阶段，且没有当前的外部判定覆盖。 | 为每个有序阶段提供兼容的外部结果；不要推断缺失的判定。 |
 
-## PostgreSQL and pgvector
+## PostgreSQL 与 pgvector
 
-The end-to-end full benchmark uses Stele's PostgreSQL + pgvector retrieval path and must run against the supported local PostgreSQL version. Keep benchmark runs in an isolated benchmark project/namespace. Do not import public benchmark corpus data into a production tenant or namespace. The batch fixture seeder uses deterministic IDs and bounded transactions so interrupted imports can be cleaned and rerun safely.
+端到端完整基准使用 Stele 的 PostgreSQL + pgvector 检索路径，并且必须针对受支持的本地 PostgreSQL 版本运行。请将基准运行保持在隔离的基准项目/命名空间中。不要将公开基准语料数据导入生产租户或命名空间。批处理夹具播种器使用确定性 ID 与有界事务，因此中断的导入可以被清理并安全重跑。
 
-The expansion change is not complete until a non-synthetic LongMemEval run has retained a
-machine-readable report containing PostgreSQL and pgvector versions, source,
-normalized-corpus and qrels checksums, embedding/strategy profile, run scope,
-quality metrics, and separate safety-gate results. Repository-owned smoke and
-synthetic PostgreSQL runs are useful regression checks but do not satisfy this
-gate.
+在非合成的 LongMemEval 运行保留了一份机器可读报告（包含 PostgreSQL 与 pgvector 版本、源、归一化语料与 qrels 校验和、嵌入/策略配置、运行作用域、质量指标以及独立的安全门禁结果）之前，扩展变更不算完成。仓库自有的冒烟与合成 PostgreSQL 运行是有用的回归检查，但不满足该门禁。
 
-## Reproducibility checklist
+## 可复现性检查清单
 
-Before sharing or comparing a report, retain all of the following together:
+在共享或比较报告之前，请一起保留以下全部内容：
 
-- [ ] PostgreSQL major/minor version and `pgvector` extension version.
-- [ ] Manifest JSON, upstream revision, license decision, source SHA256, and
-      conversion version.
-- [ ] Normalized split checksum and qrels checksum/version.
-- [ ] Embedding profile (or explicit `lexical-only`) and strategy/chunk/rank
-      configuration.
-- [ ] Dataset family, subset, run ID, benchmark tenant/project/namespace, and
-      local capacity limits.
-- [ ] Machine-readable report path, status, metrics, errors, safety outcomes,
-      and cleanup result.
+- [ ] PostgreSQL 主/次版本与 `pgvector` 扩展版本。
+- [ ] 清单 JSON、上游修订、许可证决策、源 SHA256 与转换版本。
+- [ ] 归一化划分校验和与 qrels 校验和/版本。
+- [ ] 嵌入配置（或显式的 `lexical-only`）与策略/分块/排名配置。
+- [ ] 数据集族、子集、运行 ID、基准租户/项目/命名空间与本地容量限制。
+- [ ] 机器可读报告路径、状态、指标、错误、安全结果与清理结果。
 
-For a fresh local PostgreSQL 18 container, the project uses the pgvector image
-`docker.1ms.run/pgvector/pgvector:pg18` and maps it to an unused host port. Run
-`go test ./...`, the opt-in PostgreSQL benchmark tests, and
-`openspec validate --specs --strict` before treating a report as reproducible.
+对于全新的本地 PostgreSQL 18 容器，项目使用 pgvector 镜像 `docker.1ms.run/pgvector/pgvector:pg18` 并将其映射到未使用的宿主端口。在将报告视为可复现之前，运行 `go test ./...`、可选择加入的 PostgreSQL 基准测试以及 `openspec validate --specs --strict`。

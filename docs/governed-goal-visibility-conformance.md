@@ -1,12 +1,8 @@
-# Governed goal review and experimental visibility conformance
+# 受治理的目标评审与实验性可见性一致性
 
-This change adds an exact-scope, redacted goal review projection and an
-independently opt-in `goal_context` section. The section is absent from ordinary
-context requests and is emitted only by the PostgreSQL reader when a current,
-enabled visibility policy exists for the exact scope. Provider output and replay
-do not bypass that boundary.
+此变更新增一个精确作用域、已脱敏的目标评审投影，以及一个可独立选择加入的 `goal_context` 部分。该部分不会出现在普通上下文请求中，仅在精确作用域存在当前已启用的可见性策略时由 PostgreSQL 读取器输出。Provider 输出和重放不会绕过该边界。
 
-## Verification matrix
+## 验证矩阵
 
 - `go test ./internal/insights ./internal/retrieval ./internal/storage/postgres ./internal/app ./openapi -count=1`
 - `go test ./... -count=1`
@@ -14,15 +10,8 @@ do not bypass that boundary.
 - `openspec validate governed-goal-review-and-experimental-visibility --type change`
 - `openspec validate --all --strict`
 
-The redacted admin route is `GET /v1/admin/goals/review`. It returns bounded
-review and policy categories for the authenticated exact scope and never selects
-goal title, summary, prompt, provider payload, or foreign identifiers. The public
-context request accepts `include_goal_context`; the default is false and the
-ordinary sections remain unchanged when the flag is absent or the policy fails.
+已脱敏的管理路由是 `GET /v1/admin/goals/review`。它为已认证的精确作用域返回有界评审和策略类别，且从不选取目标标题、摘要、提示词、Provider 负载或外部标识符。公开上下文请求接受 `include_goal_context`；默认值为 false，当该标志缺失或策略未通过时，普通部分保持不变。
 
-## PostgreSQL / pgvector run
+## PostgreSQL / pgvector 运行
 
-Use the existing disposable pgvector image and set
-`STELE_TEST_POSTGRES_GOAL_DSN` before running the repository conformance script.
-The migration is additive (`0032_goal_visibility`) and can be rolled back with
-its paired down migration. Do not commit credentials or DSNs.
+使用现有的可弃 pgvector 镜像，并在运行仓库一致性脚本前设置 `STELE_TEST_POSTGRES_GOAL_DSN`。该迁移是增量式（additive）的（`0032_goal_visibility`），可通过其配对的 down 迁移回滚。不要提交凭据或 DSN。

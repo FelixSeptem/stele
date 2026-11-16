@@ -1,180 +1,137 @@
-# Key components
+# 关键组件
 
-**Role:** maintainer reference. Start at the
-[documentation portal](README.md) for the system overview and contributor path.
+**角色：** 维护者参考。请从[文档门户](README.md)开始了解系统概览与贡献路径。
 
-This page maps the public architecture to the repository's implementation
-areas. The linked Go packages and contracts are authoritative when this guide
-and an implementation differ.
+本页把公开架构映射到仓库的实现区域。当本指南与实现不一致时，以被引用的 Go 包与契约为准。
 
-## API runtime
+## API 运行时
 
-- `internal/app`: HTTP wiring, dependency composition, health/readiness, admin
-  routes, provider routes, and runtime mode startup.
-- `openapi`: OpenAPI-first schemas and route publication.
-- `internal/auth`: API-key/principal authentication and role checks.
-- `internal/provider`: runtime binding, provider capabilities, governed adapter,
-  and synchronization cursor contract.
+- `internal/app`：HTTP 装配、依赖组合、健康/就绪检查、管理员路由、Provider
+  路由，以及运行时模式启动。
+- `openapi`：OpenAPI 优先的 schema 与路由发布。
+- `internal/auth`：API key/主体认证与角色校验。
+- `internal/provider`：运行时绑定、Provider 能力、受治理适配器，以及同步游标契约。
 
-The API resolves identity and exact scope before repository access. It should
-not contain a second persistence or authorization implementation for an adapter.
-`GET /v1/admin/assurance/ingestion-freshness` uses authenticated exact-scope
-context and an opaque event fixture reference; PostgreSQL correlates governance,
-canonical and successful Provider-read observations. Only redacted reports are
-retained, with fixture identity protected by a scoped unique key.
+API 在访问存储层之前解析身份与精确作用域。它不应为某个适配器再实现一套持久化或授权。
+`GET /v1/admin/assurance/ingestion-freshness` 使用已认证的精确作用域上下文与不透明事件
+fixture 引用；PostgreSQL 关联治理、规范记忆与成功的 Provider 读取观测。只保留脱敏报告，
+fixture 身份由作用域内唯一键保护。
 
-## Storage and memory governance
+## 存储与记忆治理
 
-- `internal/storage/postgres`: PostgreSQL repositories, migrations, projections,
-  append-only history, leases, and scope predicates.
-- `internal/memory`: memory classes, canonical versions, intents, sessions,
-  lifecycle inputs, validation, and service-level contracts.
-- `internal/jobs`: River worker adapter for governed memory intents; it carries
-  intent IDs only and keeps transaction ownership inside the PostgreSQL
-  repository boundary. Other derived-work kinds remain on the existing worker.
-- `internal/policy`: forgetting and retention policy decisions.
-- `internal/governance`: raw-event governance, claims, recovery, and audit.
+- `internal/storage/postgres`：PostgreSQL 仓储、迁移、投影、仅追加历史、租约与作用域谓词。
+- `internal/memory`：记忆类别、规范版本、意图、会话、生命周期输入、校验与服务级契约。
+- `internal/jobs`：受治理记忆意图的 River worker 适配器；它只携带意图 ID，并把事务
+  所有权保留在 PostgreSQL 仓储边界内。其他派生工作种类仍留在既有 worker 上。
+- `internal/policy`：遗忘与保留策略决策。
+- `internal/governance`：原始事件治理、声明、恢复与审计。
 
-Storage methods must apply exact `tenant/project/namespace` predicates and return
-safe not-found or denied outcomes without confirming foreign records.
+存储方法必须应用精确的 `tenant/project/namespace` 谓词，并返回安全的未找到或拒绝结果，
+且不得确认外部记录是否存在。
 
-## Retrieval and context
+## 检索与上下文
 
-- `internal/retrieval`: lexical, semantic, hybrid, fusion, reranking,
-  context assembly, citations, temporal constraints, and bounded diagnostics.
-- PostgreSQL full-text search supplies the lexical path.
-- pgvector supplies semantic retrieval when configured.
+- `internal/retrieval`：词法、语义、混合、融合、重排、上下文装配、引用、时间约束与
+  有界诊断。
+- PostgreSQL 全文检索提供词法路径。
+- 配置后，pgvector 提供语义检索。
 
-Retrieval output is evidence for an agent response. It is not canonical memory
-and must not be written back unchanged as if it were a new fact.
+检索输出是 agent 响应的证据，不是规范记忆，不得原样写回并当作新事实。
 
-`internal/retrieval` also owns evaluation-only comparison of task-appropriate
-derived representations: exact excerpts plus search, topic projections plus
-search, and hierarchical/parent-first evidence plus search. The internal
-evaluator and `internal/storage/postgres` representation-report repository
-accept only redacted aggregate, exact-scope records. They do not register a
-Provider, MCP, ordinary retrieval, or HTTP route; `flat-fusion-v1` remains the
-ordinary selected strategy. See [retrieval representation experiments](retrieval-progressive-context-experiments.md).
+`internal/retrieval` 还负责仅用于评估的任务适配派生表示比较：精确摘录加检索、
+主题投影加检索、层级/父级优先证据加检索。内部评估器与
+`internal/storage/postgres` 表示报告仓储只接受脱敏的聚合、精确作用域记录。它们不注册
+Provider、MCP、普通检索或 HTTP 路由；`flat-fusion-v1` 仍是普通检索选用的策略。
+参见[检索表示实验](retrieval-progressive-context-experiments.md)。
 
-For public `context-budget-v1`, retrieval owns optional final-projection admission
-inside existing context selection. `internal/provider` costs the authorized
-mode-specific item DTO, resolves independent caller/server item/content/body/
-citation minima and reserves bounded accounting space under `context-packing-v1`.
-It finalizes required closed requested/effective/usage/selection accounting and
-exact self-counting JSON size. `internal/app` writes those finalized bytes without
-a newline; it never runs another packer. `internal/config` resolves item default
-100, content inherited from response default 1 MiB, citation default 100 and their
-hard bounds; invalid settings fail startup. `openapi` publishes portable integers,
-response-only omission nulls, fixed identities and typed bounded errors.
+对于公共 `context-budget-v1`，检索在既有上下文选择流程内负责可选的最终投影准入。
+`internal/provider` 对已授权的模式相关条目 DTO 计价，解析独立的调用方/服务端
+条目/内容/正文/引用下限，并在 `context-packing-v1` 下保留有界的计费预留空间。它最终
+确定必需的封闭 requested/effective/usage/selection 计费结果，以及精确自计数的 JSON
+大小。`internal/app` 写出这些最终字节且不追加换行；它不会再次运行任何打包器。
+`internal/config` 解析条目默认 100、内容默认继承响应上限 1 MiB、引用默认 100 及其硬
+边界；非法配置会导致启动失败。`openapi` 发布可移植整数、仅在响应中出现的省略 null、
+固定身份与类型化的有界错误。
 
-The mandatory envelope preflight and final refusal return 413 without a partial
-projection. Current exact-scope disclosure/source/version eligibility precedes
-budget reasons; denied/hidden evidence contributes no private counters. Native
-assembly retains its previous defaults, and public optional sections stay closed.
-`internal/assurance` validates actual serialized usage and fresh initial/restart
-evidence separately from ranking metrics and archived PC1/PC2 readiness. Consumers
-must discover PC3 and migrate strict schemas; rollback disables dependent access
-before removing the extension. See [Provider contract](agent-runtime-memory-provider.md)
-for allocation units, zero/omission, errors and compatibility.
+强制信封预检与最终拒绝返回 413，且不产生部分投影。当前精确作用域的披露/来源/版本
+资格判断先于预算原因；被拒绝或隐藏的证据不贡献任何私有计数器。原生装配保留原有默认值，
+公共可选段保持关闭。`internal/assurance` 独立于排序指标与已归档的 PC1/PC2 就绪证据，
+校验实际序列化用量以及新的初始/重启证据。使用方必须发现 PC3 并迁移严格 schema；
+回滚会先禁用依赖访问，再移除扩展。分配单位、零值/省略、错误与兼容性见
+[Provider 契约](agent-runtime-memory-provider.md)。
 
-## Worker and scheduler
+## Worker 与 scheduler
 
-- `internal/jobs`: worker loops, scheduler dispatch, leases, retry/backoff,
-  maintenance jobs, and durable run history.
-- `internal/workqueue`: durable derived-work queue and checkpoint contracts.
+- `internal/jobs`：worker 循环、scheduler 派发、租约、重试/退避、维护作业与持久化运行历史。
+- `internal/workqueue`：持久化派生工作队列与检查点契约。
 
-Workers own asynchronous consolidation and recovery. Schedulers decide when
-bounded work is dispatched; they do not directly mutate API authorization state.
-Freshness collection reads worker timestamps and lifecycle state; it does not
-claim or retry governance work.
+Worker 负责异步整合与恢复。Scheduler 决定何时派发有界工作；它不直接修改 API 授权状态。
+新鲜度采集读取 worker 时间戳与生命周期状态；它不领取或重试治理工作。
 
-## MCP adapter
+## MCP 适配器
 
-- `internal/mcp/schema.go`: tool names, request shapes, validation limits, and
-  tool descriptors.
-- `internal/mcp/adapter.go`: Streamable HTTP MCP server, request scope
-  resolution, read tools, governed remember, and lifecycle flows.
-- `internal/mcp/contract_test.go`: protocol-level behavior and redaction
-  coverage.
+- `internal/mcp/schema.go`：工具名、请求结构、校验限制与工具描述符。
+- `internal/mcp/adapter.go`：Streamable HTTP MCP 服务器、请求作用域解析、读取工具、
+  受治理记忆写入与生命周期流程。
+- `internal/mcp/contract_test.go`：协议级行为与脱敏覆盖。
 
-The current tools are documented in the [MCP integration guide](integrations/mcp-agent-skill.md).
-MCP remains optional and disabled by default; OpenAPI remains the primary
-service boundary.
+当前工具记录在 [MCP 集成指南](integrations/mcp-agent-skill.md)中。MCP 仍是可选项且默认
+禁用；OpenAPI 仍是主要服务边界。
 
-## Provider adapter and synchronization
+## Provider 适配器与同步
 
-The additive PC5 durable-reference capability exposes exact task/run/handoff/
-compilation reference status and lookup over existing governed memory lineage.
-It is negotiated independently from context and does not own business state.
+增量式 PC5 持久引用能力在既有受治理记忆谱系之上暴露精确的
+task/run/handoff/compilation 引用状态与查询。它与上下文独立协商，不拥有业务状态。
 
-PC6 adds dedicated closed projection/history handlers and DTOs, transactional
-append-only repositories, migration 0037 and a scoped scheduler feedback job.
-`internal/assurance` independently validates the served projection schemas and
-semantics. Admission, current PC5 eligibility and later feedback influence are
-separate; [maintenance details](provider-evidence-projections.md) cover their
-versioning, bounds and recovery.
+PC6 新增专用封闭投影/历史处理器与 DTO、事务性仅追加仓储、迁移 0037 以及作用域内的
+scheduler 反馈作业。`internal/assurance` 独立校验所提供投影的 schema 与语义。准入、
+当前 PC5 资格与后续反馈影响相互独立；[维护细节](provider-evidence-projections.md) 覆盖
+它们的版本化、边界与恢复。
 
-The provider adapter composes existing event, intent, retrieval, context,
-lifecycle, and status services. Correction updates add an opt-in,
-server-attributed path from a corrected projection into an ordinary governed
-update intent; they do not create a direct canonical write. The synchronization
-contract adds bounded initial snapshots, ordered replay, cursor acknowledgment, and explicit
-`resync_required` recovery. It does not create a client-owned memory store.
+Provider 适配器组合既有的 event、intent、retrieval、context、lifecycle 与 status 服务。
+更正更新增加一条可选加入、由服务端归属的路径，把更正后的投影转换为普通的受治理更新
+意图；它们不会产生直接的规范写入。同步契约增加有界初始快照、有序回放、游标确认与显式的
+`resync_required` 恢复。它不会创建客户端自有的记忆存储。
 
-See [agent runtime provider](agent-runtime-memory-provider.md) and the
-transport-neutral synchronization contract in
-`openspec/specs/runtime-capability-and-event-sync-contract/spec.md`.
+参见 [agent 运行时 Provider](agent-runtime-memory-provider.md) 以及
+`openspec/specs/runtime-capability-and-event-sync-contract/spec.md` 中与传输无关的同步契约。
 
-## Telemetry and assurance
+## 遥测与保障
 
-- `internal/telemetry`: low-cardinality metrics and bounded lifecycle events.
-- `internal/assurance`: conformance fixtures, health/readiness evidence,
-  operational proofs, and recovery verification.
+- `internal/telemetry`：低基数指标与有界生命周期事件。
+- `internal/assurance`：一致性 fixture、健康/就绪证据、运维证明与恢复验证。
 
-Telemetry must not contain raw queries, payloads, scopes, credentials, cursors,
-or unbounded identifiers. Assurance evidence is separate from retrieval quality
-metrics.
+遥测不得包含原始查询、负载、作用域、凭据、游标或无界标识符。保障证据与检索质量指标
+相互独立。
 
-## Context disclosure and source trust
+## 上下文披露与来源信任
 
-Public runtime credentials require explicit exact-scope disclosure provisioning.
-Provider context defaults to structured references; bounded content requires the
-content profile and explicit mode. Unsupported native/MCP data routes deny public
-credentials before lookup. Source labels persist through governance and history;
-missing lineage is untrusted/restricted. Attested source data grants no instruction,
-tool, write or business-state authority. See the [disclosure/source guide](context-disclosure-and-source-trust.md)
-for endpoint behavior, administration, versioning and upgrade/rollback.
+公共运行时凭据需要显式的精确作用域披露配置。Provider 上下文默认返回结构化引用；有界内容
+需要 content profile 与显式模式。不受支持的 native/MCP 数据路由会在查询前拒绝公共凭据。
+来源标签贯穿治理与历史持久保存；缺失谱系的数据视为不可信/受限。已证实的来源数据不授予
+任何指令、工具、写入或业务状态权限。端点行为、管理、版本化以及升级/回滚见
+[披露/来源指南](context-disclosure-and-source-trust.md)。
 
-### Provider context digest and continuity
+### Provider 上下文摘要与连续性
 
-The Provider HTTP component finalizes `context-digest-v1` only after disclosure,
-selection and exact body accounting have completed. Its digest canonicalizer is
-versioned and domain-separated; the independent assurance component recomputes
-it without reusing retrieval, ranking or packing code. The PostgreSQL receipt
-component added by migration `0036_provider_context_continuity` stores only the
-opaque reference, full binding identity, normalized request fingerprint, digest
-identity and authoritative issue/expiry times. The scheduler performs bounded
-expired-only receipt cleanup. It does not delete active receipts and retained
-expired rows remain subject to capacity until cleanup. No component stores a
-context response as an implementation of comparison: compare reads current
-authorized data and returns a full fresh body.
+Provider HTTP 组件只在披露、选择与精确正文计费完成之后才最终确定 `context-digest-v1`。
+其摘要规范化器是版本化且按域分隔的；独立的保障组件会重新计算摘要，而不复用检索、排序或
+打包代码。迁移 `0036_provider_context_continuity` 增加的 PostgreSQL 回执组件只存储不透明
+引用、完整绑定身份、规范化请求指纹、摘要标识与权威的签发/过期时间。scheduler 执行有界的
+仅过期回执清理。它不会删除活跃回执，保留的过期行在清理前仍受容量约束。没有任何组件把上下文
+响应当作比较的实现：比较会读取当前授权数据并返回完整的新正文。
 
-## Procedural verification maintenance
+## 程序性验证维护
 
-`internal/memory` owns the closed procedural-verification disposition,
-evidence, attribution, and correction-admission contracts. It requires a
-current active procedural target and exact-scope eligible evidence. Its
-append-only ledger is not a parallel memory store: **PostgreSQL remains the system of record** and canonical versions continue through governed intents.
+`internal/memory` 拥有封闭的程序性验证处置、证据、归属与更正准入契约。它要求存在当前活跃的
+procedural 目标以及精确作用域内合格的证据。其仅追加台账不是并行的记忆存储：
+**PostgreSQL 仍是记录系统**，规范版本继续通过受治理意图流转。
 
-`internal/storage/postgres` persists scoped verification rows, durable
-revalidation runs, and bounded verification-to-intent-to-successor lineage.
-`internal/jobs` dispatches and recovers `procedural_revalidation` work with
-lease, attempt, and retention bounds. That worker only records mechanical
-`inconclusive` or `needs_revalidation` outcomes when the recorded sources no
-longer settle the claim; it never promotes a procedure or writes a correction.
+`internal/storage/postgres` 持久化作用域内的验证行、持久化再验证运行，以及有界的
+验证→意图→后继谱系。`internal/jobs` 派发并恢复 `procedural_revalidation` 工作，带有租约、
+尝试次数与保留边界。该 worker 只在记录的来源已无法支撑该声明时，写入机械性的
+`inconclusive` 或 `needs_revalidation` 结果；它永远不会提升某个流程，也不会写入更正。
 
-`internal/app` and `openapi` publish the separate administrator-only HTTP
-surface. The API, worker, and scheduler compose the same policy, repository,
-dispatcher, telemetry, cleanup, and redacted inspection dependencies. Provider,
-ordinary retrieval, and MCP public-runtime components do not depend on this
-surface.
+`internal/app` 与 `openapi` 发布独立的、仅限管理员的 HTTP 界面。API、worker 与 scheduler
+组合相同的策略、仓储、派发器、遥测、清理与脱敏检查依赖。Provider、普通检索与 MCP 公共
+运行时组件不依赖此界面。

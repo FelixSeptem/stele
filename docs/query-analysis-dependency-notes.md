@@ -1,69 +1,29 @@
-# Query-analysis dependency decision
+# 查询分析依赖决策
 
-## Decision
+## 决策
 
-The first deterministic query-analysis implementation uses the Go standard
-library for explicit time layouts and `golang.org/x/text` for Unicode
-normalization and locale-independent case handling. It does not add a general
-natural-language date parser, tokenizer, online model client, or query-planning
-provider.
+首个确定性的查询分析实现使用 Go 标准库处理显式时间布局，并使用 `golang.org/x/text` 处理 Unicode 归一化与与语言环境无关的大小写处理。它不引入通用自然语言日期解析器、分词器、在线模型客户端或查询规划提供方。
 
-The repository already resolves `golang.org/x/text v0.31.0` transitively. If
-query analysis imports its `cases` or `unicode/norm` packages directly, the
-module must be promoted to a direct dependency with `go mod tidy` so ownership
-is explicit.
+仓库已通过传递依赖解析到 `golang.org/x/text v0.31.0`。如果查询分析直接导入其 `cases` 或 `unicode/norm` 包，则必须通过 `go mod tidy` 将该模块提升为直接依赖，以使所有权明确。
 
-## Package review
+## 包审阅
 
-The following package pages were reviewed on pkg.go.dev on 2026-09-11:
+以下包页面于 2026-09-11 在 pkg.go.dev 上审阅：
 
-- Go standard-library `strings` and `unicode`: stable, BSD-3-Clause, widely
-  imported primitives for deterministic rune classification and explicit
-  delimiter handling. They are sufficient for the first policy's bounded term
-  extraction, whose rules must remain repository-owned and versioned.
-- `github.com/blevesearch/segment` `v0.9.1`: stable, Apache-2.0, imported by 164
-  packages on the reviewed page. It is a compact Unicode text segmenter, but
-  its generic word-boundary behavior does not remove the need for explicit
-  mixed-language policy rules.
-- `github.com/ikawaha/kagome/v2/tokenizer` `v2.11.0`: stable, MIT, imported by
-  103 packages on the reviewed page. Its Japanese morphological dictionaries
-  and language-specific runtime surface are unnecessary for the initial
-  language-agnostic bounded policy.
-- `golang.org/x/text/cases`: stable module, BSD-3-Clause. It provides
-  deterministic Unicode-aware case mapping without a remote service.
-- `golang.org/x/text/unicode/norm`: stable module, BSD-3-Clause. It provides the
-  Unicode normalization forms needed to compare and deduplicate bounded terms.
-- `github.com/araddon/dateparse`: stable package, MIT, but its broad heuristic
-  date recognition is larger and less policy-explicit than this rollout needs.
-- `github.com/markusmobius/go-dateparser`: stable module, BSD-3-Clause, but adds
-  a general natural-language parser and transitive surface that is unnecessary
-  for the first bounded deterministic policy.
+- Go 标准库 `strings` 与 `unicode`：稳定、BSD-3-Clause，是被广泛导入的基础组件，用于确定性 rune 分类与显式分隔符处理。它们足以支持第一个策略的有界词项抽取，其规则必须由仓库自有并版本化。
+- `github.com/blevesearch/segment` `v0.9.1`：稳定、Apache-2.0，在审阅页面上被 164 个包导入。它是一个紧凑的 Unicode 文本分段器，但其通用词边界行为并不能消除对显式混合语言策略规则的需要。
+- `github.com/ikawaha/kagome/v2/tokenizer` `v2.11.0`：稳定、MIT，在审阅页面上被 103 个包导入。其日语形态学词典与特定语言的运行时表面对于初始的语言无关有界策略而言并不必要。
+- `golang.org/x/text/cases`：稳定模块、BSD-3-Clause。它提供确定性的、Unicode 感知的大小写映射，无需远程服务。
+- `golang.org/x/text/unicode/norm`：稳定模块、BSD-3-Clause。它提供比较与去重有界词项所需的 Unicode 归一化形式。
+- `github.com/araddon/dateparse`：稳定包、MIT，但其宽泛的启发式日期识别比本次发布（rollout）所需更大，且策略性更弱。
+- `github.com/markusmobius/go-dateparser`：稳定模块、BSD-3-Clause，但引入了通用自然语言解析器与传递表面，对首个有界确定性策略而言并不必要。
 
-## Rationale and verification
+## 理由与验证
 
-Explicit accepted layouts and a fixed clock/time zone keep temporal behavior
-versionable and replayable. Unicode normalization and case handling solve a
-narrow standards problem, while entity, intent, and multi-hop rules remain
-repository-owned policy. This avoids silent behavior changes from broad
-heuristic parsers and keeps malformed or ambiguous dates in an explicit
-unknown/fallback category.
+显式的已接受布局以及固定的时钟/时区使时间行为可版本化且可回放。Unicode 归一化与大小写处理解决了一个狭窄的标准问题，而实体、意图与多跳规则仍由仓库自有的策略决定。这避免了宽泛启发式解析器带来的静默行为变化，并将格式错误或模棱两可的日期保留在显式的未知/回退类别中。
 
-The repository has no dedicated dependency-license checker in `scripts/` or
-its product-verification workflow. The decision was therefore verified with
-the available repository and Go controls: `go list -m -json golang.org/x/text`
-resolved the existing checksummed `v0.31.0` module, `go mod graph` confirmed its
-module ownership, and `go mod download -json golang.org/x/text@v0.31.0`
-reported the same module and `go.mod` sums recorded in `go.sum`. A full
-`go mod verify` was also attempted, but it failed because the machine-wide Go
-cache contains a modified pre-existing
-`github.com/docker/docker v28.3.3+incompatible` directory. That module is not a
-dependency introduced or selected by this change; the failure is retained as
-an environment finding rather than described as a passing repository check.
+仓库在 `scripts/` 或产品验证工作流中没有专门的依赖许可证检查器。因此该决策通过可用的仓库与 Go 控制手段验证：`go list -m -json golang.org/x/text` 解析出已有校验和的 `v0.31.0` 模块，`go mod graph` 确认了其模块所有权，`go mod download -json golang.org/x/text@v0.31.0` 报告了与 `go.sum` 中记录相同的模块与 `go.mod` 校验和。也尝试了完整的 `go mod verify`，但它失败了，因为机器范围的 Go 缓存中包含一个已存在的、被修改的 `github.com/docker/docker v28.3.3+incompatible` 目录。该模块不是本次变更引入或选择的依赖；该失败作为环境发现保留，而不是被描述为通过的仓库检查。
 
-No new tokenizer or date-parser module was added, so there is no new transitive
-license surface. Once `x/text` is imported directly, `go mod tidy` must promote
-it from indirect to direct and the module, tests, repository quality commands,
-and a clean-cache `go mod verify` must be rerun.
+没有新增分词器或日期解析器模块，因此没有新的传递许可证表面。一旦 `x/text` 被直接导入，`go mod tidy` 必须将其从间接提升为直接，并且必须重新运行模块、测试、仓库质量命令以及干净缓存的 `go mod verify`。
 
-Any future parser dependency requires a policy-version change and a new review
-of maintenance, license, deterministic behavior, and transitive dependencies.
+任何未来的解析器依赖都需要策略版本变更，以及对维护性、许可证、确定性行为与传递依赖的新一轮审阅。

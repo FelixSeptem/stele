@@ -1,27 +1,22 @@
-# Retrieval Quality Baseline
+# 检索质量基线
 
-The first repository-owned retrieval replay was executed on PostgreSQL 18 with
-pgvector using the `retrieval-fixture-v1` fixture.
+首次由仓库自有的检索回放使用 `retrieval-fixture-v1` 夹具在 PostgreSQL 18 与
+pgvector 上执行。
 
-| Field | Value |
+| 字段 | 值 |
 | --- | --- |
-| Fixture version | `retrieval-fixture-v1` |
-| Representation version | `canonical-v1` |
-| Ranking version | `baseline-v1` |
-| Compatible embedding revision | `deterministic-v1` (semantic channel inactive without vectors) |
-| Policy version | `quality-policy-v1` |
-| Replay cases | 13 |
-| Safety failures | 0 |
-| Database | PostgreSQL 18 / pgvector |
+| 夹具版本 | `retrieval-fixture-v1` |
+| 表示版本 | `canonical-v1` |
+| 排名版本 | `baseline-v1` |
+| 兼容的嵌入修订 | `deterministic-v1`（没有向量时语义通道不启用） |
+| 策略版本 | `quality-policy-v1` |
+| 回放用例 | 13 |
+| 安全失败 | 0 |
+| 数据库 | PostgreSQL 18 / pgvector |
 
-The replay completed all cases and verified append-only raw-event, canonical-version,
-provenance, scope, and lifecycle behavior. The initial fixture queries intentionally
-include semantic paraphrases; the current lexical-only replay therefore records a
-zero candidate pool for this baseline. This is an explicit measurement result for
-the pre-chunking, pre-fusion implementation and is the reference point for later
-query understanding, chunk representation, and hybrid ranking changes.
+该回放完成了全部用例，并验证了仅追加的原始事件、规范版本、来源、作用域与生命周期行为。初始夹具查询有意包含语义改写；因此当前仅词法的回放为该基线记录了一个零候选池。这是分块前、融合前实现的明确测量结果，也是后续查询理解、分块表示与混合排名变更的参照点。
 
-Run the same owned-stack check with:
+使用以下命令运行相同的自有栈检查：
 
 ```powershell
 $env:STELE_TEST_RETRIEVAL_EVALUATION_DSN = '<owned-pg18-test-dsn>'
@@ -29,114 +24,69 @@ $env:STELE_TEST_RETRIEVAL_EVALUATION_OWNED = 'true'
 pwsh -File scripts/retrieval-evaluation.ps1
 ```
 
-The command requires an explicitly owned disposable database and ownership
-marker, and never falls back to
-`STELE_POSTGRES_DSN` or another ambient operator database.
+该命令要求一个明确自有的可丢弃数据库与所有权标记，并且绝不会回退到 `STELE_POSTGRES_DSN` 或其他环境中的运维数据库。
 
-## Chunk representation shadowing
+## 分块表示影子化
 
-The hierarchical chunk representation is a derived PostgreSQL projection over raw
-events and canonical-memory versions. It is identified by source kind/id/version,
-chunk policy, renderer, and deterministic whitespace token-counter versions. Raw
-events and canonical memory remain immutable; chunk rows are rebuildable and
-append-only.
+分层分块表示是构建在原始事件与 canonical-memory 版本之上的派生 PostgreSQL 投影。它由源类型/ID/版本、分块策略、渲染器以及确定性的空白 token 计数器版本标识。原始事件与规范记忆保持不可变；分块行可重建且仅追加。
 
-Chunk materialization and retrieval consumption are controlled independently:
+分块物化与检索消费被独立控制：
 
-- `default_off` keeps the canonical-memory retrieval path unchanged;
-- `shadow` evaluates chunk candidates and emits only bounded diagnostics on an
-  authorized evaluation path;
-- `active` permits chunk-derived evidence to contribute while retaining the
-  canonical parent identity and citations.
+- `default_off` 保持 canonical-memory 检索路径不变；
+- `shadow` 在授权评估路径上评估分块候选，并且只输出有界诊断信息；
+- `active` 允许分块派生的证据参与，同时保留规范父身份与引用。
 
-Every chunk read or parent/adjacent expansion re-checks exact
-`tenant/project/namespace` scope and active lifecycle state. Hidden, stale, or
-foreign sources fail closed. Parent and adjacent evidence is bounded by count and
-character/token budgets and never broadens a session or user boundary.
+每次分块读取或父级/相邻扩展都会重新校验确切的 `tenant/project/namespace` 作用域与活动生命周期状态。隐藏、过期或外部的源会失败即关闭。父级与相邻证据受数量以及字符/token 预算约束，并且绝不会扩大会话或用户边界。
 
-Use an explicitly owned PostgreSQL + pgvector DSN for chunk integration checks:
+分块集成检查请使用明确自有的 PostgreSQL + pgvector DSN：
 
 ```powershell
 $env:STELE_TEST_POSTGRES_CHUNK_DSN = '<owned-test-dsn>'
 go test ./internal/storage/postgres -run MemoryChunkPostgres -count=1
 ```
 
-Disable chunk materialization or consumption to roll back; no destructive migration
-or canonical-memory rewrite is required. Derived chunk retention and deletion must
-follow the source lifecycle and the operator's PostgreSQL backup/restore policy.
+禁用分块物化或消费即可回滚；无需破坏性迁移或重写规范记忆。派生分块的保留与删除必须遵循源生命周期以及运维方的 PostgreSQL 备份/恢复策略。
 
-## Stable candidate fusion
+## 稳定候选融合
 
-The stable hybrid fusion contract treats lexical, semantic, relation, and active
-chunk retrieval as bounded ranked channels. The default strategy identity is
-`rrf:rrf-v1`. It uses an explicit rank constant and channel weights; for a
-visible candidate `c` the contract is:
+稳定混合融合契约将词法、语义、关系与活动分块检索视为有界的已排名通道。默认策略标识为 `rrf:rrf-v1`。它使用显式的排名常数与通道权重；对于可见候选 `c`，契约为：
 
 ```text
 fused(c) = sum(weight(channel) / (rank_constant + rank))
 ```
 
-`rank` is the channel's one-based rank, and every bounded validated contribution
-from a channel is added once to the candidate's canonical memory identity. The default
-parameters are deliberately part of `rrf:rrf-v1`:
+`rank` 是通道的从 1 开始的排名，来自某通道的每个有界且通过校验的贡献都会向该候选的规范记忆身份累加一次。默认参数是 `rrf:rrf-v1` 的刻意组成部分：
 
-- Rank constant: `60`
-- Lexical channel weight: `1`
-- Semantic channel weight: `1`
-- Relation channel weight: `0.8`
-- Chunk channel weight: `0.8`
-- Per-channel candidate bound: `50`
-- Total candidate bound: `200`
+- 排名常数 Rank constant: `60`
+- 词法通道权重 Lexical channel weight: `1`
+- 语义通道权重 Semantic channel weight: `1`
+- 关系通道权重 Relation channel weight: `0.8`
+- 分块通道权重 Chunk channel weight: `0.8`
+- 每通道候选上限 Per-channel candidate bound: `50`
+- 候选总量上限 Total candidate bound: `200`
 
-Candidates are scope-, lifecycle-, class-, and lineage-validated before fusion,
-then represented by one canonical memory identity. Final output ordering is
-deterministic: fused score descending, memory-class policy priority, source
-timestamp descending, then canonical memory ID ascending. This ordering applies
-after aggregation, so a duplicated parent from multiple recall paths cannot
-produce two public hits.
+候选在融合之前会经过作用域、生命周期、类别与谱系校验，然后由一个规范记忆身份表示。最终输出顺序是确定性的：融合得分降序、记忆类别策略优先级、源时间戳降序，最后是规范记忆 ID 升序。该顺序在聚合之后应用，因此来自多条召回路径的重复父级不会产生两个公开命中。
 
-Lexical retrieval remains the required canonical path. Semantic, relation, and
-authorized chunk retrieval are optional: an empty or unavailable optional channel
-contributes no candidates and the result falls back to the remaining validated
-channels. Invalid strategy definitions and invalid scope, lifecycle, lineage, or
-candidate-bound inputs fail closed; they never widen the candidate pool or make
-hidden evidence influence ranking.
+词法检索仍是必需的规范路径。语义、关系与授权分块检索是可选的：空或不可用的可选通道不贡献任何候选，结果回退到其余通过校验的通道。无效的策略定义以及无效的作用域、生命周期、谱系或候选上限输入会失败即关闭；它们绝不会扩大候选池，也不会让隐藏证据影响排名。
 
-`normalized_weighted:normalized-weighted-v1` is an explicit offline comparison
-experiment. It normalizes each channel's bounded scores before applying declared
-weights and is never selected implicitly. Fusion strategy identity is included in
-evaluation metadata so RRF and experimental results remain comparable and
-rollback does not require a data migration.
+`normalized_weighted:normalized-weighted-v1` 是一个显式的离线对比实验。它在应用声明的权重之前先对各通道的有界得分做归一化，并且绝不会被隐式选中。融合策略标识会写入评估元数据，因此 RRF 与实验结果保持可比，且回滚不需要数据迁移。
 
-Evaluation and replay diagnostics are available only on authorized local, CI, or
-administrative paths. They retain bounded strategy identity, channel/rank state,
-availability, and final-disposition categories for visible evaluated results.
-They never include raw candidate pools, raw provider scores, hidden identifiers,
-scope values, DSNs, credentials, or provider error text.
+评估与回放诊断仅在授权的本地、CI 或管理路径上可用。它们会为可见的已评估结果保留有界的策略标识、通道/排名状态、可用性与最终处置类别。它们绝不包含原始候选池、原始提供方得分、隐藏标识符、作用域值、DSN、凭据或提供方错误文本。
 
-The Prometheus counter `stele_retrieval_fusion_total` emits only low-cardinality
-`strategy`, `version`, `channel`, `availability`, `candidate_count`, and
-`outcome` labels. Candidate-count buckets are `0`, `1_10`, `11_50`, and
-`51_plus`; labels never contain query text, memory identifiers, policy IDs, or
-scope values. The bounded `stele_ranking_rollout_total` counter records a
-successful restoration as `reason_code=rollback_restored`.
+Prometheus 计数器 `stele_retrieval_fusion_total` 仅输出低基数的 `strategy`、`version`、`channel`、`availability`、`candidate_count` 与 `outcome` 标签。候选数量分桶为 `0`、`1_10`、`11_50` 与 `51_plus`；标签绝不包含查询文本、记忆标识符、策略 ID 或作用域值。有界的 `stele_ranking_rollout_total` 计数器将成功的恢复记录为 `reason_code=rollback_restored`。
 
-Run focused contract coverage with:
+运行聚焦的契约覆盖测试：
 
 ```powershell
 go test ./internal/retrieval ./internal/telemetry -count=1
 go test ./internal/app -run RankingRollout -count=1
 ```
 
-The replay command requires the explicitly owned disposable
-`STELE_TEST_RETRIEVAL_EVALUATION_DSN` described above. It must not be supplied
-from, or replaced by, `STELE_POSTGRES_DSN`.
+回放命令要求上文所述的、明确自有的可丢弃 `STELE_TEST_RETRIEVAL_EVALUATION_DSN`。它不得由 `STELE_POSTGRES_DSN` 提供或替代。
 
-## Identity deduplication and diversity-aware context packing
+## 身份去重与多样性感知的上下文打包
 
-The retrieval pipeline performs identity and validated-lineage deduplication
-after scope/lifecycle validation and stable fusion, and before any diversity or
-budget selection:
+检索流水线在作用域/生命周期校验与稳定融合之后、在任何多样性或预算选择之前执行身份与已校验谱系去重：
 
 ```text
 scope + lifecycle validation
@@ -146,134 +96,38 @@ scope + lifecycle validation
   -> existing section, citation, and token/character budget packing
 ```
 
-Identity equivalence is established by canonical memory ID, source event ID, or
-validated parent-memory lineage. The first candidate in the stable fused order
-is the representative; citations are merged deterministically and remain
-bounded per representative. An invalid, hidden, expired, suppressed,
-forgotten, deleted, or foreign candidate is discarded before grouping and can
-never suppress a visible candidate. With no approved diversity policy, this
-identity-deduplicated order is the default behavior.
+身份等价由规范记忆 ID、源事件 ID 或已校验的父记忆谱系确立。稳定融合顺序中的第一个候选是代表项；引用以确定性方式合并，并且在每个代表项上有界。无效、隐藏、过期、被抑制、被遗忘、已删除或外部的候选会在分组之前被丢弃，并且绝不会抑制可见候选。在没有获批多样性策略时，这种按身份去重后的顺序就是默认行为。
 
-### Versioned diversity policy lifecycle
+### 版本化的多样性策略生命周期
 
-A diversity policy is versioned by name and version and is resolved only for
-the exact `tenant/project/namespace` scope. Its bounded parameters include the
-semantic threshold, MMR (or equivalent) relevance/diversity weight, candidate
-limit, pairwise-comparison budget, citation limit, and coverage weights for
-memory class, source session, entity, and time slice. Semantic clusters are
-formed only from candidates with a compatible active embedding revision. If
-embeddings, the revision, or the optional computation are unavailable, the
-selector reports a bounded `semantic_unavailable` availability category and
-falls back to identity-only selection without widening recall or querying
-additional metadata.
+多样性策略按名称与版本进行版本化，并且只针对确切的 `tenant/project/namespace` 作用域解析。其有界参数包括语义阈值、MMR（或等价方法）的相关性/多样性权重、候选上限、成对比较预算、引用上限，以及记忆类别、源会话、实体与时间切片的覆盖权重。语义聚类仅由具有兼容活动嵌入修订的候选构成。如果嵌入、修订或可选计算不可用，选择器会报告有界的 `semantic_unavailable` 可用性类别，并回退到仅身份选择，而不会扩大召回或查询额外元数据。
 
-Rollouts use the existing ranking-rollout governance and have explicit
-`diagnostics_only`/`shadow`, `active_for_scope`, `disabled`, and rollback
-states. Diagnostics-only and shadow policies never change ordinary search or
-context output. Activation requires the normal dry-run, attribution, evidence
-threshold, and no-blocker gates; an absent, malformed, disabled, hidden, or
-foreign-scope policy is equivalent to no policy. Per-section selection runs
-after eligibility and summary preference but before existing budgets, so public
-section names, projections, citations, and caller budgets remain unchanged.
+发布（rollout）沿用现有的排名发布治理，并具有显式的 `diagnostics_only`/`shadow`、`active_for_scope`、`disabled` 与回滚状态。仅诊断与影子策略绝不会改变普通搜索或上下文输出。激活需要常规的预演、归因、证据阈值与无阻塞项门禁；缺失、格式错误、被禁用、隐藏或外部作用域的策略等同于没有策略。按节选择在资格判定与摘要偏好之后、现有预算之前运行，因此公开节名称、投影、引用与调用方预算保持不变。
 
-Authorized evaluation or admin diagnostics may expose only the policy identity,
-aggregate dispositions (`selected`, `duplicate`, `omitted_by_diversity`,
-`omitted_by_budget`, `invalid`, or `semantic_unavailable`), bounded counts, and
-availability categories. Ordinary retrieval and context responses never
-expose cluster membership, similarity values, candidate pools, hidden content,
-foreign identifiers, scope values, or provider errors.
+授权的评估或管理诊断只能暴露策略标识、聚合处置（`selected`、`duplicate`、`omitted_by_diversity`、`omitted_by_budget`、`invalid` 或 `semantic_unavailable`）、有界计数与可用性类别。普通检索与上下文响应绝不暴露聚类成员关系、相似度值、候选池、隐藏内容、外部标识符、作用域值或提供方错误。
 
-Evaluation reports include the diversity-policy name/version and aggregate
-dispositions alongside duplicate rate, protected recall, evidence coverage,
-candidate-pool size, and bounded latency. Scope or lifecycle leakage is always
-a hard failure; protected-recall, multi-hop-coverage, budget, or latency
-regressions block activation. Rollback disables the active selection and
-restores the prior approved baseline without rewriting canonical memory, raw
-events, chunks, provenance, or fusion state; telemetry records
-`reason_code=rollback_restored`.
+评估报告包含多样性策略名称/版本与聚合处置，以及重复率、受保护召回、证据覆盖、候选池规模与有界延迟。作用域或生命周期泄漏始终是硬失败；受保护召回、多跳覆盖、预算或延迟的回退会阻止激活。回滚会禁用活动选择并恢复先前获批的基线，而不重写规范记忆、原始事件、分块、来源或融合状态；遥测记录 `reason_code=rollback_restored`。
 
-The real-stack replay is intentionally opt-in. It requires an explicitly owned,
-disposable PostgreSQL + pgvector DSN in
-`STELE_TEST_RETRIEVAL_EVALUATION_DSN`. When the variable is absent, the
-evaluator prints `SKIP_RETRIEVAL_EVALUATION_DSN_REQUIRED` and exits with code
-`2`; this is a controlled non-pass skip, not a successful evaluation. The
-evaluator never falls back to `STELE_POSTGRES_DSN` or any ambient operator
-database. Remove the fixture scope after the run and keep reports free of
-credentials and raw candidate content.
+真实栈回放是有意选择加入的。它要求 `STELE_TEST_RETRIEVAL_EVALUATION_DSN` 中有一个明确自有的、可丢弃的 PostgreSQL + pgvector DSN。当该变量缺失时，评估器打印 `SKIP_RETRIEVAL_EVALUATION_DSN_REQUIRED` 并以退出码 `2` 结束；这是受控的非通过跳过，而不是成功的评估。评估器绝不会回退到 `STELE_POSTGRES_DSN` 或任何环境中的运维数据库。运行结束后移除夹具作用域，并确保报告不含凭据与原始候选内容。
 
-### Bounded query understanding rollout
+### 有界的查询理解发布
 
-Query analysis retains the caller's original query as the first mandatory signal.
-Normalization, aliases, hints, and decomposition are deterministic and bounded
-by the versioned `query-analysis-v1` and `query-analysis-limits-v1` contracts;
-derived signals copy the exact request scope, lifecycle visibility, memory-class,
-and time-window constraints. Analyzer errors, malformed output, timeout, or an
-ineligible policy fall back to original-only retrieval.
+查询分析将调用方的原始查询保留为首要的必需信号。归一化、别名、提示与分解都是确定性的，并受版本化的 `query-analysis-v1` 与 `query-analysis-limits-v1` 契约约束；派生信号复制确切的请求作用域、生命周期可见性、记忆类别与时间窗口约束。分析器错误、输出格式错误、超时或策略不符合条件都会回退到仅原始查询的检索。
 
-Query-analysis rollout policies use the existing exact-scope ranking governance.
-`diagnostics_only` and `dry_run`/shadow may collect bounded aggregate evidence but
-cannot alter ordinary ranking; only an exact-scope `active_for_scope` policy may
-allow derived signals into the common fusion pipeline. Disabled, expired, foreign,
-malformed, and rolled-back policies resolve to original-only behavior.
+查询分析发布策略使用现有的精确作用域排名治理。`diagnostics_only` 与 `dry_run`/shadow 可以收集有界的聚合证据，但不能改变普通排名；只有精确作用域的 `active_for_scope` 策略才允许派生信号进入公共融合流水线。被禁用、过期、外部、格式错误与已回滚的策略都解析为仅原始查询行为。
 
-Authorized diagnostics expose only policy and limits versions, rollout disposition,
-normalization/time status, bounded hint/signal/subquery/candidate counts, fallback
-category, and elapsed budget. They never include query text, normalized text,
-subqueries, scores, plans, identifiers, or scope values. Ordinary search and
-context responses retain their existing schemas and do not include these fields
-unless an explicitly diagnostic path requests them.
+授权诊断仅暴露策略与限制版本、发布处置、归一化/时间状态、有界的提示/信号/子查询/候选计数、回退类别以及已耗预算。它们绝不包含查询文本、归一化文本、子查询、得分、计划、标识符或作用域值。普通搜索与上下文响应保持其现有模式，除非显式诊断路径请求，否则不包含这些字段。
 
-Active decomposition remains ineligible until the real-stack prerequisite and
-original-versus-analyzed comparison pass with an explicitly owned disposable
-PostgreSQL + pgvector DSN. Without that DSN the stable result is
-`SKIP_RETRIEVAL_EVALUATION_DSN_REQUIRED`; this is a non-pass skip and must not be
-treated as release evidence.
+在执行真实栈前置条件以及原始查询与已分析查询的对比并通过（使用明确自有的可丢弃 PostgreSQL + pgvector DSN）之前，主动分解仍不符合条件。没有该 DSN 时，稳定结果为 `SKIP_RETRIEVAL_EVALUATION_DSN_REQUIRED`；这是非通过跳过，不得视为发布证据。
 
-## Query-adaptive retrieval planning
+## 查询自适应的检索规划
 
-The query-adaptive planner is a provider-independent, deterministic policy
-layer over the existing lexical, semantic, relation, and chunk channels. A
-plan is identified by the schema, planner, and policy versions and records the
-compatible analysis, fusion, ranking, and renderer identities. The supported
-families are `exact_lookup`, `semantic`, `temporal`, `entity_relation`,
-`multi_hop`, `procedural`, and `general`; classification precedence and all
-channel ordering are canonicalized for replay.
+查询自适应规划器是建立在现有词法、语义、关系与分块通道之上的、与提供方无关的确定性策略层。计划由 schema、planner 与策略版本标识，并记录兼容的分析、融合、排名与渲染器身份。支持的族为 `exact_lookup`、`semantic`、`temporal`、`entity_relation`、`multi_hop`、`procedural` 与 `general`；分类优先级与所有通道顺序都经过规范化，以便回放。
 
-Each request receives one shared hard envelope for total candidates,
-per-channel candidates, elapsed latency, context items, reranker headroom, and
-passes. Per-channel shares may be re-shared inside that envelope by a bounded
-`simple`, `moderate`, or `complex` query-complexity category derived only from
-validated analysis counts. A complexity allocation must cover every declared
-channel, keep each channel within the per-channel hard limit, and preserve the
-declared total candidate envelope, so it can never enlarge work or relax a
-service hard limit. Class quotas and context priorities are applied after
-scope/lifecycle validation. The ledger reserves reranker headroom and
-redistributes unused channel capacity without allowing any channel or pass to
-exceed the aggregate bound. Planner reranker eligibility is only a hint: the
-separately governed reranker policy and the reserved ledger headroom are both
-required.
+每个请求获得一个共享的硬性包络，覆盖总候选、每通道候选、已耗延迟、上下文条目、重排器余量与轮次。每通道份额可以在该包络内由有界的 `simple`、`moderate` 或 `complex` 查询复杂度类别重新分配，该类别仅由通过校验的分析计数推导。复杂度分配必须覆盖每个已声明通道，使每个通道保持在每通道硬限制之内，并保持声明的总候选包络，因此它绝不能放大工作量或放宽服务硬限制。类别配额与上下文优先级在作用域/生命周期校验之后应用。账本预留重排器余量，并重新分配未使用的通道容量，同时不允许任何通道或轮次超过聚合上限。规划器的重排器资格仅是一个提示：分别受治理的重排器策略与预留的账本余量都是必需的。
 
-Evidence assessment uses bounded aggregate counts and dispositions only. If the
-first pass is insufficient, an eligible plan may run at most one follow-up pass
-with the original query, exact scope, lifecycle filters, and remaining budget
-preserved. Failed, malformed, unavailable, or over-limit planner inputs fall
-back to the approved baseline; there is no recursive retrieval loop and no
-planner-generated final answer. The ordinary search and context response
-shapes remain unchanged.
+证据评估只使用有界的聚合计数与处置。如果首轮不足，符合条件的计划最多可以用原始查询、确切作用域、生命周期过滤器与剩余预算再运行一次后续轮次。失败、格式错误、不可用或超限的规划器输入会回退到获批基线；不存在递归检索循环，也没有规划器生成的最终答案。普通搜索与上下文响应形态保持不变。
 
-Planner rollout is exact-scope and dependency-compatible. `diagnostics_only`
-and `shadow` collect authorized, low-cardinality evidence without changing
-results. Only an unexpired `active_for_scope` policy with matching dependency
-identities can affect retrieval. Disabled, foreign, malformed, expired, or
-rolled-back policies fail closed to baseline. Without an explicitly owned
-PostgreSQL + pgvector evaluation DSN, the evaluator remains a stable
-`SKIP_RETRIEVAL_EVALUATION_DSN_REQUIRED` non-pass and active rollout is not
-permitted.
+规划器发布是精确作用域且依赖兼容的。`diagnostics_only` 与 `shadow` 在不改变结果的情况下收集授权、低基数的证据。只有未过期且依赖身份匹配的 `active_for_scope` 策略才能影响检索。被禁用、外部、格式错误、过期或已回滚的策略会失败即关闭至基线。没有明确自有的 PostgreSQL + pgvector 评估 DSN 时，评估器保持为稳定的 `SKIP_RETRIEVAL_EVALUATION_DSN_REQUIRED` 非通过状态，且不允许主动发布。
 
-The owned planner runner does not treat extension availability or a lexical
-proxy as pgvector evidence. It creates and activates the fixture-owned
-`planner-unit-x3-v1` vector revision, requires the production semantic query to
-return the expected semantic memory with a positive score, and then requires
-the planner replay candidate to retain a semantic-channel contribution. Any
-failure in vector seeding, activation, direct semantic retrieval, or replay
-attribution fails the run.
+自有的规划器运行器不会把扩展可用性或词法代理当作 pgvector 证据。它会创建并激活夹具自有的 `planner-unit-x3-v1` 向量修订，要求生产语义查询返回带正得分的预期语义记忆，然后要求规划器回放候选保留语义通道贡献。向量播种、激活、直接语义检索或回放归因中的任何失败都会使本次运行失败。

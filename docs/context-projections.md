@@ -1,74 +1,75 @@
-# Context Projections
+# 上下文投影
 
-Context projections are derived, append-only PostgreSQL read models. They are
-scoped by exact `tenant`, `project`, and `namespace` values and reference
-canonical memory versions or raw-event evidence; they never replace canonical
-memory or delete provenance.
+上下文投影是派生、仅追加的 PostgreSQL 读模型。它们
+按精确的 `tenant`、`project` 与 `namespace` 取值划分作用域，并引用
+规范记忆版本或原始事件证据；它们绝不替换规范
+记忆或删除来源。
 
-Projection reads are opt-in and disabled by default. Set
-`STELE_CONTEXT_PROJECTION_CONSUMPTION_ENABLED=true` only after operators inspect
-the projection kind,
-version, status, source watermark, policy version, renderer version, and
-bounded item counts before enabling consumption. A rebuild reads the authorized
-source snapshot and creates a new projection version, retaining prior versions
-for audit and rollback.
+投影读取为可选启用，默认禁用。仅在运维人员检查
+投影种类、
+版本、状态、来源水位、策略版本、渲染器版本以及有界条目计数之后，
+才设置
+`STELE_CONTEXT_PROJECTION_CONSUMPTION_ENABLED=true` 以启用消费。重建会读取已授权的
+来源快照并创建新的投影版本，保留先前版本
+用于审计与回滚。
 
-Ordinary context excludes suppressed, forgotten, expired, and deleted sources.
-Profile items may enter `always_visible` only after confidence and size gates;
-summaries may enter `session`; episodic, procedural, and relation memories stay
-on-demand; raw events remain archival evidence only.
+普通上下文排除被抑制、被遗忘、已过期与已删除的来源。
+Profile 条目只有在通过置信度与大小门控之后才能进入
+`always_visible`；摘要可以进入 `session`；情节、程序性与关系记忆保持
+按需；原始事件仅为归档证据。
 
-If a rollout is stale or unsafe, disable projection consumption and continue
-with live retrieval. Do not widen scope, increase the request budget, mutate
-canonical memory, or delete projection history as a rollback operation.
+如果滚动发布陈旧或不安全，禁用投影消费并继续
+使用实时检索。不要扩大作用域、增加请求预算、变更
+规范记忆，或作为回滚操作删除投影历史。
 
-## Evidence-gated resident context evaluation
+<a id="evidence-gated-resident-context-evaluation"></a>
+## 证据门控的常驻上下文评估
 
-Maintainers can evaluate a stricter `always_visible` profile candidate against
-the existing confidence/size policy with `EvaluateResidentContext`. This is an
-internal offline/shadow comparison. It adds no public request fields, response
-shapes, authorization roles, Provider capability, MCP tool, runtime flag, worker,
-or migration. Ordinary projection consumption retains its existing default.
+维护者可以使用 `EvaluateResidentContext`，针对
+现有置信度/大小策略评估一个更严格的 `always_visible` profile 候选。这是一个
+内部离线/影子比较。它不新增公共请求字段、响应
+形状、授权角色、Provider 能力、MCP 工具、运行时标志、worker
+或迁移。普通投影消费保留其现有默认值。
 
-Both conditions use the existing materializer and equal, independently enforced
-limits: 8 items, 4096 UTF-8 content bytes, 1024 whitespace-delimited tokens, and
-16 citations by default. The existing per-item profile gate also applies.
-Whitespace counts are evaluator accounting, not model-token usage or Provider
-wire/body bytes. Whole items are omitted when a limit would be exceeded; source
-facts remain available through authorized on-demand retrieval.
+两个条件都使用现有的物化器，以及相等且独立强制
+的限制：默认 8 个条目、4096 个 UTF-8 内容字节、1024 个以空白分隔的 token，以及
+16 个引用。现有的每条目 profile 门控也适用。
+空白计数是评估器统计，不是模型 token 使用量或 Provider
+线缆/响应体字节。当会超过限制时，完整条目会被省略；来源
+事实仍可通过已授权的按需检索获取。
 
-Candidate selection requires a current active canonical snapshot and its exact
-immutable version/content, valid time, exact scope, and disclosable metadata on
-both snapshots. Missing/legacy restricted source metadata cannot be assumed
-disclosable. An attributable raw-event support observation must bind the memory
-ID, source version and SHA-256 content fingerprint, declare stability and
-applicability, and be fresh. Only `tool_observation`, `user_correction`, or
-`external_evaluation` can corroborate; transcripts and model assertions cannot.
-Support, utility and comparison events must also have disclosable,
-`attested_data` source metadata under the existing exact-scope source-attestation
-contract. The body actor alone never establishes attribution. Attestation
-establishes authorized source attribution, not truth or instruction authority.
-A separate positive utility observation must bind the same version and occur
-at a later held-out stage and time. Observations are limited to 30 days of age
-and validity. Ambiguous, expired, negative or absent observations exclude the
-candidate; currently resident entries that are excluded are proposed for
-demotion. Access frequency never affects selection, ordering, or run identity.
+候选选择要求当前活动的规范快照及其精确
+不可变版本/内容、有效时间、精确作用域以及两个快照上的
+可披露元数据。缺失/旧版受限来源元数据不能被假定为
+可披露。可归属的原始事件支持观察必须绑定记忆
+ID、来源版本与 SHA-256 内容指纹，声明稳定性与
+适用性，并且是新鲜的。只有 `tool_observation`、`user_correction` 或
+`external_evaluation` 可以佐证；转录与模型断言不能。
+支持、效用与比较事件还必须具有可披露的
+`attested_data` 来源元数据，且符合现有的精确作用域来源证明
+契约。仅凭响应体操作者绝不足以确立归属。证明
+确立已授权的来源归属，而不是真实性或指令权限。
+单独的阳性效用观察必须绑定相同版本，并发生在
+更晚的留出阶段与时间。观察的年龄与有效期限制为 30 天。
+模糊、过期、阴性或缺失的观察会排除
+候选；当前已常驻但被排除的条目会被提议
+降级。访问频率绝不影响选择、排序或运行身份。
 
-Inputs are bounded to 256 sources/current IDs/support records/utility records,
-with at most 16 KiB of content and 32 KiB encoded size per observation. Invalid
-structural bounds return an internal error; ineligible sources and insufficient
-evidence produce aggregate omission reasons. No evaluation writes canonical
-memory, evidence, or projection history. Disablement returns the copied baseline
-plan; a future live policy rollout needs separate contract and release work.
-Observation JSON accepts exact canonical lowercase field names only; unknown,
-duplicate, case-alias and null fields fail closed. Only compatible validated
-support/utility for evaluated eligible sources advances the comparison stage;
-discarded or unrelated observations cannot block later outcomes.
+输入限制为 256 个来源/当前 ID/支持记录/效用记录，
+每个观察最多 16 KiB 内容与 32 KiB 编码大小。无效的
+结构边界返回内部错误；不合格的来源与不足的
+证据会产生聚合省略原因。任何评估都不会写入规范
+记忆、证据或投影历史。禁用会返回复制的基线
+计划；未来的实时策略滚动发布需要单独的契约与发布工作。
+观察 JSON 仅接受精确的规范小写字段名；未知、
+重复、大小写别名与 null 字段会失败即关闭。只有针对已评估合格来源的兼容且已验证
+支持/效用观察才会推进比较阶段；
+被丢弃或无关的观察不能阻止后续结果。
 
-Serialized reports contain counts, fixed reasons and hashes of actual inputs
-and plans, without source text, IDs, scope or raw observations. Separate later
-external comparison observations supply task outcomes and costs. Missing values
-remain unobserved, including when another metric is observed as zero or false;
-condition deltas are observational. Hashes identify integrity, not authenticated
-truth or activation authority. See [self-hosting](self-hosting.md#evidence-gated-resident-context-evaluation)
-for the owned PostgreSQL/pgvector verifier and persistence/restart checks.
+序列化报告包含计数、固定原因以及实际输入
+与计划的哈希，不含来源文本、ID、作用域或原始观察。稍后单独的
+外部比较观察提供任务结果与成本。缺失值
+保持未观察，即使另一个指标被观察为零或 false；
+条件增量是观察性的。哈希标识完整性，而不是已认证的
+真实性或激活权限。有关自有的 PostgreSQL/pgvector 验证器与持久化/重启检查，
+请参阅[自托管](self-hosting.md#evidence-gated-resident-context-evaluation)。

@@ -1,75 +1,47 @@
-# Governed operation policy precedence
+# 受治理操作的策略优先级
 
-Stele evaluates governed operations through one fixed order. The evaluator is
-metadata-only and does not replace the policy stores, PostgreSQL repositories,
-durable work queue, or canonical and derived mutation services.
+Stele 通过一个固定的顺序评估受治理操作。该评估器仅处理元数据，不替代策略存储、PostgreSQL 仓库、持久工作队列或规范与派生变更服务。
 
-## Evaluation order
+## 评估顺序
 
-1. **Scope** — the request must carry the exact tenant, project, and namespace
-   granted to the principal. A foreign scope stops evaluation before target,
-   lifecycle, policy, or idempotency state is read.
-2. **Lifecycle** — referenced records must be visible for the operation. A
-   suppressed, forgotten, deleted, or otherwise unavailable target produces a
-   bounded lifecycle denial.
-3. **Grant** — the principal and its exact grant must authorize the operation.
-4. **Approval** — an enabled, fresh, compatible policy version must explicitly
-   allow the operation when the owning capability requires approval.
-5. **Replay** — an identical normalized request reuses the original result;
-   conflicting reuse of an idempotency key fails closed.
-6. **Handoff** — the operation is passed to the existing asynchronous
-   governance, lifecycle, or admission boundary.
-7. **Mutation** — only the existing append-only canonical or derived mutation
-   path may change durable state.
+1. **作用域** — 请求必须携带授予主体的精确租户、项目和命名空间。外部作用域会在读取目标、生命周期、策略或幂等状态之前终止评估。
+2. **生命周期** — 被引用的记录必须对该操作可见。被抑制、被遗忘、已删除或以其他方式不可用的目标会产生有界（bounded）的生命周期拒绝。
+3. **授予** — 主体及其精确授予必须授权该操作。
+4. **审批** — 当所属能力要求审批时，一个已启用、新鲜且兼容的策略版本必须显式允许该操作。
+5. **重放** — 完全相同的规范化请求复用原始结果；幂等键的冲突复用会失败即关闭（fail closed）。
+6. **交接** — 操作被传递到已有的异步治理、生命周期或准入边界。
+7. **变更** — 只有已有的仅追加（append-only）规范或派生变更路径可以更改持久状态。
 
-The current contract identifier is
-`governed-operation-precedence-v1`. It is carried with durable intent records
-and worker processing so a restart cannot silently apply a different order.
+当前契约标识符是 `governed-operation-precedence-v1`。它会随持久意图记录和 worker 处理一起携带，因此重启不会静默地应用不同的顺序。
 
-## Bounded outcomes
+## 有界结果
 
-The public and non-admin diagnostic vocabulary is limited to the fixed stage and
-outcome categories exposed by `internal/memory/operation_precedence.go`.
-Responses and telemetry omit scope values, payloads, target identifiers,
-credentials, provider responses, and raw errors. Authorized inspection can
-include bounded counts, contract versions, and redacted references.
+公开与非管理员诊断词汇仅限于 `internal/memory/operation_precedence.go` 暴露的固定阶段与结果类别。响应与遥测会省略作用域值、负载、目标标识符、凭据、Provider 响应和原始错误。经授权的检查可以包含有界计数、契约版本和已脱敏的引用。
 
-## Rollback and re-enable
+## 回滚与重新启用
 
-Disabling or rolling back a policy stops new acceptance at the approval gate and
-retains submitted records, provenance, decisions, and lifecycle history.
-Re-enabling a compatible policy for the same exact scope resumes only eligible
-pending work after the complete precedence sequence runs again.
+禁用或回滚策略会在审批关口停止新的接受，并保留已提交记录、来源、决策和生命周期历史。在同一精确作用域上重新启用兼容策略时，只有在完整的优先级序列再次运行后，才会恢复符合条件的待处理工作。
 
-## Rollout and rollback procedure
+## 上线与回滚流程
 
-Enable the contract in this order: intent submission/worker processing, insight
-admission, provider/MCP operations, then privileged lifecycle and manual
-mutation handlers. Run the exact-scope conformance report after each boundary
-is enabled and retain the report with its contract version.
+按此顺序启用契约：意图提交/worker 处理、洞察准入、Provider/MCP 操作，然后是特权生命周期与手动变更处理器。在每个边界启用后运行精确作用域一致性报告，并连同其契约版本一起保留该报告。
 
-If a boundary must be rolled back, disable enforcement at its approval or
-handoff boundary. Leave submitted records, decision metadata, queue references,
-provenance, and audit history intact, and route new work through the owning
-capability's existing disabled or held state. Re-enable only after the same
-scope has a compatible policy version and the conformance report is complete.
+如果必须回滚某个边界，请在其审批或交接边界处禁用强制执行。保持已提交记录、决策元数据、队列引用、来源和审计历史不变，并将新工作路由到所属能力已有的禁用或保持状态。只有在同一作用域拥有兼容的策略版本且一致性报告完成之后，才重新启用。
 
-## Verification
+## 验证
 
-Focused checks:
+专项检查：
 
 ```text
 go test ./internal/memory ./internal/provider ./internal/insights ./internal/jobs ./internal/telemetry
 go test ./internal/storage/postgres
 ```
 
-Repository contract checks:
+仓库契约检查：
 
 ```text
 openspec validate --all --strict
 git diff --check
 ```
 
-The product conformance fixtures must run against one exact scope and remain
-diagnostic. They must not execute an external agent, activate data during
-shadow/replay, or change default retrieval and context behavior.
+产品一致性夹具必须针对一个精确作用域运行，并保持诊断性质。它们不得执行外部 agent，不得在 shadow/replay 期间激活数据，也不得改变默认检索与上下文行为。

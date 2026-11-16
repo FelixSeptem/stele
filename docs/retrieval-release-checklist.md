@@ -1,53 +1,26 @@
-# Retrieval release checklist
+# 检索发布检查清单
 
-- [ ] Owned PostgreSQL 18 + pgvector DSN is explicit and isolated from the
-      runtime database.
-- [ ] The evaluator ownership marker is explicitly set, the run timeout is
-      bounded, and the report directory is isolated to one run.
-- [ ] The report contains a stable opaque run identity, source-watermark hash,
-      freshness verdict, expiry time, deterministic replay, and rollback
-      outcomes; no raw DSN or scope value is retained.
-- [ ] Fixture, representation, fusion, ranking, embedding, reranker, analysis,
-      and release-policy identities are compatible with the immutable baseline.
-- [ ] Planner schema/planner/policy identities and analysis/fusion/ranking/
-      renderer dependencies are compatible and owned by the release policy.
-- [ ] All seven planner query families have deterministic replay evidence,
-      protected-category coverage, and no ambiguous-classification drift.
-- [ ] Shared candidate, per-channel, latency, context-item, pass, and reranker
-      headroom envelopes are enforced; no run exceeds two passes.
-- [ ] Planner reranker eligibility is separately authorized and consumes only
-      reserved ledger headroom.
-- [ ] First-pass and one optional follow-up metrics are reported separately;
-      fallback, unavailable-channel, no-headroom, and rollback cases are green.
-- [ ] Diagnostics/shadow planner stages are result-equivalent to baseline and
-      all diagnostics are aggregate/redacted with low-cardinality labels.
-- [ ] Real-stack replay is passed; skipped/synthetic evidence is not treated as
-      a release pass.
-- [ ] A redacted release-evidence attestation is bound to the exact scope,
-      policy, strategy, and dependency identities before activation.
-- [ ] Protected simple-fact recall, temporal coverage, multi-hop coverage,
-      duplicate rate, candidate budget, latency, and isolation gates are green.
-- [ ] Progressive context levels have fresh watermarks, bounded costs,
-      citations, and deterministic rebuild evidence.
-- [ ] Parent-first remains shadow/off unless the same gates and rollback proof
-      pass for the exact scope.
-- [ ] Retrieval trajectories and integrity reports are redacted, bounded, and
-      accessible only on authorized evaluation/admin paths.
-- [ ] Retention cleanup is tested and does not delete canonical source records.
-- [ ] Rebuild/re-index and rollback runbooks were exercised and append-only
-      history is preserved.
-- [ ] Disablement and rollback return the approved baseline, preserve the
-      attestation/audit history, and do not rewrite canonical memory.
-- [ ] Threshold owner reviewed the versioned release policy and recorded the
-      decision category.
-- [ ] Preflight outcome is one of the stable bounded categories: DSN required,
-      ownership required, runtime DSN reuse, prerequisite unavailable, fixture
-      incompatible, timeout, or incomplete cleanup.
-- [ ] Every completed report has an operational outcome marked `completed` /
-      `complete` and a matching run/scope/watermark/policy attestation; skipped,
-      timed-out, failed, or incompletely cleaned runs are non-consumable.
-- [ ] Disablement and rollback lifecycle records are redacted, append-only, and
-      verify that the approved baseline remains selected until separately
-      authorized activation.
-- [ ] Operator metrics and logs use only bounded operation/result/state,
-      cleanup, freshness, rollback, and duration categories.
+- [ ] 自有的 PostgreSQL 18 + pgvector DSN 是明确的，并且与运行时数据库隔离。
+- [ ] 评估器的所有权标记已显式设置，运行超时有界，报告目录隔离于单次运行。
+- [ ] 报告包含稳定的不透明运行标识、源水位哈希、新鲜度判定、过期时间、确定性回放与回滚结果；不保留任何原始 DSN 或作用域值。
+- [ ] 夹具、表示、融合、排名、嵌入、重排器、分析与发布策略标识与不可变基线兼容。
+- [ ] Planner schema/planner/策略标识以及分析/融合/排名/渲染器依赖兼容，并归发布策略所有。
+- [ ] 全部七个规划器查询族都有确定性回放证据、受保护类别覆盖，且没有模糊分类漂移。
+- [ ] 共享的候选、每通道、延迟、上下文条目、轮次与重排器余量包络都被强制执行；没有运行超过两轮。
+- [ ] 规划器的重排器资格经过单独授权，并且只消费预留的账本余量。
+- [ ] 首轮与一次可选后续轮次的指标分别报告；回退、通道不可用、无余量与回滚用例均为绿色。
+- [ ] 诊断/影子规划器阶段与基线结果等价，并且所有诊断都是聚合/脱敏的，使用低基数标签。
+- [ ] 真实栈回放已通过；跳过/合成的证据不被视为发布通过。
+- [ ] 脱敏的发布证据证明在激活之前绑定到确切作用域、策略、融合策略与依赖标识。
+- [ ] 受保护的简单事实召回、时间覆盖、多跳覆盖、重复率、候选预算、延迟与隔离门禁均为绿色。
+- [ ] 渐进上下文各层级都有新鲜水位、有界成本、引用与确定性重建证据。
+- [ ] 除非针对确切作用域的相同门禁与回滚证明都通过，否则父级优先保持影子/关闭。
+- [ ] 检索轨迹与完整性报告已脱敏、有界，并且只在授权的评估/管理路径上可访问。
+- [ ] 保留清理经过测试，并且不会删除规范源记录。
+- [ ] 重建/重索引与回滚运行手册已实际演练，仅追加历史得到保留。
+- [ ] 禁用与回滚会返回获批基线、保留证明/审计历史，并且不重写规范记忆。
+- [ ] 阈值负责人审阅了版本化的发布策略，并记录了决策类别。
+- [ ] 预检结果是以下稳定有界类别之一：需要 DSN、需要所有权、复用运行时 DSN、前置条件不可用、夹具不兼容、超时或清理不完整。
+- [ ] 每份已完成的报告都有标记为 `completed` / `complete` 的运维结果，以及匹配的运行/作用域/水位/策略证明；跳过、超时、失败或清理不完整的运行不可消费。
+- [ ] 禁用与回滚生命周期记录已脱敏、仅追加，并验证在单独授权的激活之前获批基线仍被选中。
+- [ ] 运维指标与日志只使用有界的操作/结果/状态、清理、新鲜度、回滚与时长类别。

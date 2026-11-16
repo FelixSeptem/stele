@@ -21,8 +21,8 @@ func TestProviderContextGuideExamplesMatchOpenAPI(t *testing.T) {
 		t.Fatal(err)
 	}
 	text := strings.ReplaceAll(string(data), "\r\n", "\n")
-	start := strings.Index(text, "## Provider context JSON contract")
-	end := strings.Index(text, "## Snapshot and reconnect synchronization")
+	start := strings.Index(text, "## Provider 上下文 JSON 契约")
+	end := strings.Index(text, "## 快照与重连同步")
 	if start < 0 || end <= start {
 		t.Fatal("context guide section missing")
 	}

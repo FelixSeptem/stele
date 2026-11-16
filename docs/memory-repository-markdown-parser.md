@@ -1,31 +1,19 @@
-# Memory repository Markdown parser decision
+# 记忆仓库 Markdown 解析器决策
 
-## Decision
+## 决策
 
-The `memory-repo-v1` snapshot importer uses
-[`github.com/yuin/goldmark`](https://pkg.go.dev/github.com/yuin/goldmark) v1.8.6
-for bounded CommonMark AST traversal. Stele will not render Markdown, enable
-extensions, execute content, fetch links, or treat parsed text as instructions.
-The application accepts only the versioned subset defined in the OpenSpec
-change: top-level single-line bullets and root-relative wiki links outside code
-fences.
+`memory-repo-v1` 快照导入器使用 [`github.com/yuin/goldmark`](https://pkg.go.dev/github.com/yuin/goldmark) v1.8.6 进行有界的 CommonMark AST 遍历。Stele 不会渲染 Markdown、启用扩展、执行内容、抓取链接，也不会将解析文本视为指令。应用只接受 OpenSpec 变更中定义的版本化子集：代码围栏之外的顶层单行项目符号与根相对 wiki 链接。
 
-## Package review
+## 包审阅
 
-The package pages were reviewed on pkg.go.dev on 2026-10-16.
+各包页面于 2026-10-16 在 pkg.go.dev 上审阅。
 
-| Candidate | Assessment | Decision |
+| 候选 | 评估 | 决策 |
 | --- | --- | --- |
-| `github.com/yuin/goldmark` v1.8.6 | Maintained Go CommonMark parser with a public AST that distinguishes list nesting and fenced code blocks. Its parser can be used without an HTML renderer. | Selected. |
-| `github.com/russross/blackfriday/v2` v2.1.0 | A mature parser, but its latest stable line is materially older and the first implementation needs explicit AST traversal boundaries. | Not selected. |
-| Hand-written line parser | Could recognize a tiny grammar, but would need to reproduce code-fence and list-context behavior that an established parser already supplies. | Not selected. |
+| `github.com/yuin/goldmark` v1.8.6 | 维护良好的 Go CommonMark 解析器，其公开 AST 可区分列表嵌套与围栏代码块。其解析器可在不启用 HTML 渲染器的情况下使用。 | 已选中。 |
+| `github.com/russross/blackfriday/v2` v2.1.0 | 成熟的解析器，但其最新稳定版本线明显更旧，且首次实现需要显式的 AST 遍历边界。 | 未选中。 |
+| 手写行解析器 | 可以识别极小的语法，但需要复现已由成熟解析器提供的代码围栏与列表上下文行为。 | 未选中。 |
 
-## Constraints and verification
+## 约束与验证
 
-Goldmark is a syntax classifier, not a policy engine. Stele still applies its
-own UTF-8, size, NFC path, metadata, link-target, scope, provenance, and
-lifecycle rules. A parser-version field is included in every preview/import
-plan so behavior remains attributable. Fixtures must verify that code fences,
-nested lists, unsupported prose, malformed metadata, and wiki links cannot
-silently become importable entries. Parser fuzz tests must demonstrate bounded
-operation and no filesystem, network, or command side effects.
+Goldmark 是语法分类器，不是策略引擎。Stele 仍然应用自己的 UTF-8、大小、NFC 路径、元数据、链接目标、作用域、来源与生命周期规则。每份预览/导入计划都包含解析器版本字段，因此行为保持可归因。夹具必须验证代码围栏、嵌套列表、不受支持的散文、格式错误的元数据与 wiki 链接都不能静默成为可导入条目。解析器模糊测试必须证明有界运行，并且没有文件系统、网络或命令副作用。

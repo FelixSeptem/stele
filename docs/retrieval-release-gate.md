@@ -1,15 +1,10 @@
-# Retrieval release gate
+# 检索发布门禁
 
-The retrieval release gate is an opt-in evidence workflow. It composes the
-repository-owned fixture replay, flat-fusion baseline, query-analysis/reranker
-comparison, context projections, and benchmark contracts. Ordinary search and
-context responses are unchanged until an explicitly scoped rollout is approved.
+检索发布门禁是一个选择加入的证据工作流。它组合仓库自有的夹具回放、扁平融合基线、查询分析/重排器对比、上下文投影与基准契约。在明确作用域的发布（rollout）获批之前，普通搜索与上下文响应保持不变。
 
-## Configuration
+## 配置
 
-Copy `.env.local.example` to `.env.local` and replace placeholders locally. Do
-not commit `.env.local` or provider credentials. Real-stack evaluation reads
-only:
+将 `.env.local.example` 复制为 `.env.local`，并在本地替换占位符。不要提交 `.env.local` 或提供方凭据。真实栈评估只读取：
 
 ```text
 STELE_TEST_RETRIEVAL_EVALUATION_DSN=<owned PostgreSQL 18 + pgvector DSN>
@@ -18,195 +13,78 @@ STELE_RETRIEVAL_EVALUATION_PROVIDER_PROFILE=canonical-v1
 STELE_RETRIEVAL_EVALUATION_REPORT_DIR=<optional local output directory>
 ```
 
-The ownership marker is mandatory for both the wrapper and direct Go harness
-runs. It is an explicit assertion that the target is disposable and owned by
-the evaluation run; both entrypoints reject an absent marker and normalized
-reuse of `STELE_POSTGRES_DSN` before opening a connection or applying
-migrations. Each run also uses unique fixture namespaces and IDs, and cleanup
-deletes only records returned by that run's seed operation.
+所有权标记对包装器与直接 Go harness 运行都是强制性的。它是一个明确断言：目标可丢弃且归本次评估运行所有；两个入口都会在打开连接或应用迁移之前，拒绝缺失的标记以及对 `STELE_POSTGRES_DSN` 的规范化复用。每次运行还会使用唯一的夹具命名空间与 ID，清理只删除该次运行的播种操作所返回的记录。
 
-The evaluation DSN must not equal `STELE_POSTGRES_DSN`. If it is absent, the
-workflow returns `SKIP_RETRIEVAL_EVALUATION_DSN_REQUIRED` and cannot authorize
-an active rollout. Synthetic or skipped runs are evidence for development only,
-not release passage.
+评估 DSN 不得等于 `STELE_POSTGRES_DSN`。如果它缺失，工作流返回 `SKIP_RETRIEVAL_EVALUATION_DSN_REQUIRED`，并且不能授权主动发布。合成或跳过的运行只是开发用证据，不是发布通过。
 
-The wrapper enforces a 30-second to 15-minute timeout window and creates an
-isolated `run-<opaque-id>` report directory beneath the configured root. A
-missing ownership marker returns
-`STELE_TEST_RETRIEVAL_EVALUATION_OWNERSHIP_REQUIRED` (exit code `2`). A failed
-or incomplete run removes its partial directory; a completed run retains only
-the redacted baseline, candidate, gate, release-evidence, and summary artifacts.
+包装器强制 30 秒到 15 分钟的超时窗口，并在配置的根目录下创建隔离的 `run-<opaque-id>` 报告目录。缺失所有权标记会返回 `STELE_TEST_RETRIEVAL_EVALUATION_OWNERSHIP_REQUIRED`（退出码 `2`）。失败或不完整的运行会删除其部分目录；已完成的运行只保留脱敏后的基线、候选、门禁、发布证据与摘要产物。
 
-## Evidence and gates
+## 证据与门禁
 
-Run deterministic checks with repository-owned fixtures:
+使用仓库自有的夹具运行确定性检查：
 
 ```powershell
 $env:GOCACHE = "$PWD/.gocache-release"
 go test ./internal/retrieval ./internal/config ./internal/memory ./internal/benchmark -count=1
 ```
 
-Run the owned PostgreSQL + pgvector replay only when the DSN is configured:
+仅在配置了 DSN 时才运行自有的 PostgreSQL + pgvector 回放：
 
 ```powershell
 pwsh -File scripts/retrieval-evaluation.ps1
 ```
 
-The release-evidence boundary is `retrieval.RunOwnedReleaseEvidence`. It accepts
-one exact scope, an explicitly owned evaluation DSN, and a provider profile;
-the runtime service DSN is never consulted as a fallback. Missing DSN or any
-PostgreSQL/pgvector, fixture, freshness, or rollback prerequisite yields a
-stable skipped/degraded verdict and must not be treated as release-ready.
+发布证据边界是 `retrieval.RunOwnedReleaseEvidence`。它接受一个确切作用域、一个明确自有的评估 DSN 以及一个提供方配置；运行时服务 DSN 绝不会作为回退被查询。缺失 DSN 或任何 PostgreSQL/pgvector、夹具、新鲜度或回滚前置条件不满足，都会产生稳定的跳过/降级判定，并且不得视为发布就绪。
 
-For CI and operator review, serialize the bounded machine report with
-`retrieval.MarshalReleaseEvidenceReport` and use
-`retrieval.RenderReleaseEvidenceSummary` for a human-readable annotation. Both
-forms contain only logical identities, scope hashes, aggregate counts, and
-failure categories; they do not contain connection strings, scope values,
-queries, content, raw scores, or provider payloads.
+为便于 CI 与运维方审阅，使用 `retrieval.MarshalReleaseEvidenceReport` 序列化有界的机器报告，并使用 `retrieval.RenderReleaseEvidenceSummary` 生成人类可读的注解。两种形式都只包含逻辑标识、作用域哈希、聚合计数与失败类别；它们不包含连接字符串、作用域值、查询、内容、原始得分或提供方载荷。
 
-The resulting `release-evidence.json` is an attestation input, not an
-activation command. An administrator must submit that redacted attestation in
-the exact-scope ranking-rollout activation request. Expiry, policy/dependency
-mismatch, disablement, and rollback all resolve to the approved baseline.
+生成的 `release-evidence.json` 是证明输入，而不是激活命令。管理员必须在精确作用域的排名发布激活请求中提交该脱敏证明。过期、策略/依赖不匹配、禁用与回滚都会解析为获批基线。
 
-The report records logical fixture, representation, fusion, ranking, embedding,
-reranker, analysis, and release-policy identities; protected recall, temporal
-and multi-hop coverage, duplicate/diversity, candidate budgets, fallback
-categories, safety outcomes, and bounded latency. It never records DSNs,
-endpoints, keys, prompts, source text, raw provider payloads, hidden IDs, or raw
-scores.
+报告记录逻辑夹具、表示、融合、排名、嵌入、重排器、分析与发布策略标识；以及受保护召回、时间与多跳覆盖、重复/多样性、候选预算、回退类别、安全结果与有界延迟。它绝不记录 DSN、端点、密钥、提示、源文本、原始提供方载荷、隐藏 ID 或原始得分。
 
-## Operational closure
+## 运维收尾
 
-Evaluation preflight and run lifecycle outcomes use stable categories for a
-missing DSN, missing ownership marker, runtime-target reuse, unavailable
-PostgreSQL/pgvector prerequisites, fixture incompatibility, timeout, and
-incomplete cleanup. The wrapper keeps each `run-*` directory isolated; a
-skipped, failed, cancelled, timed-out, or incomplete run is cleaned and cannot
-be consumed as release evidence. Only completed redacted artifacts remain
-retained, with append-only history.
+评估预检与运行生命周期结果对缺失 DSN、缺失所有权标记、运行时目标复用、PostgreSQL/pgvector 前置条件不可用、夹具不兼容、超时与清理不完整等情况使用稳定类别。包装器保持每个 `run-*` 目录隔离；跳过、失败、取消、超时或不完整的运行都会被清理，不能作为发布证据消费。只有已完成的脱敏产物会被保留，并且历史为仅追加。
 
-Activation eligibility requires a matching handoff for the stable run identity,
-exact-scope hash, source-watermark hash/freshness, fixture and policy versions,
-integrity summary, and rollback verdict. The handoff is evidence, not an
-authorization grant. A stale or mismatched handoff fails closed. Disablement
-and rollback record bounded redacted lifecycle outcomes and return selection to
-the previously approved baseline without rewriting canonical memory or source
-records. Metrics and logs expose only fixed categories and duration/age buckets.
+激活资格要求与稳定运行标识、精确作用域哈希、源水位哈希/新鲜度、夹具与策略版本、完整性摘要以及回滚判定相匹配的交接。交接是证据，不是授权授予。过期或不匹配的交接会失败即关闭。禁用与回滚记录有界的脱敏生命周期结果，并将选择返回先前获批的基线，而不重写规范记忆或源记录。指标与日志只暴露固定类别以及时长/年龄分桶。
 
-### Task-appropriate representation prerequisite
+### 任务适配的表示前置条件
 
-An opt-in release policy can require four compatible task-family representation
-reports before a future scoped rollout review. The report set must cover exact
-facts, cross-document evidence, profile preferences, and procedural lessons;
-each report must remain `shadow`, preserve `flat-fusion-v1` as its selected
-strategy, retain authorized source search, preserve every critical fact and
-source/citation, use a deterministic replay identity, be fresh inside the
-release-evidence window, and have no failure or rollback requirement. Their
-scope hash, source/qrel checksums, watermark, and renderer identity must agree.
+一个可选择加入的发布策略可以要求，在将来进行作用域发布审阅之前先有四份兼容的任务族表示报告。报告集必须覆盖精确事实、跨文档证据、profile 偏好与 procedural 经验；每份报告必须保持 `shadow`、保留 `flat-fusion-v1` 作为其选定策略、保留授权的源搜索、保留每个关键事实与来源/引用、使用确定性的回放标识、在发布证据窗口内保持新鲜，并且没有失败或回滚要求。它们的作用域哈希、源/qrel 校验和、水位与渲染器标识必须一致。
 
-Every report must include measured baseline metrics, matching policy/fixture
-versions and limits, actual owned-stack retrieval and tested baseline rollback.
-Reports expire for release use 24 hours after evaluation; future timestamps are
-invalid. Persisted expiry is an additional bound: ordinary report reads omit
-expired rows, and a release envelope cannot extend a row's retention deadline.
-The release identity binds the sorted representation run identities and the
-release source watermark must match theirs. Refreshing an outer envelope does
-not refresh the underlying evidence. The report itself remains non-activating.
+每份报告都必须包含实测基线指标、匹配的策略/夹具版本与限制、实际的自有栈检索以及经过测试的基线回滚。报告在评估后 24 小时即对发布用途过期；未来时间戳无效。持久化的过期时间是额外约束：普通报告读取会省略已过期的行，发布信封不能延长某一行的保留期限。发布标识绑定排序后的表示运行标识，并且发布源水位必须与之一致。刷新外层信封不会刷新底层证据。报告本身仍然是非激活的。
 
-This prerequisite records only a bounded eligible flag and count in the release
-evidence report. It does not serialize representation reports or their raw
-inputs, select a candidate, create an activation API, or alter ordinary
-retrieval. Missing, duplicate, stale, foreign, incompatible, unsafe, or
-incomplete evidence produces the stable
-`RETRIEVAL_RELEASE_EVIDENCE_REPRESENTATION_REQUIRED` non-pass category.
-Externally supplied utility, repeated-error, and maintenance observations stay
-separate and cannot independently authorize a release or support a causal
-claim.
+该前置条件只在发布证据报告中记录一个有界的合格标志与计数。它不会序列化表示报告或其原始输入，不会选择候选，不会创建激活 API，也不会改变普通检索。缺失、重复、过期、外部、不兼容、不安全或不完整的证据会产生稳定的 `RETRIEVAL_RELEASE_EVIDENCE_REPRESENTATION_REQUIRED` 非通过类别。外部提供的效用、重复错误与维护观察保持独立，不能单独授权发布或支持因果主张。
 
-## Redacted trajectory and information integrity
+## 脱敏轨迹与信息完整性
 
-Evaluation and shadow runs may attach bounded retrieval trajectory aggregates
-and memory-organization integrity reports. These artifacts contain only
-low-cardinality channel, candidate/expansion, fallback, freshness, budget,
-latency, disposition, and integrity-finding categories. They never contain raw
-queries, tenant/project/namespace values, memory or event identifiers, hidden
-candidates, raw scores, prompts, provider payloads, credentials, or unbounded
-plans.
+评估与影子运行可以附加有界的检索轨迹聚合与记忆组织完整性报告。这些产物只包含低基数的通道、候选/扩展、回退、新鲜度、预算、延迟、处置与完整性发现类别。它们绝不包含原始查询、租户/项目/命名空间值、记忆或事件标识符、隐藏候选、原始得分、提示、提供方载荷、凭据或无界计划。
 
-Action success is evaluated separately from information integrity for
-consolidation, merge, reclassification, reflection, and context projection.
-Missing, altered, unexpectedly duplicated, misplaced, foreign-scope,
-hidden-lifecycle, stale-watermark, nondeterministic, or rollback-incomplete
-evidence is a hard non-pass result; quality gains cannot offset it. Reports
-are append-only PostgreSQL-derived artifacts and may be inspected only through
-the authorized exact-scope `GET /v1/admin/retrieval/integrity-reports` route.
-Retention removes only expired derived artifacts and never rewrites canonical
-memory or changes ordinary retrieval/context behavior.
+对于合并、归并、重新分类、反思与上下文投影，动作成功与信息完整性是分开评估的。缺失、被篡改、意外重复、错位、外部作用域、隐藏生命周期、过期水位、非确定性或回滚不完整的证据都是硬性非通过结果；质量提升不能抵消它。报告是仅追加的、由 PostgreSQL 派生的产物，只能通过授权的精确作用域 `GET /v1/admin/retrieval/integrity-reports` 路由检查。保留策略只删除过期的派生产物，绝不重写规范记忆或改变普通检索/上下文行为。
 
-For query-adaptive planning, the same report must additionally record the
-planner schema/planner/policy identities and compatible analysis, fusion,
-ranking, and renderer identities. Family-level results must cover all seven
-bounded query families and protected memory classes. First-pass and optional
-second-pass evidence is reported separately, including aggregate disposition,
-candidate counts, latency, context-item counts, reranker-headroom use, and
-follow-up/fallback categories. A second pass is valid only when it is the one
-policy-authorized follow-up and consumes the same request-local ledger.
+对于查询自适应规划，同一报告还必须记录 planner schema/planner/策略标识，以及兼容的分析、融合、排名与渲染器标识。族级结果必须覆盖全部七个有界查询族与受保护记忆类别。首轮与可选第二轮证据分别报告，包括聚合处置、候选计数、延迟、上下文条目计数、重排器余量使用以及后续/回退类别。第二轮只有在它是策略授权的唯一一次后续轮次且消费同一请求本地账本时才有效。
 
-The owned planner gate must prove a real pgvector-backed semantic hit. The
-runner seeds and activates a fixture-owned vector revision, verifies the
-production semantic repository returns the expected memory with a positive
-semantic score, and verifies the replay attributes that candidate to the
-semantic channel. Merely finding the `vector` extension, executing an empty
-semantic query, or recovering the expected evidence through lexical recall is
-not sufficient release evidence.
+自有的规划器门禁必须证明确实存在 pgvector 支撑的语义命中。运行器播种并激活夹具自有的向量修订，验证生产语义仓库返回带正语义得分的预期记忆，并验证回放将该候选归因到语义通道。仅仅发现 `vector` 扩展、执行空语义查询，或通过词法召回找回预期证据，都不足以构成发布证据。
 
-Planner activation gates require deterministic plan replay, compatible
-dependencies, exact scope, zero lifecycle/isolation leakage, stable citations,
-and green candidate, latency, context, and reranker hard envelopes. Planner
-eligibility cannot activate a reranker by itself; the separately approved
-reranker policy and reserved headroom must be present. Any malformed or
-incompatible plan, unavailable optional channel, follow-up failure, or budget
-exhaustion must demonstrate a baseline-equivalent fallback and a tested
-rollback. Diagnostics and shadow runs must prove ordinary response equivalence.
+规划器激活门禁要求确定性的计划回放、兼容的依赖、确切作用域、零生命周期/隔离泄漏、稳定的引用，以及绿色的候选、延迟、上下文与重排器硬包络。规划器资格本身不能激活重排器；必须存在单独获批的重排器策略与预留余量。任何格式错误或不兼容的计划、不可用的可选通道、后续轮次失败或预算耗尽，都必须证明基线等价的回退与经过测试的回滚。诊断与影子运行必须证明普通响应等价。
 
-Graph-distance rollout adds a separate hard gate: the report may include only
-redacted hop aggregates, truncation/fallback rates, citation coverage, eligible
-relation-hit rate, and latency buckets. Cross-scope traversal, lifecycle or
-source-version leakage, untruncated cycles, limit overflow, citation mismatch,
-ordinary API topology leakage, and nondeterministic replay are non-pass safety
-failures even when graph quality delta is positive. A disabled or rolled-back
-exact-scope graph policy must be followed by a baseline-equivalent request.
+图距离发布增加一个独立的硬门禁：报告只能包含脱敏的跳数聚合、截断/回退率、引用覆盖、合格关系命中率与延迟分桶。跨作用域遍历、生命周期或源版本泄漏、未截断的环、限制溢出、引用不匹配、普通 API 拓扑泄漏以及非确定性回放都是非通过的安全失败，即使图质量差值为正。被禁用或已回滚的精确作用域图策略之后必须跟随一个基线等价的请求。
 
-An absent owned evaluation DSN is a controlled non-pass. It produces
-`SKIP_RETRIEVAL_EVALUATION_DSN_REQUIRED`, never authorizes `active_for_scope`,
-and must not be replaced by the runtime `STELE_POSTGRES_DSN`.
+缺失自有的评估 DSN 是受控的非通过。它产生 `SKIP_RETRIEVAL_EVALUATION_DSN_REQUIRED`，绝不授权 `active_for_scope`，并且不得用运行时 `STELE_POSTGRES_DSN` 替代。
 
-### Latest local gate observation
+### 最近的本地门禁观察
 
-On 2026-09-23 the repository-owned runner was invoked with an explicitly
-owned disposable PostgreSQL 18 + pgvector container through:
+2026-09-23，仓库自有的运行器通过一个明确自有的可丢弃 PostgreSQL 18 + pgvector 容器，以如下方式被调用：
 
 ```powershell
 pwsh -File scripts/retrieval-evaluation.ps1
 ```
 
-The runner returned exit code `0`. It used only
-`STELE_TEST_RETRIEVAL_EVALUATION_DSN` (never `STELE_POSTGRES_DSN`) and retained
-redacted baseline, candidate, gate, and RQ4 shadow artifacts. The exact-scope
-shadow evidence recorded protected recall and citation coverage of `1`, no
-safety failures, bounded context work, deterministic replay, and a tested
-rollback. The calibration summary remained unavailable with zero evidence, so
-the evaluation explicitly recorded `unavailable_baseline_fallback`; it does
-not authorize active calibration.
+运行器返回退出码 `0`。它只使用 `STELE_TEST_RETRIEVAL_EVALUATION_DSN`（绝不使用 `STELE_POSTGRES_DSN`），并保留脱敏的基线、候选、门禁与 RQ4 影子产物。精确作用域的影子证据记录了 `1` 的受保护召回与引用覆盖、无安全失败、有界上下文工作量、确定性回放以及经过测试的回滚。校准摘要仍然因零证据而不可用，因此评估显式记录了 `unavailable_baseline_fallback`；它不授权主动校准。
 
-When the owned DSN is absent, the runner still returns the controlled
-non-pass `SKIP_RETRIEVAL_EVALUATION_DSN_REQUIRED` (exit code `2`). No runtime
-PostgreSQL DSN is reused, no database is mutated, and no report is eligible.
+当自有 DSN 缺失时，运行器仍返回受控的非通过 `SKIP_RETRIEVAL_EVALUATION_DSN_REQUIRED`（退出码 `2`）。不会复用任何运行时 PostgreSQL DSN，不会变更任何数据库，也不会有任何报告合格。
 
-The following repository verification commands also completed successfully on
-2026-09-22 against the bounded graph-distance retrieval worktree:
+以下仓库验证命令也于 2026-09-22 针对有界图距离检索工作树成功完成：
 
 ```text
 go test ./internal/retrieval ./internal/storage/postgres -count=1
@@ -217,75 +95,35 @@ openspec validate --all --strict
 git diff --check
 ```
 
-These checks validate the implementation and its deterministic fixtures. The
-owned shadow result supplies real-stack evidence, but active calibration still
-requires a fresh compatible exact-scope summary and separately governed rollout
-authorization.
+这些检查验证实现及其确定性夹具。自有的影子结果提供了真实栈证据，但主动校准仍需要一份新的兼容精确作用域摘要，以及单独受治理的发布授权。
 
-Progressive context compares short retrieval projection, medium session/context
-overview, and canonical/chunk evidence. Each level must have a source watermark,
-freshness result, token/character budget, citation coverage, and deterministic
-rebuild identity. Parent-first retrieval remains offline or shadow-only and
-uses exact-scope bounded expansion.
+渐进上下文对比短检索投影、中等会话/上下文概览与规范/分块证据。每个层级都必须有源水位、新鲜度结果、token/字符预算、引用覆盖与确定性重建标识。父级优先检索保持离线或仅影子，并使用精确作用域的有界扩展。
 
-Isolation, lifecycle visibility, stale projections, missing/altered evidence,
-and rollback failures are hard gates; aggregate quality gains cannot offset
-them. A release policy is versioned whenever thresholds, protected categories,
-budgets, prerequisites, retention, or rollback conditions change.
+隔离、生命周期可见性、过期投影、缺失/被篡改证据以及回滚失败都是硬门禁；聚合质量提升不能抵消它们。当阈值、受保护类别、预算、前置条件、保留或回滚条件发生变化时，发布策略即被版本化。
 
-## Rebuild and rollback
+## 重建与回滚
 
-Derived chunks, embeddings, duplicate clusters, projections, and parent-first
-artifacts are rebuilt from PostgreSQL source records using their recorded policy
-and renderer versions. Never perform a destructive down migration or mutate
-canonical memory to roll back. Disable the experimental policy, return to the
-last approved flat-fusion strategy, retain append-only history, and rerun the
-owned evidence gate after rebuilding.
+派生分块、嵌入、重复聚类、投影与父级优先产物都使用其记录的策略与渲染器版本从 PostgreSQL 源记录重建。回滚时绝不执行破坏性的向下迁移或变更规范记忆。禁用实验策略，返回上一次获批的扁平融合策略，保留仅追加历史，并在重建后重新运行自有证据门禁。
 
-## Retention and integrity
+## 保留与完整性
 
-Trajectory, diagnostics, reports, and fixtures are bounded derived artifacts.
-Retention cleanup deletes only expired derived records and preserves canonical
-source records. The memory-organization integrity report separately measures
-action success and fact/evidence recall, placement accuracy, duplicate, missing,
-altered, and unexpected evidence. Hidden or foreign evidence appears only as
-aggregate categories and counts.
+轨迹、诊断、报告与夹具都是有界的派生产物。保留清理只删除过期的派生记录并保留规范源记录。记忆组织完整性报告分别度量动作成功与事实/证据召回、放置准确性，以及重复、缺失、被篡改与意外证据。隐藏或外部证据只以聚合类别与计数的形式出现。
 
-Maintenance conformance is an operational prerequisite for using fresh context
-projections in a release run. It checks exact-scope coverage, lease recovery,
-projection freshness/rebuild evidence, retention safety, telemetry redaction,
-and evidence completeness. The durable maintenance path remains disabled until
-that evidence is green; disabling it is the rollback path and does not mutate
-canonical memory.
+维护一致性是发布运行中使用新鲜上下文投影的运维前置条件。它检查精确作用域覆盖、租约恢复、投影新鲜度/重建证据、保留安全、遥测脱敏与证据完整性。在该证据变为绿色之前，持久维护路径保持禁用；禁用它就是回滚路径，并且不变更规范记忆。
 
-## Context-efficiency calibration (RQ4)
+## 上下文效率校准（RQ4）
 
-RQ4 adds bounded, redacted evidence for relevant-token ratio, evidence density,
-duplicate/stale token rates, quality per context budget, candidate/context work,
-and latency buckets. Reports are comparable only when fixture, renderer,
-retrieval-plan, temporal, graph, feedback-summary, calibration-policy, and
-release-policy identities match. Exact counts, query text, content, IDs, scope,
-raw scores, feedback text, and DSNs are never emitted.
+RQ4 为相关 token 比率、证据密度、重复/过期 token 率、每上下文预算质量、候选/上下文工作量以及延迟分桶增加有界的脱敏证据。仅当夹具、渲染器、检索计划、时间、图、反馈摘要、校准策略与发布策略标识都匹配时，报告才可比较。确切的计数、查询文本、内容、ID、作用域、原始得分、反馈文本与 DSN 绝不输出。
 
-Feedback calibration is disabled by default. A policy may run in diagnostics-only
-or shadow mode while returning the approved baseline. Active behavior requires a
-fresh exact-scope summary with minimum evidence, confidence threshold, decay,
-and contribution caps. Calibration runs only after lifecycle, valid-time,
-scope, deduplication, and diversity checks; it cannot add candidates, expand
-graph traversal, change citations, create a context section, or exceed the
-caller budget. Disablement and rollback return to the baseline on the next
-matching request and preserve all source history.
+反馈校准默认禁用。策略可以在仅诊断或影子模式下运行，同时返回获批基线。主动行为要求一份具有最低证据、置信阈值、衰减与贡献上限的新鲜精确作用域摘要。校准只在生命周期、有效时间、作用域、去重与多样性检查之后运行；它不能添加候选、扩展图遍历、改变引用、创建上下文节或超出调用方预算。禁用与回滚会在下一个匹配请求上返回基线，并保留所有源历史。
 
-The following are hard failures even when quality-per-budget improves:
+即使每预算质量有所改善，以下情况仍是硬失败：
 
-- protected recall or evidence-group loss;
-- scope, lifecycle, temporal, citation, or ordinary API leakage;
-- stale/duplicate overflow, budget overflow, or unbounded work;
-- missing or stale calibration summary;
-- nondeterministic fixed-clock replay;
-- failed rollback or unavailable release evidence.
+- 受保护召回或证据组丢失；
+- 作用域、生命周期、时间、引用或普通 API 泄漏；
+- 过期/重复溢出、预算溢出或无界工作；
+- 校准摘要缺失或过期；
+- 非确定性的固定时钟回放；
+- 回滚失败或发布证据不可用。
 
-The deployment limits are configured with `STELE_CONTEXT_CALIBRATION_*` values.
-The owned PostgreSQL + pgvector shadow DSN must remain distinct from
-`STELE_POSTGRES_DSN`; a missing owned DSN is a controlled non-pass, never an
-implicit activation.
+部署限制使用 `STELE_CONTEXT_CALIBRATION_*` 值配置。自有的 PostgreSQL + pgvector 影子 DSN 必须与 `STELE_POSTGRES_DSN` 保持不同；缺失自有 DSN 是受控的非通过，绝不是隐式激活。

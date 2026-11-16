@@ -63,40 +63,40 @@ func Check(root string) error {
 		issues = append(issues, unsafeExampleIssues(relative, string(data))...)
 	}
 	issues = append(issues, requiredTextIssues("docs/README.md", "portal-navigation", contents["docs/README.md"], []string{
-		"## Understand Stele",
-		"## Run Stele",
-		"## Integrate Stele",
-		"## Extend and maintain Stele",
+		"## 理解 Stele",
+		"## 运行 Stele",
+		"## 集成 Stele",
+		"## 扩展与维护 Stele",
 	})...)
 	issues = append(issues, requiredTextIssues("docs/getting-started.md", "getting-started-contract", contents["docs/getting-started.md"], []string{
-		"**Role:** tutorial",
-		"PostgreSQL is the only system of record",
-		"## Choose your next integration path",
+		"**角色：** 教程",
+		"PostgreSQL 是唯一的记录系统",
+		"## 选择下一步集成路径",
 		"self-hosting.md",
 	})...)
 	issues = append(issues, requiredTextIssues("docs/architecture.md", "architecture-navigation", contents["docs/architecture.md"], []string{
-		"## Authorization and disclosure flow",
-		"## Event-to-memory lifecycle",
-		"## Choosing an integration boundary",
-		"PostgreSQL is the only system of record",
+		"## 授权与披露流程",
+		"## 事件到记忆的生命周期",
+		"## 选择集成边界",
+		"PostgreSQL 是唯一的记录系统",
 	})...)
 	issues = append(issues, requiredTextIssues("README.md", "entry-point-navigation", contents["README.md"], []string{
-		"## Documentation",
+		"## 文档",
 		"docs/README.md",
-		"## Choose an integration boundary",
+		"## 选择集成边界",
 	})...)
 	issues = append(issues, requiredTextIssues("docs/agent-runtime-memory-provider.md", "entry-point-navigation", contents["docs/agent-runtime-memory-provider.md"], []string{
-		"**Role:** reference",
+		"**角色：**",
 		"README.md",
-		"does not authorize",
+		"不授权",
 	})...)
 	issues = append(issues, requiredTextIssues("docs/integrations/mcp-agent-skill.md", "entry-point-navigation", contents["docs/integrations/mcp-agent-skill.md"], []string{
-		"**Role:** reference",
+		"**角色：**",
 		"../README.md",
-		"administrator-operated",
+		"面向管理员操作",
 	})...)
 	issues = append(issues, requiredTextIssues("docs/self-hosting.md", "entry-point-navigation", contents["docs/self-hosting.md"], []string{
-		"**Role:** operations reference",
+		"**角色：** 运维参考",
 		"getting-started.md",
 	})...)
 

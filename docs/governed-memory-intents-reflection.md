@@ -1,61 +1,23 @@
-# Governed Memory Intents, Reflection, and Compaction Evidence
+# 受治理的记忆意图、反思与压缩证据
 
-Stele treats external memory requests and model-derived memory as governed,
-auditable records. A request is first written to the scoped `memory_intents`
-ledger. It carries an actor, reason, request/operation identifiers, an
-idempotency key, and provenance. The ledger is append-only; it is not a direct
-write path to canonical memory.
+Stele 将外部记忆请求和模型派生记忆视为受治理、可审计的记录。请求首先写入作用域内的 `memory_intents` 账本。它携带执行者、原因、请求/操作标识符、幂等键和来源。该账本是仅追加（append-only）的；它不是写入规范记忆的直接路径。
 
-Intent targets are checked against the requested tenant/project/namespace,
-active lifecycle state, and expected memory version before downstream work is
-accepted. Retries using the same scoped idempotency key return the original
-durable result. A different payload for an existing key is rejected.
+意图目标在向下游工作被接受之前，会依据所请求的租户/项目/命名空间、活动生命周期状态和预期记忆版本进行检查。使用相同作用域幂等键的重试会返回原始持久结果。针对已存在键的不同负载会被拒绝。
 
-Reflection is asynchronous. Each `reflection_runs` record has a trigger,
-transcript schema version, input watermark, processed offset, lease, attempt
-budget, bounded failure category, and replay identity. Workers checkpoint
-before completion and may resume after lease expiry. Reflection output remains
-derived/candidate data until the configured governance and review path accepts
-it.
+反思是异步的。每条 `reflection_runs` 记录都有一个触发器、转录模式版本、输入水位、已处理偏移、租约、尝试预算、有界失败类别和重放标识。worker 在完成前进行检查点记录，并可在租约过期后恢复。在配置的治理与评审路径接受之前，反思输出仍属于派生/候选数据。
 
-Administrative review decisions are append-only. Supported decisions are
-`accept`, `suppress`, `reject`, and `request_more_evidence`. Suppressed,
-rejected, forgotten, deleted, stale, or foreign-scope records are excluded
-from default retrieval and context projection.
+管理评审决策是仅追加的。受支持的决策为 `accept`、`suppress`、`reject` 和 `request_more_evidence`。被抑制、被拒绝、被遗忘、已删除、过期或外部作用域的记录会被排除在默认检索和上下文投影之外。
 
-Compaction records retain source watermark and source references, derivation and
-summary versions, token estimates, evidence coverage, and bounded recent-tail
-references. A summary is eligible for default projection only when its evidence
-is active, complete, same-scope, and lifecycle-safe. For public disclosure each
-raw source must also have low/medium labels and an independently active same-scope
-promoted canonical version; missing or hidden source edges omit the summary
-before ranking and limit. Rebuilds create derived
-projection records and never mutate canonical memory versions.
+压缩记录保留源水位和源引用、派生与摘要版本、token 估算、证据覆盖范围以及有界近期尾部引用。只有当摘要的证据处于活动状态、完整、同作用域且生命周期安全时，它才有资格进入默认投影。对于公开披露，每个原始源还必须具有低/中等级标签，以及一个独立活动且同作用域的已提升规范版本；缺失或隐藏的源边会在排序和限制之前省略该摘要。重建会创建派生投影记录，且从不更改规范记忆版本。
 
-## Operational checks
+## 运维检查
 
-- Inspect intent and reflection status only through scoped admin endpoints.
-- Treat lease expiry as recoverable and retry only within the configured
-  attempt budget.
-- Replay with the original input watermark and transcript schema version when
-  investigating deterministic drift.
-- Mark compaction evidence stale when a source version or lifecycle state is no
-  longer eligible; rebuild the derived artifact instead of editing it in place.
-- Keep diagnostics bounded and redacted; do not expose raw cross-tenant
-  evidence in logs or admin responses.
+- 仅通过作用域管理端点检查意图和反思状态。
+- 将租约过期视为可恢复，并仅在配置的尝试预算内重试。
+- 调查确定性漂移时，使用原始输入水位和转录模式版本进行重放。
+- 当源版本或生命周期状态不再符合条件时，将压缩证据标记为过期；重建派生工件，而不是就地编辑它。
+- 保持诊断有界且已脱敏；不要在日志或管理响应中暴露原始跨租户证据。
 
-## Current disclosure and source-lineage boundary
+## 当前披露与源谱系边界
 
-Public credentials use profiled Provider context and safe Provider event/intent
-acknowledgments. Native history/provenance, lifecycle and MCP data tools require
-administrator access. Accepted writes do not prove canonical promotion or business
-completion. Canonical versions retain immutable typed source snapshots. Manual
-create/update introduces unattributed `untrusted/restricted` text while preserving
-prior version labels; merge and reclassification append restrictive joined
-versions. Existing suppression, forgetting and deletion do not erase historical
-labels. Summaries,
-reflection and insights use restrictive joins across exact-scope evidence, with
-missing lineage resolving to untrusted/restricted. Attested source attribution
-never authorizes tools, writes or instructions. See the
-[disclosure/source guide](context-disclosure-and-source-trust.md)
-for grant provisioning, migration and rollback constraints.
+公开凭据使用经配置的 Provider 上下文以及安全的 Provider 事件/意图确认。原生历史/来源、生命周期和 MCP 数据工具需要管理员访问权限。被接受的写入并不证明规范提升或业务完成。规范版本保留不可变的类型化源快照。手动创建/更新会引入无归属的 `untrusted/restricted` 文本，同时保留先前版本标签；合并与重新分类会追加限制性的联合版本。已有的抑制、遗忘与删除不会擦除历史标签。摘要、反思和洞察在精确作用域证据上使用限制性连接，缺失谱系会解析为 untrusted/restricted。经过证实的源归属从不授权工具、写入或指令。有关授予配置、迁移和回滚约束，请参见[披露/源指南](context-disclosure-and-source-trust.md)。

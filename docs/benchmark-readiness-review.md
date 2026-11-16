@@ -1,54 +1,33 @@
-# Benchmark Expansion Readiness Review
+# 基准扩展就绪性审查
 
-Review date: 2026-09-03
+审查日期：2026-09-03
 
-## Evidence
+## 证据
 
-- `go test ./... -count=1 -timeout 15m`: passed.
-- PostgreSQL integration tests for repeated import, cross-run isolation,
-  lifecycle exclusion, and auditable runtime identity: passed against
-  PostgreSQL 18.6 with pgvector 0.8.6.
-- `openspec validate agent-memory-benchmark-expansion --strict`: passed.
-- `openspec validate --specs --strict`: 46 passed, 0 failed.
-- Real LongMemEval `s` report retained at
-  `.tmp/benchmark-expansion/longmemeval/modelscope-cleaned-f180315e-s/reports/longmemeval-s/retrieval.json`.
+- `go test ./... -count=1 -timeout 15m`：通过。
+- 针对重复导入、跨运行隔离、生命周期排除与可审计运行时身份的 PostgreSQL 集成测试：在 PostgreSQL 18.6 与 pgvector 0.8.6 上通过。
+- `openspec validate agent-memory-benchmark-expansion --strict`：通过。
+- `openspec validate --specs --strict`：46 通过，0 失败。
+- 真实 LongMemEval `s` 报告保留在 `.tmp/benchmark-expansion/longmemeval/modelscope-cleaned-f180315e-s/reports/longmemeval-s/retrieval.json`。
 
-The LongMemEval report is checksum locked, non-synthetic, and records the
-normalized corpus checksum, qrels checksum, runtime identity, strategy, scope,
-metrics, safety outcomes, and artifact path. Its PostgreSQL benchmark scope was
-cleaned after replay.
+该 LongMemEval 报告经过校验和锁定、非合成，并记录了归一化语料校验和、qrels 校验和、运行时身份、策略、作用域、指标、安全结果与产物路径。其 PostgreSQL 基准作用域在回放后已清理。
 
-## Safety and isolation review
+## 安全与隔离审查
 
-- PostgreSQL remains the only system of record; benchmark code does not alter
-  production memory APIs or lifecycle semantics.
-- Every benchmark import and query uses benchmark-owned tenant/project/namespace
-  scopes. Generic strategy comparison rejects production scopes and incompatible
-  corpus/qrels/embedding/normalization identities.
-- Retrieval excludes suppressed, forgotten, and deleted memories by default.
-- Batch import uses deterministic IDs and bounded transactions; cleanup is
-  dependency ordered and limited to seeder-owned IDs.
-- The final database check found zero records under benchmark run scopes after
-  cleanup; production scopes were not included in the cleanup predicates.
+- PostgreSQL 仍是唯一记录系统；基准代码不改变生产记忆 API 或生命周期语义。
+- 每次基准导入与查询都使用基准自有的租户/项目/命名空间作用域。通用策略对比会拒绝生产作用域以及不兼容的语料/qrels/嵌入/归一化标识。
+- 检索默认排除被抑制、被遗忘与已删除的记忆。
+- 批导入使用确定性 ID 与有界事务；清理按依赖顺序进行，并且只限于播种器自有的 ID。
+- 最终数据库检查发现清理后基准运行作用域下没有记录；生产作用域未包含在清理谓词中。
 
-## License and operational review
+## 许可证与运维审查
 
-- Restricted external corpora remain outside Git under the local cache.
-- Manifests require upstream revision, source checksum, conversion version,
-  split identity, qrels checksum, license, and redistribution status.
-- C-MTEB/MTEB/BEIR selections are metadata-locked with explicit local storage
-  budgets; users must perform the upstream license review before fetching.
-- Needle, MRCR, LongBench-v2, and VTCBench visual artifacts remain planned or
-  prerequisite-gated unless a local artifact and capability are explicitly
-  supplied. They are non-gating stress tracks and do not affect the memory
-  product gate.
-- Offline mode is the default; no implicit network, model, remote judge, or
-  public leaderboard dependency is introduced.
+- 受限外部语料保留在 Git 之外的本地缓存中。
+- 清单要求上游修订、源校验和、转换版本、划分标识、qrels 校验和、许可证与再分发状态。
+- C-MTEB/MTEB/BEIR 的选择以元数据锁定，并具有显式的本地存储预算；用户必须在获取之前完成上游许可证审阅。
+- Needle、MRCR、LongBench-v2 与 VTCBench 视觉产物仍为计划中或受前置条件门控，除非明确提供本地产物与能力。它们是非门控的压力轨道，不影响记忆产品门禁。
+- 离线模式是默认；不引入隐式网络、模型、远程裁判或公开排行榜依赖。
 
-## Residual prerequisites
+## 残留前置条件
 
-The expansion is ready for local product use of the implemented tracks. A
-future change is still required to promote any external metadata-only/planned
-dataset to runnable status: acquire a license-approved local artifact, lock its
-checksum/qrels, add normalization goldens, and run its family-specific gate.
-This is an explicit prerequisite, not a hidden fallback.
+该扩展已可用于已实现轨道的本地产品使用。仍需一次后续变更来将任何外部仅元数据/计划中的数据集提升为可运行状态：获取经许可证批准的本地产物，锁定其校验和/qrels，添加归一化基准样本（goldens），并运行其族特定门禁。这是显式前置条件，而不是隐藏回退。

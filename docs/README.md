@@ -1,62 +1,56 @@
-# Stele documentation
+# Stele 文档
 
-This is the documentation entry point for developers evaluating, operating,
-integrating, or extending Stele. The [repository README](../README.md) is the
-short project overview; this page maps the next steps to the right level of
-detail.
+这是供评估、运行、集成或扩展 Stele 的开发者使用的文档入口。[仓库 README](../README.md)
+是简短的项目概览；本页把下一步工作映射到相应层级的细节。
 
-## Start here
+## 从这里开始
 
-1. Read [Getting started](getting-started.md) to run a local development stack.
-2. Read [Architecture](architecture.md) to understand runtime and memory flow.
-3. Choose an integration boundary in [Integrate Stele](#integrate-stele).
+1. 阅读[入门指南](getting-started.md)，运行本地开发栈。
+2. 阅读[架构](architecture.md)，理解运行时与记忆流程。
+3. 在[集成 Stele](#集成-stele) 中选择集成边界。
 
-## Understand Stele
+## 理解 Stele
 
-- [Architecture](architecture.md) explains the governing flows and boundaries.
-- [Key components](components.md) maps Go packages to their responsibilities.
-- [Best practices](best-practices.md) covers safe application integration.
-- [Disclosure and source trust](context-disclosure-and-source-trust.md) explains
-  how source labels and disclosure policy constrain returned context.
+- [架构](architecture.md) 说明核心流程与边界。
+- [关键组件](components.md) 将 Go 包映射到各自的职责。
+- [最佳实践](best-practices.md) 覆盖安全的应用程序集成方式。
+- [披露与来源信任](context-disclosure-and-source-trust.md) 说明来源标签与披露策略
+  如何约束返回的上下文。
 
-## Run Stele
+## 运行 Stele
 
-- [Getting started](getting-started.md) is the short local first-run tutorial.
-- [Self-hosting](self-hosting.md) is the operations reference for configuration,
-  migrations, backup, restore, and recovery.
+- [入门指南](getting-started.md) 是简短的本地首次运行教程。
+- [自托管](self-hosting.md) 是配置、迁移、备份、恢复与故障恢复的运维参考。
 
-## Integrate Stele
+## 集成 Stele
 
-- Use the [Provider reference](agent-runtime-memory-provider.md) for public
-  agent runtimes that need governed context or memory writes.
-- Use the [MCP administrator guide](integrations/mcp-agent-skill.md) for
-  administrator-operated inspection and review workflows.
-- Use the [OpenAPI source](../openapi/spec.go) when building an endpoint-specific
-  service client. Preserve the authentication and exact-scope rules.
+- 需要受治理上下文或记忆写入的公共 agent 运行时，使用
+  [Provider 参考](agent-runtime-memory-provider.md)。
+- 管理员运营的检查与审阅工作流，使用
+  [MCP 管理员指南](integrations/mcp-agent-skill.md)。
+- 构建针对具体端点的服务客户端时，使用 [OpenAPI 源](../openapi/spec.go)。
+  必须保留认证与精确作用域规则。
 
-## Extend and maintain Stele
+## 扩展与维护 Stele
 
-- Consult the [Stele v1 roadmap](roadmaps/2026-05-28-stele-v1-roadmap.md) for
-  baseline status and follow-up priorities, and the
-  [evidence-verified memory maintenance roadmap](roadmaps/2026-11-08-evidence-verified-memory-maintenance-roadmap.md)
-  for the Anthropic-informed verification, correction, and evaluation backlog.
-- Read [Key components](components.md) before changing Go package ownership.
-- Use [Self-hosting](self-hosting.md) for deployment and recovery operations.
-- Follow the repository's [tests](../docs/documentation_test.go) and
-  [OpenSpec changes](../openspec/changes) when proposing changes.
-- Treat the [OpenAPI contract](../openapi/spec.go), versioned Provider
-  contracts, and OpenSpec requirements as authoritative for exact behavior;
-  overview prose explains intent but does not override those contracts.
-- Read the [OpenSpec configuration](../openspec/config.yaml) for the repository
-  change process and [archived changes](../openspec/changes/archive) for prior
-  design and implementation records.
+- 查阅 [Stele v1 路线图](roadmaps/2026-05-28-stele-v1-roadmap.md) 了解基线状态与
+  后续优先级，以及[证据验证的记忆维护路线图](roadmaps/2026-11-08-evidence-verified-memory-maintenance-roadmap.md)
+  了解受 Anthropic 启发的验证、更正与评估待办。
+- 变更 Go 包的职责归属之前，先阅读[关键组件](components.md)。
+- 部署与恢复操作使用[自托管](self-hosting.md)。
+- 提出变更时，遵循仓库的[测试](../docs/documentation_test.go)与
+  [OpenSpec 变更](../openspec/changes)。
+- 精确行为以 [OpenAPI 契约](../openapi/spec.go)、版本化 Provider 契约和 OpenSpec
+  要求为权威；概览性文字只解释意图，不覆盖这些契约。
+- 阅读 [OpenSpec 配置](../openspec/config.yaml) 了解仓库变更流程，阅读
+  [已归档变更](../openspec/changes/archive) 了解既往设计与实现记录。
 
-## Authoritative references
+## 权威参考
 
-| Concern | Authority |
+| 关注点 | 权威来源 |
 | --- | --- |
-| HTTP request/response shapes | [OpenAPI source](../openapi/spec.go) |
-| Public runtime integration | [Provider reference](agent-runtime-memory-provider.md) and its versioned capabilities |
-| Administrator tools | [MCP integration guide](integrations/mcp-agent-skill.md) |
-| Deployment and operations | [Self-hosting reference](self-hosting.md) |
-| Change requirements and design rationale | [OpenSpec config](../openspec/config.yaml) and [active changes](../openspec/changes) |
+| HTTP 请求/响应结构 | [OpenAPI 源](../openapi/spec.go) |
+| 公共运行时集成 | [Provider 参考](agent-runtime-memory-provider.md) 及其版本化能力 |
+| 管理员工具 | [MCP 集成指南](integrations/mcp-agent-skill.md) |
+| 部署与运维 | [自托管参考](self-hosting.md) |
+| 变更要求与设计理由 | [OpenSpec 配置](../openspec/config.yaml) 与[活跃变更](../openspec/changes) |

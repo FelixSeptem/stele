@@ -1,35 +1,19 @@
-# Governed Autonomous Reasoning Insights
+# 受治理的自主推理洞察
 
-Stele treats provider-backed reasoning as a derived, non-authoritative
-candidate flow. A provider may propose `hypothesis`, `goal`, `contradiction`,
-or `causal_link`, but it cannot activate an insight or mutate canonical memory.
+Stele 将 Provider 支持的推理视为派生的、非权威的候选流程。Provider 可以提议 `hypothesis`、`goal`、`contradiction` 或 `causal_link`，但它不能激活洞察或更改规范记忆。
 
-## Execution Modes
+## 执行模式
 
-- `offline` validates a normalized candidate envelope and produces a stable
-  replay identity without invoking a remote provider.
-- `shadow` may invoke a bounded provider and record a `would_activate` result,
-  but it does not change active derived insights, retrieval, or context output.
-- Activation remains a separate exact-scope policy decision through the reserved
-  insight activation service.
+- `offline` 验证规范化候选信封，并产生稳定的重放标识，而不调用远程 Provider。
+- `shadow` 可以调用有界的 Provider 并记录 `would_activate` 结果，但它不会更改活动的派生洞察、检索或上下文输出。
+- 激活仍是通过保留的洞察激活服务做出的独立精确作用域策略决策。
 
-## Candidate Contract
+## 候选契约
 
-Every candidate carries exact scope proof, active-only lifecycle visibility,
-reference-only redaction policy, source watermark, evidence digest, provider and
-schema versions, policy version, uncertainty, and replay identity. Evidence is
-validated as an authorized subset before a candidate can be handed to policy
-admission. Missing, stale, hidden, foreign, malformed, or over-budget inputs
-fail closed and are represented by bounded dispositions.
+每个候选都携带精确作用域证明、仅活动生命周期可见性、仅引用脱敏策略、源水位、证据摘要、provider 与 schema 版本、策略版本、不确定性以及重放标识。证据在候选可被交给策略准入之前会被验证为经授权的子集。缺失、过期、隐藏、外部、格式错误或超预算的输入会失败即关闭，并由有界处置表示。
 
-The candidate envelope is persisted in PostgreSQL for audit and replay. The
-record is append-only and contains no prompt, chain-of-thought, raw provider
-payload, credential, or default context content.
+候选信封持久化在 PostgreSQL 中，用于审计和重放。该记录是仅追加的，不包含提示词、思维链、原始 Provider 负载、凭据或默认上下文内容。
 
-## Verification
+## 验证
 
-Focused tests cover evidence digest ordering, exact scope, unsafe mutation
-rejection, deterministic replay, shadow non-authority, activation handoff,
-candidate persistence, migration manifest continuity, and low-cardinality
-reasoning telemetry. Any policy that is not separately enabled remains
-shadow-only.
+专项测试覆盖证据摘要排序、精确作用域、不安全变更拒绝、确定性重放、shadow 非权威性、激活交接、候选持久化、迁移清单连续性以及低基数推理遥测。任何未单独启用的策略都保持仅 shadow。

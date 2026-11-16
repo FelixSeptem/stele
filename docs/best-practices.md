@@ -1,169 +1,126 @@
-# Stele best practices
+# Stele 最佳实践
 
-**Role:** integration guidance. Start at the
-[documentation portal](README.md) to choose the right service boundary.
+**角色：** 集成指导。请从[文档门户](README.md)开始选择合适的服务边界。
 
-These practices apply to operators, integrations, and agents using the public
-OpenAPI or MCP boundaries.
+这些实践适用于运维人员、集成方以及使用公共 OpenAPI 或 MCP 边界的 agent。
 
-For durable references, poll bounded status until governance is complete and
-then use exact ID/path lookup. Validate scope, UUID lineage, limits, lifecycle,
-and disclosure on every response. Never treat HTTP acceptance as canonical
-promotion or fall back to ranked search when PC5 is unavailable.
+对于持久引用，应先以有界方式轮询状态直至治理完成，然后使用精确 ID/路径查询。对每个响应
+校验作用域、UUID 谱系、限制、生命周期与披露状态。切勿把 HTTP 接受视为规范提升，也不要在
+PC5 不可用时回退到排序检索。
 
-For operator diagnosis, use the admin exact-scope ingestion-freshness endpoint
-to distinguish admission, governance, canonical promotion, and an observed
-public read. A report missing the final stage is not proof that an item is
-retrievable; never infer it from a successful write or database promotion, and
-never use freshness evidence as task or artifact completion authority.
+进行运维诊断时，使用管理员精确作用域的摄取新鲜度端点，区分准入、治理、规范提升与观测到的
+公共读取。缺少最后阶段的报告不能证明条目可检索；不要从写入成功或数据库提升推断这一点，
+也不要把新鲜度证据当作任务或产物完成的权威。
 
-For runtime outcome/feedback evidence, negotiate PC6 and preserve a stable
-effect ID plus idempotency key per source revision. Append corrections with a
-greater revision and new key; never equate admission or `feedback_state=pending`
-with task completion, canonical promotion or ranking/insight activation.
-Reauthorize current reference states on inspection. See
-[projection maintenance](provider-evidence-projections.md) for bounds and errors.
+对于运行时结果/反馈证据，协商 PC6，并为每个源修订保留稳定的 effect ID 与幂等键。以更大的
+修订号和新键追加更正；不要把准入或 `feedback_state=pending` 等同于任务完成、规范提升或
+排序/洞察激活。检查时应重新授权当前的引用状态。边界与错误见
+[投影维护](provider-evidence-projections.md)。
 
-## Establish scope before memory work
+## 在记忆操作前确定作用域
 
-Use an authenticated principal and resolve the exact runtime binding before
-reading or writing memory. Treat `tenant`, `project`, and `namespace` as a
-security boundary, not a search filter. Do not invent a broader namespace or
-reuse a binding from another session.
+使用已认证的主体，并在读写记忆之前解析精确的运行时绑定。把 `tenant`、`project` 与
+`namespace` 视为安全边界，而不是搜索过滤器。不要自行构造更宽泛的命名空间，也不要复用
+其他会话的绑定。
 
-For an explicitly authorized administrator MCP workflow, call `who_am_i` first
-and confirm the active scope. Public credentials cannot use MCP data tools.
-Public Provider clients complete runtime initialization and retain the
-server-issued binding and session identity.
+在明确授权的管理员 MCP 工作流中，先调用 `who_am_i` 并确认当前活跃作用域。公共凭据不能
+使用 MCP 数据工具。公共 Provider 客户端需完成运行时初始化，并保留服务端签发的绑定与会话
+身份。
 
-## Choose the smallest read
+## 选择最小的读取
 
-- Public clients use profiled Provider context, defaulting to references.
-- Administrators use native/MCP context assembly for bounded working context.
-- Administrators use search for a focused query and browse for scoped review.
-- Request only the result and context limits needed for the current turn.
+- 公共客户端使用带 profile 的 Provider 上下文，默认返回引用。
+- 管理员使用原生/MCP 上下文装配获得有界工作上下文。
+- 管理员使用检索处理聚焦查询，使用浏览进行作用域内审阅。
+- 只请求当前轮次所需的结果与上下文限制。
 
-Read results are lifecycle-filtered evidence. Suppressed, forgotten, deleted,
-stale, and foreign records must remain unavailable through ordinary reads.
+读取结果是经过生命周期过滤的证据。被抑制、已遗忘、已删除、过期与外部的记录在普通读取中
+必须保持不可用。
 
-Provider clients must validate the categorized context response before treating
-it as usable or empty. Use canonical snake_case fields and binding-owned scope;
-preserve citations rather than depending on ranking scores. See the
-[Provider contract and migration notes](agent-runtime-memory-provider.md#provider-context-json-contract)
-for disclosure provisioning, independent allocations and pending digest/continuity work.
+Provider 客户端必须校验分类后的上下文响应，然后才能把它视为可用或空结果。使用规范的
+snake_case 字段与绑定自有的作用域；保留引用，而不是依赖排序分数。披露配置、独立分配以及
+待完成的摘要/连续性工作见 [Provider 契约与迁移说明](agent-runtime-memory-provider.md#provider-context-json-contract)。
 
-Discover `context-budget-v1` and `context-packing-v1` explicitly; require
-`token_budget_supported=false`. Reserve the agent's other prompt components,
-then allocate positive item `budget` and optional content/body/citation limits.
-Omission inherits server ceilings (100 items, 100 citations, default 1 MiB body
-and inherited content); explicit zero content/citations is meaningful and never
-changes the mode. Bytes measure UTF-8 content or the complete serialized body,
-not model tokens. Whole-item selection retains required citations and may leave
-space unused for deterministic accounting reservation.
+显式发现 `context-budget-v1` 与 `context-packing-v1`；要求 `token_budget_supported=false`。
+先预留 agent 的其他 prompt 组成部分，再分配正的条目 `budget` 与可选的内容/正文/引用限制。
+省略即继承服务端上限（100 个条目、100 条引用、默认 1 MiB 正文与继承的内容上限）；显式的零
+内容/零引用是有意义的，且永不改变模式。字节衡量的是 UTF-8 内容或完整序列化正文，不是模型
+token。整条目选择会保留必需引用，并可能为了确定性的计费预留而留空部分空间。
 
-Require closed `budget_accounting` even with diagnostics disabled. Check mode,
-requested/effective limits, exact captured body bytes, content bytes, items and
-unique citations; invalid/missing/version-incompatible accounting is a contract
-failure. `empty` and `budget_exhausted` are distinct successful outcomes, while
-dependency 503 is retryable failure. 400 malformed allocation needs correction,
-403 disclosure denial needs operator review, and 413 means no partial projection
-may be consumed; an infeasible envelope requires enough body space. Public section
-labels describe unsupported capability, never hidden stored evidence. Avoid local
-packing/reranking, byte-to-token guesses, alternate-route fallback or stripped
-limits. Before rollback, disable access for consumers requiring PC3; historical
-PC1/PC2 evidence is not allocation readiness.
+即使关闭诊断，也必须要求封闭的 `budget_accounting`。校验模式、requested/effective 限制、
+精确捕获的正文字节、内容字节、条目数与唯一引用数；无效/缺失/版本不兼容的计费结果属于契约
+失败。`empty` 与 `budget_exhausted` 是两种不同的成功结果，而依赖项 503 是可重试失败。400
+表示分配格式错误需要更正，403 披露拒绝需要运维审查，413 表示不得消费任何部分投影；不可行
+的信封需要足够的正文字节空间。公共段的标签只描述不受支持的能力，绝不暗示存在隐藏的已存
+证据。避免本地打包/重排、字节到 token 的猜测、改用其他路由的回退或裁剪限制。回滚之前，
+先为需要 PC3 的消费方禁用访问；历史 PC1/PC2 证据不代表分配能力已就绪。
 
-## Write through governed paths
+## 通过受治理路径写入
 
-Memory writes should be explicit, attributable, and idempotent. Include a
-meaningful reason and a stable idempotency key. Use the memory class and path
-when known. Do not write directly to PostgreSQL or copy a retrieval result into
-canonical storage without an explicit new-memory decision.
+记忆写入应当显式、可归属且幂等。包含有意义的理由与稳定的幂等键。已知时使用记忆类别与路径。
+不要直接写入 PostgreSQL，也不要在没有明确的新记忆决策的情况下把检索结果复制进规范存储。
 
-Stele preserves raw events, provenance, candidates, canonical versions, and
-lifecycle history. A later correction should create a governed version or
-intent rather than silently overwriting the old record.
+Stele 保留原始事件、来源、候选、规范版本与生命周期历史。后续更正应创建受治理的版本或意图，
+而不是静默覆盖旧记录。
 
-## Forget safely
+## 安全地遗忘
 
-In an authorized administrator workflow, use the governed single-memory forget operation with a
-reason and idempotency key. For semantic or bulk forgetting:
+在已授权的管理员工作流中，使用带理由与幂等键的受治理单条记忆遗忘操作。对于语义或批量遗忘：
 
-1. Run `memory_forget_preview`.
-2. Review the bounded candidate IDs and reasons.
-3. Apply only the reviewed IDs with `memory_forget_apply`.
+1. 运行 `memory_forget_preview`。
+2. 审阅有界候选 ID 与理由。
+3. 只使用 `memory_forget_apply` 应用已审阅的 ID。
 
-Never turn a search result into an unreviewed bulk deletion. Retain the preview
-identity when applying and treat conflicts or stale targets as a stop-and-review
-condition.
+切勿把检索结果变成未经审阅的批量删除。应用时保留预览身份，并把冲突或过期目标视为停止并
+复查的条件。
 
-## Verify Provider context continuity without rebuilding context locally
+## 在不本地重建上下文的前提下验证 Provider 上下文连续性
 
-Discover and require `context-digest-v1`, `context-canonical-v1`,
-`context-selection-v1` and `context-continuity-v1` before consuming the PC4
-extension. Capture the exact compact response bytes, verify the closed response
-shape and recompute the digest using the documented canonical form. Digest
-comparison proves only that two authorized projections are the same under the
-advertised policy; it neither grants read access nor proves task completion,
-write authority, source truth or business state.
+在消费 PC4 扩展之前，发现并要求 `context-digest-v1`、`context-canonical-v1`、
+`context-selection-v1` 与 `context-continuity-v1`。捕获精确的紧凑响应字节，校验封闭的
+响应结构，并使用文档所述的规范形式重新计算摘要。摘要比较只能证明两个已授权的投影在所声明
+的策略下相同；它既不授予读取权限，也不证明任务完成、写入权限、来源真实性或业务状态。
 
-Use continuity only for an equivalent follow-up read. An omitted continuity
-input means a normal fresh request. `issue` returns an opaque short-lived
-metadata-only reference; `compare` returns another complete current body with
-`unchanged` or `changed`. Never treat comparison as ETag behavior: do not accept
-304, a bodyless response, a stored snapshot, a watermark, or a historical
-projection. On 409 continuity refusal or retryable 503, stop and repair/retry
-the Provider operation; do not widen scope, switch to MCP/native retrieval,
-infer hidden changes, cache a prior body, or locally rerank/pack alternatives.
+只对等价的后续读取使用连续性。省略连续性输入意味着一次普通的全新请求。`issue` 返回不透明的
+短期、仅元数据引用；`compare` 返回另一个完整的当前正文，并给出 `unchanged` 或 `changed`。
+切勿把比较当作 ETag 行为：不要接受 304、无正文响应、已存快照、水位或历史投影。遇到 409
+连续性拒绝或可重试的 503 时，停止并修复/重试 Provider 操作；不要扩大作用域、切换到
+MCP/原生检索、推断隐藏变更、缓存先前的正文，或在本地重排/打包替代结果。
 
-Keep comparison references and digest values out of prompts, telemetry,
-diagnostics and repositories. They are not credentials, but an opaque reference
-can still correlate runtime activity. Preserve citations and use recalled text
-only after the agent's own tool/write/business policy has evaluated it.
+把比较引用与摘要值排除在 prompt、遥测、诊断和仓储之外。它们不是凭据，但不透明引用仍可能
+关联运行时活动。保留引用，并且只有在 agent 自身的工具/写入/业务策略评估之后才使用召回文本。
 
-## Preserve evidence quality
+## 保持证据质量
 
-Keep citations attached to agent-facing answers when a result depends on memory.
-Use source references and projection/version watermarks where available. Do not
-expose hidden content, raw embeddings, ranking internals, credentials, or
-provider payloads to an agent merely for debugging convenience.
+当结果依赖记忆时，在面向 agent 的回答中保留引用。尽可能使用来源引用与投影/版本水位。不要
+仅仅为了方便调试就把隐藏内容、原始嵌入、排序内部信息、凭据或 Provider 负载暴露给 agent。
 
-## Retry and recover deliberately
+## 有意识地重试与恢复
 
-Retry idempotent reads and writes with the same request or idempotency identity.
-Do not retry a destructive action with a new key until the prior outcome is
-understood. Treat scope, authorization, validation, lifecycle, and compatibility
-errors as corrective actions, not transient failures.
+使用相同的请求或幂等身份重试幂等读取与写入。在弄清先前结果之前，不要用新键重试破坏性操作。
+把作用域、授权、校验、生命周期与兼容性错误视为需要纠正的事项，而不是瞬时故障。
 
-For provider synchronization, persist an acknowledged cursor only after the
-batch is accepted. On `resync_required`, discard the cursor and start a fresh
-snapshot. Do not assume skipped events were applied.
+对于 Provider 同步，只有在批次被接受之后才持久化已确认的游标。遇到 `resync_required` 时，
+丢弃游标并重新开始一次快照。不要假设被跳过的事件已经应用。
 
-## Operate the self-hosted service
+## 运维自托管服务
 
-- Keep PostgreSQL as the only system of record.
-- Run migrations before enabling new API/provider capabilities.
-- Treat River schema migration as part of PostgreSQL startup policy. Keep the
-  intent ledger authoritative, preserve legacy queue history, and do not drop
-  River jobs or replay terminal rows as a rollback shortcut.
-- Keep MCP and provider adapters disabled until exact-scope smoke and
-  conformance checks pass.
-- Use explicit owned PostgreSQL + pgvector databases for integration evidence.
-- Monitor `/health`, `/ready`, worker leases, scheduler backlog, retention, and
-  migration status.
-- Back up PostgreSQL and rehearse restore verification before relying on a
-  deployment.
+- 保持 PostgreSQL 为唯一的记录系统。
+- 在启用新的 API/Provider 能力之前运行迁移。
+- 把 River schema 迁移视为 PostgreSQL 启动策略的一部分。保持意图台账的权威性，保留旧版
+  队列历史，不要以删除 River 作业或重放终态行作为回滚捷径。
+- 在精确作用域冒烟与一致性检查通过之前，保持 MCP 与 Provider 适配器禁用。
+- 为集成证据使用明确的、自有 PostgreSQL + pgvector 数据库。
+- 监控 `/health`、`/ready`、worker 租约、scheduler 积压、保留策略与迁移状态。
+- 在依赖某个部署之前，备份 PostgreSQL 并演练恢复验证。
 
-Detailed configuration and recovery procedures are in
-[self-hosting](self-hosting.md), while the architecture and component roles are
-documented in [architecture](architecture.md) and [components](components.md).
+详细的配置与恢复流程见[自托管](self-hosting.md)，架构与组件职责见
+[架构](architecture.md) 和[关键组件](components.md)。
 
-## Context disclosure and source trust
+## 上下文披露与来源信任
 
-Public runtime credentials require explicit exact-scope disclosure provisioning.
-Provider context defaults to structured references; bounded content requires the
-content profile and explicit mode. Unsupported native/MCP data routes deny public
-credentials before lookup. Source labels persist through governance and history;
-missing lineage is untrusted/restricted. Attested source data grants no instruction,
-tool, write or business-state authority. See the [disclosure/source guide](context-disclosure-and-source-trust.md)
-for endpoint behavior, administration, versioning and upgrade/rollback.
+公共运行时凭据需要显式的精确作用域披露配置。Provider 上下文默认返回结构化引用；有界内容
+需要 content profile 与显式模式。不受支持的 native/MCP 数据路由会在查询前拒绝公共凭据。
+来源标签贯穿治理与历史持久保存；缺失谱系的数据视为不可信/受限。已证实的来源数据不授予
+任何指令、工具、写入或业务状态权限。端点行为、管理、版本化以及升级/回滚见
+[披露/来源指南](context-disclosure-and-source-trust.md)。

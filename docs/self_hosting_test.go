@@ -17,7 +17,7 @@ func TestSelfHostingSmokeLoopDocumentsReplayContextAndMetrics(t *testing.T) {
 	spec := openapi.SpecYAML()
 
 	for _, want := range []string{
-		"Smoke fixture scope",
+		"冒烟夹具作用域",
 		"tenant-a",
 		"project-a",
 		"namespace-a",
@@ -69,17 +69,17 @@ func TestSelfHostingDocsDescribeReasoningProviderBoundary(t *testing.T) {
 	}
 	content := string(contentBytes)
 	for _, want := range []string{
-		"Reasoning provider boundary",
-		"disabled by default",
-		"offline replay",
-		"shadow execution",
-		"candidate or governed intent",
-		"canonical memory",
-		"chain-of-thought",
-		"raw provider payloads",
+		"推理 Provider 边界",
+		"默认禁用",
+		"离线回放",
+		"影子执行",
+		"候选或受治理的意图",
+		"规范记忆",
+		"思维链",
+		"原始 Provider 载荷",
 		"hypothesis",
 		"causal_link",
-		"rollback",
+		"回滚",
 		"STELE_REASONING_ENABLED",
 		"STELE_REASONING_MODE",
 		"GET /v1/reasoning/capabilities",
@@ -101,10 +101,10 @@ func TestSelfHostingDocsDescribeOpenAICompatibleReasoningAdapter(t *testing.T) {
 		"STELE_REASONING_MODEL",
 		"STELE_REASONING_API_KEY",
 		"shadow",
-		"one bounded",
-		"automatic retries",
-		"Offline",
-		"replay never contacts",
+		"一次有界的",
+		"自动重试",
+		"离线",
+		"回放绝不会联系",
 	} {
 		if !strings.Contains(content, want) {
 			t.Fatalf("self-hosting adapter docs missing %q", want)
@@ -147,12 +147,12 @@ func TestSelfHostingDocsDescribeRedactedRetrievalIntegrityEvaluation(t *testing.
 	}
 	content := string(contentBytes)
 	for _, want := range []string{
-		"Redacted retrieval trajectory and memory-integrity evaluation",
+		"脱敏检索轨迹与记忆完整性评估",
 		"GET /v1/admin/retrieval/integrity-reports",
-		"raw query text",
+		"原始查询文本",
 		"information-integrity",
-		"hard non-pass result",
-		"append-only derived PostgreSQL records",
+		"硬性未通过结果",
+		"仅追加的派生 PostgreSQL 记录",
 	} {
 		if !strings.Contains(content, want) {
 			t.Fatalf("self-hosting docs missing retrieval integrity guidance %q", want)
@@ -167,19 +167,19 @@ func TestSelfHostingDocsDescribeScopedAgentSelfModelConvention(t *testing.T) {
 	}
 	content := string(contentBytes)
 	for _, want := range []string{
-		"Agent self-model memory convention",
+		"Agent 自我模型记忆约定",
 		"agents/{agent-id}/self/{category}",
-		"capabilities`, `preferences`, `limitations`, and `lessons",
+		"`capabilities`、`preferences`、`limitations` 和 `lessons`",
 		"profile",
 		"procedural",
-		"agent-id is",
-		"path data only",
-		"server-published capabilities, grants,",
-		"runtime-enforced limits remain authoritative",
-		"Shared memory-path validation",
-		"lifecycle visibility",
-		"segment-boundary",
-		"budgets",
+		"agent-id 仅是",
+		"仅是路径数据",
+		"服务器发布的能力、授权、",
+		"运行时强制限制仍为权威",
+		"共享的记忆路径校验",
+		"生命周期可见性",
+		"段边界",
+		"预算",
 		`"path":"agents/agent-a/self/preferences"`,
 		`"path_prefix":"agents/agent-a/self"`,
 		"X-Stele-Tenant: tenant-a",
@@ -198,7 +198,7 @@ func TestSelfHostingDocsDescribeReleaseEvidenceReconciliation(t *testing.T) {
 		t.Fatalf("read self-hosting.md: %v", err)
 	}
 	content := string(contentBytes)
-	for _, want := range []string{"Release-evidence freshness reconciliation", "release_evidence_reconciliation", "/v1/admin/release-evidence/reconciliation", "new compatible evidence handoff", "fail closed"} {
+	for _, want := range []string{"发布证据新鲜度核对", "release_evidence_reconciliation", "/v1/admin/release-evidence/reconciliation", "新的兼容证据移交", "失败即关闭"} {
 		if !strings.Contains(content, want) {
 			t.Fatalf("self-hosting docs missing reconciliation guidance %q", want)
 		}
@@ -388,8 +388,8 @@ func TestSelfHostingDocsDescribeChecksummedMigrationIntegrity(t *testing.T) {
 		"integrity_status",
 		"stele_schema_migration_ledger",
 		"SHA-256",
-		"forward-remediation",
-		"Automatic down migration is prohibited",
+		"前向修复迁移",
+		"禁止自动向下迁移",
 	} {
 		if !strings.Contains(string(content), want) {
 			t.Fatalf("self-hosting guide missing migration integrity guidance %q", want)
@@ -435,35 +435,35 @@ func TestProceduralVerificationOwnedStackScriptCreatesDatabaseAfterSQLReadiness(
 func TestProceduralVerificationOperationsAreDocumentedAsAdminOnly(t *testing.T) {
 	checks := map[string][]string{
 		"../README.md": {
-			"Procedural verification maintenance",
-			"administrator-only",
-			"governed update",
+			"程序性验证维护",
+			"仅限管理员",
+			"受治理更新",
 		},
 		"architecture.md": {
-			"Procedural verification and governed correction",
-			"append-only verification ledger",
-			"does not overwrite canonical memory",
+			"程序性验证与受治理更正",
+			"仅追加的验证台账",
+			"不会覆盖规范记忆",
 		},
 		"components.md": {
-			"Procedural verification maintenance",
+			"程序性验证维护",
 			"procedural_revalidation",
-			"PostgreSQL remains the system of record",
+			"PostgreSQL 仍是记录系统",
 		},
 		"self-hosting.md": {
-			"Procedural verification maintenance",
+			"程序性验证维护",
 			"STELE_PROCEDURAL_VERIFICATION_ENABLED",
 			"STELE_PROCEDURAL_VERIFICATION_MAX_ATTEMPTS",
 			"stele-procedural-verification-verify.ps1",
-			"Rollback",
+			"回滚",
 		},
 		"integrations/mcp-agent-skill.md": {
-			"Procedural verification maintenance",
-			"not an MCP tool",
-			"not available to public Provider credentials",
+			"程序性验证维护",
+			"不是 MCP 工具",
+			"不向公共 Provider 凭据开放",
 		},
 		"agent-runtime-memory-provider.md": {
-			"Procedural verification is administrator-only",
-			"does not add a Provider route",
+			"程序性验证仅限管理员",
+			"不新增 Provider 路由",
 		},
 		"../skills/stele-memory/SKILL.md": {
 			"Procedural verification is an administrator-only maintenance workflow",
@@ -490,19 +490,19 @@ func TestSelfHostingDocsIncludeFirstTenMinutesOwnedPath(t *testing.T) {
 	}
 	content := string(contentBytes)
 	for _, want := range []string{
-		"First-ten-minutes owned smoke path",
+		"最初十分钟的自有冒烟路径",
 		"scripts/stele-first-ten-minutes.ps1",
 		"STELE_FIRST_TEN_MINUTES_CI=1",
-		"600 seconds",
-		"900 seconds",
+		"600 秒",
+		"900 秒",
 		"preflight",
 		"discovery",
 		"readiness",
 		"telemetry",
 		"SKIP",
 		"KeepResources",
-		"full product verification",
-		"does not add an API route",
+		"完整产品验证",
+		"不新增 API 路由",
 	} {
 		if !strings.Contains(content, want) {
 			t.Fatalf("self-hosting guide missing first-ten-minutes contract %q", want)
@@ -541,7 +541,7 @@ func TestSelfHostingDocsDescribeBoundedRuntimeTelemetry(t *testing.T) {
 		t.Fatalf("read self-hosting.md: %v", err)
 	}
 	content := string(contentBytes)
-	for _, want := range []string{"Runtime startup and drain telemetry", "migration validation", "readiness/drain", "without emitting DSNs", "Product verification emits", "only phase/result categories"} {
+	for _, want := range []string{"运行时启动与排空遥测", "迁移校验", "就绪/排空", "不会输出 DSN", "产品验证只输出", "阶段/结果类别"} {
 		if !strings.Contains(content, want) {
 			t.Fatalf("self-hosting docs missing bounded telemetry contract %q", want)
 		}
@@ -557,7 +557,7 @@ func TestSelfHostingDocsIncludeMemoryQualityRepairLoop(t *testing.T) {
 	spec := openapi.SpecYAML()
 
 	for _, want := range []string{
-		"Memory quality and repair loop",
+		"记忆质量与修复循环",
 		"/v1/admin/memory-quality/evaluations",
 		"/v1/admin/memory-quality/evaluations/<evaluation-run-id>/findings",
 		"/v1/admin/memory-quality/repair-plans",
@@ -594,7 +594,7 @@ func TestSelfHostingDocsIncludeScopeProofAndMemorySessionLoop(t *testing.T) {
 	spec := openapi.SpecYAML()
 
 	for _, want := range []string{
-		"Durable scope proof and memory session loop",
+		"持久作用域证明与记忆会话循环",
 		"/v1/admin/scope-proofs",
 		"/v1/admin/scope-proofs/<proof-run-id>/report",
 		"/v1/admin/scope-proofs/<proof-run-id>:rerun",
@@ -609,10 +609,10 @@ func TestSelfHostingDocsIncludeScopeProofAndMemorySessionLoop(t *testing.T) {
 		"stele_scope_proof_steps_total",
 		"stele_memory_session_verifications_total",
 		"SDK/UI",
-		"external agent runtime integration",
-		"capacity/load proof",
-		"backup/restore proof",
-		"long-term memory usefulness scoring",
+		"外部 agent 运行时集成",
+		"容量/负载证明",
+		"备份/恢复证明",
+		"长期记忆有用性评分",
 	} {
 		if !strings.Contains(content, want) {
 			t.Fatalf("self-hosting proof/session docs missing %q", want)
@@ -644,15 +644,15 @@ func TestSelfHostingDocsIncludeTaskSuccessLoop(t *testing.T) {
 	spec := openapi.SpecYAML()
 
 	for _, want := range []string{
-		"External-agent task success loop",
+		"外部 agent 任务成功循环",
 		"/v1/task-evaluations",
 		"/v1/task-evaluations/<task-evaluation-id>/report",
 		"/v1/admin/task-evaluations",
 		"/v1/admin/task-evaluations/<task-evaluation-id>",
 		"/v1/admin/task-evaluations/<task-evaluation-id>/supersede",
 		"/v1/admin/task-evaluations/summary",
-		"Opaque caller evidence tokens",
-		"bounded linked ids",
+		"不透明的调用方证据令牌",
+		"有界的关联 ID",
 	} {
 		if !strings.Contains(content, want) {
 			t.Fatalf("self-hosting task success docs missing %q", want)
@@ -681,13 +681,13 @@ func TestSelfHostingDocsStateRemainingFeedbackLoopProductGaps(t *testing.T) {
 	content := string(contentBytes)
 
 	for _, want := range []string{
-		"Remaining feedback-loop product gaps",
-		"governed ranking rollout policy",
-		"SDK/UI collection surfaces",
-		"external agent runtime integration",
-		"Hosted incident management",
-		"vendor-specific alert integrations",
-		"advanced scoring calibration",
+		"反馈循环剩余的产品缺口",
+		"受治理的排序发布（rollout）策略",
+		"SDK/UI 采集界面",
+		"外部 agent 运行时集成",
+		"托管故障管理",
+		"厂商专用告警集成",
+		"高级评分校准",
 	} {
 		if !strings.Contains(content, want) {
 			t.Fatalf("self-hosting remaining product gaps docs missing %q", want)
@@ -708,7 +708,7 @@ func TestSelfHostingDocsIncludeAssuranceConformanceReadinessLoop(t *testing.T) {
 	spec := openapi.SpecYAML()
 
 	for _, want := range []string{
-		"Production-readiness assurance and conformance loop",
+		"生产就绪保障与一致性循环",
 		"/v1/admin/assurance/health-evaluations",
 		"/v1/admin/assurance/conformance-profiles",
 		"/v1/admin/assurance/conformance-runs",
@@ -716,11 +716,11 @@ func TestSelfHostingDocsIncludeAssuranceConformanceReadinessLoop(t *testing.T) {
 		"/v1/admin/assurance/incidents",
 		"/v1/admin/assurance/alert-candidates",
 		"/v1/admin/assurance/recovery-verifications",
-		"capacity/load proof",
-		"backup/restore proof",
-		"disabled`, `stdout`, and generic `webhook`",
-		"HTTPS-by-default",
-		"unsafe target rejection",
+		"容量/负载证明",
+		"备份/恢复证明",
+		"`disabled`、`stdout` 和通用 `webhook`",
+		"默认使用 HTTPS",
+		"拒绝不安全目标",
 		"stele_assurance_health_evaluations_total",
 		"stele_conformance_runs_total",
 		"component=assurance event=lifecycle",
@@ -754,15 +754,15 @@ func TestSelfHostingDocsStateRemainingAssuranceProductGaps(t *testing.T) {
 	content := string(contentBytes)
 
 	for _, want := range []string{
-		"Remaining assurance product gaps",
-		"SDK/UI collection surfaces",
-		"external agent runtime implementation",
-		"vendor-specific alert integrations",
-		"hosted incident management",
-		"adaptive scoring calibration",
-		"model invocation",
-		"prompt orchestration",
-		"final-answer generation",
+		"保障功能的剩余产品缺口",
+		"SDK/UI 采集界面",
+		"外部 agent 运行时实现",
+		"厂商专用告警集成",
+		"托管故障管理",
+		"自适应评分校准",
+		"模型调用",
+		"提示编排",
+		"最终答案生成",
 	} {
 		if !strings.Contains(content, want) {
 			t.Fatalf("self-hosting assurance gaps docs missing %q", want)
@@ -778,7 +778,7 @@ func TestSelfHostingDocsIncludeIntegrationEvidenceWorkflowGoldenPath(t *testing.
 	content := string(contentBytes)
 	spec := openapi.SpecYAML()
 	for _, want := range []string{
-		"Integration evidence workflow golden path",
+		"集成证据工作流黄金路径",
 		"/v1/admin/workflows/templates",
 		"/v1/workflows/runs",
 		"/v1/workflows/runs/<workflow-run-id>/steps",
@@ -787,10 +787,10 @@ func TestSelfHostingDocsIncludeIntegrationEvidenceWorkflowGoldenPath(t *testing.
 		"/v1/admin/workflows/evidence-links/<evidence-link-id>/supersede",
 		"STELE_WORKFLOW_MAINTENANCE_ENABLED",
 		"stele_workflow_lifecycle_total",
-		"external agent execution",
-		"model invocation",
-		"prompt orchestration",
-		"final-answer generation",
+		"外部 agent 执行",
+		"模型调用",
+		"提示编排",
+		"最终答案生成",
 	} {
 		if !strings.Contains(content, want) {
 			t.Fatalf("self-hosting workflow docs missing %q", want)
@@ -835,7 +835,7 @@ func TestFusionContractAndRolloutRunbookAreDocumented(t *testing.T) {
 	}
 	hosting := string(hostingBytes)
 	for _, want := range []string{
-		"Stable fusion rollout and evaluator runbook",
+		"稳定融合发布（rollout）与评估器运行手册",
 		"/v1/admin/ranking-rollouts",
 		"normalized_weighted:normalized-weighted-v1",
 		"active_for_scope",
@@ -843,7 +843,7 @@ func TestFusionContractAndRolloutRunbookAreDocumented(t *testing.T) {
 		"STELE_TEST_RETRIEVAL_EVALUATION_OWNED",
 		"-TimeoutSeconds 300",
 		"release-evidence.json",
-		"redacted `evidence` object",
+		"脱敏的 `evidence` 对象",
 		"SKIP_RETRIEVAL_EVALUATION_DSN_REQUIRED",
 	} {
 		if !strings.Contains(hosting, want) {

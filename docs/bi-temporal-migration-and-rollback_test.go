@@ -29,9 +29,9 @@ func TestBiTemporalMigrationDocumentationCoversRecoveryAndRollback(t *testing.T)
 		"dirty",
 		"operational rollback",
 		"schema revert",
-		"disables temporal-aware policy resolution",
-		"never deletes temporal history",
-		"never rewrites canonical data",
+		"禁用感知时间的策略解析",
+		"从不删除时间历史",
+		"从不重写规范数据",
 		"bounded",
 	} {
 		if !strings.Contains(text, strings.ToLower(term)) {
